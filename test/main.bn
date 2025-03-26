@@ -1,0 +1,6 @@
+import "./utils.bn"
+
+fun main() {
+    var num = power(2, 3)    // Uses imported power function
+    print("2^3 = " + toString(num))
+}

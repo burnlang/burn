@@ -1,0 +1,79 @@
+// Define a struct type
+def Person {
+    name: string,
+    age: int,
+    active: bool
+}
+
+// Function declaration with parameters and return type
+fun createPerson(name: string, age: int): Person {
+    return {
+        name: name,
+        age: age,
+        active: true
+    }
+}
+
+// Function to demonstrate arithmetic and string operations
+fun calculate(x: int, y: int): int {
+    var result = x + y * 2 - (y / 2)
+    return result
+}
+
+// Main function - entry point
+fun main() {
+    // Variable declarations
+    var greeting = "Hello, Burn!"
+    const PI = 3.14159
+
+    // Print statements
+    print(greeting)
+    print("PI value is: " + toString(PI))
+
+    // Conditional statements
+    var x = 10
+    if (x > 5) {
+        print("x is greater than 5")
+    } else {
+        if (x == 5) {
+            print("x equals 5")
+        } else {
+            print("x is less than 5")
+        }
+    }
+
+    // While loop
+    var counter = 0
+    while (counter < 3) {
+        print("Counter: " + toString(counter))
+        counter = counter + 1
+    }
+
+    // For loop
+    for (var i = 0; i < 3; i = i + 1) {
+        print("Loop iteration: " + toString(i))
+    }
+
+    // Struct usage
+    var person = createPerson("John", 30)
+    print("Person name: " + person.name)
+    print("Person age: " + toString(person.age))
+
+    // Boolean operations
+    var isActive = true && !false
+    print("Is active: " + toString(isActive))
+
+    // Function call with arithmetic
+    var result = calculate(5, 3)
+    print("Calculation result: " + toString(result))
+
+    // Struct field modification
+    person.active = false
+    print("Person active status: " + toString(person.active))
+
+    // String concatenation
+    var firstName = "John"
+    var lastName = "Doe"
+    var fullName = firstName + " " + lastName
+    print("Full name: " + fullName)
+}
