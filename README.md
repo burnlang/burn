@@ -1,4 +1,4 @@
-# Burn Programming Language
+# Burnlang
 
 <p align="center">
     <img src="https://github.com/s42yt/assets/blob/master/assets/burnlang/burn-logo.png" alt="Burn Logo">
