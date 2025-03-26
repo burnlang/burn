@@ -1,8 +1,14 @@
 // Example usage of input
+def Human {
+    name: string,
+    age: int
+}
+
 fun main() {
     var name = input("Enter your name: ")
     print("Hello, " + name + "!")
     
     var age = input("Enter your age: ")
-    print("You entered: " + age)
-}
+    print("Your Age is: " + age)
+ }
+
