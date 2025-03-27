@@ -163,7 +163,7 @@ for (var i = 0; i < 3; i = i + 1) {
 ### Imports
 
 ```bn
-import "./utils.bn"
+import "test/utils.bn"
 
 fun main() {
     var result = power(2, 3)  // Using imported function
