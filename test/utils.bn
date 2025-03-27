@@ -1,4 +1,4 @@
-// Util functions to be imported
+// Util functions to be imported for import.bn
 
 // Function to calculate power of a number
 fun power(base: int, exp: int): int {

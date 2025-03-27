@@ -2,11 +2,14 @@ package interpreter
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/burnlang/burn/pkg/ast"
+	"github.com/burnlang/burn/pkg/lexer"
+	"github.com/burnlang/burn/pkg/parser"
 )
 
 type Value interface{}
@@ -80,9 +83,49 @@ func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
 }
 
 func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
+	
 	if strings.Contains(imp.Path, "src/lib/std/date.bn") || imp.Path == "date" {
 		i.registerDateLibrary()
 		return nil
+	}
+
+	
+	source, err := os.ReadFile(imp.Path)
+	if err != nil {
+		return fmt.Errorf("could not read imported file %s: %v", imp.Path, err)
+	}
+
+	l := lexer.New(string(source))
+	tokens, err := l.Tokenize()
+	if err != nil {
+		return err
+	}
+
+	p := parser.New(tokens)
+	program, err := p.Parse()
+	if err != nil {
+		return err
+	}
+
+	
+	importInterpreter := New()
+
+	
+	_, err = importInterpreter.Interpret(program)
+	if err != nil {
+		return err
+	}
+
+	
+	for name, fn := range importInterpreter.functions {
+		if name != "main" { 
+			i.functions[name] = fn
+		}
+	}
+
+	
+	for name, class := range importInterpreter.classes {
+		i.classes[name] = class
 	}
 
 	return nil
@@ -1272,10 +1315,9 @@ func (i *Interpreter) evaluateCall(expr *ast.CallExpression) (Value, error) {
 		}
 
 		if structObj, ok := object.(*Struct); ok {
-			
+
 			methodName := getExpr.Name
 
-			
 			args := make([]Value, len(expr.Arguments))
 			for j, arg := range expr.Arguments {
 				val, err := i.evaluateExpression(arg)
@@ -1285,14 +1327,12 @@ func (i *Interpreter) evaluateCall(expr *ast.CallExpression) (Value, error) {
 				args[j] = val
 			}
 
-			
 			if class, exists := i.classes[structObj.TypeName]; exists {
-				
+
 				allArgs := make([]Value, len(args)+1)
 				allArgs[0] = structObj
 				copy(allArgs[1:], args)
 
-				
 				if method, exists := class.Methods[methodName]; exists {
 					return i.executeFunction(method, allArgs)
 				}

@@ -1,6 +1,7 @@
-//TODO: Make Imports in own file paths work
-import "./utils.bn" 
+//Import file with folder structure and then filename.bn
+import "test/utils.bn" 
 
+//main fun with using the imported functions
 fun main() {
     var num = power(2, 3)    // Uses imported power function
     print("2^3 = " + toString(num))
