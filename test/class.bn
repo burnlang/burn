@@ -1,0 +1,36 @@
+//class implementation in Burn
+//classes are like a wrapper in burn
+class Human {
+    //fun of class Human
+    fun create(name: string, age: int): Human {
+        return {
+            name: name,
+            age: age
+        }
+    }
+    
+    fun greet(human: Human): string {
+        return "Hello, " + human.name + "!"
+    }
+}
+
+class Dog {
+    fun create(name: string, breed: string): Dog {
+        return {
+            name: name,
+            breed: breed
+        }
+    }
+    
+    fun bark(dog: Dog): string {
+        return dog.name + " says Woof!"
+    }
+}
+//at the main function that triggers the classes
+fun main() {
+    var john = Human.create("John", 30)
+    print(Human.greet(john))
+    
+    var rex = Dog.create("Rex", "Golden Retriever")
+    print(Dog.bark(rex))
+}

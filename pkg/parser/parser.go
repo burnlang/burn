@@ -42,6 +42,9 @@ func (p *Parser) declaration() (ast.Declaration, error) {
 	if p.match(lexer.TokenImport) {
 		return p.importDeclaration()
 	}
+	if p.match(lexer.TokenClass) {
+		return p.classDeclaration()
+	}
 	if p.match(lexer.TokenFun) {
 		return p.functionDeclaration()
 	}
@@ -842,6 +845,44 @@ func (p *Parser) arrayLiteral() (ast.Expression, error) {
 
 	return &ast.ArrayLiteralExpression{
 		Elements: elements,
+	}, nil
+}
+
+func (p *Parser) classDeclaration() (ast.Declaration, error) {
+	if !p.check(lexer.TokenIdentifier) {
+		return nil, fmt.Errorf("expected class name at line %d", p.peek().Line)
+	}
+
+	name := p.advance().Value
+
+	if !p.match(lexer.TokenLeftBrace) {
+		return nil, fmt.Errorf("expected '{' after class name at line %d", p.peek().Line)
+	}
+
+	methods := []*ast.FunctionDeclaration{}
+
+	for !p.check(lexer.TokenRightBrace) && !p.isAtEnd() {
+		if !p.match(lexer.TokenFun) {
+			return nil, fmt.Errorf("expected function in class body at line %d", p.peek().Line)
+		}
+
+		method, err := p.functionDeclaration()
+		if err != nil {
+			return nil, err
+		}
+
+		if fnDecl, ok := method.(*ast.FunctionDeclaration); ok {
+			methods = append(methods, fnDecl)
+		}
+	}
+
+	if !p.match(lexer.TokenRightBrace) {
+		return nil, fmt.Errorf("expected '}' after class body at line %d", p.peek().Line)
+	}
+
+	return &ast.ClassDeclaration{
+		Name:    name,
+		Methods: methods,
 	}, nil
 }
 

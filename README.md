@@ -113,6 +113,29 @@ var person = {
 print(person.name)
 ```
 
+### Classes
+
+```bn
+// Classes provide a way to organize related functions
+class Human {
+    fun create(name: string, age: int): Human {
+        return {
+            name: name,
+            age: age
+        }
+    }
+    
+    fun greet(human: Human): string {
+        return "Hello, " + human.name + "!"
+    }
+}
+
+fun main() {
+    var john = Human.create("John", 30)
+    print(Human.greet(john))
+}
+``` 
+
 ### Control Flow
 
 ```bn

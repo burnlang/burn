@@ -3,6 +3,7 @@ package typechecker
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/s42yt/burn/pkg/ast"
@@ -14,6 +15,7 @@ type TypeChecker struct {
 	variables  map[string]string
 	functions  map[string]FunctionType
 	types      map[string]map[string]string
+	classes    map[string]map[string]FunctionType
 	currentFn  string
 	errorPos   int
 	arrayTypes map[string]string
@@ -29,6 +31,7 @@ func New() *TypeChecker {
 		variables:  make(map[string]string),
 		functions:  make(map[string]FunctionType),
 		types:      make(map[string]map[string]string),
+		classes:    make(map[string]map[string]FunctionType),
 		arrayTypes: make(map[string]string),
 	}
 
@@ -121,21 +124,39 @@ func New() *TypeChecker {
 }
 
 func (t *TypeChecker) Check(program *ast.Program) error {
+
+	for _, decl := range program.Declarations {
+		switch d := decl.(type) {
+		case *ast.TypeDefinition:
+			if err := t.checkTypeDefinition(d); err != nil {
+				return err
+			}
+		}
+	}
+
 	for _, decl := range program.Declarations {
 		switch d := decl.(type) {
 		case *ast.FunctionDeclaration:
+			if strings.Contains(d.Name, ".") {
+				continue
+			}
 			paramTypes := make([]string, len(d.Parameters))
 			for i, param := range d.Parameters {
 				paramTypes[i] = param.Type
 			}
-
 			t.functions[d.Name] = FunctionType{
 				Parameters: paramTypes,
 				ReturnType: d.ReturnType,
 			}
-		case *ast.TypeDefinition:
-			if err := t.checkTypeDefinition(d); err != nil {
-				return err
+
+		case *ast.ClassDeclaration:
+
+			if _, exists := t.types[d.Name]; !exists {
+				t.types[d.Name] = make(map[string]string)
+			}
+
+			if _, exists := t.classes[d.Name]; !exists {
+				t.classes[d.Name] = make(map[string]FunctionType)
 			}
 		}
 	}
@@ -183,20 +204,37 @@ func (t *TypeChecker) checkDeclaration(decl ast.Declaration) error {
 		if t.currentFn == "" {
 			return fmt.Errorf("return statement outside of function")
 		}
+
+		if strings.Contains(t.currentFn, ".") {
+			return nil
+		}
+
 		if d.Value == nil {
-			if t.functions[t.currentFn].ReturnType != "" {
+			var expectedReturnType string
+			if fn, exists := t.functions[t.currentFn]; exists {
+				expectedReturnType = fn.ReturnType
+			}
+
+			if expectedReturnType != "" {
 				return fmt.Errorf("function %s must return a value of type %s",
-					t.currentFn, t.functions[t.currentFn].ReturnType)
+					t.currentFn, expectedReturnType)
 			}
 			return nil
 		}
+
 		valueType, err := t.checkExpression(d.Value)
 		if err != nil {
 			return err
 		}
-		if valueType != t.functions[t.currentFn].ReturnType {
+
+		var expectedReturnType string
+		if fn, exists := t.functions[t.currentFn]; exists {
+			expectedReturnType = fn.ReturnType
+		}
+
+		if valueType != expectedReturnType && expectedReturnType != "" {
 			return fmt.Errorf("function %s must return %s but got %s",
-				t.currentFn, t.functions[t.currentFn].ReturnType, valueType)
+				t.currentFn, expectedReturnType, valueType)
 		}
 		return nil
 	case *ast.IfStatement:
@@ -266,6 +304,8 @@ func (t *TypeChecker) checkDeclaration(decl ast.Declaration) error {
 			}
 		}
 		return nil
+	case *ast.ClassDeclaration:
+		return t.checkClassDeclaration(d)
 	default:
 		return fmt.Errorf("unknown declaration type: %T", decl)
 	}
@@ -310,6 +350,10 @@ func (t *TypeChecker) checkImport(imp *ast.ImportDeclaration) error {
 }
 
 func (t *TypeChecker) checkFunction(fn *ast.FunctionDeclaration) error {
+	if strings.Contains(fn.Name, ".") {
+
+		return nil
+	}
 	prevVariables := make(map[string]string)
 	for k, v := range t.variables {
 		prevVariables[k] = v
@@ -472,6 +516,8 @@ func (t *TypeChecker) checkExpression(expr ast.Expression) (string, error) {
 		}
 
 		return "int", nil
+	case *ast.ClassMethodCallExpression:
+		return t.checkClassMethodCall(e)
 	default:
 		return "", fmt.Errorf("unknown expression type: %T", expr)
 	}
@@ -578,6 +624,25 @@ func (t *TypeChecker) checkAssignment(expr *ast.AssignmentExpression) (string, e
 }
 
 func (t *TypeChecker) checkCall(expr *ast.CallExpression) (string, error) {
+	
+	if getExpr, ok := expr.Callee.(*ast.GetExpression); ok {
+		
+		if classNameExpr, ok := getExpr.Object.(*ast.VariableExpression); ok {
+			className := classNameExpr.Name
+			methodName := getExpr.Name
+
+			
+			classMethodCall := &ast.ClassMethodCallExpression{
+				ClassName:  className,
+				MethodName: methodName,
+				Arguments:  expr.Arguments,
+			}
+
+			return t.checkClassMethodCall(classMethodCall)
+		}
+	}
+
+	
 	callee, ok := expr.Callee.(*ast.VariableExpression)
 	if !ok {
 		return "", fmt.Errorf("callee is not a function name")
@@ -586,30 +651,6 @@ func (t *TypeChecker) checkCall(expr *ast.CallExpression) (string, error) {
 	fn, exists := t.functions[callee.Name]
 	if !exists {
 		return "", fmt.Errorf("undefined function: %s", callee.Name)
-	}
-
-	if callee.Name == "print" {
-		if len(expr.Arguments) < 1 {
-			return "", fmt.Errorf("print expects at least 1 argument")
-		}
-		for _, arg := range expr.Arguments {
-			_, err := t.checkExpression(arg)
-			if err != nil {
-				return "", err
-			}
-		}
-		return "", nil
-	}
-
-	if callee.Name == "toString" {
-		if len(expr.Arguments) != 1 {
-			return "", fmt.Errorf("toString expects 1 argument but got %d", len(expr.Arguments))
-		}
-		_, err := t.checkExpression(expr.Arguments[0])
-		if err != nil {
-			return "", err
-		}
-		return "string", nil
 	}
 
 	if len(expr.Arguments) != len(fn.Parameters) {
@@ -623,9 +664,10 @@ func (t *TypeChecker) checkCall(expr *ast.CallExpression) (string, error) {
 			return "", err
 		}
 
-		if fn.Parameters[i] != "any" && argType != fn.Parameters[i] {
+		expectedType := fn.Parameters[i]
+		if expectedType != "any" && argType != expectedType {
 			return "", fmt.Errorf("argument %d of function %s expects %s but got %s",
-				i+1, callee.Name, fn.Parameters[i], argType)
+				i+1, callee.Name, expectedType, argType)
 		}
 	}
 
@@ -675,6 +717,97 @@ func (t *TypeChecker) checkGetExpression(expr *ast.GetExpression) (string, error
 	}
 
 	return fieldType, nil
+}
+
+func (t *TypeChecker) checkClassDeclaration(class *ast.ClassDeclaration) error {
+
+	classMethods, exists := t.classes[class.Name]
+	if !exists {
+		classMethods = make(map[string]FunctionType)
+		t.classes[class.Name] = classMethods
+	}
+
+	if _, exists := t.types[class.Name]; !exists {
+		t.types[class.Name] = make(map[string]string)
+	}
+
+	for _, method := range class.Methods {
+		paramTypes := make([]string, len(method.Parameters))
+		for i, param := range method.Parameters {
+			paramTypes[i] = param.Type
+		}
+
+		funcName := class.Name + "." + method.Name
+
+		classMethods[method.Name] = FunctionType{
+			Parameters: paramTypes,
+			ReturnType: method.ReturnType,
+		}
+
+		t.functions[funcName] = FunctionType{
+			Parameters: paramTypes,
+			ReturnType: method.ReturnType,
+		}
+
+		prevVariables := make(map[string]string)
+		for k, v := range t.variables {
+			prevVariables[k] = v
+		}
+		prevFn := t.currentFn
+
+		t.currentFn = funcName
+		t.variables = make(map[string]string)
+
+		for _, param := range method.Parameters {
+			t.variables[param.Name] = param.Type
+		}
+
+		for _, stmt := range method.Body {
+			if err := t.checkDeclaration(stmt); err != nil {
+				return err
+			}
+		}
+
+		t.variables = prevVariables
+		t.currentFn = prevFn
+	}
+
+	return nil
+}
+
+func (t *TypeChecker) checkClassMethodCall(expr *ast.ClassMethodCallExpression) (string, error) {
+	className := expr.ClassName
+	methodName := expr.MethodName
+
+	classMethods, exists := t.classes[className]
+	if !exists {
+		return "", fmt.Errorf("undefined class: %s", className)
+	}
+
+	method, exists := classMethods[methodName]
+	if !exists {
+		return "", fmt.Errorf("undefined method %s in class %s", methodName, className)
+	}
+
+	if len(expr.Arguments) != len(method.Parameters) {
+		return "", fmt.Errorf("method %s.%s expects %d arguments but got %d",
+			className, methodName, len(method.Parameters), len(expr.Arguments))
+	}
+
+	for i, arg := range expr.Arguments {
+		argType, err := t.checkExpression(arg)
+		if err != nil {
+			return "", err
+		}
+
+		expectedType := method.Parameters[i]
+		if expectedType != "any" && argType != expectedType {
+			return "", fmt.Errorf("argument %d of method %s.%s expects %s but got %s",
+				i+1, className, methodName, expectedType, argType)
+		}
+	}
+
+	return method.ReturnType, nil
 }
 
 func (t *TypeChecker) setErrorPos(pos int) {

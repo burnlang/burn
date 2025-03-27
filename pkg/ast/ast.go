@@ -169,6 +169,14 @@ type StructLiteralExpression struct {
 
 func (s *StructLiteralExpression) exprNode() {}
 
+type ClassMethodCallExpression struct {
+	ClassName  string
+	MethodName string
+	Arguments  []Expression
+}
+
+func (c *ClassMethodCallExpression) exprNode() {}
+
 type VariableExpression struct {
 	Name string
 }
@@ -249,6 +257,13 @@ type ImportDeclaration struct {
 
 func (i *ImportDeclaration) declNode() {}
 
+type ClassDeclaration struct {
+	Name    string
+	Methods []*FunctionDeclaration
+}
+
+func (c *ClassDeclaration) declNode() {}
+
 type Visitor interface {
 	VisitProgram(program *Program) interface{}
 	VisitTypeDefinition(typeDef *TypeDefinition) interface{}
@@ -269,6 +284,7 @@ type Visitor interface {
 	VisitSliceExpression(sliceExpr *SliceExpression) interface{}
 	VisitArrayLiteralExpression(arrayLiteral *ArrayLiteralExpression) interface{}
 	VisitStructLiteralExpression(structLiteral *StructLiteralExpression) interface{}
+	VisitClassMethodCallExpression(callExpr *ClassMethodCallExpression) interface{}
 	VisitVariableExpression(varExpr *VariableExpression) interface{}
 	VisitAssignmentExpression(assignExpr *AssignmentExpression) interface{}
 	VisitCompoundAssignmentExpression(compoundExpr *CompoundAssignmentExpression) interface{}
@@ -356,6 +372,10 @@ func (a *ArrayLiteralExpression) Accept(visitor Visitor) interface{} {
 
 func (s *StructLiteralExpression) Accept(visitor Visitor) interface{} {
 	return visitor.VisitStructLiteralExpression(s)
+}
+
+func (c *ClassMethodCallExpression) Accept(visitor Visitor) interface{} {
+	return visitor.VisitClassMethodCallExpression(c)
 }
 
 func (v *VariableExpression) Accept(visitor Visitor) interface{} {
@@ -480,6 +500,10 @@ func (a *ArrayLiteralExpression) String() string {
 
 func (s *StructLiteralExpression) String() string {
 	return "StructLiteralExpression"
+}
+
+func (c *ClassMethodCallExpression) String() string {
+	return "ClassMethodCallExpression: " + c.ClassName + "." + c.MethodName
 }
 
 func (v *VariableExpression) String() string {

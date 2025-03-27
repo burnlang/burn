@@ -23,6 +23,7 @@ func (bf *BuiltinFunction) Call(args []Value) (Value, error) {
 type Interpreter struct {
 	environment map[string]Value
 	functions   map[string]*ast.FunctionDeclaration
+	classes     map[string]*Class
 	errorPos    int
 }
 
@@ -30,6 +31,7 @@ func New() *Interpreter {
 	i := &Interpreter{
 		environment: make(map[string]Value),
 		functions:   make(map[string]*ast.FunctionDeclaration),
+		classes:     make(map[string]*Class),
 		errorPos:    0,
 	}
 	i.addBuiltins()
@@ -37,6 +39,17 @@ func New() *Interpreter {
 }
 
 func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
+
+	for _, decl := range program.Declarations {
+		if classDef, ok := decl.(*ast.ClassDeclaration); ok {
+			class := NewClass(classDef.Name)
+			for _, method := range classDef.Methods {
+				class.AddMethod(method.Name, method)
+			}
+			i.classes[classDef.Name] = class
+		}
+	}
+
 	for _, decl := range program.Declarations {
 		if fn, ok := decl.(*ast.FunctionDeclaration); ok {
 			i.functions[fn.Name] = fn
@@ -71,8 +84,7 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 		i.registerDateLibrary()
 		return nil
 	}
-	
-	
+
 	return nil
 }
 
@@ -532,6 +544,9 @@ func (i *Interpreter) addBuiltins() {
 
 func (i *Interpreter) executeDeclaration(decl ast.Declaration) (Value, error) {
 	switch d := decl.(type) {
+	case *ast.ClassDeclaration:
+
+		return nil, nil
 	case *ast.TypeDefinition:
 		return nil, nil
 	case *ast.FunctionDeclaration:
@@ -1235,6 +1250,60 @@ func (i *Interpreter) evaluateUnary(expr *ast.UnaryExpression) (Value, error) {
 }
 
 func (i *Interpreter) evaluateCall(expr *ast.CallExpression) (Value, error) {
+
+	if getExpr, ok := expr.Callee.(*ast.GetExpression); ok {
+
+		if classNameExpr, ok := getExpr.Object.(*ast.VariableExpression); ok {
+			className := classNameExpr.Name
+			methodName := getExpr.Name
+
+			classMethodCall := &ast.ClassMethodCallExpression{
+				ClassName:  className,
+				MethodName: methodName,
+				Arguments:  expr.Arguments,
+			}
+
+			return i.evaluateClassMethodCall(classMethodCall)
+		}
+
+		object, err := i.evaluateExpression(getExpr.Object)
+		if err != nil {
+			return nil, err
+		}
+
+		if structObj, ok := object.(*Struct); ok {
+			
+			methodName := getExpr.Name
+
+			
+			args := make([]Value, len(expr.Arguments))
+			for j, arg := range expr.Arguments {
+				val, err := i.evaluateExpression(arg)
+				if err != nil {
+					return nil, err
+				}
+				args[j] = val
+			}
+
+			
+			if class, exists := i.classes[structObj.TypeName]; exists {
+				
+				allArgs := make([]Value, len(args)+1)
+				allArgs[0] = structObj
+				copy(allArgs[1:], args)
+
+				
+				if method, exists := class.Methods[methodName]; exists {
+					return i.executeFunction(method, allArgs)
+				}
+			}
+
+			return nil, fmt.Errorf("undefined method '%s' on type '%s'", methodName, structObj.TypeName)
+		}
+
+		return nil, fmt.Errorf("cannot call method on expression of type %T", object)
+	}
+
 	callee, ok := expr.Callee.(*ast.VariableExpression)
 	if !ok {
 		return nil, fmt.Errorf("callee is not a function name")
@@ -1356,4 +1425,59 @@ func NewEnvironment(enclosing *Environment) *Environment {
 		enclosing: enclosing,
 		values:    make(map[string]interface{}),
 	}
+}
+
+type Class struct {
+	Name    string
+	Methods map[string]*ast.FunctionDeclaration
+	Statics map[string]*ast.FunctionDeclaration
+}
+
+func NewClass(name string) *Class {
+	return &Class{
+		Name:    name,
+		Methods: make(map[string]*ast.FunctionDeclaration),
+		Statics: make(map[string]*ast.FunctionDeclaration),
+	}
+}
+
+func (c *Class) AddMethod(name string, fn *ast.FunctionDeclaration) {
+	c.Methods[name] = fn
+}
+
+func (c *Class) AddStatic(name string, fn *ast.FunctionDeclaration) {
+	c.Statics[name] = fn
+}
+
+func (c *Class) Call(methodName string, interpreter *Interpreter, args []Value) (Value, error) {
+	if method, exists := c.Methods[methodName]; exists {
+		return interpreter.executeFunction(method, args)
+	}
+
+	if static, exists := c.Statics[methodName]; exists {
+		return interpreter.executeFunction(static, args)
+	}
+
+	return nil, fmt.Errorf("undefined method '%s' in class '%s'", methodName, c.Name)
+}
+
+func (i *Interpreter) evaluateClassMethodCall(expr *ast.ClassMethodCallExpression) (Value, error) {
+	className := expr.ClassName
+	methodName := expr.MethodName
+
+	class, exists := i.classes[className]
+	if !exists {
+		return nil, fmt.Errorf("undefined class: %s", className)
+	}
+
+	args := make([]Value, len(expr.Arguments))
+	for j, arg := range expr.Arguments {
+		val, err := i.evaluateExpression(arg)
+		if err != nil {
+			return nil, err
+		}
+		args[j] = val
+	}
+
+	return class.Call(methodName, i, args)
 }

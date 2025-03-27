@@ -55,6 +55,7 @@ const (
 	TokenRightBracket
 	TokenImport
 	TokenModulo
+	TokenClass
 )
 
 type Token struct {
@@ -97,6 +98,7 @@ func New(source string) *Lexer {
 			"string": TokenTypeString,
 			"bool":   TokenTypeBool,
 			"import": TokenImport,
+			"class":  TokenClass,
 		},
 	}
 }
