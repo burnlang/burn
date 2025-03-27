@@ -193,3 +193,12 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - Thanks to all contributors who have helped shape the Burn language
 - Inspired by modern programming languages with clean syntax
+
+
+## Plans For Burn
+
+1. Until language is ready for Production only master branch will be used
+2. Post Production Language will be self hosted
+3. Documentaion of the entire language with its own website
+4. After Selfhosting Package Manager will be next and use of other packages will be possible
+5. ...
