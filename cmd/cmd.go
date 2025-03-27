@@ -6,11 +6,11 @@ import (
     "os"
     "strings"
 
-    "github.com/s42yt/burn/pkg/ast"
-    "github.com/s42yt/burn/pkg/interpreter"
-    "github.com/s42yt/burn/pkg/lexer"
-    "github.com/s42yt/burn/pkg/parser"
-    "github.com/s42yt/burn/pkg/typechecker"
+    "github.com/burnlang/burn/pkg/ast"
+    "github.com/burnlang/burn/pkg/interpreter"
+    "github.com/burnlang/burn/pkg/lexer"
+    "github.com/burnlang/burn/pkg/parser"
+    "github.com/burnlang/burn/pkg/typechecker"
 )
 
 func Execute(args []string, stdin io.Reader, stdout, stderr io.Writer) int {

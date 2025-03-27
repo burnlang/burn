@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/s42yt/burn/pkg/ast"
-	"github.com/s42yt/burn/pkg/lexer"
+	"github.com/burnlang/burn/pkg/ast"
+	"github.com/burnlang/burn/pkg/lexer"
 )
 
 type Parser struct {

@@ -3,7 +3,7 @@ package main
 import (
     "os"
 
-	"github.com/s42yt/burn/cmd"
+	"github.com/burnlang/burn/cmd"
 )
 
 func main() {

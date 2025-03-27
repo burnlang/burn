@@ -1,3 +1,3 @@
-module github.com/s42yt/burn
+module github.com/burnlang/burn
 
 go 1.24.1

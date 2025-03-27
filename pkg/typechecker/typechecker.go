@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/s42yt/burn/pkg/ast"
-	"github.com/s42yt/burn/pkg/lexer"
-	"github.com/s42yt/burn/pkg/parser"
+	"github.com/burnlang/burn/pkg/ast"
+	"github.com/burnlang/burn/pkg/lexer"
+	"github.com/burnlang/burn/pkg/parser"
 )
 
 type TypeChecker struct {

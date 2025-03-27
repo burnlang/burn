@@ -3,7 +3,7 @@ package interpreter
 import (
 	"fmt"
 
-	"github.com/s42yt/burn/pkg/ast"
+	"github.com/burnlang/burn/pkg/ast"
 )
 
 type Struct struct {
