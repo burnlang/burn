@@ -67,11 +67,12 @@ func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
 }
 
 func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
-	if strings.Contains(imp.Path, "pkg/std/date.bn") || imp.Path == "date" {
+	if strings.Contains(imp.Path, "src/std/date.bn") || imp.Path == "date" {
 		i.registerDateLibrary()
 		return nil
 	}
-
+	
+	
 	return nil
 }
 

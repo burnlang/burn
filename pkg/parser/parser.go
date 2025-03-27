@@ -76,7 +76,7 @@ func (p *Parser) processImportPath(path string) string {
 	trimmedPath := strings.Trim(path, "\"")
 
 	if !strings.Contains(trimmedPath, "/") && !strings.Contains(trimmedPath, "\\") {
-		return "pkg/std/" + trimmedPath + ".bn"
+		return "src/std/" + trimmedPath + ".bn"
 	}
 
 	if strings.HasSuffix(trimmedPath, ".bn") {
