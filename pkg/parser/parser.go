@@ -3,6 +3,7 @@ package parser
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/s42yt/burn/pkg/ast"
 	"github.com/s42yt/burn/pkg/lexer"
@@ -64,9 +65,25 @@ func (p *Parser) importDeclaration() (ast.Declaration, error) {
 
 	path := p.previous().Value
 
+	processedPath := p.processImportPath(path)
+
 	return &ast.ImportDeclaration{
-		Path: path,
+		Path: processedPath,
 	}, nil
+}
+
+func (p *Parser) processImportPath(path string) string {
+	trimmedPath := strings.Trim(path, "\"")
+
+	if !strings.Contains(trimmedPath, "/") && !strings.Contains(trimmedPath, "\\") {
+		return "pkg/std/" + trimmedPath + ".bn"
+	}
+
+	if strings.HasSuffix(trimmedPath, ".bn") {
+		return trimmedPath
+	}
+
+	return trimmedPath + ".bn"
 }
 
 func (p *Parser) functionDeclaration() (ast.Declaration, error) {
@@ -612,7 +629,7 @@ func (p *Parser) factor() (ast.Expression, error) {
 		return nil, err
 	}
 
-	for p.match(lexer.TokenMultiply, lexer.TokenDivide) {
+	for p.match(lexer.TokenMultiply, lexer.TokenDivide, lexer.TokenModulo) {
 		operator := p.previous().Value
 		right, err := p.unary()
 		if err != nil {
@@ -666,6 +683,20 @@ func (p *Parser) call() (ast.Expression, error) {
 			expr = &ast.GetExpression{
 				Object: expr,
 				Name:   name,
+			}
+		} else if p.match(lexer.TokenLeftBracket) {
+			index, err := p.expression()
+			if err != nil {
+				return nil, err
+			}
+
+			if !p.match(lexer.TokenRightBracket) {
+				return nil, fmt.Errorf("expected ']' after array index at line %d", p.peek().Line)
+			}
+
+			expr = &ast.IndexExpression{
+				Array: expr,
+				Index: index,
 			}
 		} else {
 			break
@@ -781,8 +812,37 @@ func (p *Parser) primary() (ast.Expression, error) {
 			Fields: fields,
 		}, nil
 	}
+	if p.match(lexer.TokenLeftBracket) {
+		return p.arrayLiteral()
+	}
 
 	return nil, fmt.Errorf("expected expression at line %d", p.peek().Line)
+}
+
+func (p *Parser) arrayLiteral() (ast.Expression, error) {
+	elements := []ast.Expression{}
+
+	if !p.check(lexer.TokenRightBracket) {
+		for {
+			element, err := p.expression()
+			if err != nil {
+				return nil, err
+			}
+			elements = append(elements, element)
+
+			if !p.match(lexer.TokenComma) {
+				break
+			}
+		}
+	}
+
+	if !p.match(lexer.TokenRightBracket) {
+		return nil, fmt.Errorf("expected ']' after array elements at line %d", p.peek().Line)
+	}
+
+	return &ast.ArrayLiteralExpression{
+		Elements: elements,
+	}, nil
 }
 
 func (p *Parser) Position() int {

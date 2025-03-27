@@ -1,0 +1,63 @@
+// Burn Standard Library: Date Module
+// This provides date and time functionality for Burn programs
+
+// Get the current date
+fun now(): Date {
+    // Implementation is provided by the interpreter
+    // Returns a Date struct representing the current date
+}
+
+// Format a date as a string (YYYY-MM-DD)
+fun formatDate(date: Date): string {
+    // Implementation is provided by the interpreter
+}
+
+// Create a date from year, month, day components
+fun createDate(year: int, month: int, day: int): Date {
+    // Implementation is provided by the interpreter
+}
+
+// Get the current year
+fun currentYear(): int {
+    // Implementation is provided by the interpreter
+}
+
+// Get the current month (1-12)
+fun currentMonth(): int {
+    // Implementation is provided by the interpreter
+}
+
+// Get the current day of month
+fun currentDay(): int {
+    // Implementation is provided by the interpreter
+}
+
+// Check if a year is a leap year
+fun isLeapYear(year: int): bool {
+    // Implementation is provided by the interpreter
+}
+
+// Get the number of days in a month
+fun daysInMonth(year: int, month: int): int {
+    // Implementation is provided by the interpreter
+}
+
+// Get the day of week (0=Saturday, 1=Sunday, ..., 6=Friday)
+fun dayOfWeek(date: Date): int {
+    // Implementation is provided by the interpreter
+}
+
+// Add days to a date
+fun addDays(date: Date, days: int): Date {
+    // Implementation is provided by the interpreter
+}
+
+// Subtract days from a date
+fun subtractDays(date: Date, days: int): Date {
+    // Implementation is provided by the interpreter
+}
+
+// Get today's date as a formatted string
+fun today(): string {
+    return formatDate(now())
+}

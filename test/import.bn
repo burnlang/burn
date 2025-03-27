@@ -1,4 +1,5 @@
-import "./utils.bn"
+//TODO: Make Imports in own file paths work
+import "./utils.bn" 
 
 fun main() {
     var num = power(2, 3)    // Uses imported power function

@@ -1,0 +1,58 @@
+// Date functions test
+import "date"
+
+fun main() {
+    // Get current date
+    var today = now()
+    print("Current date:")
+    print("------------")
+    print("Year: " + toString(today.year))
+    print("Month: " + toString(today.month))
+    print("Day: " + toString(today.day))
+    print("")
+    
+    // Get current date components using individual functions
+    print("Current date components:")
+    print("------------------------")
+    print("Current year: " + toString(currentYear()))
+    print("Current month: " + toString(currentMonth()))
+    print("Current day: " + toString(currentDay()))
+    print("")
+    
+    // Format the date
+    print("Formatted date: " + formatDate(today))
+    print("")
+    
+    // Create a custom date
+    var birthday = createDate(1990, 5, 15)
+    print("Custom date (1990-05-15):")
+    print("-------------------------")
+    print("Year: " + toString(birthday.year))
+    print("Month: " + toString(birthday.month))
+    print("Day: " + toString(birthday.day))
+    print("Formatted: " + formatDate(birthday))
+    print("")
+    
+    // Add days to a date
+    var futureDate = addDays(today, 10)
+    print("Date 10 days from now: " + formatDate(futureDate))
+    
+    // Subtract days from a date
+    var pastDate = subtractDays(today, 10)
+    print("Date 10 days ago: " + formatDate(pastDate))
+    
+    // Check if current year is a leap year
+    print("Is current year a leap year? " + toString(isLeapYear(today.year)))
+    
+    // Get days in current month
+    print("Days in current month: " + toString(daysInMonth(today.year, today.month)))
+    
+    // Get day of week (0 = Saturday, 1 = Sunday, ..., 6 = Friday)
+    var dayOfWeekNum = dayOfWeek(today)
+    // Create array with day names in the correct order (algorithm returns 0=Saturday, 1=Sunday, etc.)
+    var dayNames = ["Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+    print("Today is a " + dayNames[dayOfWeekNum])
+    
+    // Use the convenience function from the date library
+    print("Today's date string: " + today())
+}

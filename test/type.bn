@@ -1,0 +1,18 @@
+//define a type
+def Person {
+    name: string,
+    age: int,
+    active: bool
+}
+//create a person with the type
+fun createPerson(name: string, age: int): Person {
+    return {
+        name: name,
+        age: age,
+        active: true
+    }
+}
+
+//print the created person
+var person = createPerson("John", 30)
+print("Person name: " + person.name)

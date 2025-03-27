@@ -54,6 +54,7 @@ const (
 	TokenLeftBracket
 	TokenRightBracket
 	TokenImport
+	TokenModulo
 )
 
 type Token struct {
@@ -115,6 +116,9 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 				continue
 			}
 			l.addToken(TokenDivide, "/")
+			l.advance(size)
+		case r == '%':
+			l.addToken(TokenModulo, "%")
 			l.advance(size)
 		case unicode.IsLetter(r) || r == '_':
 			l.tokenizeIdentifier()
@@ -274,20 +278,18 @@ func (l *Lexer) tokenizeIdentifier() {
 func (l *Lexer) tokenizeNumber() {
 	start := l.pos
 
-	// Integer part
 	for l.pos < len(l.source) && unicode.IsDigit(rune(l.source[l.pos])) {
 		l.advance(1)
 	}
 
-	// Decimal part
 	if l.pos < len(l.source) && l.source[l.pos] == '.' {
-		l.advance(1) // Consume '.'
+		l.advance(1)
 
 		if l.pos < len(l.source) && !unicode.IsDigit(rune(l.source[l.pos])) {
-			l.pos-- // If no digits follow the '.', backtrack
+			l.pos--
 			l.col--
 		} else {
-			// Consume decimal digits
+
 			for l.pos < len(l.source) && unicode.IsDigit(rune(l.source[l.pos])) {
 				l.advance(1)
 			}
@@ -299,7 +301,7 @@ func (l *Lexer) tokenizeNumber() {
 
 func (l *Lexer) tokenizeString() error {
 	start := l.pos
-	l.advance(1) // Skip opening quote
+	l.advance(1)
 
 	for l.pos < len(l.source) && l.source[l.pos] != '"' {
 		if l.source[l.pos] == '\\' && l.pos+1 < len(l.source) {

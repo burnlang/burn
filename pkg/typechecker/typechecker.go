@@ -3,7 +3,7 @@ package typechecker
 import (
 	"fmt"
 	"os"
-	"strings"
+	"time"
 
 	"github.com/s42yt/burn/pkg/ast"
 	"github.com/s42yt/burn/pkg/lexer"
@@ -11,11 +11,12 @@ import (
 )
 
 type TypeChecker struct {
-	variables map[string]string
-	functions map[string]FunctionType
-	types     map[string]map[string]string
-	currentFn string
-	errorPos  int
+	variables  map[string]string
+	functions  map[string]FunctionType
+	types      map[string]map[string]string
+	currentFn  string
+	errorPos   int
+	arrayTypes map[string]string
 }
 
 type FunctionType struct {
@@ -25,9 +26,10 @@ type FunctionType struct {
 
 func New() *TypeChecker {
 	tc := &TypeChecker{
-		variables: make(map[string]string),
-		functions: make(map[string]FunctionType),
-		types:     make(map[string]map[string]string),
+		variables:  make(map[string]string),
+		functions:  make(map[string]FunctionType),
+		types:      make(map[string]map[string]string),
+		arrayTypes: make(map[string]string),
 	}
 
 	tc.functions["print"] = FunctionType{
@@ -44,6 +46,76 @@ func New() *TypeChecker {
 		Parameters: []string{"string"},
 		ReturnType: "string",
 	}
+
+	tc.functions["now"] = FunctionType{
+		Parameters: []string{},
+		ReturnType: "Date",
+	}
+
+	tc.functions["formatDate"] = FunctionType{
+		Parameters: []string{"Date"},
+		ReturnType: "string",
+	}
+
+	tc.functions["createDate"] = FunctionType{
+		Parameters: []string{"int", "int", "int"},
+		ReturnType: "Date",
+	}
+
+	tc.functions["currentYear"] = FunctionType{
+		Parameters: []string{},
+		ReturnType: "int",
+	}
+
+	tc.functions["currentMonth"] = FunctionType{
+		Parameters: []string{},
+		ReturnType: "int",
+	}
+
+	tc.functions["currentDay"] = FunctionType{
+		Parameters: []string{},
+		ReturnType: "int",
+	}
+
+	tc.functions["isLeapYear"] = FunctionType{
+		Parameters: []string{"int"},
+		ReturnType: "bool",
+	}
+
+	tc.functions["daysInMonth"] = FunctionType{
+		Parameters: []string{"int", "int"},
+		ReturnType: "int",
+	}
+
+	tc.functions["dayOfWeek"] = FunctionType{
+		Parameters: []string{"Date"},
+		ReturnType: "int",
+	}
+
+	tc.functions["today"] = FunctionType{
+		Parameters: []string{},
+		ReturnType: "string",
+	}
+
+	tc.functions["addDays"] = FunctionType{
+		Parameters: []string{"Date", "int"},
+		ReturnType: "Date",
+	}
+
+	tc.functions["subtractDays"] = FunctionType{
+		Parameters: []string{"Date", "int"},
+		ReturnType: "Date",
+	}
+
+	tc.types["Date"] = map[string]string{
+		"year":  "int",
+		"month": "int",
+		"day":   "int",
+	}
+
+	tc.types["array"] = map[string]string{}
+
+	tc.types["any"] = map[string]string{}
 
 	return tc
 }
@@ -200,7 +272,7 @@ func (t *TypeChecker) checkDeclaration(decl ast.Declaration) error {
 }
 
 func (t *TypeChecker) checkImport(imp *ast.ImportDeclaration) error {
-	path := strings.Trim(imp.Path, "\"")
+	path := imp.Path
 
 	source, err := os.ReadFile(path)
 	if err != nil {
@@ -228,6 +300,10 @@ func (t *TypeChecker) checkImport(imp *ast.ImportDeclaration) error {
 		if name != "main" {
 			t.functions[name] = fn
 		}
+	}
+
+	for typeName, typeFields := range importedChecker.types {
+		t.types[typeName] = typeFields
 	}
 
 	return nil
@@ -266,6 +342,16 @@ func (t *TypeChecker) checkVariableDeclaration(decl *ast.VariableDeclaration) er
 			return err
 		}
 
+		if valueType == "array" {
+			if arrayLiteral, ok := decl.Value.(*ast.ArrayLiteralExpression); ok && len(arrayLiteral.Elements) > 0 {
+				elemType, err := t.checkExpression(arrayLiteral.Elements[0])
+				if err != nil {
+					return err
+				}
+				t.arrayTypes[decl.Name] = elemType
+			}
+		}
+
 		if decl.Type != "" && decl.Type != valueType {
 			return fmt.Errorf("type mismatch: variable %s is declared as %s but assigned %s",
 				decl.Name, decl.Type, valueType)
@@ -278,7 +364,10 @@ func (t *TypeChecker) checkVariableDeclaration(decl *ast.VariableDeclaration) er
 		return fmt.Errorf("variable %s must have a type or initializer", decl.Name)
 	}
 
-	if _, isBuiltin := t.types[decl.Type]; !isBuiltin && decl.Type != "int" && decl.Type != "float" && decl.Type != "string" && decl.Type != "bool" {
+	if _, isBuiltin := t.types[decl.Type]; !isBuiltin &&
+		decl.Type != "int" && decl.Type != "float" &&
+		decl.Type != "string" && decl.Type != "bool" &&
+		decl.Type != "array" && decl.Type != "any" {
 		return fmt.Errorf("unknown type: %s", decl.Type)
 	}
 
@@ -334,6 +423,55 @@ func (t *TypeChecker) checkExpression(expr ast.Expression) (string, error) {
 			return "int", nil
 		}
 		return e.Type, nil
+	case *ast.ArrayLiteralExpression:
+		if len(e.Elements) == 0 {
+			return "array", nil
+		}
+
+		firstType, err := t.checkExpression(e.Elements[0])
+		if err != nil {
+			return "", err
+		}
+
+		for i := 1; i < len(e.Elements); i++ {
+			elemType, err := t.checkExpression(e.Elements[i])
+			if err != nil {
+				return "", err
+			}
+
+			if elemType != firstType {
+				return "", fmt.Errorf("array elements must be of the same type, got %s and %s", firstType, elemType)
+			}
+		}
+
+		return "array", nil
+
+	case *ast.IndexExpression:
+		arrayType, err := t.checkExpression(e.Array)
+		if err != nil {
+			return "", err
+		}
+
+		if arrayType != "array" {
+			return "", fmt.Errorf("cannot index into non-array type: %s", arrayType)
+		}
+
+		indexType, err := t.checkExpression(e.Index)
+		if err != nil {
+			return "", err
+		}
+
+		if indexType != "int" {
+			return "", fmt.Errorf("array index must be an integer, got %s", indexType)
+		}
+
+		if varExpr, ok := e.Array.(*ast.VariableExpression); ok {
+			if elemType, exists := t.arrayTypes[varExpr.Name]; exists {
+				return elemType, nil
+			}
+		}
+
+		return "int", nil
 	default:
 		return "", fmt.Errorf("unknown expression type: %T", expr)
 	}
@@ -351,7 +489,7 @@ func (t *TypeChecker) checkBinaryExpression(expr *ast.BinaryExpression) (string,
 	}
 
 	switch expr.Operator {
-	case "+", "-", "*", "/":
+	case "+", "-", "*", "/", "%":
 		if leftType == "number" {
 			leftType = "int"
 		}
@@ -359,12 +497,13 @@ func (t *TypeChecker) checkBinaryExpression(expr *ast.BinaryExpression) (string,
 			rightType = "int"
 		}
 
-		if leftType == "int" && rightType == "int" {
+		if (leftType == "int" || leftType == "float") && (rightType == "int" || rightType == "float") {
+			if leftType == "float" || rightType == "float" {
+				return "float", nil
+			}
 			return "int", nil
 		}
-		if leftType == "float" && rightType == "float" {
-			return "float", nil
-		}
+
 		if expr.Operator == "+" && leftType == "string" && rightType == "string" {
 			return "string", nil
 		}
@@ -377,6 +516,10 @@ func (t *TypeChecker) checkBinaryExpression(expr *ast.BinaryExpression) (string,
 		}
 		return "bool", nil
 	case "==", "!=", "<", ">", "<=", ">=":
+		if (leftType == "int" || leftType == "float") && (rightType == "int" || rightType == "float") {
+			return "bool", nil
+		}
+
 		if leftType != rightType {
 			return "", fmt.Errorf("incompatible types for comparison: %s and %s",
 				leftType, rightType)
@@ -540,4 +683,42 @@ func (t *TypeChecker) setErrorPos(pos int) {
 
 func (t *TypeChecker) Position() int {
 	return t.errorPos
+}
+
+type DateStruct struct {
+	Year  int
+	Month int
+	Day   int
+}
+
+type Struct struct {
+	TypeName string
+	Fields   map[string]interface{}
+}
+
+func timeToDateStruct(t time.Time) *Struct {
+	return &Struct{
+		TypeName: "Date",
+		Fields: map[string]interface{}{
+			"year":  t.Year(),
+			"month": int(t.Month()),
+			"day":   t.Day(),
+		},
+	}
+}
+
+func dateStructToTime(dateStruct *Struct) (time.Time, error) {
+	if dateStruct.TypeName != "Date" {
+		return time.Time{}, fmt.Errorf("expected Date struct")
+	}
+
+	year, ok1 := dateStruct.Fields["year"].(int)
+	month, ok2 := dateStruct.Fields["month"].(int)
+	day, ok3 := dateStruct.Fields["day"].(int)
+
+	if !ok1 || !ok2 || !ok3 {
+		return time.Time{}, fmt.Errorf("invalid Date struct fields")
+	}
+
+	return time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC), nil
 }
