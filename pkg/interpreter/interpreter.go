@@ -42,7 +42,6 @@ func New() *Interpreter {
 }
 
 func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
-
 	for _, decl := range program.Declarations {
 		if classDef, ok := decl.(*ast.ClassDeclaration); ok {
 			class := NewClass(classDef.Name)
@@ -60,6 +59,13 @@ func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
 		if imp, ok := decl.(*ast.ImportDeclaration); ok {
 			if err := i.handleImport(imp); err != nil {
 				return nil, err
+			}
+		}
+		if multiImp, ok := decl.(*ast.MultiImportDeclaration); ok {
+			for _, imp := range multiImp.Imports {
+				if err := i.handleImport(imp); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -83,13 +89,12 @@ func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
 }
 
 func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
-	
+
 	if strings.Contains(imp.Path, "src/lib/std/date.bn") || imp.Path == "date" {
 		i.registerDateLibrary()
 		return nil
 	}
 
-	
 	source, err := os.ReadFile(imp.Path)
 	if err != nil {
 		return fmt.Errorf("could not read imported file %s: %v", imp.Path, err)
@@ -107,23 +112,19 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 		return err
 	}
 
-	
 	importInterpreter := New()
 
-	
 	_, err = importInterpreter.Interpret(program)
 	if err != nil {
 		return err
 	}
 
-	
 	for name, fn := range importInterpreter.functions {
-		if name != "main" { 
+		if name != "main" {
 			i.functions[name] = fn
 		}
 	}
 
-	
 	for name, class := range importInterpreter.classes {
 		i.classes[name] = class
 	}

@@ -191,6 +191,13 @@ func (t *TypeChecker) checkDeclaration(decl ast.Declaration) error {
 	switch d := decl.(type) {
 	case *ast.ImportDeclaration:
 		return t.checkImport(d)
+	case *ast.MultiImportDeclaration:
+		for _, imp := range d.Imports {
+			if err := t.checkImport(imp); err != nil {
+				return err
+			}
+		}
+		return nil
 	case *ast.TypeDefinition:
 		return nil
 	case *ast.FunctionDeclaration:
@@ -624,14 +631,13 @@ func (t *TypeChecker) checkAssignment(expr *ast.AssignmentExpression) (string, e
 }
 
 func (t *TypeChecker) checkCall(expr *ast.CallExpression) (string, error) {
-	
+
 	if getExpr, ok := expr.Callee.(*ast.GetExpression); ok {
-		
+
 		if classNameExpr, ok := getExpr.Object.(*ast.VariableExpression); ok {
 			className := classNameExpr.Name
 			methodName := getExpr.Name
 
-			
 			classMethodCall := &ast.ClassMethodCallExpression{
 				ClassName:  className,
 				MethodName: methodName,
@@ -642,7 +648,6 @@ func (t *TypeChecker) checkCall(expr *ast.CallExpression) (string, error) {
 		}
 	}
 
-	
 	callee, ok := expr.Callee.(*ast.VariableExpression)
 	if !ok {
 		return "", fmt.Errorf("callee is not a function name")

@@ -257,6 +257,12 @@ type ImportDeclaration struct {
 
 func (i *ImportDeclaration) declNode() {}
 
+type MultiImportDeclaration struct {
+	Imports []*ImportDeclaration
+}
+
+func (m *MultiImportDeclaration) declNode() {}
+
 type ClassDeclaration struct {
 	Name    string
 	Methods []*FunctionDeclaration

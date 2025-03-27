@@ -62,12 +62,39 @@ func (p *Parser) declaration() (ast.Declaration, error) {
 }
 
 func (p *Parser) importDeclaration() (ast.Declaration, error) {
+	// Check if this is a multi-import block with parentheses
+	if p.match(lexer.TokenLeftParen) {
+		imports := []*ast.ImportDeclaration{}
+
+		// Parse imports until we reach the closing parenthesis
+		for !p.check(lexer.TokenRightParen) && !p.isAtEnd() {
+			if !p.match(lexer.TokenString) {
+				return nil, fmt.Errorf("expected string in import block at line %d", p.peek().Line)
+			}
+
+			path := p.previous().Value
+			processedPath := p.processImportPath(path)
+
+			imports = append(imports, &ast.ImportDeclaration{
+				Path: processedPath,
+			})
+		}
+
+		if !p.match(lexer.TokenRightParen) {
+			return nil, fmt.Errorf("expected ')' after import block at line %d", p.peek().Line)
+		}
+
+		return &ast.MultiImportDeclaration{
+			Imports: imports,
+		}, nil
+	}
+
+	// Single import statement
 	if !p.match(lexer.TokenString) {
 		return nil, fmt.Errorf("expected string after import at line %d", p.peek().Line)
 	}
 
 	path := p.previous().Value
-
 	processedPath := p.processImportPath(path)
 
 	return &ast.ImportDeclaration{
