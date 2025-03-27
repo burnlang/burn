@@ -1,0 +1,51 @@
+// Test file to demonstrate constants in Burn
+
+fun testMath(): int {
+    const PI = 3.14159
+    const RADIUS = 5.0
+    
+    // Calculate area of circle
+    return PI * RADIUS * RADIUS
+}
+
+fun testStrings(): string {
+    const GREETING = "Hello"
+    const NAME = "Burn"
+    
+    // Concatenate constants
+    return GREETING + ", " + NAME + "!"
+}
+
+fun main() {
+    // Numeric constants
+    const MAX_VALUE = 100
+    const MIN_VALUE = 0
+    const FACTOR = 2.5
+    
+    print("MAX_VALUE: " + toString(MAX_VALUE))
+    print("MIN_VALUE: " + toString(MIN_VALUE))
+    print("FACTOR: " + toString(FACTOR))
+    
+    // Cannot reassign constants
+    // MAX_VALUE = 200  // This would cause an error
+    
+    // Using constants in expressions
+    var result = MAX_VALUE * FACTOR
+    print("MAX_VALUE * FACTOR = " + toString(result))
+    
+    // Using constants from functions
+    print("Circle area: " + toString(testMath()))
+    print("Greeting: " + testStrings())
+    
+    // Boolean constants
+    const IS_DEBUG = true
+    const IS_PRODUCTION = false
+    
+    if (IS_DEBUG) {
+        print("Debug mode is enabled")
+    }
+    
+    if (!IS_PRODUCTION) {
+        print("Not in production mode")
+    }
+}

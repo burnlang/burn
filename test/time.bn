@@ -1,12 +1,1 @@
-// Example usage
-//TODO: Add time std lib
-import "time"
-
-fun main() {
-    var ms = hoursToMs(2)  // Convert 2 hours to milliseconds
-    print("2 hours in milliseconds: " + toString(ms))
-        
-    // Type verification
-    var secValue: float = msToSeconds(5000) 
-    print("Type verified seconds: " + toString(secValue))
-}
+//TODO: Test time and fix time

@@ -1,2 +1,306 @@
-//Burn Standart Library Module Time
-//TODO: Implement Logic
+// Burn Standard Library: Time Module
+// This provides time conversion functionality for Burn programs
+
+// Define a Time struct to represent time values
+def Time {
+    hours: int,
+    minutes: int,
+    seconds: int,
+    milliseconds: int
+}
+
+// Create a new Time object with integer parameters
+fun createTime(hours: int, minutes: int, seconds: int, milliseconds: int): Time {
+    return {
+        hours: hours,
+        minutes: minutes,
+        seconds: seconds,
+        milliseconds: milliseconds
+    }
+}
+
+// Convert time to total milliseconds
+fun toMilliseconds(time: Time): int {
+    return (time.hours * 3600000.0) + 
+           (time.minutes * 60000.0) + 
+           (time.seconds * 1000.0) + 
+           (time.milliseconds * 1.0)
+}
+
+// Create Time from total milliseconds
+fun fromMilliseconds(ms: float): Time {
+    var msInt = ms
+    var hours = (msInt / 3600000.0)
+    var hoursInt = hours - (hours % 1)
+    msInt = msInt - (hoursInt * 3600000.0)
+    
+    var minutes = (msInt / 60000.0)
+    var minutesInt = minutes - (minutes % 1)
+    msInt = msInt - (minutesInt * 60000.0)
+    
+    var seconds = (msInt / 1000.0)
+    var secondsInt = seconds - (seconds % 1)
+    var milliseconds = msInt - (secondsInt * 1000.0)
+    
+    return createTime(
+        hoursInt as int, 
+        minutesInt as int, 
+        secondsInt as int, 
+        milliseconds as int
+    )
+}
+
+// Convert hours to minutes
+fun hoursToMinutes(hours: float): float {
+    return hours * 60.0
+}
+
+// Convert minutes to hours
+fun minutesToHours(minutes: float): float {
+    return minutes / 60.0
+}
+
+// Convert hours to seconds
+fun hoursToSeconds(hours: float): float {
+    return hours * 3600.0
+}
+
+// Convert seconds to hours
+fun secondsToHours(seconds: float): float {
+    return seconds / 3600.0
+}
+
+// Convert minutes to seconds
+fun minutesToSeconds(minutes: float): float {
+    return minutes * 60.0
+}
+
+// Convert seconds to minutes
+fun secondsToMinutes(seconds: float): float {
+    return seconds / 60.0
+}
+
+// Convert hours to milliseconds
+fun hoursToMs(hours: float): float {
+    return hours * 3600000.0
+}
+
+// Convert milliseconds to hours
+fun msToHours(ms: float): float {
+    return ms / 3600000.0
+}
+
+// Convert minutes to milliseconds
+fun minutesToMs(minutes: float): float {
+    return minutes * 60000.0
+}
+
+// Convert milliseconds to minutes
+fun msToMinutes(ms: float): float {
+    return ms / 60000.0
+}
+
+// Convert seconds to milliseconds
+fun secondsToMs(seconds: float): float {
+    return seconds * 1000.0
+}
+
+// Convert milliseconds to seconds
+fun msToSeconds(ms: float): float {
+    return ms / 1000.0
+}
+
+// Add two times
+fun addTime(time1: Time, time2: Time): Time {
+    var ms1 = toMilliseconds(time1)
+    var ms2 = toMilliseconds(time2)
+    return fromMilliseconds(ms1 + ms2)
+}
+
+// Subtract time2 from time1
+fun subtractTime(time1: Time, time2: Time): Time {
+    var ms1 = toMilliseconds(time1)
+    var ms2 = toMilliseconds(time2)
+    return fromMilliseconds(ms1 - ms2)
+}
+
+// Format seconds into HH:MM:SS string
+fun formatTime(totalSeconds: float): string {
+    var time = fromMilliseconds(totalSeconds * 1000.0)
+    
+    // Format with leading zeros
+    var hoursStr = toString(time.hours)
+    if (time.hours < 10) {
+        hoursStr = "0" + hoursStr
+    }
+    
+    var minutesStr = toString(time.minutes)
+    if (time.minutes < 10) {
+        minutesStr = "0" + minutesStr
+    }
+    
+    var secondsStr = toString(time.seconds)
+    if (time.seconds < 10) {
+        secondsStr = "0" + secondsStr
+    }
+    
+    return hoursStr + ":" + minutesStr + ":" + secondsStr
+}
+
+// Format Time object to string (HH:MM:SS or HH:MM:SS.mmm)
+fun formatTimeObject(time: Time, includeMs: bool): string {
+    // Format with leading zeros
+    var hoursStr = toString(time.hours)
+    if (time.hours < 10) {
+        hoursStr = "0" + hoursStr
+    }
+    
+    var minutesStr = toString(time.minutes)
+    if (time.minutes < 10) {
+        minutesStr = "0" + minutesStr
+    }
+    
+    var secondsStr = toString(time.seconds)
+    if (time.seconds < 10) {
+        secondsStr = "0" + secondsStr
+    }
+    
+    var timeStr = hoursStr + ":" + minutesStr + ":" + secondsStr
+    
+    if (includeMs) {
+        var msStr = toString(time.milliseconds)
+        // Pad with leading zeros if needed
+        if (time.milliseconds < 10) {
+            msStr = "00" + msStr
+        } else if (time.milliseconds < 100) {
+            msStr = "0" + msStr
+        }
+        timeStr = timeStr + "." + msStr
+    }
+    
+    return timeStr
+}
+
+// Parse a time string (HH:MM:SS or HH:MM:SS.mmm) into a Time object
+fun parseTimeString(timeStr: string): Time {
+    // Initialize components
+    var hours = 0
+    var minutes = 0
+    var seconds = 0
+    var milliseconds = 0
+    
+    // Split into parts before and after decimal point (for milliseconds)
+    var mainPart = timeStr
+    var msPart = ""
+    
+    for (var i = 0; i < size(timeStr); i = i + 1) {
+        if (charAt(timeStr, i) == ".") {
+            mainPart = substring(timeStr, 0, i)
+            msPart = substring(timeStr, i + 1, size(timeStr))
+            break
+        }
+    }
+    
+    // Parse the HH:MM:SS part
+    var parts = split(mainPart, ":")
+    
+    if (size(parts) >= 1) {
+        hours = parseInt(parts[0])
+    }
+    
+    if (size(parts) >= 2) {
+        minutes = parseInt(parts[1])
+    }
+    
+    if (size(parts) >= 3) {
+        seconds = parseInt(parts[2])
+    }
+    
+    // Parse milliseconds if present
+    if (msPart != "") {
+        milliseconds = parseInt(msPart)
+        
+        // Adjust based on number of digits
+        if (size(msPart) == 1) {
+            milliseconds = milliseconds * 100
+        } else if (size(msPart) == 2) {
+            milliseconds = milliseconds * 10
+        }
+    }
+    
+    return createTime(hours, minutes, seconds, milliseconds)
+}
+
+// Parse a time string (HH:MM:SS) into total seconds
+fun parseTime(timeStr: string): float {
+    var time = parseTimeString(timeStr)
+    return (time.hours * 3600.0) + (time.minutes * 60.0) + time.seconds + (time.milliseconds / 1000.0)
+}
+
+// Helper function to split a string by a delimiter
+fun split(str: string, delimiter: string): array {
+    var result = []
+    var current = ""
+    
+    for (var i = 0; i < size(str); i = i + 1) {
+        var char = charAt(str, i)
+        if (char == delimiter) {
+            result = append(result, current)
+            current = ""
+        } else {
+            current = current + char
+        }
+    }
+    
+    // Add the last part
+    if (current != "") {
+        result = append(result, current)
+    }
+    
+    return result
+}
+
+// Helper function to parse int from string
+fun parseInt(str: string): int {
+    var result = 0
+    for (var i = 0; i < size(str); i = i + 1) {
+        var char = charAt(str, i)
+        if (char >= "0" && char <= "9") {
+            result = result * 10 + (char - "0")
+        }
+    }
+    return result
+}
+
+// Helper function to append to an array
+fun append(arr: array, item: any): array {
+    var newArr = []
+    for (var i = 0; i < size(arr); i = i + 1) {
+        newArr = newArr + [arr[i]]
+    }
+    newArr = newArr + [item]
+    return newArr
+}
+
+// Helper function to get character at index
+fun charAt(str: string, index: int): string {
+    if (index < 0 || index >= size(str)) {
+        return ""
+    }
+    return substring(str, index, index + 1)
+}
+
+// Helper function to get string length
+fun size(str: string): int {
+    return length(str)
+}
+
+// Helper function to get substring
+fun substring(str: string, start: int, end: int): string {
+    return getPart(str, start, end)
+}
+
+// Current time as HH:MM:SS
+fun now(): string {
+    return currentTimeHMS()
+}
