@@ -29,7 +29,7 @@ Burn is an easy-to-use general-purpose programming language designed with simpli
 
 1. Clone the repository:
 ```sh
-git clone https://github.com/s42yt/burn.git
+git clone https://github.com/burnlang/burn.git
 cd burn
 ```
 
