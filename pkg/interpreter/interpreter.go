@@ -587,6 +587,10 @@ func (i *Interpreter) addBuiltins() {
 }
 
 func (i *Interpreter) executeDeclaration(decl ast.Declaration) (Value, error) {
+	if decl != nil {
+		i.setErrorPos(decl.Pos())
+	}
+
 	switch d := decl.(type) {
 	case *ast.ClassDeclaration:
 
@@ -1018,6 +1022,10 @@ func (i *Interpreter) executeBuiltin(name string, args []Value) (Value, error) {
 }
 
 func (i *Interpreter) evaluateExpression(expr ast.Expression) (Value, error) {
+	if expr != nil {
+		i.setErrorPos(expr.Pos())
+	}
+
 	switch e := expr.(type) {
 	case *ast.BinaryExpression:
 		return i.evaluateBinary(e)

@@ -1,15 +1,17 @@
 package ast
 
-type Node interface{}
+type Node interface {
+	Pos() int
+}
 
 type Expression interface {
 	Node
-	exprNode()
+	expressionNode()
 }
 
 type Declaration interface {
 	Node
-	declNode()
+	declarationNode()
 }
 
 type Statement interface {
@@ -19,18 +21,32 @@ type Statement interface {
 
 type Program struct {
 	Declarations []Declaration
+	Position     int
+}
+
+func (p *Program) Pos() int {
+	return p.Position
 }
 
 type TypeDefinition struct {
-	Name   string
-	Fields []TypeField
+	Name     string
+	Fields   []TypeField
+	Position int
 }
 
-func (t *TypeDefinition) declNode() {}
+func (t *TypeDefinition) declarationNode() {}
+func (t *TypeDefinition) Pos() int {
+	return t.Position
+}
 
 type TypeField struct {
-	Name string
-	Type string
+	Name     string
+	Type     string
+	Position int
+}
+
+func (t *TypeField) Pos() int {
+	return t.Position
 }
 
 type FunctionDeclaration struct {
@@ -38,237 +54,373 @@ type FunctionDeclaration struct {
 	Parameters []Parameter
 	ReturnType string
 	Body       []Declaration
+	Position   int
 }
 
-func (f *FunctionDeclaration) declNode() {}
+func (f *FunctionDeclaration) declarationNode() {}
+func (f *FunctionDeclaration) Pos() int {
+	return f.Position
+}
 
 type Parameter struct {
-	Name string
-	Type string
+	Name     string
+	Type     string
+	Position int
+}
+
+func (p *Parameter) Pos() int {
+	return p.Position
 }
 
 type VariableDeclaration struct {
-	Name    string
-	Type    string
-	Value   Expression
-	IsConst bool
+	Name     string
+	Type     string
+	Value    Expression
+	IsConst  bool
+	Position int
 }
 
-func (v *VariableDeclaration) declNode() {}
+func (v *VariableDeclaration) declarationNode() {}
+func (v *VariableDeclaration) Pos() int {
+	return v.Position
+}
 
 type BlockStatement struct {
 	Statements []Declaration
+	Position   int
 }
 
-func (b *BlockStatement) declNode() {}
-func (b *BlockStatement) stmtNode() {}
+func (b *BlockStatement) declarationNode() {}
+func (b *BlockStatement) stmtNode()        {}
+func (b *BlockStatement) Pos() int {
+	return b.Position
+}
 
 type ReturnStatement struct {
-	Value Expression
+	Value    Expression
+	Position int
 }
 
-func (r *ReturnStatement) declNode() {}
-func (r *ReturnStatement) stmtNode() {}
+func (r *ReturnStatement) declarationNode() {}
+func (r *ReturnStatement) stmtNode()        {}
+func (r *ReturnStatement) Pos() int {
+	return r.Position
+}
 
 type IfStatement struct {
 	Condition  Expression
 	ThenBranch []Declaration
 	ElseBranch []Declaration
+	Position   int
 }
 
-func (i *IfStatement) declNode() {}
-func (i *IfStatement) stmtNode() {}
+func (i *IfStatement) declarationNode() {}
+func (i *IfStatement) stmtNode()        {}
+func (i *IfStatement) Pos() int {
+	return i.Position
+}
 
 type WhileStatement struct {
 	Condition Expression
 	Body      []Declaration
+	Position  int
 }
 
-func (w *WhileStatement) declNode() {}
-func (w *WhileStatement) stmtNode() {}
+func (w *WhileStatement) declarationNode() {}
+func (w *WhileStatement) stmtNode()        {}
+func (w *WhileStatement) Pos() int {
+	return w.Position
+}
 
 type ForStatement struct {
 	Initializer Declaration
 	Condition   Expression
 	Increment   Expression
 	Body        []Declaration
+	Position    int
 }
 
-func (f *ForStatement) declNode() {}
-func (f *ForStatement) stmtNode() {}
+func (f *ForStatement) declarationNode() {}
+func (f *ForStatement) stmtNode()        {}
+func (f *ForStatement) Pos() int {
+	return f.Position
+}
 
 type ExpressionStatement struct {
 	Expression Expression
+	Position   int
 }
 
-func (e *ExpressionStatement) declNode() {}
-func (e *ExpressionStatement) stmtNode() {}
+func (e *ExpressionStatement) declarationNode() {}
+func (e *ExpressionStatement) stmtNode()        {}
+func (e *ExpressionStatement) Pos() int {
+	return e.Position
+}
+
 
 type BinaryExpression struct {
 	Left     Expression
 	Operator string
 	Right    Expression
+	Position int
 }
 
-func (b *BinaryExpression) exprNode() {}
+func (b *BinaryExpression) expressionNode() {}
+func (b *BinaryExpression) Pos() int {
+	return b.Position
+}
 
 type UnaryExpression struct {
 	Operator string
 	Right    Expression
+	Position int
 }
 
-func (u *UnaryExpression) exprNode() {}
+func (u *UnaryExpression) expressionNode() {}
+func (u *UnaryExpression) Pos() int {
+	return u.Position
+}
 
 type CallExpression struct {
 	Callee    Expression
 	Arguments []Expression
+	Position  int
 }
 
-func (c *CallExpression) exprNode() {}
+func (c *CallExpression) expressionNode() {}
+func (c *CallExpression) Pos() int {
+	return c.Position
+}
 
 type GetExpression struct {
-	Object Expression
-	Name   string
+	Object   Expression
+	Name     string
+	Position int
 }
 
-func (g *GetExpression) exprNode() {}
+func (g *GetExpression) expressionNode() {}
+func (g *GetExpression) Pos() int {
+	return g.Position
+}
 
 type SetExpression struct {
-	Object Expression
-	Name   string
-	Value  Expression
+	Object   Expression
+	Name     string
+	Value    Expression
+	Position int
 }
 
-func (s *SetExpression) exprNode() {}
+func (s *SetExpression) expressionNode() {}
+func (s *SetExpression) Pos() int {
+	return s.Position
+}
 
 type IndexExpression struct {
-	Array Expression
-	Index Expression
+	Array    Expression
+	Index    Expression
+	Position int
 }
 
-func (i *IndexExpression) exprNode() {}
+func (i *IndexExpression) expressionNode() {}
+func (i *IndexExpression) Pos() int {
+	return i.Position
+}
 
 type SliceExpression struct {
-	Array Expression
-	Start Expression
-	End   Expression
+	Array    Expression
+	Start    Expression
+	End      Expression
+	Position int
 }
 
-func (s *SliceExpression) exprNode() {}
+func (s *SliceExpression) expressionNode() {}
+func (s *SliceExpression) Pos() int {
+	return s.Position
+}
 
 type ArrayLiteralExpression struct {
 	Elements []Expression
+	Position int
 }
 
-func (a *ArrayLiteralExpression) exprNode() {}
+func (a *ArrayLiteralExpression) expressionNode() {}
+func (a *ArrayLiteralExpression) Pos() int {
+	return a.Position
+}
 
 type StructLiteralExpression struct {
-	Type   string
-	Fields map[string]Expression
+	Type     string
+	Fields   map[string]Expression
+	Position int
 }
 
-func (s *StructLiteralExpression) exprNode() {}
+func (s *StructLiteralExpression) expressionNode() {}
+func (s *StructLiteralExpression) Pos() int {
+	return s.Position
+}
 
 type ClassMethodCallExpression struct {
 	ClassName  string
 	MethodName string
 	Arguments  []Expression
+	Position   int
 }
 
-func (c *ClassMethodCallExpression) exprNode() {}
+func (c *ClassMethodCallExpression) expressionNode() {}
+func (c *ClassMethodCallExpression) Pos() int {
+	return c.Position
+}
 
 type VariableExpression struct {
-	Name string
+	Name     string
+	Position int
 }
 
-func (v *VariableExpression) exprNode() {}
+func (v *VariableExpression) expressionNode() {}
+func (v *VariableExpression) Pos() int {
+	return v.Position
+}
 
 type AssignmentExpression struct {
-	Name  string
-	Value Expression
+	Name     string
+	Value    Expression
+	Position int
 }
 
-func (a *AssignmentExpression) exprNode() {}
+func (a *AssignmentExpression) expressionNode() {}
+func (a *AssignmentExpression) Pos() int {
+	return a.Position
+}
 
 type CompoundAssignmentExpression struct {
 	Name     string
 	Operator string
 	Value    Expression
+	Position int
 }
 
-func (c *CompoundAssignmentExpression) exprNode() {}
+func (c *CompoundAssignmentExpression) expressionNode() {}
+func (c *CompoundAssignmentExpression) Pos() int {
+	return c.Position
+}
 
 type LiteralExpression struct {
-	Value interface{}
-	Type  string
-	Raw   string
+	Value    interface{}
+	Type     string
+	Raw      string
+	Position int
 }
 
-func (l *LiteralExpression) exprNode() {}
+func (l *LiteralExpression) expressionNode() {}
+func (l *LiteralExpression) Pos() int {
+	return l.Position
+}
 
 type GroupingExpression struct {
 	Expression Expression
+	Position   int
 }
 
-func (g *GroupingExpression) exprNode() {}
+func (g *GroupingExpression) expressionNode() {}
+func (g *GroupingExpression) Pos() int {
+	return g.Position
+}
 
 type LambdaExpression struct {
 	Parameters []Parameter
 	ReturnType string
 	Body       []Declaration
+	Position   int
 }
 
-func (l *LambdaExpression) exprNode() {}
+func (l *LambdaExpression) expressionNode() {}
+func (l *LambdaExpression) Pos() int {
+	return l.Position
+}
 
-type ThisExpression struct{}
+type ThisExpression struct {
+	Position int
+}
 
-func (t *ThisExpression) exprNode() {}
+func (t *ThisExpression) expressionNode() {}
+func (t *ThisExpression) Pos() int {
+	return t.Position
+}
 
-type NilExpression struct{}
+type NilExpression struct {
+	Position int
+}
 
-func (n *NilExpression) exprNode() {}
+func (n *NilExpression) expressionNode() {}
+func (n *NilExpression) Pos() int {
+	return n.Position
+}
 
 type CastExpression struct {
 	Expression Expression
 	TargetType string
+	Position   int
 }
 
-func (c *CastExpression) exprNode() {}
+func (c *CastExpression) expressionNode() {}
+func (c *CastExpression) Pos() int {
+	return c.Position
+}
 
 type RangeExpression struct {
-	Start Expression
-	End   Expression
-	Step  Expression
+	Start    Expression
+	End      Expression
+	Step     Expression
+	Position int
 }
 
-func (r *RangeExpression) exprNode() {}
+func (r *RangeExpression) expressionNode() {}
+func (r *RangeExpression) Pos() int {
+	return r.Position
+}
 
 type ErrorNode struct {
-	Message string
+	Message  string
+	Position int
 }
 
-func (e *ErrorNode) exprNode() {}
-func (e *ErrorNode) declNode() {}
-func (e *ErrorNode) stmtNode() {}
+func (e *ErrorNode) expressionNode()  {}
+func (e *ErrorNode) declarationNode() {}
+func (e *ErrorNode) stmtNode()        {}
+func (e *ErrorNode) Pos() int {
+	return e.Position
+}
 
 type ImportDeclaration struct {
-	Path string
+	Path     string
+	Position int
 }
 
-func (i *ImportDeclaration) declNode() {}
+func (i *ImportDeclaration) declarationNode() {}
+func (i *ImportDeclaration) Pos() int {
+	return i.Position
+}
 
 type MultiImportDeclaration struct {
-	Imports []*ImportDeclaration
+	Imports  []*ImportDeclaration
+	Position int
 }
 
-func (m *MultiImportDeclaration) declNode() {}
+func (m *MultiImportDeclaration) declarationNode() {}
+func (m *MultiImportDeclaration) Pos() int {
+	return m.Position
+}
 
 type ClassDeclaration struct {
-	Name    string
-	Methods []*FunctionDeclaration
+	Name     string
+	Methods  []*FunctionDeclaration
+	Position int
 }
 
-func (c *ClassDeclaration) declNode() {}
+func (c *ClassDeclaration) declarationNode() {}
+func (c *ClassDeclaration) Pos() int {
+	return c.Position
+}
 
 type Visitor interface {
 	VisitProgram(program *Program) interface{}

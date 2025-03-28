@@ -188,6 +188,10 @@ func (t *TypeChecker) checkTypeDefinition(typeDef *ast.TypeDefinition) error {
 }
 
 func (t *TypeChecker) checkDeclaration(decl ast.Declaration) error {
+	if decl != nil {
+		t.setErrorPos(decl.Pos())
+	}
+
 	switch d := decl.(type) {
 	case *ast.ImportDeclaration:
 		return t.checkImport(d)
@@ -427,6 +431,10 @@ func (t *TypeChecker) checkVariableDeclaration(decl *ast.VariableDeclaration) er
 }
 
 func (t *TypeChecker) checkExpression(expr ast.Expression) (string, error) {
+	if expr != nil {
+		t.setErrorPos(expr.Pos())
+	}
+
 	switch e := expr.(type) {
 	case *ast.BinaryExpression:
 		return t.checkBinaryExpression(e)
@@ -606,6 +614,8 @@ func (t *TypeChecker) checkUnary(expr *ast.UnaryExpression) (string, error) {
 }
 
 func (t *TypeChecker) checkVariable(expr *ast.VariableExpression) (string, error) {
+	t.setErrorPos(expr.Pos())
+
 	if varType, exists := t.variables[expr.Name]; exists {
 		return varType, nil
 	}

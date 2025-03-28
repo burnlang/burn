@@ -62,11 +62,10 @@ func (p *Parser) declaration() (ast.Declaration, error) {
 }
 
 func (p *Parser) importDeclaration() (ast.Declaration, error) {
-	// Check if this is a multi-import block with parentheses
+
 	if p.match(lexer.TokenLeftParen) {
 		imports := []*ast.ImportDeclaration{}
 
-		// Parse imports until we reach the closing parenthesis
 		for !p.check(lexer.TokenRightParen) && !p.isAtEnd() {
 			if !p.match(lexer.TokenString) {
 				return nil, fmt.Errorf("expected string in import block at line %d", p.peek().Line)
@@ -89,7 +88,6 @@ func (p *Parser) importDeclaration() (ast.Declaration, error) {
 		}, nil
 	}
 
-	// Single import statement
 	if !p.match(lexer.TokenString) {
 		return nil, fmt.Errorf("expected string after import at line %d", p.peek().Line)
 	}
@@ -199,6 +197,8 @@ func (p *Parser) functionDeclaration() (ast.Declaration, error) {
 }
 
 func (p *Parser) variableDeclaration(isConst bool) (ast.Declaration, error) {
+	pos := p.peek().Position
+
 	if !p.check(lexer.TokenIdentifier) {
 		return nil, fmt.Errorf("expected variable name at line %d", p.peek().Line)
 	}
@@ -230,14 +230,18 @@ func (p *Parser) variableDeclaration(isConst bool) (ast.Declaration, error) {
 	}
 
 	return &ast.VariableDeclaration{
-		Name:    name,
-		Type:    typeName,
-		Value:   value,
-		IsConst: isConst,
+		Name:     name,
+		Type:     typeName,
+		Value:    value,
+		IsConst:  isConst,
+		Position: pos,
 	}, nil
 }
 
 func (p *Parser) typeDefinition() (ast.Declaration, error) {
+
+	pos := p.peek().Position
+
 	if !p.check(lexer.TokenIdentifier) {
 		return nil, fmt.Errorf("expected type name at line %d", p.peek().Line)
 	}
@@ -288,8 +292,9 @@ func (p *Parser) typeDefinition() (ast.Declaration, error) {
 	}
 
 	return &ast.TypeDefinition{
-		Name:   name,
-		Fields: fields,
+		Name:     name,
+		Fields:   fields,
+		Position: pos,
 	}, nil
 }
 
@@ -318,6 +323,9 @@ func (p *Parser) statement() (ast.Declaration, error) {
 }
 
 func (p *Parser) ifStatement() (ast.Declaration, error) {
+
+	pos := p.peek().Position
+
 	if !p.match(lexer.TokenLeftParen) {
 		p.current--
 	}
@@ -361,10 +369,14 @@ func (p *Parser) ifStatement() (ast.Declaration, error) {
 		Condition:  condition,
 		ThenBranch: thenBranch,
 		ElseBranch: elseBranch,
+		Position:   pos,
 	}, nil
 }
 
 func (p *Parser) whileStatement() (ast.Declaration, error) {
+
+	pos := p.peek().Position
+
 	if !p.match(lexer.TokenLeftParen) {
 		p.current--
 	}
@@ -389,10 +401,14 @@ func (p *Parser) whileStatement() (ast.Declaration, error) {
 	return &ast.WhileStatement{
 		Condition: condition,
 		Body:      body,
+		Position:  pos,
 	}, nil
 }
 
 func (p *Parser) forStatement() (ast.Declaration, error) {
+
+	pos := p.peek().Position
+
 	if !p.match(lexer.TokenLeftParen) {
 		p.current--
 	}
@@ -449,10 +465,14 @@ func (p *Parser) forStatement() (ast.Declaration, error) {
 		Condition:   condition,
 		Increment:   increment,
 		Body:        body,
+		Position:    pos,
 	}, nil
 }
 
 func (p *Parser) returnStatement() (ast.Declaration, error) {
+
+	pos := p.peek().Position
+
 	var value ast.Expression
 	var err error
 
@@ -467,7 +487,8 @@ func (p *Parser) returnStatement() (ast.Declaration, error) {
 	}
 
 	return &ast.ReturnStatement{
-		Value: value,
+		Value:    value,
+		Position: pos,
 	}, nil
 }
 
@@ -490,6 +511,9 @@ func (p *Parser) block() ([]ast.Declaration, error) {
 }
 
 func (p *Parser) expressionStatement() (ast.Declaration, error) {
+
+	pos := p.peek().Position
+
 	expr, err := p.expression()
 	if err != nil {
 		return nil, err
@@ -500,6 +524,7 @@ func (p *Parser) expressionStatement() (ast.Declaration, error) {
 
 	return &ast.ExpressionStatement{
 		Expression: expr,
+		Position:   pos,
 	}, nil
 }
 
@@ -521,14 +546,16 @@ func (p *Parser) assignment() (ast.Expression, error) {
 
 		if varExpr, ok := expr.(*ast.VariableExpression); ok {
 			return &ast.AssignmentExpression{
-				Name:  varExpr.Name,
-				Value: value,
+				Name:     varExpr.Name,
+				Value:    value,
+				Position: varExpr.Position,
 			}, nil
 		} else if getExpr, ok := expr.(*ast.GetExpression); ok {
 			return &ast.SetExpression{
-				Object: getExpr.Object,
-				Name:   getExpr.Name,
-				Value:  value,
+				Object:   getExpr.Object,
+				Name:     getExpr.Name,
+				Value:    value,
+				Position: getExpr.Position,
 			}, nil
 		}
 
@@ -555,6 +582,7 @@ func (p *Parser) logicalOr() (ast.Expression, error) {
 			Left:     expr,
 			Operator: operator,
 			Right:    right,
+			Position: p.previous().Position,
 		}
 	}
 
@@ -578,6 +606,7 @@ func (p *Parser) logicalAnd() (ast.Expression, error) {
 			Left:     expr,
 			Operator: operator,
 			Right:    right,
+			Position: p.previous().Position,
 		}
 	}
 
@@ -592,6 +621,8 @@ func (p *Parser) equality() (ast.Expression, error) {
 
 	for p.match(lexer.TokenEqual, lexer.TokenNotEqual) {
 		operator := p.previous().Value
+		opPos := p.previous().Position
+
 		right, err := p.comparison()
 		if err != nil {
 			return nil, err
@@ -601,6 +632,7 @@ func (p *Parser) equality() (ast.Expression, error) {
 			Left:     expr,
 			Operator: operator,
 			Right:    right,
+			Position: opPos,
 		}
 	}
 
@@ -624,6 +656,7 @@ func (p *Parser) comparison() (ast.Expression, error) {
 			Left:     expr,
 			Operator: operator,
 			Right:    right,
+			Position: p.previous().Position,
 		}
 	}
 
@@ -647,6 +680,7 @@ func (p *Parser) term() (ast.Expression, error) {
 			Left:     expr,
 			Operator: operator,
 			Right:    right,
+			Position: p.previous().Position,
 		}
 	}
 
@@ -670,6 +704,7 @@ func (p *Parser) factor() (ast.Expression, error) {
 			Left:     expr,
 			Operator: operator,
 			Right:    right,
+			Position: p.previous().Position,
 		}
 	}
 
@@ -687,6 +722,7 @@ func (p *Parser) unary() (ast.Expression, error) {
 		return &ast.UnaryExpression{
 			Operator: operator,
 			Right:    right,
+			Position: p.previous().Position,
 		}, nil
 	}
 
@@ -711,8 +747,9 @@ func (p *Parser) call() (ast.Expression, error) {
 			}
 			name := p.advance().Value
 			expr = &ast.GetExpression{
-				Object: expr,
-				Name:   name,
+				Object:   expr,
+				Name:     name,
+				Position: p.previous().Position,
 			}
 		} else if p.match(lexer.TokenLeftBracket) {
 			index, err := p.expression()
@@ -725,8 +762,9 @@ func (p *Parser) call() (ast.Expression, error) {
 			}
 
 			expr = &ast.IndexExpression{
-				Array: expr,
-				Index: index,
+				Array:    expr,
+				Index:    index,
+				Position: p.previous().Position,
 			}
 		} else {
 			break
@@ -760,20 +798,25 @@ func (p *Parser) finishCall(callee ast.Expression) (ast.Expression, error) {
 	return &ast.CallExpression{
 		Callee:    callee,
 		Arguments: arguments,
+		Position:  p.previous().Position,
 	}, nil
 }
 
 func (p *Parser) primary() (ast.Expression, error) {
+	pos := p.peek().Position
+
 	if p.match(lexer.TokenTrue) {
 		return &ast.LiteralExpression{
-			Value: "true",
-			Type:  "bool",
+			Value:    "true",
+			Type:     "bool",
+			Position: pos,
 		}, nil
 	}
 	if p.match(lexer.TokenFalse) {
 		return &ast.LiteralExpression{
-			Value: "false",
-			Type:  "bool",
+			Value:    "false",
+			Type:     "bool",
+			Position: p.previous().Position,
 		}, nil
 	}
 	if p.match(lexer.TokenNumber) {
@@ -782,19 +825,23 @@ func (p *Parser) primary() (ast.Expression, error) {
 			return nil, fmt.Errorf("invalid number at line %d: %s", p.previous().Line, value)
 		}
 		return &ast.LiteralExpression{
-			Value: value,
-			Type:  "number",
+			Value:    value,
+			Type:     "number",
+			Position: p.previous().Position,
 		}, nil
 	}
 	if p.match(lexer.TokenString) {
 		return &ast.LiteralExpression{
-			Value: p.previous().Value,
-			Type:  "string",
+			Value:    p.previous().Value,
+			Type:     "string",
+			Position: p.previous().Position,
 		}, nil
 	}
+
 	if p.match(lexer.TokenIdentifier) {
 		return &ast.VariableExpression{
-			Name: p.previous().Value,
+			Name:     p.previous().Value,
+			Position: p.previous().Position,
 		}, nil
 	}
 	if p.match(lexer.TokenLeftParen) {
@@ -838,8 +885,9 @@ func (p *Parser) primary() (ast.Expression, error) {
 		}
 
 		return &ast.StructLiteralExpression{
-			Type:   typeName,
-			Fields: fields,
+			Type:     typeName,
+			Fields:   fields,
+			Position: p.previous().Position,
 		}, nil
 	}
 	if p.match(lexer.TokenLeftBracket) {
@@ -872,10 +920,14 @@ func (p *Parser) arrayLiteral() (ast.Expression, error) {
 
 	return &ast.ArrayLiteralExpression{
 		Elements: elements,
+		Position: p.previous().Position,
 	}, nil
 }
 
 func (p *Parser) classDeclaration() (ast.Declaration, error) {
+
+	pos := p.peek().Position
+
 	if !p.check(lexer.TokenIdentifier) {
 		return nil, fmt.Errorf("expected class name at line %d", p.peek().Line)
 	}
@@ -908,16 +960,17 @@ func (p *Parser) classDeclaration() (ast.Declaration, error) {
 	}
 
 	return &ast.ClassDeclaration{
-		Name:    name,
-		Methods: methods,
+		Name:     name,
+		Methods:  methods,
+		Position: pos,
 	}, nil
 }
 
 func (p *Parser) Position() int {
-	if p.current > 0 && p.current < len(p.tokens) {
-		return p.tokens[p.current].Col + len(p.tokens[p.current].Value)
-	} else if p.current > 0 {
-		return p.tokens[p.current-1].Col + len(p.tokens[p.current-1].Value)
+	if p.current < len(p.tokens) {
+		return p.tokens[p.current].Position
+	} else if len(p.tokens) > 0 {
+		return p.tokens[len(p.tokens)-1].Position
 	}
 	return 0
 }
