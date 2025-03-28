@@ -148,15 +148,37 @@ func execute(source string, debug bool, stdout io.Writer) (interface{}, error) {
 		return nil, formattedError("Lexical error", err, source, lex.Position())
 	}
 
+	if debug {
+		fmt.Fprintln(stdout, "--- Tokens ---")
+		for _, token := range tokens {
+			if token.Type != lexer.TokenEOF {
+				fmt.Fprintf(stdout, "%s '%s' at position %d\n",
+					tokenTypeToString(token.Type), token.Value, token.Position)
+			}
+		}
+		fmt.Fprintln(stdout)
+	}
+
 	p := parser.New(tokens)
 	program, err := p.Parse()
 	if err != nil {
 		return nil, formattedError("Parse error", err, source, p.Position())
 	}
 
+	if debug {
+		fmt.Fprintln(stdout, "--- AST ---")
+		printAST(program, 0, stdout)
+		fmt.Fprintln(stdout)
+	}
+
 	tc := typechecker.New()
 	if err := tc.Check(program); err != nil {
 		return nil, formattedError("Type error", err, source, tc.Position())
+	}
+
+	if debug {
+		fmt.Fprintln(stdout, "--- Type Check Passed ---")
+		fmt.Fprintln(stdout)
 	}
 
 	interpreter := interpreter.New()
@@ -171,12 +193,10 @@ func execute(source string, debug bool, stdout io.Writer) (interface{}, error) {
 func formattedError(errType string, err error, source string, pos int) error {
 	errMsg := err.Error()
 
-	
 	if strings.Contains(errMsg, "at line") {
 		return fmt.Errorf("%s: %v", errType, err)
 	}
 
-	
 	if pos < 0 {
 		pos = 0
 	}
