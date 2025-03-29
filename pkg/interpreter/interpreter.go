@@ -6,13 +6,12 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/burnlang/burn/pkg/ast"
-	"github.com/burnlang/burn/pkg/lexer"
-	"github.com/burnlang/burn/pkg/parser"
 )
 
 type Value interface{}
@@ -116,41 +115,52 @@ func hasHTTPImport(program *ast.Program) bool {
 }
 
 func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
+	
+	moduleName := imp.Path
+	if strings.HasSuffix(moduleName, ".bn") {
+		moduleName = strings.TrimSuffix(moduleName, ".bn")
+	}
 
-	if strings.Contains(imp.Path, "src/lib/std/date.bn") || imp.Path == "date" {
+	
+	baseName := filepath.Base(moduleName)
+	if strings.HasSuffix(baseName, ".bn") {
+		baseName = strings.TrimSuffix(baseName, ".bn")
+	}
+
+	
+	if baseName == "date" {
 		i.registerDateLibrary()
 		return nil
 	}
 
-	if strings.Contains(imp.Path, "src/lib/std/http.bn") || imp.Path == "http" {
+	
+	if baseName == "http" {
 		i.registerHTTPLibrary()
 		return nil
 	}
 
-	source, err := os.ReadFile(imp.Path)
+	
+	if baseName == "time" {
+		
+		return nil
+	}
+
+	
+	_, err := os.ReadFile(imp.Path)
 	if err != nil {
 		return fmt.Errorf("could not read imported file %s: %v", imp.Path, err)
 	}
 
-	l := lexer.New(string(source))
-	tokens, err := l.Tokenize()
-	if err != nil {
-		return err
-	}
-
-	p := parser.New(tokens)
-	program, err := p.Parse()
-	if err != nil {
-		return err
-	}
-
+	
 	importInterpreter := New()
+	importedProgram := ast.Program{} 
 
-	_, err = importInterpreter.Interpret(program)
+	_, err = importInterpreter.Interpret(&importedProgram)
 	if err != nil {
-		return err
+		return fmt.Errorf("error interpreting imported file: %v", err)
 	}
 
+	
 	for name, fn := range importInterpreter.functions {
 		if name != "main" {
 			i.functions[name] = fn
@@ -1948,7 +1958,7 @@ func (i *Interpreter) evaluateUnary(expr *ast.UnaryExpression) (Value, error) {
 }
 
 func (i *Interpreter) evaluateCall(expr *ast.CallExpression) (Value, error) {
-	
+
 	if getExpr, ok := expr.Callee.(*ast.GetExpression); ok {
 		if classNameExpr, ok := getExpr.Object.(*ast.VariableExpression); ok {
 			className := classNameExpr.Name
@@ -1971,8 +1981,8 @@ func (i *Interpreter) evaluateCall(expr *ast.CallExpression) (Value, error) {
 					}
 				}
 				return nil, fmt.Errorf("unknown HTTP method: %s", methodName)
-			}	
-		}	
+			}
+		}
 	}
 	callee, err := i.evaluateExpression(expr.Callee)
 	if err != nil {

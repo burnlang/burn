@@ -12,6 +12,7 @@ import (
 	"github.com/burnlang/burn/pkg/interpreter"
 	"github.com/burnlang/burn/pkg/lexer"
 	"github.com/burnlang/burn/pkg/parser"
+	"github.com/burnlang/burn/pkg/stdlib"
 	"github.com/burnlang/burn/pkg/typechecker"
 )
 
@@ -342,12 +343,10 @@ func compileToExecutable(sourceFile, outputName string, stdout, stderr io.Writer
 		fmt.Fprintf(stderr, "Warning: File %s does not have the .bn extension\n", sourceFile)
 	}
 
-	
 	if outputName == sourceFile || outputName == "" {
 		outputName = strings.TrimSuffix(filepath.Base(sourceFile), ".bn")
 	}
 
-	
 	if !strings.HasSuffix(outputName, ".exe") {
 		outputName += ".exe"
 	}
@@ -410,6 +409,19 @@ func createExecutableWrapper(goFilePath, burnFilePath, burnSource string) error 
 	imports, err := collectImports(burnFilePath, burnSource)
 	if err != nil {
 		return err
+	}
+
+	
+	for name, content := range stdlib.StdLibFiles {
+		stdlibPath := "src/lib/std/" + name + ".bn"
+		if _, exists := imports[stdlibPath]; !exists {
+			imports[stdlibPath] = content
+		}
+
+		
+		if _, exists := imports[name]; !exists {
+			imports[name] = content
+		}
 	}
 
 	wrapperTemplate := `package main
@@ -519,7 +531,12 @@ func registerImport(interp *interpreter.Interpreter, path, source string) error 
 }
 
 func collectImports(mainFile, mainSource string) (map[string]string, error) {
-	imports := map[string]string{}
+	imports := make(map[string]string)
+
+	workingDir, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("error getting current directory: %v", err)
+	}
 
 	lex := lexer.New(mainSource)
 	tokens, err := lex.Tokenize()
@@ -533,55 +550,235 @@ func collectImports(mainFile, mainSource string) (map[string]string, error) {
 		return nil, err
 	}
 
-	mainDir := filepath.Dir(mainFile)
+	baseDir := filepath.Dir(mainFile)
 
-	toProcess := []ast.ImportDeclaration{}
-	for _, decl := range program.Declarations {
-		if importDecl, ok := decl.(*ast.ImportDeclaration); ok {
-			toProcess = append(toProcess, *importDecl)
+	processImport := func(imp *ast.ImportDeclaration) error {
+		
+		moduleName := imp.Path
+		if strings.HasSuffix(moduleName, ".bn") {
+			moduleName = strings.TrimSuffix(moduleName, ".bn")
 		}
-	}
 
-	processed := map[string]bool{}
-	for len(toProcess) > 0 {
-		imp := toProcess[0]
-		toProcess = toProcess[1:]
-
-		if processed[imp.Path] {
-			continue
+		
+		baseName := filepath.Base(moduleName)
+		if strings.HasSuffix(baseName, ".bn") {
+			baseName = strings.TrimSuffix(baseName, ".bn")
 		}
-		processed[imp.Path] = true
+
+		
+		if stdLib, exists := stdlib.StdLibFiles[baseName]; exists {
+			imports[imp.Path] = stdLib
+			fmt.Printf("Found standard library %s (embedded)\n", baseName)
+			return nil
+		}
+
+		if imp.Path == "http" || imp.Path == "date" || imp.Path == "time" {
+
+			stdLibPaths := []string{
+				filepath.Join(workingDir, "lib", "std", imp.Path+".bn"),
+				filepath.Join(workingDir, "src", "lib", "std", imp.Path+".bn"),
+				filepath.Join(workingDir, "std", imp.Path+".bn"),
+				filepath.Join(baseDir, "lib", "std", imp.Path+".bn"),
+				filepath.Join(baseDir, "src", "lib", "std", imp.Path+".bn"),
+				filepath.Join(baseDir, "std", imp.Path+".bn"),
+				filepath.Join("lib", "std", imp.Path+".bn"),
+				filepath.Join("src", "lib", "std", imp.Path+".bn"),
+				filepath.Join("std", imp.Path+".bn"),
+			}
+
+			for i := 1; i <= 3; i++ {
+				upPath := strings.Repeat(".."+string(os.PathSeparator), i)
+				stdLibPaths = append(stdLibPaths,
+					filepath.Join(upPath, "lib", "std", imp.Path+".bn"),
+					filepath.Join(upPath, "src", "lib", "std", imp.Path+".bn"),
+					filepath.Join(upPath, "std", imp.Path+".bn"))
+			}
+
+			var content []byte
+			var readErr error
+			var foundPath string
+
+			for _, path := range stdLibPaths {
+				content, readErr = os.ReadFile(path)
+				if readErr == nil {
+
+					imports[imp.Path] = string(content)
+					foundPath = path
+					fmt.Printf("Found standard library %s at %s\n", imp.Path, foundPath)
+					return nil
+				}
+			}
+
+			return fmt.Errorf("could not find standard library file '%s.bn'. First tried: %s",
+				imp.Path, stdLibPaths[0])
+		}
 
 		importPath := imp.Path
+		if !strings.HasSuffix(importPath, ".bn") {
+			importPath += ".bn"
+		}
+
 		if !filepath.IsAbs(importPath) {
-			importPath = filepath.Join(mainDir, importPath)
+			importPath = filepath.Join(baseDir, importPath)
 		}
 
-		source, err := os.ReadFile(importPath)
+		content, err := os.ReadFile(importPath)
 		if err != nil {
-			return nil, fmt.Errorf("error reading import %s: %v", imp.Path, err)
+			return fmt.Errorf("error reading import %s: %v", importPath, err)
 		}
 
-		imports[imp.Path] = string(source)
+		imports[imp.Path] = string(content)
 
-		importLex := lexer.New(string(source))
-		importTokens, err := importLex.Tokenize()
-		if err != nil {
-			return nil, err
+		return collectNestedImports(importPath, string(content), imports, workingDir, baseDir)
+	}
+
+	for _, decl := range program.Declarations {
+		if imp, ok := decl.(*ast.ImportDeclaration); ok {
+			if err := processImport(imp); err != nil {
+				return nil, err
+			}
 		}
 
-		importParser := parser.New(importTokens)
-		importProgram, err := importParser.Parse()
-		if err != nil {
-			return nil, err
-		}
-
-		for _, decl := range importProgram.Declarations {
-			if nestedImport, ok := decl.(*ast.ImportDeclaration); ok {
-				toProcess = append(toProcess, *nestedImport)
+		if multiImp, ok := decl.(*ast.MultiImportDeclaration); ok {
+			for _, imp := range multiImp.Imports {
+				if err := processImport(imp); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
 
 	return imports, nil
+}
+
+func findWorkspaceRoot(dir string) (string, error) {
+	markers := []string{"go.mod", ".git", "lib", "std"}
+	current := dir
+
+	for {
+		for _, marker := range markers {
+			if _, err := os.Stat(filepath.Join(current, marker)); err == nil {
+				return current, nil
+			}
+		}
+
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", fmt.Errorf("workspace root not found")
+		}
+		current = parent
+	}
+}
+
+func collectNestedImports(filePath, source string, imports map[string]string, workingDir, originBaseDir string) error {
+	lex := lexer.New(source)
+	tokens, err := lex.Tokenize()
+	if err != nil {
+		return err
+	}
+
+	p := parser.New(tokens)
+	program, err := p.Parse()
+	if err != nil {
+		return err
+	}
+
+	baseDir := filepath.Dir(filePath)
+
+	processNestedImport := func(imp *ast.ImportDeclaration) error {
+
+		if _, exists := imports[imp.Path]; exists {
+			return nil
+		}
+
+		if stdLib, exists := stdlib.StdLibFiles[imp.Path]; exists {
+			imports[imp.Path] = stdLib
+			fmt.Printf("Found standard library %s (embedded)\n", imp.Path)
+			return nil
+		}
+
+		if imp.Path == "http" || imp.Path == "date" || imp.Path == "time" {
+			stdLibPaths := []string{
+				filepath.Join(workingDir, "lib", "std", imp.Path+".bn"),
+				filepath.Join(workingDir, "src", "lib", "std", imp.Path+".bn"),
+				filepath.Join(workingDir, "std", imp.Path+".bn"),
+				filepath.Join(originBaseDir, "lib", "std", imp.Path+".bn"),
+				filepath.Join(originBaseDir, "src", "lib", "std", imp.Path+".bn"),
+				filepath.Join(originBaseDir, "std", imp.Path+".bn"),
+				filepath.Join(baseDir, "lib", "std", imp.Path+".bn"),
+				filepath.Join(baseDir, "src", "lib", "std", imp.Path+".bn"),
+				filepath.Join(baseDir, "std", imp.Path+".bn"),
+				filepath.Join("lib", "std", imp.Path+".bn"),
+				filepath.Join("src", "lib", "std", imp.Path+".bn"),
+				filepath.Join("std", imp.Path+".bn"),
+			}
+
+			for i := 1; i <= 3; i++ {
+				upPath := strings.Repeat(".."+string(os.PathSeparator), i)
+				workspaceRoot, _ := findWorkspaceRoot(workingDir)
+				stdLibPaths = append(stdLibPaths,
+					filepath.Join(upPath, "lib", "std", imp.Path+".bn"),
+					filepath.Join(upPath, "src", "lib", "std", imp.Path+".bn"),
+					filepath.Join(upPath, "std", imp.Path+".bn"),
+					filepath.Join(workspaceRoot, "lib", "std", imp.Path+".bn"),
+					filepath.Join(workspaceRoot, "std", imp.Path+".bn"),
+					filepath.Join("/", "usr", "local", "lib", "burn", "std", imp.Path+".bn"),
+					filepath.Join("/", "usr", "lib", "burn", "std", imp.Path+".bn"))
+			}
+
+			var content []byte
+			var readErr error
+			var foundPath string
+
+			for _, path := range stdLibPaths {
+				content, readErr = os.ReadFile(path)
+				if readErr == nil {
+
+					imports[imp.Path] = string(content)
+					foundPath = path
+					fmt.Printf("Found standard library %s at %s\n", imp.Path, foundPath)
+					return nil
+				}
+			}
+
+			return fmt.Errorf("could not find standard library file '%s.bn' for nested import. First tried: %s",
+				imp.Path, stdLibPaths[0])
+		}
+
+		importPath := imp.Path
+		if !strings.HasSuffix(importPath, ".bn") {
+			importPath += ".bn"
+		}
+
+		if !filepath.IsAbs(importPath) {
+			importPath = filepath.Join(baseDir, importPath)
+		}
+
+		content, err := os.ReadFile(importPath)
+		if err != nil {
+			return fmt.Errorf("error reading nested import %s: %v", importPath, err)
+		}
+
+		imports[imp.Path] = string(content)
+
+		return collectNestedImports(importPath, string(content), imports, workingDir, originBaseDir)
+	}
+
+	for _, decl := range program.Declarations {
+		if imp, ok := decl.(*ast.ImportDeclaration); ok {
+			if err := processNestedImport(imp); err != nil {
+				return err
+			}
+		}
+
+		if multiImp, ok := decl.(*ast.MultiImportDeclaration); ok {
+			for _, imp := range multiImp.Imports {
+				if err := processNestedImport(imp); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
 }
