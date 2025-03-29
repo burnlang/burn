@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/burnlang/burn/pkg/ast"
@@ -43,6 +45,14 @@ func Execute(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return executeCode(nonOptions[0], options["debug"], stdout, stderr)
 	}
 
+	if options["exe"] {
+		if len(nonOptions) == 0 {
+			fmt.Fprintln(stderr, "Error: no source file provided for compilation")
+			return 1
+		}
+		return compileToExecutable(nonOptions[0], nonOptions[len(nonOptions)-1], stdout, stderr)
+	}
+
 	if len(nonOptions) == 0 {
 		printUsage(stdout)
 		return 1
@@ -66,6 +76,7 @@ func parseArgs(args []string) ([]string, map[string]bool) {
 		"repl":    false,
 		"eval":    false,
 		"debug":   false,
+		"exe":     false,
 	}
 
 	for i := 0; i < len(args); i++ {
@@ -86,6 +97,8 @@ func parseArgs(args []string) ([]string, map[string]bool) {
 				}
 			case "-d", "--debug":
 				options["debug"] = true
+			case "-exe", "--executable":
+				options["exe"] = true
 			}
 		} else {
 			nonOptions = append(nonOptions, arg)
@@ -106,11 +119,13 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  -r, --repl     Start interactive REPL (Read-Eval-Print Loop)")
 	fmt.Fprintln(w, "  -e, --eval     Evaluate Burn code from command line")
 	fmt.Fprintln(w, "  -d, --debug    Run in debug mode (show more information)")
+	fmt.Fprintln(w, "  -exe, --executable  Compile to a standalone executable")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Examples:")
 	fmt.Fprintln(w, "  burn main.bn              Execute a Burn program")
 	fmt.Fprintln(w, "  burn -r                   Start REPL")
 	fmt.Fprintln(w, "  burn -e 'print(\"Hello\")' Evaluate a single expression")
+	fmt.Fprintln(w, "  burn -exe test/main.bn    Compile to executable")
 }
 
 func executeFile(filename string, debug bool, stdout, stderr io.Writer) int {
@@ -320,4 +335,253 @@ func startREPL(stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	return 0
+}
+
+func compileToExecutable(sourceFile, outputName string, stdout, stderr io.Writer) int {
+	if !strings.HasSuffix(sourceFile, ".bn") {
+		fmt.Fprintf(stderr, "Warning: File %s does not have the .bn extension\n", sourceFile)
+	}
+
+	
+	if outputName == sourceFile || outputName == "" {
+		outputName = strings.TrimSuffix(filepath.Base(sourceFile), ".bn")
+	}
+
+	
+	if !strings.HasSuffix(outputName, ".exe") {
+		outputName += ".exe"
+	}
+
+	fmt.Fprintf(stdout, "Compiling %s to executable %s...\n", sourceFile, outputName)
+
+	source, err := os.ReadFile(sourceFile)
+	if err != nil {
+		fmt.Fprintf(stderr, "Error reading source file: %v\n", err)
+		return 1
+	}
+
+	lex := lexer.New(string(source))
+	tokens, err := lex.Tokenize()
+	if err != nil {
+		fmt.Fprintf(stderr, "Lexical error: %v\n", err)
+		return 1
+	}
+
+	p := parser.New(tokens)
+	program, err := p.Parse()
+	if err != nil {
+		fmt.Fprintf(stderr, "Parse error: %v\n", err)
+		return 1
+	}
+
+	tc := typechecker.New()
+	if err := tc.Check(program); err != nil {
+		fmt.Fprintf(stderr, "Type error: %v\n", err)
+		return 1
+	}
+
+	tempDir, err := os.MkdirTemp("", "burn-build-")
+	if err != nil {
+		fmt.Fprintf(stderr, "Error creating build directory: %v\n", err)
+		return 1
+	}
+	defer os.RemoveAll(tempDir)
+
+	goFilePath := filepath.Join(tempDir, "main.go")
+	err = createExecutableWrapper(goFilePath, sourceFile, string(source))
+	if err != nil {
+		fmt.Fprintf(stderr, "Error creating executable wrapper: %v\n", err)
+		return 1
+	}
+
+	cmd := exec.Command("go", "build", "-o", outputName, goFilePath)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(stderr, "Error building executable: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(stdout, "Successfully compiled %s to %s\n", sourceFile, outputName)
+	return 0
+}
+
+func createExecutableWrapper(goFilePath, burnFilePath, burnSource string) error {
+	imports, err := collectImports(burnFilePath, burnSource)
+	if err != nil {
+		return err
+	}
+
+	wrapperTemplate := `package main
+
+import (
+    "fmt"
+    "os"
+
+    "github.com/burnlang/burn/pkg/interpreter"
+    "github.com/burnlang/burn/pkg/lexer"
+    "github.com/burnlang/burn/pkg/parser"
+    "github.com/burnlang/burn/pkg/typechecker"
+)
+
+
+var mainSource = %q
+
+
+var importSources = map[string]string{
+%s
+}
+
+func main() {
+    exitCode := runBurnProgram()
+    os.Exit(exitCode)
+}
+
+func runBurnProgram() int {
+    
+    interp := interpreter.New()
+    
+    
+    for path, source := range importSources {
+        if err := registerImport(interp, path, source); err != nil {
+            fmt.Fprintf(os.Stderr, "Import error: %%v\n", err)
+            return 1
+        }
+    }
+
+    
+    lex := lexer.New(mainSource)
+    tokens, err := lex.Tokenize()
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Lexical error: %%v\n", err)
+        return 1
+    }
+
+    p := parser.New(tokens)
+    program, err := p.Parse()
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Parse error: %%v\n", err)
+        return 1
+    }
+
+    tc := typechecker.New()
+    if err := tc.Check(program); err != nil {
+        fmt.Fprintf(os.Stderr, "Type error: %%v\n", err)
+        return 1
+    }
+
+    _, err = interp.Interpret(program)
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Runtime error: %%v\n", err)
+        return 1
+    }
+
+    return 0
+}
+
+func registerImport(interp *interpreter.Interpreter, path, source string) error {
+    lex := lexer.New(source)
+    tokens, err := lex.Tokenize()
+    if err != nil {
+        return err
+    }
+
+    p := parser.New(tokens)
+    program, err := p.Parse()
+    if err != nil {
+        return err
+    }
+    
+    importInterp := interpreter.New()
+    _, err = importInterp.Interpret(program)
+    if err != nil {
+        return err
+    }
+    
+    for name, fn := range importInterp.GetFunctions() {
+        if name != "main" {
+            interp.AddFunction(name, fn)
+        }
+    }
+
+    return nil
+}
+`
+
+	var importSourcesContent strings.Builder
+	for path, source := range imports {
+		importSourcesContent.WriteString(fmt.Sprintf("\t%q: %q,\n", path, source))
+	}
+
+	wrapperCode := fmt.Sprintf(wrapperTemplate, burnSource, importSourcesContent.String())
+
+	return os.WriteFile(goFilePath, []byte(wrapperCode), 0644)
+}
+
+func collectImports(mainFile, mainSource string) (map[string]string, error) {
+	imports := map[string]string{}
+
+	lex := lexer.New(mainSource)
+	tokens, err := lex.Tokenize()
+	if err != nil {
+		return nil, err
+	}
+
+	p := parser.New(tokens)
+	program, err := p.Parse()
+	if err != nil {
+		return nil, err
+	}
+
+	mainDir := filepath.Dir(mainFile)
+
+	toProcess := []ast.ImportDeclaration{}
+	for _, decl := range program.Declarations {
+		if importDecl, ok := decl.(*ast.ImportDeclaration); ok {
+			toProcess = append(toProcess, *importDecl)
+		}
+	}
+
+	processed := map[string]bool{}
+	for len(toProcess) > 0 {
+		imp := toProcess[0]
+		toProcess = toProcess[1:]
+
+		if processed[imp.Path] {
+			continue
+		}
+		processed[imp.Path] = true
+
+		importPath := imp.Path
+		if !filepath.IsAbs(importPath) {
+			importPath = filepath.Join(mainDir, importPath)
+		}
+
+		source, err := os.ReadFile(importPath)
+		if err != nil {
+			return nil, fmt.Errorf("error reading import %s: %v", imp.Path, err)
+		}
+
+		imports[imp.Path] = string(source)
+
+		importLex := lexer.New(string(source))
+		importTokens, err := importLex.Tokenize()
+		if err != nil {
+			return nil, err
+		}
+
+		importParser := parser.New(importTokens)
+		importProgram, err := importParser.Parse()
+		if err != nil {
+			return nil, err
+		}
+
+		for _, decl := range importProgram.Declarations {
+			if nestedImport, ok := decl.(*ast.ImportDeclaration); ok {
+				toProcess = append(toProcess, *nestedImport)
+			}
+		}
+	}
+
+	return imports, nil
 }

@@ -69,6 +69,33 @@ burn -r
 burn -e 'print("Hello, World!")'
 ```
 
+### Compile to standalone executable
+
+```sh
+burn -exe path/to/file.bn
+```
+
+This compiles your Burn program into a standalone executable that can be run without the Burn interpreter. The executable will be named after your source file (e.g., `file.exe` on Windows or `file` on other platforms).
+
+You can also specify a custom output name:
+
+```sh
+burn -exe path/to/file.bn custom-name
+```
+
+The compiled executable includes the Burn runtime and all imported dependencies, so it can be distributed and run without requiring Burn to be installed.
+
+#### Example
+
+```sh
+# Compile
+burn -exe test/class.bn
+
+# Run the executable
+./class.exe  # On Windows/Mac
+./class      # On Linux
+```
+
 ### Debug mode
 
 Add the `-d` flag to see tokens, AST, and execution details:

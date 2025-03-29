@@ -1530,3 +1530,17 @@ func (i *Interpreter) evaluateClassMethodCall(expr *ast.ClassMethodCallExpressio
 
 	return class.Call(methodName, i, args)
 }
+
+
+func (i *Interpreter) GetFunctions() map[string]*ast.FunctionDeclaration {
+	functions := make(map[string]*ast.FunctionDeclaration)
+	for name, fn := range i.functions {
+		functions[name] = fn
+	}
+	return functions
+}
+
+
+func (i *Interpreter) AddFunction(name string, fn *ast.FunctionDeclaration) {
+	i.functions[name] = fn
+}
