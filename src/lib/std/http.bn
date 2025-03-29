@@ -1,0 +1,40 @@
+// Burn Standard Library: HTTP Module
+// This provides HTTP request functionality for Burn programs
+
+// HTTP class implementation
+class HTTP {
+    // Make a GET request to the specified URL
+    fun get(url: string): HTTPResponse {
+        // Implementation is provided by the interpreter
+    }
+    
+    // Make a POST request to the specified URL with the given body
+    fun post(url: string, body: string): HTTPResponse {
+        // Implementation is provided by the interpreter
+    }
+    
+    // Make a PUT request to the specified URL with the given body
+    fun put(url: string, body: string): HTTPResponse {
+        // Implementation is provided by the interpreter
+    }
+    
+    // Make a DELETE request to the specified URL
+    fun delete(url: string): HTTPResponse {
+        // Implementation is provided by the interpreter
+    }
+    
+    // Add custom headers to a request
+    fun setHeaders(headers: array): bool {
+        // Implementation is provided by the interpreter
+    }
+    
+    // Get a header value from a response
+    fun getHeader(response: HTTPResponse, name: string): string {
+        // Implementation is provided by the interpreter
+    }
+    
+    // Parse JSON from a response body
+    fun parseJSON(body: string): any {
+        // Implementation is provided by the interpreter
+    }
+}

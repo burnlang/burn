@@ -122,6 +122,45 @@ func New() *TypeChecker {
 
 	tc.types["void"] = map[string]string{}
 
+	tc.types["HTTPResponse"] = map[string]string{
+		"statusCode": "int",
+		"body":       "string",
+		"headers":    "array",
+	}
+
+	tc.types["Object"] = map[string]string{}
+
+	tc.classes["HTTP"] = map[string]FunctionType{
+		"get": {
+			Parameters: []string{"string"},
+			ReturnType: "HTTPResponse",
+		},
+		"post": {
+			Parameters: []string{"string", "string"},
+			ReturnType: "HTTPResponse",
+		},
+		"put": {
+			Parameters: []string{"string", "string"},
+			ReturnType: "HTTPResponse",
+		},
+		"delete": {
+			Parameters: []string{"string"},
+			ReturnType: "HTTPResponse",
+		},
+		"setHeaders": {
+			Parameters: []string{"array"},
+			ReturnType: "bool",
+		},
+		"getHeader": {
+			Parameters: []string{"HTTPResponse", "string"},
+			ReturnType: "string",
+		},
+		"parseJSON": {
+			Parameters: []string{"string"},
+			ReturnType: "any",
+		},
+	}
+
 	return tc
 }
 
@@ -429,12 +468,11 @@ func (t *TypeChecker) checkVariableDeclaration(decl *ast.VariableDeclaration) er
 	if _, isBuiltin := t.types[decl.Type]; !isBuiltin &&
 		decl.Type != "int" && decl.Type != "float" &&
 		decl.Type != "string" && decl.Type != "bool" &&
-		decl.Type != "void" && 
+		decl.Type != "void" &&
 		decl.Type != "array" && decl.Type != "any" {
 		return fmt.Errorf("unknown type: %s", decl.Type)
 	}
 
-	
 	if decl.Type == "void" {
 		return fmt.Errorf("variables cannot have void type")
 	}

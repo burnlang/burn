@@ -11,6 +11,15 @@ type Struct struct {
 	Fields   map[string]interface{}
 }
 
+func (s *Struct) GetField(name string) (interface{}, bool) {
+	value, exists := s.Fields[name]
+	return value, exists
+}
+
+func (s *Struct) SetField(name string, value interface{}) {
+	s.Fields[name] = value
+}
+
 func (i *Interpreter) evalExpression(expr ast.Expression) (interface{}, error) {
 	return nil, fmt.Errorf("evalExpression not implemented for %T", expr)
 }

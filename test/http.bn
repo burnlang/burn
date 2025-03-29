@@ -1,0 +1,31 @@
+// HTTP API example for Burn
+
+import "http"
+
+fun main() {
+    // Default headers are already set, but we can override them if needed
+    var headers = [
+        "User-Agent: BurnLang/1.0",
+        "Accept: application/json"
+    ]
+    HTTP.setHeaders(headers)
+    
+    // Make a GET request to the anime reaction API
+    print("Making GET request to otakugifs API...")
+    var response = HTTP.get("https://api.otakugifs.xyz/gif?reaction=kiss&format=gif")
+    
+    // Print response information
+    print("Status code: " + toString(response.statusCode))
+    
+    // Print the raw response body
+    print("Response body: " + response.body)
+    
+    // Parse the JSON response
+    var jsonData = HTTP.parseJSON(response.body)
+    
+    // Check content type header
+    var contentType = HTTP.getHeader(response, "Content-Type")
+    print("Content-Type: " + contentType)
+    
+    print("\nAPI response successfully retrieved!")
+}

@@ -1,7 +1,10 @@
 package interpreter
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -49,6 +52,7 @@ func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
 				class.AddMethod(method.Name, method)
 			}
 			i.classes[classDef.Name] = class
+			i.environment[classDef.Name] = class
 		}
 	}
 
@@ -72,6 +76,11 @@ func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
 
 	i.addBuiltins()
 
+	if _, ok := i.environment["HTTP"]; !ok && (hasHTTPImport(program)) {
+		fmt.Println("HTTP library not found in environment, registering it now")
+		i.registerHTTPLibrary()
+	}
+
 	if mainFn, exists := i.functions["main"]; exists {
 		return i.executeFunction(mainFn, []Value{})
 	}
@@ -88,10 +97,33 @@ func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
 	return result, nil
 }
 
+func hasHTTPImport(program *ast.Program) bool {
+	for _, decl := range program.Declarations {
+		if imp, ok := decl.(*ast.ImportDeclaration); ok {
+			if imp.Path == "http" || strings.Contains(imp.Path, "http.bn") {
+				return true
+			}
+		}
+		if multiImp, ok := decl.(*ast.MultiImportDeclaration); ok {
+			for _, imp := range multiImp.Imports {
+				if imp.Path == "http" || strings.Contains(imp.Path, "http.bn") {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 
 	if strings.Contains(imp.Path, "src/lib/std/date.bn") || imp.Path == "date" {
 		i.registerDateLibrary()
+		return nil
+	}
+
+	if strings.Contains(imp.Path, "src/lib/std/http.bn") || imp.Path == "http" {
+		i.registerHTTPLibrary()
 		return nil
 	}
 
@@ -517,6 +549,359 @@ func (i *Interpreter) registerDateLibrary() {
 	}
 }
 
+func convertJSONToBurn(value interface{}) Value {
+	switch v := value.(type) {
+	case map[string]interface{}:
+		fields := make(map[string]interface{})
+		for key, val := range v {
+			fields[key] = convertJSONToBurn(val)
+		}
+		return &Struct{
+			TypeName: "Object",
+			Fields:   fields,
+		}
+	case []interface{}:
+		array := make([]Value, len(v))
+		for i, val := range v {
+			array[i] = convertJSONToBurn(val)
+		}
+		return array
+	case string:
+		return v
+	case float64:
+		return v
+	case bool:
+		return v
+	case nil:
+		return nil
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+func (i *Interpreter) registerHTTPLibrary() {
+	httpClass := NewClass("HTTP")
+
+	httpClass.AddStatic("get", &ast.FunctionDeclaration{
+		Name:       "get",
+		Parameters: []ast.Parameter{{Name: "url", Type: "string"}},
+		ReturnType: "HTTPResponse",
+	})
+	httpClass.AddStatic("post", &ast.FunctionDeclaration{
+		Name:       "post",
+		Parameters: []ast.Parameter{{Name: "url", Type: "string"}, {Name: "body", Type: "string"}},
+		ReturnType: "HTTPResponse",
+	})
+	httpClass.AddStatic("put", &ast.FunctionDeclaration{
+		Name:       "put",
+		Parameters: []ast.Parameter{{Name: "url", Type: "string"}, {Name: "body", Type: "string"}},
+		ReturnType: "HTTPResponse",
+	})
+	httpClass.AddStatic("delete", &ast.FunctionDeclaration{
+		Name:       "delete",
+		Parameters: []ast.Parameter{{Name: "url", Type: "string"}},
+		ReturnType: "HTTPResponse",
+	})
+	httpClass.AddStatic("getHeader", &ast.FunctionDeclaration{
+		Name:       "getHeader",
+		Parameters: []ast.Parameter{{Name: "response", Type: "HTTPResponse"}, {Name: "name", Type: "string"}},
+		ReturnType: "string",
+	})
+	httpClass.AddStatic("parseJSON", &ast.FunctionDeclaration{
+		Name:       "parseJSON",
+		Parameters: []ast.Parameter{{Name: "body", Type: "string"}},
+		ReturnType: "any",
+	})
+
+	httpClass.AddStatic("setHeaders", &ast.FunctionDeclaration{
+		Name:       "setHeaders",
+		Parameters: []ast.Parameter{{Name: "headers", Type: "array"}},
+		ReturnType: "bool",
+	})
+
+	i.classes["HTTP"] = httpClass
+
+	i.environment["HTTP"] = httpClass
+
+	i.environment["HTTP.get"] = &BuiltinFunction{
+		Name: "HTTP.get",
+		Fn: func(args []Value) (Value, error) {
+			if len(args) != 1 {
+				return nil, fmt.Errorf("HTTP.get expects exactly one string argument")
+			}
+			urlStr, ok := args[0].(string)
+			if !ok {
+				return nil, fmt.Errorf("HTTP.get expects a string URL")
+			}
+			client := &http.Client{Timeout: time.Second * 30}
+			req, err := http.NewRequest("GET", urlStr, nil)
+			if err != nil {
+				return nil, fmt.Errorf("error creating request: %v", err)
+			}
+			for k, v := range httpHeaders {
+				req.Header.Add(k, v)
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				return nil, fmt.Errorf("error making request: %v", err)
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return nil, fmt.Errorf("error reading response: %v", err)
+			}
+			headers := []Value{}
+			for name, values := range resp.Header {
+				for _, value := range values {
+					headers = append(headers, fmt.Sprintf("%s: %s", name, value))
+				}
+			}
+			return &Struct{
+				TypeName: "HTTPResponse",
+				Fields: map[string]interface{}{
+					"statusCode": resp.StatusCode,
+					"body":       string(body),
+					"headers":    headers,
+				},
+			}, nil
+		},
+	}
+
+	i.environment["HTTP.setHeaders"] = &BuiltinFunction{
+		Name: "HTTP.setHeaders",
+		Fn: func(args []Value) (Value, error) {
+			if len(args) != 1 {
+				return nil, fmt.Errorf("HTTP.setHeaders expects exactly one array argument")
+			}
+			headerArray, ok := args[0].([]Value)
+			if !ok {
+				return nil, fmt.Errorf("HTTP.setHeaders expects an array of header strings")
+			}
+			newHeaders := make(map[string]string)
+			for _, hv := range headerArray {
+				headerStr, ok := hv.(string)
+				if !ok {
+					return nil, fmt.Errorf("each header must be a string")
+				}
+				parts := strings.SplitN(headerStr, ":", 2)
+				if len(parts) != 2 {
+					return nil, fmt.Errorf("invalid header format: %s", headerStr)
+				}
+				name := strings.TrimSpace(parts[0])
+				value := strings.TrimSpace(parts[1])
+				newHeaders[name] = value
+			}
+
+			httpHeaders = newHeaders
+			return true, nil
+		},
+	}
+
+	i.environment["HTTP.getHeader"] = &BuiltinFunction{
+		Name: "HTTP.getHeader",
+		Fn: func(args []Value) (Value, error) {
+			if len(args) != 2 {
+				return nil, fmt.Errorf("HTTP.getHeader expects exactly two arguments")
+			}
+			respObj, ok := args[0].(*Struct)
+			if !ok || respObj.TypeName != "HTTPResponse" {
+				return nil, fmt.Errorf("HTTP.getHeader expects an HTTPResponse as first argument")
+			}
+			headerName, ok := args[1].(string)
+			if !ok {
+				return nil, fmt.Errorf("HTTP.getHeader expects a string header name")
+			}
+			headers, ok := respObj.Fields["headers"].([]Value)
+			if !ok {
+				return "", nil
+			}
+			headerName = strings.ToLower(headerName)
+			for _, h := range headers {
+				headerStr, ok := h.(string)
+				if !ok {
+					continue
+				}
+				parts := strings.SplitN(headerStr, ":", 2)
+				if len(parts) != 2 {
+					continue
+				}
+				name := strings.ToLower(strings.TrimSpace(parts[0]))
+				value := strings.TrimSpace(parts[1])
+				if name == headerName {
+					return value, nil
+				}
+			}
+			return "", nil
+		},
+	}
+
+	i.environment["HTTP.parseJSON"] = &BuiltinFunction{
+		Name: "HTTP.parseJSON",
+		Fn: func(args []Value) (Value, error) {
+			if len(args) != 1 {
+				return nil, fmt.Errorf("HTTP.parseJSON expects exactly one string argument")
+			}
+			jsonStr, ok := args[0].(string)
+			if !ok {
+				return nil, fmt.Errorf("HTTP.parseJSON expects a string JSON")
+			}
+			var result interface{}
+			err := json.Unmarshal([]byte(jsonStr), &result)
+			if err != nil {
+				return nil, fmt.Errorf("error parsing JSON: %v", err)
+			}
+			return convertJSONToBurn(result), nil
+		},
+	}
+
+	i.environment["HTTP.post"] = &BuiltinFunction{
+		Name: "HTTP.post",
+		Fn: func(args []Value) (Value, error) {
+			if len(args) != 2 {
+				return nil, fmt.Errorf("HTTP.post expects exactly two string arguments (url, body)")
+			}
+			urlStr, ok := args[0].(string)
+			if !ok {
+				return nil, fmt.Errorf("HTTP.post expects a string URL as first argument")
+			}
+			bodyStr, ok := args[1].(string)
+			if !ok {
+				return nil, fmt.Errorf("HTTP.post expects a string body as second argument")
+			}
+
+			client := &http.Client{Timeout: time.Second * 30}
+			req, err := http.NewRequest("POST", urlStr, strings.NewReader(bodyStr))
+			if err != nil {
+				return nil, fmt.Errorf("error creating request: %v", err)
+			}
+			for k, v := range httpHeaders {
+				req.Header.Add(k, v)
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				return nil, fmt.Errorf("error making request: %v", err)
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return nil, fmt.Errorf("error reading response: %v", err)
+			}
+			headers := []Value{}
+			for name, values := range resp.Header {
+				for _, value := range values {
+					headers = append(headers, fmt.Sprintf("%s: %s", name, value))
+				}
+			}
+			return &Struct{
+				TypeName: "HTTPResponse",
+				Fields: map[string]interface{}{
+					"statusCode": resp.StatusCode,
+					"body":       string(body),
+					"headers":    headers,
+				},
+			}, nil
+		},
+	}
+
+	i.environment["HTTP.put"] = &BuiltinFunction{
+		Name: "HTTP.put",
+		Fn: func(args []Value) (Value, error) {
+			if len(args) != 2 {
+				return nil, fmt.Errorf("HTTP.put expects exactly two string arguments (url, body)")
+			}
+			urlStr, ok := args[0].(string)
+			if !ok {
+				return nil, fmt.Errorf("HTTP.put expects a string URL as first argument")
+			}
+			bodyStr, ok := args[1].(string)
+			if !ok {
+				return nil, fmt.Errorf("HTTP.put expects a string body as second argument")
+			}
+
+			client := &http.Client{Timeout: time.Second * 30}
+			req, err := http.NewRequest("PUT", urlStr, strings.NewReader(bodyStr))
+			if err != nil {
+				return nil, fmt.Errorf("error creating request: %v", err)
+			}
+			for k, v := range httpHeaders {
+				req.Header.Add(k, v)
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				return nil, fmt.Errorf("error making request: %v", err)
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return nil, fmt.Errorf("error reading response: %v", err)
+			}
+			headers := []Value{}
+			for name, values := range resp.Header {
+				for _, value := range values {
+					headers = append(headers, fmt.Sprintf("%s: %s", name, value))
+				}
+			}
+			return &Struct{
+				TypeName: "HTTPResponse",
+				Fields: map[string]interface{}{
+					"statusCode": resp.StatusCode,
+					"body":       string(body),
+					"headers":    headers,
+				},
+			}, nil
+		},
+	}
+
+	i.environment["HTTP.delete"] = &BuiltinFunction{
+		Name: "HTTP.delete",
+		Fn: func(args []Value) (Value, error) {
+			if len(args) != 1 {
+				return nil, fmt.Errorf("HTTP.delete expects exactly one string argument")
+			}
+			urlStr, ok := args[0].(string)
+			if !ok {
+				return nil, fmt.Errorf("HTTP.delete expects a string URL")
+			}
+			client := &http.Client{Timeout: time.Second * 30}
+			req, err := http.NewRequest("DELETE", urlStr, nil)
+			if err != nil {
+				return nil, fmt.Errorf("error creating request: %v", err)
+			}
+			for k, v := range httpHeaders {
+				req.Header.Add(k, v)
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				return nil, fmt.Errorf("error making request: %v", err)
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return nil, fmt.Errorf("error reading response: %v", err)
+			}
+			headers := []Value{}
+			for name, values := range resp.Header {
+				for _, value := range values {
+					headers = append(headers, fmt.Sprintf("%s: %s", name, value))
+				}
+			}
+			return &Struct{
+				TypeName: "HTTPResponse",
+				Fields: map[string]interface{}{
+					"statusCode": resp.StatusCode,
+					"body":       string(body),
+					"headers":    headers,
+				},
+			}, nil
+		},
+	}
+}
+
+var httpHeaders = map[string]string{
+	"User-Agent": "BurnLang/1.0",
+	"Accept":     "application/json",
+}
+
 func (i *Interpreter) addBuiltins() {
 	i.functions["print"] = &ast.FunctionDeclaration{
 		Name: "print",
@@ -613,7 +998,7 @@ func (i *Interpreter) executeDeclaration(decl ast.Declaration) (Value, error) {
 		return i.evaluateExpression(d.Expression)
 	case *ast.ReturnStatement:
 		if d.Value == nil {
-			
+
 			return nil, nil
 		}
 		return i.evaluateExpression(d.Value)
@@ -721,19 +1106,26 @@ func (i *Interpreter) executeFunction(fn *ast.FunctionDeclaration, args []Value)
 		prevEnv[k] = v
 	}
 
-	i.environment = make(map[string]Value)
+	newEnv := make(map[string]Value)
+	for k, v := range prevEnv {
+		newEnv[k] = v
+	}
 
 	for j, param := range fn.Parameters {
 		if j < len(args) {
-			i.environment[param.Name] = args[j]
+			newEnv[param.Name] = args[j]
 		}
 	}
+
+	i.environment = newEnv
 
 	var result Value
 	for _, stmt := range fn.Body {
 		var err error
 		result, err = i.executeDeclaration(stmt)
 		if err != nil {
+
+			i.environment = prevEnv
 			return nil, err
 		}
 	}
@@ -744,10 +1136,21 @@ func (i *Interpreter) executeFunction(fn *ast.FunctionDeclaration, args []Value)
 }
 
 func (i *Interpreter) executeBuiltin(name string, args []Value) (Value, error) {
+
 	if builtinFunc, exists := i.environment[name]; exists {
 		if bf, ok := builtinFunc.(*BuiltinFunction); ok {
 			return bf.Call(args)
 		}
+	}
+
+	if strings.HasPrefix(name, "HTTP.") {
+		methodName := name
+		if builtinFunc, exists := i.environment[methodName]; exists {
+			if bf, ok := builtinFunc.(*BuiltinFunction); ok {
+				return bf.Call(args)
+			}
+		}
+		return nil, fmt.Errorf("unknown HTTP method: %s", name)
 	}
 
 	switch name {
@@ -1016,6 +1419,248 @@ func (i *Interpreter) executeBuiltin(name string, args []Value) (Value, error) {
 			return "", fmt.Errorf("error reading input: %v", err)
 		}
 		return input, nil
+
+	case "HTTP.get":
+		if len(args) != 1 {
+			return nil, fmt.Errorf("HTTP.get expects exactly one string argument")
+		}
+		urlStr, ok := args[0].(string)
+		if !ok {
+			return nil, fmt.Errorf("HTTP.get expects a string URL")
+		}
+		client := &http.Client{Timeout: time.Second * 30}
+		req, err := http.NewRequest("GET", urlStr, nil)
+		if err != nil {
+			return nil, fmt.Errorf("error creating request: %v", err)
+		}
+		for k, v := range httpHeaders {
+			req.Header.Add(k, v)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("error making request: %v", err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("error reading response: %v", err)
+		}
+		headers := []Value{}
+		for name, values := range resp.Header {
+			for _, value := range values {
+				headers = append(headers, fmt.Sprintf("%s: %s", name, value))
+			}
+		}
+		return &Struct{
+			TypeName: "HTTPResponse",
+			Fields: map[string]interface{}{
+				"statusCode": resp.StatusCode,
+				"body":       string(body),
+				"headers":    headers,
+			},
+		}, nil
+
+	case "HTTP.setHeaders":
+		if len(args) != 1 {
+			return nil, fmt.Errorf("HTTP.setHeaders expects exactly one array argument")
+		}
+		headerArray, ok := args[0].([]Value)
+		if !ok {
+			return nil, fmt.Errorf("HTTP.setHeaders expects an array of header strings")
+		}
+		newHeaders := make(map[string]string)
+		for _, hv := range headerArray {
+			headerStr, ok := hv.(string)
+			if !ok {
+				return nil, fmt.Errorf("each header must be a string")
+			}
+			parts := strings.SplitN(headerStr, ":", 2)
+			if len(parts) != 2 {
+				return nil, fmt.Errorf("invalid header format: %s", headerStr)
+			}
+			name := strings.TrimSpace(parts[0])
+			value := strings.TrimSpace(parts[1])
+			newHeaders[name] = value
+		}
+		httpHeaders = newHeaders
+		return true, nil
+
+	case "HTTP.getHeader":
+		if len(args) != 2 {
+			return nil, fmt.Errorf("HTTP.getHeader expects exactly two arguments")
+		}
+		respObj, ok := args[0].(*Struct)
+		if !ok || respObj.TypeName != "HTTPResponse" {
+			return nil, fmt.Errorf("HTTP.getHeader expects an HTTPResponse as first argument")
+		}
+		headerName, ok := args[1].(string)
+		if !ok {
+			return nil, fmt.Errorf("HTTP.getHeader expects a string header name")
+		}
+		headers, ok := respObj.Fields["headers"].([]Value)
+		if !ok {
+			return "", nil
+		}
+		headerName = strings.ToLower(headerName)
+		for _, h := range headers {
+			headerStr, ok := h.(string)
+			if !ok {
+				continue
+			}
+			parts := strings.SplitN(headerStr, ":", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			name := strings.ToLower(strings.TrimSpace(parts[0]))
+			value := strings.TrimSpace(parts[1])
+			if name == headerName {
+				return value, nil
+			}
+		}
+		return "", nil
+
+	case "HTTP.parseJSON":
+		if len(args) != 1 {
+			return nil, fmt.Errorf("HTTP.parseJSON expects exactly one string argument")
+		}
+		jsonStr, ok := args[0].(string)
+		if !ok {
+			return nil, fmt.Errorf("HTTP.parseJSON expects a string JSON")
+		}
+		var result interface{}
+		err := json.Unmarshal([]byte(jsonStr), &result)
+		if err != nil {
+			return nil, fmt.Errorf("error parsing JSON: %v", err)
+		}
+		return convertJSONToBurn(result), nil
+
+	case "HTTP.post":
+		if len(args) != 2 {
+			return nil, fmt.Errorf("HTTP.post expects exactly two string arguments (url, body)")
+		}
+		urlStr, ok := args[0].(string)
+		if !ok {
+			return nil, fmt.Errorf("HTTP.post expects a string URL as first argument")
+		}
+		bodyStr, ok := args[1].(string)
+		if !ok {
+			return nil, fmt.Errorf("HTTP.post expects a string body as second argument")
+		}
+		client := &http.Client{Timeout: time.Second * 30}
+		req, err := http.NewRequest("POST", urlStr, strings.NewReader(bodyStr))
+		if err != nil {
+			return nil, fmt.Errorf("error creating request: %v", err)
+		}
+		for k, v := range httpHeaders {
+			req.Header.Add(k, v)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("error making request: %v", err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("error reading response: %v", err)
+		}
+		headers := []Value{}
+		for name, values := range resp.Header {
+			for _, value := range values {
+				headers = append(headers, fmt.Sprintf("%s: %s", name, value))
+			}
+		}
+		return &Struct{
+			TypeName: "HTTPResponse",
+			Fields: map[string]interface{}{
+				"statusCode": resp.StatusCode,
+				"body":       string(body),
+				"headers":    headers,
+			},
+		}, nil
+
+	case "HTTP.put":
+		if len(args) != 2 {
+			return nil, fmt.Errorf("HTTP.put expects exactly two string arguments (url, body)")
+		}
+		urlStr, ok := args[0].(string)
+		if !ok {
+			return nil, fmt.Errorf("HTTP.put expects a string URL as first argument")
+		}
+		bodyStr, ok := args[1].(string)
+		if !ok {
+			return nil, fmt.Errorf("HTTP.put expects a string body as second argument")
+		}
+		client := &http.Client{Timeout: time.Second * 30}
+		req, err := http.NewRequest("PUT", urlStr, strings.NewReader(bodyStr))
+		if err != nil {
+			return nil, fmt.Errorf("error creating request: %v", err)
+		}
+		for k, v := range httpHeaders {
+			req.Header.Add(k, v)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("error making request: %v", err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("error reading response: %v", err)
+		}
+		headers := []Value{}
+		for name, values := range resp.Header {
+			for _, value := range values {
+				headers = append(headers, fmt.Sprintf("%s: %s", name, value))
+			}
+		}
+		return &Struct{
+			TypeName: "HTTPResponse",
+			Fields: map[string]interface{}{
+				"statusCode": resp.StatusCode,
+				"body":       string(body),
+				"headers":    headers,
+			},
+		}, nil
+
+	case "HTTP.delete":
+		if len(args) != 1 {
+			return nil, fmt.Errorf("HTTP.delete expects exactly one string argument")
+		}
+		urlStr, ok := args[0].(string)
+		if !ok {
+			return nil, fmt.Errorf("HTTP.delete expects a string URL")
+		}
+		client := &http.Client{Timeout: time.Second * 30}
+		req, err := http.NewRequest("DELETE", urlStr, nil)
+		if err != nil {
+			return nil, fmt.Errorf("error creating request: %v", err)
+		}
+		for k, v := range httpHeaders {
+			req.Header.Add(k, v)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("error making request: %v", err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("error reading response: %v", err)
+		}
+		headers := []Value{}
+		for name, values := range resp.Header {
+			for _, value := range values {
+				headers = append(headers, fmt.Sprintf("%s: %s", name, value))
+			}
+		}
+		return &Struct{
+			TypeName: "HTTPResponse",
+			Fields: map[string]interface{}{
+				"statusCode": resp.StatusCode,
+				"body":       string(body),
+				"headers":    headers,
+			},
+		}, nil
 
 	default:
 		return nil, fmt.Errorf("unknown built-in function: %s", name)
@@ -1303,82 +1948,55 @@ func (i *Interpreter) evaluateUnary(expr *ast.UnaryExpression) (Value, error) {
 }
 
 func (i *Interpreter) evaluateCall(expr *ast.CallExpression) (Value, error) {
-
+	
 	if getExpr, ok := expr.Callee.(*ast.GetExpression); ok {
-
 		if classNameExpr, ok := getExpr.Object.(*ast.VariableExpression); ok {
 			className := classNameExpr.Name
 			methodName := getExpr.Name
 
-			classMethodCall := &ast.ClassMethodCallExpression{
-				ClassName:  className,
-				MethodName: methodName,
-				Arguments:  expr.Arguments,
-			}
+			if className == "HTTP" {
+				fullMethodName := className + "." + methodName
+				args := make([]Value, len(expr.Arguments))
+				for j, arg := range expr.Arguments {
+					val, err := i.evaluateExpression(arg)
+					if err != nil {
+						return nil, err
+					}
+					args[j] = val
+				}
 
-			return i.evaluateClassMethodCall(classMethodCall)
-		}
+				if builtinFunc, exists := i.environment[fullMethodName]; exists {
+					if bf, ok := builtinFunc.(*BuiltinFunction); ok {
+						return bf.Call(args)
+					}
+				}
+				return nil, fmt.Errorf("unknown HTTP method: %s", methodName)
+			}	
+		}	
+	}
+	callee, err := i.evaluateExpression(expr.Callee)
+	if err != nil {
+		return nil, err
+	}
 
-		object, err := i.evaluateExpression(getExpr.Object)
+	args := make([]Value, len(expr.Arguments))
+	for j, arg := range expr.Arguments {
+		val, err := i.evaluateExpression(arg)
 		if err != nil {
 			return nil, err
 		}
-
-		if structObj, ok := object.(*Struct); ok {
-
-			methodName := getExpr.Name
-
-			args := make([]Value, len(expr.Arguments))
-			for j, arg := range expr.Arguments {
-				val, err := i.evaluateExpression(arg)
-				if err != nil {
-					return nil, err
-				}
-				args[j] = val
-			}
-
-			if class, exists := i.classes[structObj.TypeName]; exists {
-
-				allArgs := make([]Value, len(args)+1)
-				allArgs[0] = structObj
-				copy(allArgs[1:], args)
-
-				if method, exists := class.Methods[methodName]; exists {
-					return i.executeFunction(method, allArgs)
-				}
-			}
-
-			return nil, fmt.Errorf("undefined method '%s' on type '%s'", methodName, structObj.TypeName)
-		}
-
-		return nil, fmt.Errorf("cannot call method on expression of type %T", object)
+		args[j] = val
 	}
 
-	callee, ok := expr.Callee.(*ast.VariableExpression)
-	if !ok {
-		return nil, fmt.Errorf("callee is not a function name")
+	if builtin, ok := callee.(*BuiltinFunction); ok {
+		return builtin.Call(args)
 	}
 
-	args := make([]Value, 0, len(expr.Arguments))
-	for _, arg := range expr.Arguments {
-		value, err := i.evaluateExpression(arg)
-		if err != nil {
-			return nil, err
-		}
-		args = append(args, value)
+	if fn, ok := i.functions[expr.Callee.(*ast.VariableExpression).Name]; ok {
+		return i.executeFunction(fn, args)
 	}
 
-	switch callee.Name {
-	case "print", "toString", "input":
-		return i.executeBuiltin(callee.Name, args)
-	}
-
-	fn, exists := i.functions[callee.Name]
-	if !exists {
-		return nil, fmt.Errorf("undefined function: %s", callee.Name)
-	}
-
-	return i.executeFunction(fn, args)
+	return nil, fmt.Errorf("not a callable value")
 }
 
 func (i *Interpreter) evaluateLiteral(expr *ast.LiteralExpression) (Value, error) {
