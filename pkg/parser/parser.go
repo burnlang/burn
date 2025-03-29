@@ -166,6 +166,7 @@ func (p *Parser) functionDeclaration() (ast.Declaration, error) {
 	if p.match(lexer.TokenColon) {
 		if !p.check(lexer.TokenTypeInt) && !p.check(lexer.TokenTypeFloat) &&
 			!p.check(lexer.TokenTypeString) && !p.check(lexer.TokenTypeBool) &&
+			!p.check(lexer.TokenTypeVoid) && 
 			!p.check(lexer.TokenIdentifier) {
 			return nil, fmt.Errorf("expected return type after ':' at line %d", p.peek().Line)
 		}

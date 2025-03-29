@@ -613,6 +613,7 @@ func (i *Interpreter) executeDeclaration(decl ast.Declaration) (Value, error) {
 		return i.evaluateExpression(d.Expression)
 	case *ast.ReturnStatement:
 		if d.Value == nil {
+			
 			return nil, nil
 		}
 		return i.evaluateExpression(d.Value)
@@ -1531,7 +1532,6 @@ func (i *Interpreter) evaluateClassMethodCall(expr *ast.ClassMethodCallExpressio
 	return class.Call(methodName, i, args)
 }
 
-
 func (i *Interpreter) GetFunctions() map[string]*ast.FunctionDeclaration {
 	functions := make(map[string]*ast.FunctionDeclaration)
 	for name, fn := range i.functions {
@@ -1539,7 +1539,6 @@ func (i *Interpreter) GetFunctions() map[string]*ast.FunctionDeclaration {
 	}
 	return functions
 }
-
 
 func (i *Interpreter) AddFunction(name string, fn *ast.FunctionDeclaration) {
 	i.functions[name] = fn

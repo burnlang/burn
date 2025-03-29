@@ -56,6 +56,7 @@ const (
 	TokenImport
 	TokenModulo
 	TokenClass
+	TokenTypeVoid 
 )
 
 type Token struct {
@@ -63,7 +64,7 @@ type Token struct {
 	Value    string
 	Line     int
 	Col      int
-	Position int 
+	Position int
 }
 
 type Lexer struct {
@@ -337,13 +338,13 @@ func processEscapes(s string) string {
 	return s
 }
 
-// Update Token creation to include position
+
 func (l *Lexer) addToken(tokenType TokenType, value string) {
 	l.tokens = append(l.tokens, Token{
 		Type:     tokenType,
 		Value:    value,
 		Line:     l.line,
 		Col:      l.col - len(value),
-		Position: l.pos, // Add position
+		Position: l.pos, 
 	})
 }

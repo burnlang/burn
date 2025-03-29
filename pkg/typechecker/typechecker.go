@@ -120,6 +120,8 @@ func New() *TypeChecker {
 
 	tc.types["any"] = map[string]string{}
 
+	tc.types["void"] = map[string]string{}
+
 	return tc
 }
 
@@ -220,12 +222,19 @@ func (t *TypeChecker) checkDeclaration(decl ast.Declaration) error {
 			return nil
 		}
 
-		if d.Value == nil {
-			var expectedReturnType string
-			if fn, exists := t.functions[t.currentFn]; exists {
-				expectedReturnType = fn.ReturnType
-			}
+		var expectedReturnType string
+		if fn, exists := t.functions[t.currentFn]; exists {
+			expectedReturnType = fn.ReturnType
+		}
 
+		if expectedReturnType == "void" {
+			if d.Value != nil {
+				return fmt.Errorf("void function should not return a value")
+			}
+			return nil
+		}
+
+		if d.Value == nil {
 			if expectedReturnType != "" {
 				return fmt.Errorf("function %s must return a value of type %s",
 					t.currentFn, expectedReturnType)
@@ -236,11 +245,6 @@ func (t *TypeChecker) checkDeclaration(decl ast.Declaration) error {
 		valueType, err := t.checkExpression(d.Value)
 		if err != nil {
 			return err
-		}
-
-		var expectedReturnType string
-		if fn, exists := t.functions[t.currentFn]; exists {
-			expectedReturnType = fn.ReturnType
 		}
 
 		if valueType != expectedReturnType && expectedReturnType != "" {
@@ -384,6 +388,9 @@ func (t *TypeChecker) checkFunction(fn *ast.FunctionDeclaration) error {
 		}
 	}
 
+	if fn.ReturnType == "void" {
+	}
+
 	t.variables = prevVariables
 	t.currentFn = prevFn
 
@@ -422,8 +429,14 @@ func (t *TypeChecker) checkVariableDeclaration(decl *ast.VariableDeclaration) er
 	if _, isBuiltin := t.types[decl.Type]; !isBuiltin &&
 		decl.Type != "int" && decl.Type != "float" &&
 		decl.Type != "string" && decl.Type != "bool" &&
+		decl.Type != "void" && 
 		decl.Type != "array" && decl.Type != "any" {
 		return fmt.Errorf("unknown type: %s", decl.Type)
+	}
+
+	
+	if decl.Type == "void" {
+		return fmt.Errorf("variables cannot have void type")
 	}
 
 	t.variables[decl.Name] = decl.Type
