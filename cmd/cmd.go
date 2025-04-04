@@ -289,6 +289,41 @@ func printAST(node ast.Node, indent int, w io.Writer) {
 		for _, stmt := range n.Body {
 			printAST(stmt, indent+2, w)
 		}
+	case *ast.ClassDeclaration:
+		fmt.Fprintf(w, "%sClassDeclaration: %s\n", indentStr, n.Name)
+		fmt.Fprintf(w, "%s  Methods:\n", indentStr)
+		for _, method := range n.Methods {
+			printAST(method, indent+2, w)
+		}
+	case *ast.VariableDeclaration:
+		fmt.Fprintf(w, "%sVariableDeclaration: %s", indentStr, n.Name)
+		if n.Type != "" {
+			fmt.Fprintf(w, " : %s", n.Type)
+		}
+		fmt.Fprintln(w)
+		if n.Value != nil {
+			printAST(n.Value, indent+1, w)
+		}
+	case *ast.ExpressionStatement:
+		fmt.Fprintf(w, "%sExpressionStatement:\n", indentStr)
+		printAST(n.Expression, indent+1, w)
+	case *ast.CallExpression:
+		fmt.Fprintf(w, "%sCallExpression: ", indentStr)
+		printAST(n.Callee, indent, w)
+		fmt.Fprintf(w, "%s  Arguments:\n", indentStr)
+		for _, arg := range n.Arguments {
+			printAST(arg, indent+2, w)
+		}
+	case *ast.ClassMethodCallExpression:
+		fmt.Fprintf(w, "%sClassMethodCallExpression: %s.%s\n", indentStr, n.ClassName, n.MethodName)
+		fmt.Fprintf(w, "%s  Arguments:\n", indentStr)
+		for _, arg := range n.Arguments {
+			printAST(arg, indent+2, w)
+		}
+	case *ast.LiteralExpression:
+		fmt.Fprintf(w, "%sLiteral: %v (%T)\n", indentStr, n.Value, n.Value)
+	case *ast.VariableExpression:
+		fmt.Fprintf(w, "%sVariable: %s\n", indentStr, n.Name)
 	default:
 		fmt.Fprintf(w, "%sNode: %T\n", indentStr, node)
 	}
@@ -411,14 +446,12 @@ func createExecutableWrapper(goFilePath, burnFilePath, burnSource string) error 
 		return err
 	}
 
-	
 	for name, content := range stdlib.StdLibFiles {
 		stdlibPath := "src/lib/std/" + name + ".bn"
 		if _, exists := imports[stdlibPath]; !exists {
 			imports[stdlibPath] = content
 		}
 
-		
 		if _, exists := imports[name]; !exists {
 			imports[name] = content
 		}
@@ -553,19 +586,17 @@ func collectImports(mainFile, mainSource string) (map[string]string, error) {
 	baseDir := filepath.Dir(mainFile)
 
 	processImport := func(imp *ast.ImportDeclaration) error {
-		
+
 		moduleName := imp.Path
 		if strings.HasSuffix(moduleName, ".bn") {
 			moduleName = strings.TrimSuffix(moduleName, ".bn")
 		}
 
-		
 		baseName := filepath.Base(moduleName)
 		if strings.HasSuffix(baseName, ".bn") {
 			baseName = strings.TrimSuffix(baseName, ".bn")
 		}
 
-		
 		if stdLib, exists := stdlib.StdLibFiles[baseName]; exists {
 			imports[imp.Path] = stdLib
 			fmt.Printf("Found standard library %s (embedded)\n", baseName)

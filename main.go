@@ -1,15 +1,15 @@
 package main
 
 import (
-    "os"
+	"os"
 
 	"github.com/burnlang/burn/cmd"
 )
 
 func main() {
-    args := os.Args[1:]
+	args := os.Args[1:]
 
-    exitCode := cmd.Execute(args, os.Stdin, os.Stdout, os.Stderr)
+	exitCode := cmd.Execute(args, os.Stdin, os.Stdout, os.Stderr)
 
-    os.Exit(exitCode)
+	os.Exit(exitCode)
 }

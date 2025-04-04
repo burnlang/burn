@@ -20,6 +20,11 @@ func (s *Struct) SetField(name string, value interface{}) {
 	s.Fields[name] = value
 }
 
+func (s *Struct) HasField(name string) bool {
+	_, exists := s.Fields[name]
+	return exists
+}
+
 func (i *Interpreter) evalExpression(expr ast.Expression) (interface{}, error) {
 	return nil, fmt.Errorf("evalExpression not implemented for %T", expr)
 }

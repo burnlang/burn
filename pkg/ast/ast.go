@@ -157,7 +157,6 @@ func (e *ExpressionStatement) Pos() int {
 	return e.Position
 }
 
-
 type BinaryExpression struct {
 	Left     Expression
 	Operator string
@@ -412,9 +411,10 @@ func (m *MultiImportDeclaration) Pos() int {
 }
 
 type ClassDeclaration struct {
-	Name     string
-	Methods  []*FunctionDeclaration
-	Position int
+	Name          string
+	Methods       []*FunctionDeclaration
+	StaticMethods []*FunctionDeclaration
+	Position      int
 }
 
 func (c *ClassDeclaration) declarationNode() {}
