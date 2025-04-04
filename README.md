@@ -41,10 +41,10 @@ go build
 3. Run the executable:
 ```sh
 # On Unix/Linux/macOS
-./burn.exe
+./burn
 
 # On Windows
-.\burn.exe
+./burn.exe
 ```
 
 ## Usage
@@ -92,8 +92,8 @@ The compiled executable includes the Burn runtime and all imported dependencies,
 burn -exe test/class.bn
 
 # Run the executable
-./class.exe  # On Windows/Mac
-./class      # On Linux
+./class      # On Unix/Linux/macOS
+./class.exe  # On Windows
 ```
 
 ### Debug mode
