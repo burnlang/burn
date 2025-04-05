@@ -1,3 +1,6 @@
+> [!TIP]
+> Burnlang is on hold at the moment because of personal preferences
+
 # Burnlang
 
 <p align="center">
