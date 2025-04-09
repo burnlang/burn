@@ -605,76 +605,6 @@ func (i *Interpreter) registerHTTPLibrary() {
 		Name: "HTTP.setHeaders",
 		Fn:   i.httpSetHeaders,
 	}
-
-	i.functions["setHeaders"] = &ast.FunctionDeclaration{
-		Name:       "setHeaders",
-		Parameters: []ast.Parameter{{Name: "headers", Type: "array"}},
-		ReturnType: "bool",
-	}
-	i.environment["setHeaders"] = &BuiltinFunction{
-		Name: "setHeaders",
-		Fn:   i.httpSetHeaders,
-	}
-
-	i.functions["get"] = &ast.FunctionDeclaration{
-		Name:       "get",
-		Parameters: []ast.Parameter{{Name: "url", Type: "string"}},
-		ReturnType: "HTTPResponse",
-	}
-	i.environment["get"] = &BuiltinFunction{
-		Name: "get",
-		Fn:   i.httpGet,
-	}
-
-	i.functions["post"] = &ast.FunctionDeclaration{
-		Name:       "post",
-		Parameters: []ast.Parameter{{Name: "url", Type: "string"}, {Name: "body", Type: "string"}},
-		ReturnType: "HTTPResponse",
-	}
-	i.environment["post"] = &BuiltinFunction{
-		Name: "post",
-		Fn:   i.httpPost,
-	}
-
-	i.functions["put"] = &ast.FunctionDeclaration{
-		Name:       "put",
-		Parameters: []ast.Parameter{{Name: "url", Type: "string"}, {Name: "body", Type: "string"}},
-		ReturnType: "HTTPResponse",
-	}
-	i.environment["put"] = &BuiltinFunction{
-		Name: "put",
-		Fn:   i.httpPut,
-	}
-
-	i.functions["delete"] = &ast.FunctionDeclaration{
-		Name:       "delete",
-		Parameters: []ast.Parameter{{Name: "url", Type: "string"}},
-		ReturnType: "HTTPResponse",
-	}
-	i.environment["delete"] = &BuiltinFunction{
-		Name: "delete",
-		Fn:   i.httpDelete,
-	}
-
-	i.functions["getHeader"] = &ast.FunctionDeclaration{
-		Name:       "getHeader",
-		Parameters: []ast.Parameter{{Name: "response", Type: "HTTPResponse"}, {Name: "name", Type: "string"}},
-		ReturnType: "string",
-	}
-	i.environment["getHeader"] = &BuiltinFunction{
-		Name: "getHeader",
-		Fn:   i.httpGetHeader,
-	}
-
-	i.functions["parseJSON"] = &ast.FunctionDeclaration{
-		Name:       "parseJSON",
-		Parameters: []ast.Parameter{{Name: "body", Type: "string"}},
-		ReturnType: "any",
-	}
-	i.environment["parseJSON"] = &BuiltinFunction{
-		Name: "parseJSON",
-		Fn:   i.httpParseJSON,
-	}
 }
 
 func (i *Interpreter) httpGet(args []Value) (Value, error) {
@@ -1771,7 +1701,6 @@ func (i *Interpreter) evaluateUnary(expr *ast.UnaryExpression) (Value, error) {
 }
 
 func (i *Interpreter) evaluateCall(expr *ast.CallExpression) (Value, error) {
-
 	if getExpr, ok := expr.Callee.(*ast.GetExpression); ok {
 
 		if classNameExpr, ok := getExpr.Object.(*ast.VariableExpression); ok {
@@ -1794,6 +1723,10 @@ func (i *Interpreter) evaluateCall(expr *ast.CallExpression) (Value, error) {
 
 			if static, exists := class.Statics[methodName]; exists {
 				return i.executeFunction(static, args)
+			}
+
+			if instanceMethod, exists := class.Methods[methodName]; exists {
+				return i.executeFunction(instanceMethod, args)
 			}
 
 			builtinFuncName := fmt.Sprintf("%s.%s", className, methodName)
@@ -2012,7 +1945,7 @@ func (c *Class) Call(methodName string, interpreter *Interpreter, args []Value) 
 	}
 
 	if c.Name == "HTTP" {
-		builtinMethodName := fmt.Sprintf("HTTP.%s", methodName)
+		builtinMethodName := fmt.Sprintf("%s.%s", c.Name, methodName)
 		if builtinFunc, exists := interpreter.environment[builtinMethodName]; exists {
 			if bf, ok := builtinFunc.(*BuiltinFunction); ok {
 				return bf.Call(args)
