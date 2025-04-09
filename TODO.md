@@ -1,8 +1,15 @@
-# TODO
+# TODO (sometimes i forget to update it)
 
-# Add compiling to JS
+# Change STD Lib [IN PROGESS]
+- To be implemented in the executable itself
 
-# Fix HTTP
+# Fix HTTP [IN PROGESS]
+- Build in Functions are not Registered
+
+## Add compiling to JS 
+- Basic implementation added
+- Need to complete all expression and statement types
+- Need to implement proper stdlib mapping
 
 ## Errors Show up on line 1 even tough error is on another line
 
@@ -10,5 +17,5 @@
 
 ## Add Private and Public for more complexity in import 
 
-## Add async 
+## Add async
 
