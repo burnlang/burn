@@ -1,6 +1,8 @@
 # TODO
 
-# FIX ALL BUGS AT THE MOMENT
+# Add compiling to JS
+
+# Fix HTTP
 
 ## Errors Show up on line 1 even tough error is on another line
 
@@ -10,4 +12,3 @@
 
 ## Add async 
 
-## add http
