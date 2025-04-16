@@ -8,6 +8,8 @@
 # Fix HTTP [IN PROGESS]
 - Build in Functions are not Registered
 
+## Add Interfaces
+
 ## Add compiling to JS 
 - Basic implementation added
 - Need to complete all expression and statement types
