@@ -3,6 +3,7 @@ package interpreter
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/burnlang/burn/pkg/ast"
 	"github.com/burnlang/burn/pkg/lexer"
 	"github.com/burnlang/burn/pkg/parser"
+	"github.com/burnlang/burn/pkg/stdlib"
 )
 
 var httpHeaders = map[string]string{
@@ -50,6 +52,12 @@ func New() *Interpreter {
 	return i
 }
 
+func (i *Interpreter) RegisterBuiltinStandardLibraries() {
+	i.registerDateLibrary()
+	i.registerHTTPLibrary()
+	i.registerTimeLibrary()
+}
+
 func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
 	for _, decl := range program.Declarations {
 		if classDef, ok := decl.(*ast.ClassDeclaration); ok {
@@ -63,6 +71,8 @@ func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
 			i.classes[classDef.Name] = class
 		}
 	}
+
+	i.RegisterBuiltinStandardLibraries()
 
 	for _, decl := range program.Declarations {
 		if fn, ok := decl.(*ast.FunctionDeclaration); ok {
@@ -82,8 +92,6 @@ func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
 		}
 	}
 
-	i.addBuiltins()
-
 	if mainFn, exists := i.functions["main"]; exists {
 		return i.executeFunction(mainFn, []Value{})
 	}
@@ -102,13 +110,25 @@ func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
 
 func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 
-	if strings.Contains(imp.Path, "src/lib/std/date.bn") || imp.Path == "date" {
-		i.registerDateLibrary()
-		return nil
+	libName := imp.Path
+	if strings.HasSuffix(libName, ".bn") {
+		libName = strings.TrimSuffix(libName, ".bn")
 	}
+	basename := filepath.Base(libName)
 
-	if strings.Contains(imp.Path, "src/lib/std/http.bn") || imp.Path == "http" {
-		i.registerHTTPLibrary()
+	if lib, exists := stdlib.StdLibFiles[basename]; exists {
+
+		switch basename {
+		case "date":
+			i.registerDateLibrary()
+		case "http":
+			i.registerHTTPLibrary()
+		case "time":
+			i.registerTimeLibrary()
+		default:
+
+			return i.interpretStdLib(basename, lib)
+		}
 		return nil
 	}
 
@@ -147,6 +167,43 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 	}
 
 	return nil
+}
+
+func (i *Interpreter) interpretStdLib(name, source string) error {
+	l := lexer.New(source)
+	tokens, err := l.Tokenize()
+	if err != nil {
+		return err
+	}
+
+	p := parser.New(tokens)
+	program, err := p.Parse()
+	if err != nil {
+		return err
+	}
+
+	importInterpreter := New()
+
+	_, err = importInterpreter.Interpret(program)
+	if err != nil {
+		return err
+	}
+
+	for name, fn := range importInterpreter.functions {
+		if name != "main" {
+			i.functions[name] = fn
+		}
+	}
+
+	for name, class := range importInterpreter.classes {
+		i.classes[name] = class
+	}
+
+	return nil
+}
+
+func (i *Interpreter) registerTimeLibrary() {
+
 }
 
 func (i *Interpreter) registerDateLibrary() {
