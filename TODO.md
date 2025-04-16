@@ -1,5 +1,7 @@
 # TODO (sometimes i forget to update it)
 
+# Fix Compiling to executable
+
 # Change STD Lib [IN PROGESS]
 - To be implemented in the executable itself
 
