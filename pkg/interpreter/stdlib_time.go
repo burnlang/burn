@@ -45,8 +45,7 @@ func (i *Interpreter) registerTimeLibrary() {
 	i.environment["Time.now"] = &BuiltinFunction{
 		Name: "Time.now",
 		Fn: func(args []Value) (Value, error) {
-			return time.Now().Format(time.RFC3339), nil
-		},
+			return time.Now(), nil
 	}
 
 	i.environment["Time.sleep"] = &BuiltinFunction{
