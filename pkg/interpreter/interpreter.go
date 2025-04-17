@@ -3,56 +3,71 @@ package interpreter
 import (
 	"fmt"
 	"os"
-	"strconv"
+	"path/filepath"
 	"strings"
-	"time"
-
-	"encoding/json"
-	"io"
-	"net/http"
 
 	"github.com/burnlang/burn/pkg/ast"
 	"github.com/burnlang/burn/pkg/lexer"
 	"github.com/burnlang/burn/pkg/parser"
+	"github.com/burnlang/burn/pkg/stdlib"
 )
-
-var httpHeaders = map[string]string{
-	"User-Agent": "BurnLang/1.0",
-	"Accept":     "application/json",
-}
-
-type Value interface{}
-
-type BuiltinFunction struct {
-	Name string
-	Fn   func(args []Value) (Value, error)
-}
-
-func (bf *BuiltinFunction) Call(args []Value) (Value, error) {
-	return bf.Fn(args)
-}
 
 type Interpreter struct {
 	environment map[string]Value
 	functions   map[string]*ast.FunctionDeclaration
+	types       map[string]*ast.TypeDefinition
 	classes     map[string]*Class
 	errorPos    int
+
+	importedModules map[string]bool
+}
+
+type Environment struct {
+	enclosing *Environment
+	values    map[string]interface{}
+}
+
+func NewEnvironment(enclosing *Environment) *Environment {
+	return &Environment{
+		enclosing: enclosing,
+		values:    make(map[string]interface{}),
+	}
 }
 
 func New() *Interpreter {
 	i := &Interpreter{
-		environment: make(map[string]Value),
-		functions:   make(map[string]*ast.FunctionDeclaration),
-		classes:     make(map[string]*Class),
-		errorPos:    0,
+		environment:     make(map[string]Value),
+		functions:       make(map[string]*ast.FunctionDeclaration),
+		types:           make(map[string]*ast.TypeDefinition),
+		classes:         make(map[string]*Class),
+		errorPos:        0,
+		importedModules: make(map[string]bool),
 	}
 	i.addBuiltins()
 	return i
 }
 
+func (i *Interpreter) RegisterBuiltinStandardLibraries() {
+
+	i.registerDateLibrary()
+	i.registerHTTPLibrary()
+	i.registerTimeLibrary()
+
+	for name, lib := range stdlib.StdLibFiles {
+		if name == "date" || name == "http" || name == "time" {
+
+			continue
+		}
+		_ = i.interpretStdLib(name, lib)
+	}
+}
+
 func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
+
 	for _, decl := range program.Declarations {
-		if classDef, ok := decl.(*ast.ClassDeclaration); ok {
+		if typeDef, ok := decl.(*ast.TypeDefinition); ok {
+			i.types[typeDef.Name] = typeDef
+		} else if classDef, ok := decl.(*ast.ClassDeclaration); ok {
 			class := NewClass(classDef.Name)
 			for _, method := range classDef.Methods {
 				class.AddMethod(method.Name, method)
@@ -63,6 +78,10 @@ func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
 			i.classes[classDef.Name] = class
 		}
 	}
+
+	i.addBuiltins()
+
+	i.RegisterBuiltinStandardLibraries()
 
 	for _, decl := range program.Declarations {
 		if fn, ok := decl.(*ast.FunctionDeclaration); ok {
@@ -82,8 +101,6 @@ func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
 		}
 	}
 
-	i.addBuiltins()
-
 	if mainFn, exists := i.functions["main"]; exists {
 		return i.executeFunction(mainFn, []Value{})
 	}
@@ -101,23 +118,158 @@ func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
 }
 
 func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
+	libName := imp.Path
 
-	if strings.Contains(imp.Path, "src/lib/std/date.bn") || imp.Path == "date" {
-		i.registerDateLibrary()
+	if i.importedModules[libName] {
 		return nil
 	}
 
-	if strings.Contains(imp.Path, "src/lib/std/http.bn") || imp.Path == "http" {
-		i.registerHTTPLibrary()
+	i.importedModules[libName] = true
+
+	if strings.HasPrefix(libName, "std/") || (!strings.Contains(libName, "/") && !strings.Contains(libName, "\\")) {
+		basename := strings.TrimPrefix(libName, "std/")
+		basename = strings.TrimSuffix(basename, ".bn")
+
+		switch basename {
+		case "date":
+			i.registerDateLibrary()
+			return nil
+		case "http":
+			i.registerHTTPLibrary()
+			return nil
+		case "time":
+			i.registerTimeLibrary()
+			return nil
+		}
+	}
+
+	if strings.HasSuffix(libName, ".bn") || !strings.Contains(libName, ".") {
+		path := libName
+
+		if !strings.HasSuffix(path, ".bn") {
+			path = path + ".bn"
+		}
+
+		workingDir, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("error getting current directory: %v", err)
+		}
+
+		searchPaths := []string{
+			path,
+			filepath.Join(workingDir, path),
+			filepath.Join("src", "lib", "std", path),
+			filepath.Join("src", "lib", path),
+			filepath.Join("src", "lib", "std", strings.TrimSuffix(path, ".bn")+".bn"),
+			filepath.Join("src", "lib", strings.TrimSuffix(path, ".bn")+".bn"),
+
+			filepath.Join("test", strings.TrimPrefix(path, "test/")),
+		}
+
+		var source []byte
+		var foundPath string
+
+		for _, searchPath := range searchPaths {
+			source, err = os.ReadFile(searchPath)
+			if err == nil {
+				foundPath = searchPath
+				break
+			}
+		}
+
+		if foundPath == "" {
+			baseName := filepath.Base(strings.TrimSuffix(libName, ".bn"))
+			if lib, exists := stdlib.StdLibFiles[baseName]; exists {
+				switch baseName {
+				case "date":
+					i.registerDateLibrary()
+					return nil
+				case "http":
+					i.registerHTTPLibrary()
+					return nil
+				case "time":
+					i.registerTimeLibrary()
+					return nil
+				default:
+					return i.interpretStdLib(baseName, lib)
+				}
+			}
+
+			return fmt.Errorf("could not find import file: %s (tried paths: %v)", libName, searchPaths)
+		}
+
+		l := lexer.New(string(source))
+		tokens, err := l.Tokenize()
+		if err != nil {
+			return fmt.Errorf("lexical error in import %s: %v", foundPath, err)
+		}
+
+		p := parser.New(tokens)
+		program, err := p.Parse()
+		if err != nil {
+			return fmt.Errorf("parse error in import %s: %v", foundPath, err)
+		}
+
+		importInterpreter := New()
+		importInterpreter.addBuiltins()
+		importInterpreter.RegisterBuiltinStandardLibraries()
+
+		for mod := range i.importedModules {
+			importInterpreter.importedModules[mod] = true
+		}
+
+		_, err = importInterpreter.Interpret(program)
+		if err != nil {
+			return fmt.Errorf("error interpreting import %s: %v", foundPath, err)
+		}
+
+		for name, typeDef := range importInterpreter.types {
+			i.types[name] = typeDef
+		}
+
+		for name, fn := range importInterpreter.functions {
+			if name != "main" {
+				i.functions[name] = fn
+			}
+		}
+
+		for name, class := range importInterpreter.classes {
+			i.classes[name] = class
+		}
+
+		for name, value := range importInterpreter.environment {
+			if _, exists := i.environment[name]; !exists {
+				i.environment[name] = value
+			}
+		}
+
 		return nil
 	}
 
-	source, err := os.ReadFile(imp.Path)
-	if err != nil {
-		return fmt.Errorf("could not read imported file %s: %v", imp.Path, err)
+	basename := filepath.Base(libName)
+	if strings.HasSuffix(basename, ".bn") {
+		basename = strings.TrimSuffix(basename, ".bn")
 	}
 
-	l := lexer.New(string(source))
+	if lib, exists := stdlib.StdLibFiles[basename]; exists {
+		switch basename {
+		case "date":
+			i.registerDateLibrary()
+		case "http":
+			i.registerHTTPLibrary()
+		case "time":
+			i.registerTimeLibrary()
+		default:
+			return i.interpretStdLib(basename, lib)
+		}
+		return nil
+	}
+
+	return fmt.Errorf("could not find import: %s", imp.Path)
+}
+
+func (i *Interpreter) interpretStdLib(name, source string) error {
+	l := lexer.New(source)
 	tokens, err := l.Tokenize()
 	if err != nil {
 		return err
@@ -130,6 +282,8 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 	}
 
 	importInterpreter := New()
+	importInterpreter.addBuiltins()
+	importInterpreter.RegisterBuiltinStandardLibraries()
 
 	_, err = importInterpreter.Interpret(program)
 	if err != nil {
@@ -146,843 +300,13 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 		i.classes[name] = class
 	}
 
+	for name, value := range importInterpreter.environment {
+		if _, exists := i.environment[name]; !exists {
+			i.environment[name] = value
+		}
+	}
+
 	return nil
-}
-
-func (i *Interpreter) registerDateLibrary() {
-	i.functions["now"] = &ast.FunctionDeclaration{
-		Name:       "now",
-		Parameters: []ast.Parameter{},
-		ReturnType: "Date",
-	}
-
-	i.environment["now"] = &BuiltinFunction{
-		Name: "now",
-		Fn: func(args []Value) (Value, error) {
-			currentTime := time.Now()
-
-			dateStruct := &Struct{
-				TypeName: "Date",
-				Fields: map[string]interface{}{
-					"year":  currentTime.Year(),
-					"month": int(currentTime.Month()),
-					"day":   currentTime.Day(),
-				},
-			}
-
-			return dateStruct, nil
-		},
-	}
-
-	i.functions["formatDate"] = &ast.FunctionDeclaration{
-		Name: "formatDate",
-		Parameters: []ast.Parameter{
-			{Name: "date", Type: "Date"},
-		},
-		ReturnType: "string",
-	}
-
-	i.environment["formatDate"] = &BuiltinFunction{
-		Name: "formatDate",
-		Fn: func(args []Value) (Value, error) {
-			if len(args) != 1 {
-				return nil, fmt.Errorf("formatDate expects exactly one Date argument")
-			}
-
-			dateStruct, ok := args[0].(*Struct)
-			if !ok || dateStruct.TypeName != "Date" {
-				return nil, fmt.Errorf("formatDate expects a Date struct")
-			}
-
-			year, _ := dateStruct.Fields["year"].(int)
-			month, _ := dateStruct.Fields["month"].(int)
-			day, _ := dateStruct.Fields["day"].(int)
-
-			monthStr := fmt.Sprintf("%02d", month)
-			dayStr := fmt.Sprintf("%02d", day)
-
-			return fmt.Sprintf("%d-%s-%s", year, monthStr, dayStr), nil
-		},
-	}
-
-	i.functions["currentYear"] = &ast.FunctionDeclaration{
-		Name:       "currentYear",
-		Parameters: []ast.Parameter{},
-		ReturnType: "int",
-	}
-
-	i.environment["currentYear"] = &BuiltinFunction{
-		Name: "currentYear",
-		Fn: func(args []Value) (Value, error) {
-			return float64(time.Now().Year()), nil
-		},
-	}
-
-	i.functions["currentMonth"] = &ast.FunctionDeclaration{
-		Name:       "currentMonth",
-		Parameters: []ast.Parameter{},
-		ReturnType: "int",
-	}
-
-	i.environment["currentMonth"] = &BuiltinFunction{
-		Name: "currentMonth",
-		Fn: func(args []Value) (Value, error) {
-			return float64(int(time.Now().Month())), nil
-		},
-	}
-
-	i.functions["currentDay"] = &ast.FunctionDeclaration{
-		Name:       "currentDay",
-		Parameters: []ast.Parameter{},
-		ReturnType: "int",
-	}
-
-	i.environment["currentDay"] = &BuiltinFunction{
-		Name: "currentDay",
-		Fn: func(args []Value) (Value, error) {
-			return float64(time.Now().Day()), nil
-		},
-	}
-
-	i.functions["isLeapYear"] = &ast.FunctionDeclaration{
-		Name: "isLeapYear",
-		Parameters: []ast.Parameter{
-			{Name: "year", Type: "int"},
-		},
-		ReturnType: "bool",
-	}
-
-	i.environment["isLeapYear"] = &BuiltinFunction{
-		Name: "isLeapYear",
-		Fn: func(args []Value) (Value, error) {
-			if len(args) != 1 {
-				return nil, fmt.Errorf("isLeapYear expects exactly one integer argument")
-			}
-
-			yearFloat, ok := args[0].(float64)
-			if !ok {
-				return nil, fmt.Errorf("isLeapYear expects an integer")
-			}
-
-			year := int(yearFloat)
-
-			isLeap := false
-			if year%400 == 0 {
-				isLeap = true
-			} else if year%100 == 0 {
-				isLeap = false
-			} else if year%4 == 0 {
-				isLeap = true
-			}
-
-			return isLeap, nil
-		},
-	}
-
-	i.functions["daysInMonth"] = &ast.FunctionDeclaration{
-		Name: "daysInMonth",
-		Parameters: []ast.Parameter{
-			{Name: "year", Type: "int"},
-			{Name: "month", Type: "int"},
-		},
-		ReturnType: "int",
-	}
-
-	i.environment["daysInMonth"] = &BuiltinFunction{
-		Name: "daysInMonth",
-		Fn: func(args []Value) (Value, error) {
-			if len(args) != 2 {
-				return nil, fmt.Errorf("daysInMonth expects exactly two integer arguments")
-			}
-
-			yearFloat, ok := args[0].(float64)
-			if !ok {
-				return nil, fmt.Errorf("daysInMonth expects year as an integer")
-			}
-
-			monthFloat, ok := args[1].(float64)
-			if !ok {
-				return nil, fmt.Errorf("daysInMonth expects month as an integer")
-			}
-
-			year := int(yearFloat)
-			month := int(monthFloat)
-
-			daysInMonth := 31
-			if month == 4 || month == 6 || month == 9 || month == 11 {
-				daysInMonth = 30
-			} else if month == 2 {
-				isLeap := false
-				if year%400 == 0 {
-					isLeap = true
-				} else if year%100 == 0 {
-					isLeap = false
-				} else if year%4 == 0 {
-					isLeap = true
-				}
-
-				if isLeap {
-					daysInMonth = 29
-				} else {
-					daysInMonth = 28
-				}
-			}
-
-			return float64(daysInMonth), nil
-		},
-	}
-
-	i.functions["createDate"] = &ast.FunctionDeclaration{
-		Name: "createDate",
-		Parameters: []ast.Parameter{
-			{Name: "year", Type: "int"},
-			{Name: "month", Type: "int"},
-			{Name: "day", Type: "int"},
-		},
-		ReturnType: "Date",
-	}
-
-	i.environment["createDate"] = &BuiltinFunction{
-		Name: "createDate",
-		Fn: func(args []Value) (Value, error) {
-			if len(args) != 3 {
-				return nil, fmt.Errorf("createDate expects exactly three integer arguments")
-			}
-
-			yearFloat, ok := args[0].(float64)
-			if !ok {
-				return nil, fmt.Errorf("createDate expects year as an integer")
-			}
-
-			monthFloat, ok := args[1].(float64)
-			if !ok {
-				return nil, fmt.Errorf("createDate expects month as an integer")
-			}
-
-			dayFloat, ok := args[2].(float64)
-			if !ok {
-				return nil, fmt.Errorf("createDate expects day as an integer")
-			}
-
-			dateStruct := &Struct{
-				TypeName: "Date",
-				Fields: map[string]interface{}{
-					"year":  int(yearFloat),
-					"month": int(monthFloat),
-					"day":   int(dayFloat),
-				},
-			}
-
-			return dateStruct, nil
-		},
-	}
-
-	i.functions["dayOfWeek"] = &ast.FunctionDeclaration{
-		Name: "dayOfWeek",
-		Parameters: []ast.Parameter{
-			{Name: "date", Type: "Date"},
-		},
-		ReturnType: "int",
-	}
-
-	i.environment["dayOfWeek"] = &BuiltinFunction{
-		Name: "dayOfWeek",
-		Fn: func(args []Value) (Value, error) {
-			if len(args) != 1 {
-				return nil, fmt.Errorf("dayOfWeek expects exactly one Date argument")
-			}
-
-			dateStruct, ok := args[0].(*Struct)
-			if !ok || dateStruct.TypeName != "Date" {
-				return nil, fmt.Errorf("dayOfWeek expects a Date struct")
-			}
-
-			year, _ := dateStruct.Fields["year"].(int)
-			month, _ := dateStruct.Fields["month"].(int)
-			day, _ := dateStruct.Fields["day"].(int)
-
-			if month < 3 {
-				month += 12
-				year--
-			}
-
-			k := year % 100
-			j := year / 100
-
-			h := (day + ((13 * (month + 1)) / 5) + k + (k / 4) + (j / 4) - (2 * j)) % 7
-
-			if h < 0 {
-				h += 7
-			}
-
-			return float64(h), nil
-		},
-	}
-
-	i.functions["addDays"] = &ast.FunctionDeclaration{
-		Name: "addDays",
-		Parameters: []ast.Parameter{
-			{Name: "date", Type: "Date"},
-			{Name: "days", Type: "int"},
-		},
-		ReturnType: "Date",
-	}
-
-	i.environment["addDays"] = &BuiltinFunction{
-		Name: "addDays",
-		Fn: func(args []Value) (Value, error) {
-			if len(args) != 2 {
-				return nil, fmt.Errorf("addDays expects exactly two arguments: a Date and an integer")
-			}
-
-			dateStruct, ok := args[0].(*Struct)
-			if !ok || dateStruct.TypeName != "Date" {
-				return nil, fmt.Errorf("addDays expects a Date struct as first argument")
-			}
-
-			daysFloat, ok := args[1].(float64)
-			if !ok {
-				return nil, fmt.Errorf("addDays expects an integer as second argument")
-			}
-
-			year, _ := dateStruct.Fields["year"].(int)
-			month, _ := dateStruct.Fields["month"].(int)
-			day, _ := dateStruct.Fields["day"].(int)
-
-			t := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
-			newTime := t.AddDate(0, 0, int(daysFloat))
-
-			newDateStruct := &Struct{
-				TypeName: "Date",
-				Fields: map[string]interface{}{
-					"year":  newTime.Year(),
-					"month": int(newTime.Month()),
-					"day":   newTime.Day(),
-				},
-			}
-
-			return newDateStruct, nil
-		},
-	}
-
-	i.functions["subtractDays"] = &ast.FunctionDeclaration{
-		Name: "subtractDays",
-		Parameters: []ast.Parameter{
-			{Name: "date", Type: "Date"},
-			{Name: "days", Type: "int"},
-		},
-		ReturnType: "Date",
-	}
-
-	i.environment["subtractDays"] = &BuiltinFunction{
-		Name: "subtractDays",
-		Fn: func(args []Value) (Value, error) {
-			if len(args) != 2 {
-				return nil, fmt.Errorf("subtractDays expects exactly two arguments: a Date and an integer")
-			}
-
-			dateStruct, ok := args[0].(*Struct)
-			if !ok || dateStruct.TypeName != "Date" {
-				return nil, fmt.Errorf("subtractDays expects a Date struct as first argument")
-			}
-
-			daysFloat, ok := args[1].(float64)
-			if !ok {
-				return nil, fmt.Errorf("subtractDays expects an integer as second argument")
-			}
-
-			year, _ := dateStruct.Fields["year"].(int)
-			month, _ := dateStruct.Fields["month"].(int)
-			day, _ := dateStruct.Fields["day"].(int)
-
-			t := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
-			newTime := t.AddDate(0, 0, -int(daysFloat))
-
-			newDateStruct := &Struct{
-				TypeName: "Date",
-				Fields: map[string]interface{}{
-					"year":  newTime.Year(),
-					"month": int(newTime.Month()),
-					"day":   newTime.Day(),
-				},
-			}
-
-			return newDateStruct, nil
-		},
-	}
-
-	i.functions["today"] = &ast.FunctionDeclaration{
-		Name:       "today",
-		Parameters: []ast.Parameter{},
-		ReturnType: "string",
-	}
-
-	i.environment["today"] = &BuiltinFunction{
-		Name: "today",
-		Fn: func(args []Value) (Value, error) {
-			currentTime := time.Now()
-
-			year := currentTime.Year()
-			month := int(currentTime.Month())
-			day := currentTime.Day()
-
-			monthStr := fmt.Sprintf("%02d", month)
-			dayStr := fmt.Sprintf("%02d", day)
-
-			return fmt.Sprintf("%d-%s-%s", year, monthStr, dayStr), nil
-		},
-	}
-}
-
-func (i *Interpreter) registerHTTPLibrary() {
-
-	httpClass := NewClass("HTTP")
-
-	httpClass.AddStatic("get", &ast.FunctionDeclaration{
-		Name:       "get",
-		Parameters: []ast.Parameter{{Name: "url", Type: "string"}},
-		ReturnType: "HTTPResponse",
-	})
-	httpClass.AddStatic("post", &ast.FunctionDeclaration{
-		Name:       "post",
-		Parameters: []ast.Parameter{{Name: "url", Type: "string"}, {Name: "body", Type: "string"}},
-		ReturnType: "HTTPResponse",
-	})
-	httpClass.AddStatic("put", &ast.FunctionDeclaration{
-		Name:       "put",
-		Parameters: []ast.Parameter{{Name: "url", Type: "string"}, {Name: "body", Type: "string"}},
-		ReturnType: "HTTPResponse",
-	})
-	httpClass.AddStatic("delete", &ast.FunctionDeclaration{
-		Name:       "delete",
-		Parameters: []ast.Parameter{{Name: "url", Type: "string"}},
-		ReturnType: "HTTPResponse",
-	})
-	httpClass.AddStatic("getHeader", &ast.FunctionDeclaration{
-		Name:       "getHeader",
-		Parameters: []ast.Parameter{{Name: "response", Type: "HTTPResponse"}, {Name: "name", Type: "string"}},
-		ReturnType: "string",
-	})
-	httpClass.AddStatic("parseJSON", &ast.FunctionDeclaration{
-		Name:       "parseJSON",
-		Parameters: []ast.Parameter{{Name: "body", Type: "string"}},
-		ReturnType: "any",
-	})
-	httpClass.AddStatic("setHeaders", &ast.FunctionDeclaration{
-		Name:       "setHeaders",
-		Parameters: []ast.Parameter{{Name: "headers", Type: "array"}},
-		ReturnType: "bool",
-	})
-
-	i.classes["HTTP"] = httpClass
-	i.environment["HTTP"] = httpClass
-
-	i.environment["HTTP.get"] = &BuiltinFunction{
-		Name: "HTTP.get",
-		Fn:   i.httpGet,
-	}
-	i.environment["HTTP.post"] = &BuiltinFunction{
-		Name: "HTTP.post",
-		Fn:   i.httpPost,
-	}
-	i.environment["HTTP.put"] = &BuiltinFunction{
-		Name: "HTTP.put",
-		Fn:   i.httpPut,
-	}
-	i.environment["HTTP.delete"] = &BuiltinFunction{
-		Name: "HTTP.delete",
-		Fn:   i.httpDelete,
-	}
-	i.environment["HTTP.getHeader"] = &BuiltinFunction{
-		Name: "HTTP.getHeader",
-		Fn:   i.httpGetHeader,
-	}
-	i.environment["HTTP.parseJSON"] = &BuiltinFunction{
-		Name: "HTTP.parseJSON",
-		Fn:   i.httpParseJSON,
-	}
-	i.environment["HTTP.setHeaders"] = &BuiltinFunction{
-		Name: "HTTP.setHeaders",
-		Fn:   i.httpSetHeaders,
-	}
-}
-
-func (i *Interpreter) httpGet(args []Value) (Value, error) {
-	if len(args) != 1 {
-		return nil, fmt.Errorf("HTTP.get expects exactly one string argument")
-	}
-	urlStr, ok := args[0].(string)
-	if !ok {
-		return nil, fmt.Errorf("HTTP.get expects a string URL")
-	}
-
-	client := &http.Client{Timeout: time.Second * 30}
-	req, err := http.NewRequest("GET", urlStr, nil)
-	if err != nil {
-		return nil, fmt.Errorf("error creating request: %v", err)
-	}
-
-	for k, v := range httpHeaders {
-		req.Header.Add(k, v)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("error making request: %v", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("error reading response: %v", err)
-	}
-
-	headers := []Value{}
-	for name, values := range resp.Header {
-		for _, value := range values {
-			headers = append(headers, fmt.Sprintf("%s: %s", name, value))
-		}
-	}
-
-	return &Struct{
-		TypeName: "HTTPResponse",
-		Fields: map[string]interface{}{
-			"statusCode": resp.StatusCode,
-			"body":       string(body),
-			"headers":    headers,
-		},
-	}, nil
-}
-
-func (i *Interpreter) httpPost(args []Value) (Value, error) {
-	if len(args) != 2 {
-		return nil, fmt.Errorf("HTTP.post expects exactly two string arguments (url, body)")
-	}
-	urlStr, ok := args[0].(string)
-	if !ok {
-		return nil, fmt.Errorf("HTTP.post expects a string URL as first argument")
-	}
-	bodyStr, ok := args[1].(string)
-	if !ok {
-		return nil, fmt.Errorf("HTTP.post expects a string body as second argument")
-	}
-
-	client := &http.Client{Timeout: time.Second * 30}
-	req, err := http.NewRequest("POST", urlStr, strings.NewReader(bodyStr))
-	if err != nil {
-		return nil, fmt.Errorf("error creating request: %v", err)
-	}
-
-	for k, v := range httpHeaders {
-		req.Header.Add(k, v)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("error making request: %v", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("error reading response: %v", err)
-	}
-
-	headers := []Value{}
-	for name, values := range resp.Header {
-		for _, value := range values {
-			headers = append(headers, fmt.Sprintf("%s: %s", name, value))
-		}
-	}
-
-	return &Struct{
-		TypeName: "HTTPResponse",
-		Fields: map[string]interface{}{
-			"statusCode": resp.StatusCode,
-			"body":       string(body),
-			"headers":    headers,
-		},
-	}, nil
-}
-
-func (i *Interpreter) httpPut(args []Value) (Value, error) {
-	if len(args) != 2 {
-		return nil, fmt.Errorf("HTTP.put expects exactly two string arguments (url, body)")
-	}
-	urlStr, ok := args[0].(string)
-	if !ok {
-		return nil, fmt.Errorf("HTTP.put expects a string URL as first argument")
-	}
-	bodyStr, ok := args[1].(string)
-	if !ok {
-		return nil, fmt.Errorf("HTTP.put expects a string body as second argument")
-	}
-
-	client := &http.Client{Timeout: time.Second * 30}
-	req, err := http.NewRequest("PUT", urlStr, strings.NewReader(bodyStr))
-	if err != nil {
-		return nil, fmt.Errorf("error creating request: %v", err)
-	}
-
-	for k, v := range httpHeaders {
-		req.Header.Add(k, v)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("error making request: %v", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("error reading response: %v", err)
-	}
-
-	headers := []Value{}
-	for name, values := range resp.Header {
-		for _, value := range values {
-			headers = append(headers, fmt.Sprintf("%s: %s", name, value))
-		}
-	}
-
-	return &Struct{
-		TypeName: "HTTPResponse",
-		Fields: map[string]interface{}{
-			"statusCode": resp.StatusCode,
-			"body":       string(body),
-			"headers":    headers,
-		},
-	}, nil
-}
-
-func (i *Interpreter) httpDelete(args []Value) (Value, error) {
-	if len(args) != 1 {
-		return nil, fmt.Errorf("HTTP.delete expects exactly one string argument")
-	}
-	urlStr, ok := args[0].(string)
-	if !ok {
-		return nil, fmt.Errorf("HTTP.delete expects a string URL")
-	}
-
-	client := &http.Client{Timeout: time.Second * 30}
-	req, err := http.NewRequest("DELETE", urlStr, nil)
-	if err != nil {
-		return nil, fmt.Errorf("error creating request: %v", err)
-	}
-
-	for k, v := range httpHeaders {
-		req.Header.Add(k, v)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("error making request: %v", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("error reading response: %v", err)
-	}
-
-	headers := []Value{}
-	for name, values := range resp.Header {
-		for _, value := range values {
-			headers = append(headers, fmt.Sprintf("%s: %s", name, value))
-		}
-	}
-
-	return &Struct{
-		TypeName: "HTTPResponse",
-		Fields: map[string]interface{}{
-			"statusCode": resp.StatusCode,
-			"body":       string(body),
-			"headers":    headers,
-		},
-	}, nil
-}
-
-func (i *Interpreter) httpSetHeaders(args []Value) (Value, error) {
-	if len(args) != 1 {
-		return nil, fmt.Errorf("HTTP.setHeaders expects exactly one array argument")
-	}
-	headerArray, ok := args[0].([]Value)
-	if !ok {
-		return nil, fmt.Errorf("HTTP.setHeaders expects an array of header strings")
-	}
-
-	newHeaders := make(map[string]string)
-	for _, hv := range headerArray {
-		headerStr, ok := hv.(string)
-		if !ok {
-			return nil, fmt.Errorf("each header must be a string")
-		}
-		parts := strings.SplitN(headerStr, ":", 2)
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid header format: %s", headerStr)
-		}
-		name := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-		newHeaders[name] = value
-	}
-
-	httpHeaders = newHeaders
-	return true, nil
-}
-
-func (i *Interpreter) httpGetHeader(args []Value) (Value, error) {
-	if len(args) != 2 {
-		return nil, fmt.Errorf("HTTP.getHeader expects exactly two arguments")
-	}
-	respObj, ok := args[0].(*Struct)
-	if !ok || respObj.TypeName != "HTTPResponse" {
-		return nil, fmt.Errorf("HTTP.getHeader expects an HTTPResponse as first argument")
-	}
-	headerName, ok := args[1].(string)
-	if !ok {
-		return nil, fmt.Errorf("HTTP.getHeader expects a string header name")
-	}
-
-	headers, ok := respObj.Fields["headers"].([]Value)
-	if !ok {
-		return "", nil
-	}
-
-	headerName = strings.ToLower(headerName)
-	for _, h := range headers {
-		headerStr, ok := h.(string)
-		if !ok {
-			continue
-		}
-		parts := strings.SplitN(headerStr, ":", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		name := strings.ToLower(strings.TrimSpace(parts[0]))
-		value := strings.TrimSpace(parts[1])
-		if name == headerName {
-			return value, nil
-		}
-	}
-	return "", nil
-}
-
-func (i *Interpreter) httpParseJSON(args []Value) (Value, error) {
-	if len(args) != 1 {
-		return nil, fmt.Errorf("HTTP.parseJSON expects exactly one string argument")
-	}
-	jsonStr, ok := args[0].(string)
-	if !ok {
-		return nil, fmt.Errorf("HTTP.parseJSON expects a string JSON")
-	}
-
-	var result interface{}
-	err := json.Unmarshal([]byte(jsonStr), &result)
-	if err != nil {
-		return nil, fmt.Errorf("error parsing JSON: %v", err)
-	}
-
-	return convertJSONToBurn(result), nil
-}
-
-func convertJSONToBurn(value interface{}) Value {
-	switch v := value.(type) {
-	case map[string]interface{}:
-		fields := make(map[string]interface{})
-		for key, val := range v {
-			fields[key] = convertJSONToBurn(val)
-		}
-		return &Struct{
-			TypeName: "Object",
-			Fields:   fields,
-		}
-	case []interface{}:
-		array := make([]Value, len(v))
-		for i, val := range v {
-			array[i] = convertJSONToBurn(val)
-		}
-		return array
-	case string:
-		return v
-	case float64:
-		return v
-	case bool:
-		return v
-	case nil:
-		return nil
-	default:
-		return fmt.Sprintf("%v", v)
-	}
-}
-
-func (i *Interpreter) addBuiltins() {
-	i.functions["print"] = &ast.FunctionDeclaration{
-		Name: "print",
-		Parameters: []ast.Parameter{
-			{Name: "value", Type: "any"},
-		},
-	}
-
-	i.environment["print"] = &BuiltinFunction{
-		Name: "print",
-		Fn: func(args []Value) (Value, error) {
-			if len(args) < 1 {
-				return nil, fmt.Errorf("print requires at least one argument")
-			}
-			for _, arg := range args {
-				fmt.Print(arg)
-			}
-			fmt.Println()
-			return nil, nil
-		},
-	}
-
-	i.functions["toString"] = &ast.FunctionDeclaration{
-		Name: "toString",
-		Parameters: []ast.Parameter{
-			{Name: "value", Type: "any"},
-		},
-		ReturnType: "string",
-	}
-
-	i.environment["toString"] = &BuiltinFunction{
-		Name: "toString",
-		Fn: func(args []Value) (Value, error) {
-			if len(args) != 1 {
-				return nil, fmt.Errorf("toString expects exactly one argument")
-			}
-			return fmt.Sprintf("%v", args[0]), nil
-		},
-	}
-
-	i.functions["input"] = &ast.FunctionDeclaration{
-		Name: "input",
-		Parameters: []ast.Parameter{
-			{Name: "prompt", Type: "string"},
-		},
-		ReturnType: "string",
-	}
-
-	i.environment["input"] = &BuiltinFunction{
-		Name: "input",
-		Fn: func(args []Value) (Value, error) {
-			if len(args) != 1 {
-				return nil, fmt.Errorf("input requires exactly one string argument")
-			}
-
-			fmt.Print(args[0])
-
-			var input string
-			_, err := fmt.Scanln(&input)
-			if err != nil {
-				return "", fmt.Errorf("error reading input: %v", err)
-			}
-
-			return input, nil
-		},
-	}
-
 }
 
 func (i *Interpreter) executeDeclaration(decl ast.Declaration) (Value, error) {
@@ -992,7 +316,6 @@ func (i *Interpreter) executeDeclaration(decl ast.Declaration) (Value, error) {
 
 	switch d := decl.(type) {
 	case *ast.ClassDeclaration:
-
 		return nil, nil
 	case *ast.TypeDefinition:
 		return nil, nil
@@ -1109,6 +432,15 @@ func (i *Interpreter) executeDeclaration(decl ast.Declaration) (Value, error) {
 	}
 }
 
+func (i *Interpreter) executeBuiltin(name string, args []Value) (Value, error) {
+	if builtinFunc, ok := i.environment[name]; ok {
+		if bf, ok := builtinFunc.(*BuiltinFunction); ok {
+			return bf.Call(args)
+		}
+	}
+	return nil, fmt.Errorf("undefined builtin function: %s", name)
+}
+
 func (i *Interpreter) executeFunction(fn *ast.FunctionDeclaration, args []Value) (Value, error) {
 	if fn.Body == nil {
 		return i.executeBuiltin(fn.Name, args)
@@ -1119,7 +451,15 @@ func (i *Interpreter) executeFunction(fn *ast.FunctionDeclaration, args []Value)
 		prevEnv[k] = v
 	}
 
-	i.environment = make(map[string]Value)
+	newEnv := make(map[string]Value)
+
+	for k, v := range i.environment {
+		if _, ok := v.(*BuiltinFunction); ok {
+			newEnv[k] = v
+		}
+	}
+
+	i.environment = newEnv
 
 	for j, param := range fn.Parameters {
 		if j < len(args) {
@@ -1141,711 +481,6 @@ func (i *Interpreter) executeFunction(fn *ast.FunctionDeclaration, args []Value)
 	return result, nil
 }
 
-func (i *Interpreter) executeBuiltin(name string, args []Value) (Value, error) {
-	if builtinFunc, exists := i.environment[name]; exists {
-		if bf, ok := builtinFunc.(*BuiltinFunction); ok {
-			return bf.Call(args)
-		}
-	}
-
-	switch name {
-	case "print":
-		if len(args) > 0 {
-			fmt.Println(args[0])
-		}
-		return nil, nil
-
-	case "now":
-		currentTime := time.Now()
-		dateStruct := &Struct{
-			TypeName: "Date",
-			Fields: map[string]interface{}{
-				"year":  currentTime.Year(),
-				"month": int(currentTime.Month()),
-				"day":   currentTime.Day(),
-			},
-		}
-		return dateStruct, nil
-
-	case "formatDate":
-		if len(args) != 1 {
-			return nil, fmt.Errorf("formatDate expects exactly one Date argument")
-		}
-
-		dateStruct, ok := args[0].(*Struct)
-		if !ok || dateStruct.TypeName != "Date" {
-			return nil, fmt.Errorf("formatDate expects a Date struct")
-		}
-
-		year, _ := dateStruct.Fields["year"].(int)
-		month, _ := dateStruct.Fields["month"].(int)
-		day, _ := dateStruct.Fields["day"].(int)
-
-		monthStr := fmt.Sprintf("%02d", month)
-		dayStr := fmt.Sprintf("%02d", day)
-
-		return fmt.Sprintf("%d-%s-%s", year, monthStr, dayStr), nil
-
-	case "currentYear":
-		return float64(time.Now().Year()), nil
-
-	case "currentMonth":
-		return float64(int(time.Now().Month())), nil
-
-	case "currentDay":
-		return float64(time.Now().Day()), nil
-
-	case "createDate":
-		if len(args) != 3 {
-			return nil, fmt.Errorf("createDate expects exactly three integer arguments")
-		}
-
-		yearFloat, ok := args[0].(float64)
-		if !ok {
-			return nil, fmt.Errorf("createDate expects year as an integer")
-		}
-
-		monthFloat, ok := args[1].(float64)
-		if !ok {
-			return nil, fmt.Errorf("createDate expects month as an integer")
-		}
-
-		dayFloat, ok := args[2].(float64)
-		if !ok {
-			return nil, fmt.Errorf("createDate expects day as an integer")
-		}
-
-		dateStruct := &Struct{
-			TypeName: "Date",
-			Fields: map[string]interface{}{
-				"year":  int(yearFloat),
-				"month": int(monthFloat),
-				"day":   int(dayFloat),
-			},
-		}
-
-		return dateStruct, nil
-
-	case "isLeapYear":
-		if len(args) != 1 {
-			return nil, fmt.Errorf("isLeapYear expects exactly one integer argument")
-		}
-
-		yearFloat, ok := args[0].(float64)
-		if !ok {
-			return nil, fmt.Errorf("isLeapYear expects an integer")
-		}
-
-		year := int(yearFloat)
-
-		isLeap := false
-		if year%400 == 0 {
-			isLeap = true
-		} else if year%100 == 0 {
-			isLeap = false
-		} else if year%4 == 0 {
-			isLeap = true
-		}
-
-		return isLeap, nil
-
-	case "daysInMonth":
-		if len(args) != 2 {
-			return nil, fmt.Errorf("daysInMonth expects exactly two integer arguments")
-		}
-
-		yearFloat, ok := args[0].(float64)
-		if !ok {
-			return nil, fmt.Errorf("daysInMonth expects year as an integer")
-		}
-
-		monthFloat, ok := args[1].(float64)
-		if !ok {
-			return nil, fmt.Errorf("daysInMonth expects month as an integer")
-		}
-
-		year := int(yearFloat)
-		month := int(monthFloat)
-
-		daysInMonth := 31
-		if month == 4 || month == 6 || month == 9 || month == 11 {
-			daysInMonth = 30
-		} else if month == 2 {
-			isLeap := false
-			if year%400 == 0 {
-				isLeap = true
-			} else if year%100 == 0 {
-				isLeap = false
-			} else if year%4 == 0 {
-				isLeap = true
-			}
-
-			if isLeap {
-				daysInMonth = 29
-			} else {
-				daysInMonth = 28
-			}
-		}
-
-		return float64(daysInMonth), nil
-
-	case "dayOfWeek":
-		if len(args) != 1 {
-			return nil, fmt.Errorf("dayOfWeek expects exactly one Date argument")
-		}
-
-		dateStruct, ok := args[0].(*Struct)
-		if !ok || dateStruct.TypeName != "Date" {
-			return nil, fmt.Errorf("dayOfWeek expects a Date struct")
-		}
-
-		year, _ := dateStruct.Fields["year"].(int)
-		month, _ := dateStruct.Fields["month"].(int)
-		day, _ := dateStruct.Fields["day"].(int)
-
-		if month < 3 {
-			month += 12
-			year--
-		}
-
-		k := year % 100
-		j := year / 100
-
-		h := (day + ((13 * (month + 1)) / 5) + k + (k / 4) + (j / 4) - (2 * j)) % 7
-
-		if h < 0 {
-			h += 7
-		}
-
-		return float64(h), nil
-
-	case "addDays":
-		if len(args) != 2 {
-			return nil, fmt.Errorf("addDays expects exactly two arguments: a Date and an integer")
-		}
-
-		dateStruct, ok := args[0].(*Struct)
-		if !ok || dateStruct.TypeName != "Date" {
-			return nil, fmt.Errorf("addDays expects a Date struct as first argument")
-		}
-
-		daysFloat, ok := args[1].(float64)
-		if !ok {
-			return nil, fmt.Errorf("addDays expects an integer as second argument")
-		}
-
-		year, _ := dateStruct.Fields["year"].(int)
-		month, _ := dateStruct.Fields["month"].(int)
-		day, _ := dateStruct.Fields["day"].(int)
-
-		t := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
-		newTime := t.AddDate(0, 0, int(daysFloat))
-
-		newDateStruct := &Struct{
-			TypeName: "Date",
-			Fields: map[string]interface{}{
-				"year":  newTime.Year(),
-				"month": int(newTime.Month()),
-				"day":   newTime.Day(),
-			},
-		}
-
-		return newDateStruct, nil
-
-	case "subtractDays":
-		if len(args) != 2 {
-			return nil, fmt.Errorf("subtractDays expects exactly two arguments: a Date and an integer")
-		}
-
-		dateStruct, ok := args[0].(*Struct)
-		if !ok || dateStruct.TypeName != "Date" {
-			return nil, fmt.Errorf("subtractDays expects a Date struct as first argument")
-		}
-
-		daysFloat, ok := args[1].(float64)
-		if !ok {
-			return nil, fmt.Errorf("subtractDays expects an integer as second argument")
-		}
-
-		year, _ := dateStruct.Fields["year"].(int)
-		month, _ := dateStruct.Fields["month"].(int)
-		day, _ := dateStruct.Fields["day"].(int)
-
-		t := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
-		newTime := t.AddDate(0, 0, -int(daysFloat))
-
-		newDateStruct := &Struct{
-			TypeName: "Date",
-			Fields: map[string]interface{}{
-				"year":  newTime.Year(),
-				"month": int(newTime.Month()),
-				"day":   newTime.Day(),
-			},
-		}
-
-		return newDateStruct, nil
-
-	case "today":
-		currentTime := time.Now()
-		year := currentTime.Year()
-		month := int(currentTime.Month())
-		day := currentTime.Day()
-
-		monthStr := fmt.Sprintf("%02d", month)
-		dayStr := fmt.Sprintf("%02d", day)
-
-		return fmt.Sprintf("%d-%s-%s", year, monthStr, dayStr), nil
-
-	case "toString":
-		if len(args) != 1 {
-			return nil, fmt.Errorf("toString expects exactly one argument")
-		}
-		return fmt.Sprintf("%v", args[0]), nil
-
-	case "input":
-		if len(args) != 1 {
-			return nil, fmt.Errorf("input requires exactly one string argument")
-		}
-		fmt.Print(args[0])
-
-		var input string
-		_, err := fmt.Scanln(&input)
-		if err != nil {
-			return "", fmt.Errorf("error reading input: %v", err)
-		}
-		return input, nil
-
-	default:
-		return nil, fmt.Errorf("unknown built-in function: %s", name)
-	}
-}
-
-func (i *Interpreter) evaluateExpression(expr ast.Expression) (Value, error) {
-	if expr != nil {
-		i.setErrorPos(expr.Pos())
-	}
-
-	switch e := expr.(type) {
-	case *ast.BinaryExpression:
-		return i.evaluateBinary(e)
-	case *ast.UnaryExpression:
-		return i.evaluateUnary(e)
-	case *ast.VariableExpression:
-		if value, exists := i.environment[e.Name]; exists {
-			return value, nil
-		}
-		return nil, fmt.Errorf("undefined variable: %s", e.Name)
-	case *ast.AssignmentExpression:
-		value, err := i.evaluateExpression(e.Value)
-		if err != nil {
-			return nil, err
-		}
-		i.environment[e.Name] = value
-		return value, nil
-	case *ast.CallExpression:
-		return i.evaluateCall(e)
-	case *ast.GetExpression:
-		object, err := i.evaluateExpression(e.Object)
-		if err != nil {
-			return nil, err
-		}
-
-		if structObj, ok := object.(*Struct); ok {
-			if value, exists := structObj.Fields[e.Name]; exists {
-				if intVal, ok := value.(int); ok {
-					return float64(intVal), nil
-				}
-				return value, nil
-			}
-			return nil, fmt.Errorf("undefined field '%s' on struct of type '%s'",
-				e.Name, structObj.TypeName)
-		}
-
-		if obj, ok := object.(map[string]Value); ok {
-			if value, exists := obj[e.Name]; exists {
-				if intVal, ok := value.(int); ok {
-					return float64(intVal), nil
-				}
-				return value, nil
-			}
-			return nil, fmt.Errorf("undefined field: %s", e.Name)
-		}
-
-		return nil, fmt.Errorf("cannot access field on non-struct value")
-	case *ast.SetExpression:
-		object, err := i.evaluateExpression(e.Object)
-		if err != nil {
-			return nil, err
-		}
-		value, err := i.evaluateExpression(e.Value)
-		if err != nil {
-			return nil, err
-		}
-		if obj, ok := object.(map[string]Value); ok {
-			obj[e.Name] = value
-			return value, nil
-		}
-		return nil, fmt.Errorf("cannot set field on non-struct value")
-	case *ast.LiteralExpression:
-		return i.evaluateLiteral(e)
-	case *ast.StructLiteralExpression:
-		fields := make(map[string]Value)
-		for name, value := range e.Fields {
-			evaluated, err := i.evaluateExpression(value)
-			if err != nil {
-				return nil, err
-			}
-			fields[name] = evaluated
-		}
-		return fields, nil
-	case *ast.ArrayLiteralExpression:
-		elements := make([]Value, 0, len(e.Elements))
-		for _, element := range e.Elements {
-			value, err := i.evaluateExpression(element)
-			if err != nil {
-				return nil, err
-			}
-			elements = append(elements, value)
-		}
-		return elements, nil
-	case *ast.IndexExpression:
-		array, err := i.evaluateExpression(e.Array)
-		if err != nil {
-			return nil, err
-		}
-
-		index, err := i.evaluateExpression(e.Index)
-		if err != nil {
-			return nil, err
-		}
-
-		indexInt, ok := index.(float64)
-		if !ok {
-			return nil, fmt.Errorf("array index must be a number")
-		}
-
-		arrayValue, ok := array.([]Value)
-		if !ok {
-			return nil, fmt.Errorf("cannot index into non-array value")
-		}
-
-		idx := int(indexInt)
-		if idx < 0 || idx >= len(arrayValue) {
-			return nil, fmt.Errorf("array index out of bounds: %d", idx)
-		}
-
-		return arrayValue[idx], nil
-	default:
-		return nil, fmt.Errorf("unknown expression type: %T", expr)
-	}
-}
-
-func (i *Interpreter) evaluateBinary(expr *ast.BinaryExpression) (Value, error) {
-	left, err := i.evaluateExpression(expr.Left)
-	if err != nil {
-		return nil, err
-	}
-
-	right, err := i.evaluateExpression(expr.Right)
-	if err != nil {
-		return nil, err
-	}
-
-	switch expr.Operator {
-	case "+", "-", "*", "/", "<", ">", "<=", ">=", "==", "!=":
-		if lInt, lok := left.(int); lok {
-			left = float64(lInt)
-		}
-		if rInt, rok := right.(int); rok {
-			right = float64(rInt)
-		}
-	}
-
-	switch expr.Operator {
-	case "&&":
-		if lBool, lok := left.(bool); lok {
-			if rBool, rok := right.(bool); rok {
-				return lBool && rBool, nil
-			}
-		}
-		return nil, fmt.Errorf("cannot perform logical AND on non-boolean values")
-	case "||":
-		if lBool, lok := left.(bool); lok {
-			if rBool, rok := right.(bool); rok {
-				return lBool || rBool, nil
-			}
-		}
-		return nil, fmt.Errorf("cannot perform logical OR on non-boolean values")
-	case "+":
-		if lNum, lOk := left.(float64); lOk {
-			if rNum, rOk := right.(float64); rOk {
-				return lNum + rNum, nil
-			}
-		}
-		if lStr, lOk := left.(string); lOk {
-			if rStr, rOk := right.(string); rOk {
-				return lStr + rStr, nil
-			}
-		}
-		return nil, fmt.Errorf("invalid operator %s for types %T and %T", expr.Operator, left, right)
-	case "-":
-		if lNum, lOk := left.(float64); lOk {
-			if rNum, rOk := right.(float64); rOk {
-				return lNum - rNum, nil
-			}
-		}
-		return nil, fmt.Errorf("invalid operator %s for types %T and %T", expr.Operator, left, right)
-	case "*":
-		if lNum, lOk := left.(float64); lOk {
-			if rNum, rOk := right.(float64); rOk {
-				return lNum * rNum, nil
-			}
-		}
-		return nil, fmt.Errorf("invalid operator %s for types %T and %T", expr.Operator, left, right)
-	case "/":
-		if lNum, lOk := left.(float64); lOk {
-			if rNum, rOk := right.(float64); rOk {
-				if rNum == 0 {
-					return nil, fmt.Errorf("division by zero")
-				}
-				return lNum / rNum, nil
-			}
-		}
-		return nil, fmt.Errorf("invalid operator %s for types %T and %T", expr.Operator, left, right)
-
-	case "%":
-		if lNum, lOk := left.(float64); lOk {
-			if rNum, rOk := right.(float64); rOk {
-				if rNum == 0 {
-					return nil, fmt.Errorf("modulo by zero")
-				}
-				return float64(int(lNum) % int(rNum)), nil
-			}
-		}
-		return nil, fmt.Errorf("invalid operator %s for types %T and %T", expr.Operator, left, right)
-	case "==":
-		if lNum, lOk := left.(float64); lOk {
-			if rNum, rOk := right.(float64); rOk {
-				return lNum == rNum, nil
-			}
-		}
-		if lStr, lOk := left.(string); lOk {
-			if rStr, rOk := right.(string); rOk {
-				return lStr == rStr, nil
-			}
-		}
-		return nil, fmt.Errorf("invalid operator %s for types %T and %T", expr.Operator, left, right)
-	case "!=":
-		if lNum, lOk := left.(float64); lOk {
-			if rNum, rOk := right.(float64); rOk {
-				return lNum != rNum, nil
-			}
-		}
-		if lStr, lOk := left.(string); lOk {
-			if rStr, rOk := right.(string); rOk {
-				return lStr != rStr, nil
-			}
-		}
-		return nil, fmt.Errorf("invalid operator %s for types %T and %T", expr.Operator, left, right)
-	case "<":
-		if lNum, lOk := left.(float64); lOk {
-			if rNum, rOk := right.(float64); rOk {
-				return lNum < rNum, nil
-			}
-		}
-		return nil, fmt.Errorf("invalid operator %s for types %T and %T", expr.Operator, left, right)
-	case ">":
-		if lNum, lOk := left.(float64); lOk {
-			if rNum, rOk := right.(float64); rOk {
-				return lNum > rNum, nil
-			}
-		}
-		return nil, fmt.Errorf("invalid operator %s for types %T and %T", expr.Operator, left, right)
-	case "<=":
-		if lNum, lOk := left.(float64); lOk {
-			if rNum, rOk := right.(float64); rOk {
-				return lNum <= rNum, nil
-			}
-		}
-		return nil, fmt.Errorf("invalid operator %s for types %T and %T", expr.Operator, left, right)
-	case ">=":
-		if lNum, lOk := left.(float64); lOk {
-			if rNum, rOk := right.(float64); rOk {
-				return lNum >= rNum, nil
-			}
-		}
-		return nil, fmt.Errorf("invalid operator %s for types %T and %T", expr.Operator, left, right)
-	}
-
-	return nil, fmt.Errorf("invalid operator %s for types %T and %T", expr.Operator, left, right)
-}
-
-func (i *Interpreter) evaluateUnary(expr *ast.UnaryExpression) (Value, error) {
-	right, err := i.evaluateExpression(expr.Right)
-	if err != nil {
-		return nil, err
-	}
-
-	switch expr.Operator {
-	case "-":
-		if num, ok := right.(float64); ok {
-			return -num, nil
-		}
-	case "!":
-		if b, ok := right.(bool); ok {
-			return !b, nil
-		}
-	}
-
-	return nil, fmt.Errorf("invalid unary operator %s for type", expr.Operator)
-}
-
-func (i *Interpreter) evaluateCall(expr *ast.CallExpression) (Value, error) {
-	if getExpr, ok := expr.Callee.(*ast.GetExpression); ok {
-
-		if classNameExpr, ok := getExpr.Object.(*ast.VariableExpression); ok {
-			className := classNameExpr.Name
-			methodName := getExpr.Name
-
-			class, exists := i.classes[className]
-			if !exists {
-				return nil, fmt.Errorf("undefined class: %s", className)
-			}
-
-			args := make([]Value, 0, len(expr.Arguments))
-			for _, arg := range expr.Arguments {
-				value, err := i.evaluateExpression(arg)
-				if err != nil {
-					return nil, err
-				}
-				args = append(args, value)
-			}
-
-			if static, exists := class.Statics[methodName]; exists {
-				return i.executeFunction(static, args)
-			}
-
-			if instanceMethod, exists := class.Methods[methodName]; exists {
-				return i.executeFunction(instanceMethod, args)
-			}
-
-			builtinFuncName := fmt.Sprintf("%s.%s", className, methodName)
-			if builtinFunc, exists := i.environment[builtinFuncName]; exists {
-				if bf, ok := builtinFunc.(*BuiltinFunction); ok {
-					return bf.Call(args)
-				}
-			}
-
-			return nil, fmt.Errorf("undefined static method '%s' in class '%s'", methodName, className)
-		}
-
-		object, err := i.evaluateExpression(getExpr.Object)
-		if err != nil {
-			return nil, err
-		}
-
-		if structObj, ok := object.(*Struct); ok {
-			methodName := getExpr.Name
-
-			args := make([]Value, len(expr.Arguments))
-			for j, arg := range expr.Arguments {
-				val, err := i.evaluateExpression(arg)
-				if err != nil {
-					return nil, err
-				}
-				args[j] = val
-			}
-
-			if class, exists := i.classes[structObj.TypeName]; exists {
-				allArgs := make([]Value, len(args)+1)
-				allArgs[0] = structObj
-				copy(allArgs[1:], args)
-
-				if method, exists := class.Methods[methodName]; exists {
-					return i.executeFunction(method, allArgs)
-				}
-			}
-
-			return nil, fmt.Errorf("undefined method '%s' on type '%s'", methodName, structObj.TypeName)
-		}
-
-		return nil, fmt.Errorf("cannot call method on expression of type %T", object)
-	}
-
-	callee, ok := expr.Callee.(*ast.VariableExpression)
-	if !ok {
-		return nil, fmt.Errorf("callee is not a function name")
-	}
-
-	args := make([]Value, 0, len(expr.Arguments))
-	for _, arg := range expr.Arguments {
-		value, err := i.evaluateExpression(arg)
-		if err != nil {
-			return nil, err
-		}
-		args = append(args, value)
-	}
-
-	if builtinFunc, exists := i.environment[callee.Name]; exists {
-		if bf, ok := builtinFunc.(*BuiltinFunction); ok {
-			return bf.Call(args)
-		}
-	}
-
-	fn, exists := i.functions[callee.Name]
-	if !exists {
-		return nil, fmt.Errorf("undefined function: %s", callee.Name)
-	}
-
-	return i.executeFunction(fn, args)
-}
-
-func (c *Class) CallStatic(methodName string, interpreter *Interpreter, args []Value) (Value, error) {
-
-	if static, exists := c.Statics[methodName]; exists {
-		return interpreter.executeFunction(static, args)
-	}
-
-	builtinFuncName := fmt.Sprintf("%s.%s", c.Name, methodName)
-	if builtinFunc, exists := interpreter.environment[builtinFuncName]; exists {
-		if bf, ok := builtinFunc.(*BuiltinFunction); ok {
-			return bf.Call(args)
-		}
-	}
-
-	return nil, fmt.Errorf("undefined static method '%s' in class '%s'", methodName, c.Name)
-}
-
-func (i *Interpreter) evaluateLiteral(expr *ast.LiteralExpression) (Value, error) {
-	switch expr.Type {
-	case "number":
-		if strings.Contains(expr.Value.(string), ".") {
-			if val, err := strconv.ParseFloat(expr.Value.(string), 64); err == nil {
-				return val, nil
-			} else {
-				return nil, fmt.Errorf("invalid float: %s", expr.Value)
-			}
-		} else {
-			if val, err := strconv.ParseFloat(expr.Value.(string), 64); err == nil {
-				return val, nil
-			} else {
-				return nil, fmt.Errorf("invalid number: %s", expr.Value)
-			}
-		}
-	case "string":
-		return expr.Value, nil
-	case "bool":
-		if expr.Value == "true" {
-			return true, nil
-		} else if expr.Value == "false" {
-			return false, nil
-		}
-		return nil, fmt.Errorf("invalid boolean: %s", expr.Value)
-	default:
-		return nil, fmt.Errorf("unknown literal type: %s", expr.Type)
-	}
-}
-
 func (i *Interpreter) GetVariables() map[string]interface{} {
 	if i.environment == nil {
 		return make(map[string]interface{})
@@ -1857,41 +492,6 @@ func (i *Interpreter) GetVariables() map[string]interface{} {
 	return result
 }
 
-func (i *Interpreter) evalBinaryExpression(expr *ast.BinaryExpression) (interface{}, error) {
-	left, err := i.evaluateExpression(expr.Left)
-	if err != nil {
-		return nil, err
-	}
-
-	right, err := i.evaluateExpression(expr.Right)
-	if err != nil {
-		return nil, err
-	}
-
-	switch expr.Operator {
-	case "+":
-		if lInt, lok := left.(int); lok {
-			if rInt, rok := right.(int); rok {
-				return lInt + rInt, nil
-			}
-		}
-		if lFloat, lok := left.(float64); lok {
-			if rFloat, rok := right.(float64); rok {
-				return lFloat + rFloat, nil
-			}
-		}
-		if lStr, lok := left.(string); lok {
-			if rStr, rok := right.(string); rok {
-				return lStr + rStr, nil
-			}
-		}
-		return nil, fmt.Errorf("cannot add values of types %T and %T", left, right)
-
-	}
-
-	return nil, fmt.Errorf("unsupported operator: %s", expr.Operator)
-}
-
 func (i *Interpreter) setErrorPos(pos int) {
 	i.errorPos = pos
 }
@@ -1900,87 +500,16 @@ func (i *Interpreter) Position() int {
 	return i.errorPos
 }
 
-type Environment struct {
-	enclosing *Environment
-	values    map[string]interface{}
+func (i *Interpreter) AddFunction(name string, fn *ast.FunctionDeclaration) {
+	i.functions[name] = fn
 }
 
-func NewEnvironment(enclosing *Environment) *Environment {
-	return &Environment{
-		enclosing: enclosing,
-		values:    make(map[string]interface{}),
-	}
+func (i *Interpreter) GetFunctions() map[string]*ast.FunctionDeclaration {
+	return i.functions
 }
 
-type Class struct {
-	Name    string
-	Methods map[string]*ast.FunctionDeclaration
-	Statics map[string]*ast.FunctionDeclaration
-}
-
-func NewClass(name string) *Class {
-	return &Class{
-		Name:    name,
-		Methods: make(map[string]*ast.FunctionDeclaration),
-		Statics: make(map[string]*ast.FunctionDeclaration),
+func (i *Interpreter) AddVariable(name string, value interface{}) {
+	if _, exists := i.environment[name]; !exists {
+		i.environment[name] = value
 	}
-}
-
-func (c *Class) AddMethod(name string, fn *ast.FunctionDeclaration) {
-	c.Methods[name] = fn
-}
-
-func (c *Class) AddStatic(name string, fn *ast.FunctionDeclaration) {
-	c.Statics[name] = fn
-}
-
-func (c *Class) Call(methodName string, interpreter *Interpreter, args []Value) (Value, error) {
-
-	if method, exists := c.Methods[methodName]; exists {
-		return interpreter.executeFunction(method, args)
-	}
-
-	if static, exists := c.Statics[methodName]; exists {
-		return interpreter.executeFunction(static, args)
-	}
-
-	if c.Name == "HTTP" {
-		builtinMethodName := fmt.Sprintf("%s.%s", c.Name, methodName)
-		if builtinFunc, exists := interpreter.environment[builtinMethodName]; exists {
-			if bf, ok := builtinFunc.(*BuiltinFunction); ok {
-				return bf.Call(args)
-			}
-		}
-	}
-
-	return nil, fmt.Errorf("undefined method '%s' in class '%s'", methodName, c.Name)
-}
-
-func (i *Interpreter) evaluateClassMethodCall(expr *ast.ClassMethodCallExpression) (Value, error) {
-	className := expr.ClassName
-	methodName := expr.MethodName
-
-	class, exists := i.classes[className]
-	if !exists {
-		return nil, fmt.Errorf("undefined class: %s", className)
-	}
-
-	args := make([]Value, len(expr.Arguments))
-	for j, arg := range expr.Arguments {
-		val, err := i.evaluateExpression(arg)
-		if err != nil {
-			return nil, err
-		}
-		args[j] = val
-	}
-
-	if method, exists := class.Methods[methodName]; exists {
-		return i.executeFunction(method, args)
-	}
-
-	if static, exists := class.Statics[methodName]; exists {
-		return i.executeFunction(static, args)
-	}
-
-	return class.Call(methodName, i, args)
 }

@@ -1,5 +1,5 @@
 //define a type
-def Person {
+type Person {
     name: string,
     age: int,
     active: bool

@@ -1,5 +1,5 @@
 // Example usage of input
-def Human {
+type Human {
     name: string,
     age: int
 }

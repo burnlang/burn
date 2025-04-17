@@ -5,7 +5,7 @@ const TimeLib = `// Burn Standard Library: Time Module
 // This provides time conversion functionality for Burn programs
 
 // Define a Time struct to represent time values
-def Time {
+type Time {
     hours: int,
     minutes: int,
     seconds: int,

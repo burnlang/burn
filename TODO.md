@@ -1,14 +1,15 @@
 # TODO (sometimes i forget to update it)
 
-# Fix Compiling to executable
-
-# Change STD Lib [IN PROGESS]
-- To be implemented in the executable itself
-
-# Fix HTTP [IN PROGESS]
+# Fix Date [IN PROGESS]
 - Build in Functions are not Registered
 
-## Add compiling to JS 
+## Fix compilation to executable 
+
+## Add Interfaces
+
+## Add Better Documentation using MDX
+
+## Add compiling to JS or Kotlin
 - Basic implementation added
 - Need to complete all expression and statement types
 - Need to implement proper stdlib mapping

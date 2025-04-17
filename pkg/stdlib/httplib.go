@@ -5,7 +5,7 @@ const HTTPLib = `// Burn Standard Library: HTTP Module
 // This provides HTTP request functionality for Burn programs
 
 // HTTPResponse struct to represent an HTTP response
-def HTTPResponse {
+type HTTPResponse {
     statusCode: int,
     body: string,
     headers: [string]

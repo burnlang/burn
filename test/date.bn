@@ -1,9 +1,9 @@
 // Date functions test
-import "date"
+import "std/date"
 
 fun main() {
     // Get current date
-    var today = now()
+    var today = Date.now()
     print("Current date:")
     print("------------")
     print("Year: " + toString(today.year))
@@ -14,45 +14,45 @@ fun main() {
     // Get current date components using individual functions
     print("Current date components:")
     print("------------------------")
-    print("Current year: " + toString(currentYear()))
-    print("Current month: " + toString(currentMonth()))
-    print("Current day: " + toString(currentDay()))
+    print("Current year: " + toString(Date.currentYear()))
+    print("Current month: " + toString(Date.currentMonth()))
+    print("Current day: " + toString(Date.currentDay()))
     print("")
     
     // Format the date
-    print("Formatted date: " + formatDate(today))
+    print("Formatted date: " + Date.formatDate(today))
     print("")
     
     // Create a custom date
-    var birthday = createDate(1990, 5, 15)
+    var birthday = Date.createDate(1990, 5, 15)
     print("Custom date (1990-05-15):")
     print("-------------------------")
     print("Year: " + toString(birthday.year))
     print("Month: " + toString(birthday.month))
     print("Day: " + toString(birthday.day))
-    print("Formatted: " + formatDate(birthday))
+    print("Formatted: " + Date.formatDate(birthday))
     print("")
     
     // Add days to a date
-    var futureDate = addDays(today, 10)
-    print("Date 10 days from now: " + formatDate(futureDate))
+    var futureDate = Date.addDays(today, 10)
+    print("Date 10 days from now: " + Date.formatDate(futureDate))
     
     // Subtract days from a date
-    var pastDate = subtractDays(today, 10)
-    print("Date 10 days ago: " + formatDate(pastDate))
+    var pastDate = Date.subtractDays(today, 10)
+    print("Date 10 days ago: " + Date.formatDate(pastDate))
     
     // Check if current year is a leap year
-    print("Is current year a leap year? " + toString(isLeapYear(today.year)))
+    print("Is current year a leap year? " + toString(Date.isLeapYear(today.year)))
     
     // Get days in current month
-    print("Days in current month: " + toString(daysInMonth(today.year, today.month)))
+    print("Days in current month: " + toString(Date.daysInMonth(today.year, today.month)))
     
     // Get day of week (0 = Saturday, 1 = Sunday, ..., 6 = Friday)
-    var dayOfWeekNum = dayOfWeek(today)
+    var dayOfWeekNum = Date.dayOfWeek(today)
     // Create array with day names in the correct order (algorithm returns 0=Saturday, 1=Sunday, etc.)
     var dayNames = ["Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
     print("Today is a " + dayNames[dayOfWeekNum])
     
     // Use the convenience function from the date library
-    print("Today's date string: " + today())
+    print("Today's date string: " + Date.today())
 }
