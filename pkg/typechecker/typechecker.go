@@ -224,15 +224,14 @@ func (t *TypeChecker) processImport(imp *ast.ImportDeclaration, baseDir string) 
 }
 
 func (t *TypeChecker) registerImportedDeclarations(declarations []ast.Declaration, imp *ast.ImportDeclaration) error {
-	
+
 	for _, decl := range declarations {
 		if typeDef, ok := decl.(*ast.TypeDefinition); ok {
-			
+
 			if _, exists := t.types[typeDef.Name]; exists {
 				continue
 			}
 
-			
 			fields := make(map[string]string)
 			for _, field := range typeDef.Fields {
 				fields[field.Name] = field.Type
@@ -240,22 +239,20 @@ func (t *TypeChecker) registerImportedDeclarations(declarations []ast.Declaratio
 			t.types[typeDef.Name] = fields
 
 		} else if class, ok := decl.(*ast.ClassDeclaration); ok {
-			
+
 			if _, exists := t.classes[class.Name]; exists {
 				continue
 			}
 
-			
 			if _, exists := t.types[class.Name]; !exists {
 				t.types[class.Name] = make(map[string]string)
 			}
 		}
 	}
 
-	
 	for _, decl := range declarations {
 		if fn, ok := decl.(*ast.FunctionDeclaration); ok {
-			
+
 			if _, exists := t.functions[fn.Name]; exists {
 				continue
 			}
@@ -270,12 +267,11 @@ func (t *TypeChecker) registerImportedDeclarations(declarations []ast.Declaratio
 				ReturnType: fn.ReturnType,
 			}
 		} else if class, ok := decl.(*ast.ClassDeclaration); ok {
-			
+
 			if _, exists := t.classes[class.Name]; !exists {
 				classMethods := make(map[string]FunctionType)
 				t.classes[class.Name] = classMethods
 
-				
 				for _, method := range class.Methods {
 					paramTypes := make([]string, len(method.Parameters))
 					for i, param := range method.Parameters {
@@ -293,7 +289,6 @@ func (t *TypeChecker) registerImportedDeclarations(declarations []ast.Declaratio
 					}
 				}
 
-				
 				for _, method := range class.StaticMethods {
 					methodKey := "static." + method.Name
 					paramTypes := make([]string, len(method.Parameters))

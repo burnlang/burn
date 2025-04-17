@@ -180,14 +180,6 @@ func (t *TypeChecker) functionHasValidReturn(body []ast.Declaration, expectedTyp
 func (t *TypeChecker) checkTypeDefinition(decl *ast.TypeDefinition) error {
 	t.setErrorPos(decl.Pos())
 
-	
-	if _, exists := t.types[decl.Name]; exists {
-		
-		
-		
-	}
-
-	
 	fields := make(map[string]string)
 	for _, field := range decl.Fields {
 		if !isBuiltinType(field.Type) && field.Type != decl.Name {

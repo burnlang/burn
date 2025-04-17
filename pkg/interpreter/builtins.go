@@ -134,7 +134,7 @@ func (i *Interpreter) addBuiltins() {
 		},
 	}
 
-	// Add global now() function for date library
+	
 	i.environment["now"] = &BuiltinFunction{
 		Name: "now",
 		Fn: func(args []Value) (Value, error) {
@@ -146,7 +146,7 @@ func (i *Interpreter) addBuiltins() {
 		},
 	}
 
-	// Register standard library functions to ensure compatibility with tests
+	
 	i.registerDateLibrary()
 	i.registerHTTPLibrary()
 	i.registerTimeLibrary()

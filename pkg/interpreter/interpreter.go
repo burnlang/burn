@@ -54,7 +54,7 @@ func (i *Interpreter) RegisterBuiltinStandardLibraries() {
 }
 
 func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
-	// First pass: process type definitions and classes
+
 	for _, decl := range program.Declarations {
 		if typeDef, ok := decl.(*ast.TypeDefinition); ok {
 			i.types[typeDef.Name] = typeDef
@@ -70,9 +70,10 @@ func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
 		}
 	}
 
+	i.addBuiltins()
+
 	i.RegisterBuiltinStandardLibraries()
 
-	// Second pass: handle imports, functions, and other declarations
 	for _, decl := range program.Declarations {
 		if fn, ok := decl.(*ast.FunctionDeclaration); ok {
 			i.functions[fn.Name] = fn
@@ -110,14 +111,12 @@ func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
 func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 	libName := imp.Path
 
-	// Avoid circular imports
 	if i.importedModules[libName] {
 		return nil
 	}
 
 	i.importedModules[libName] = true
 
-	// Handle standard library imports
 	if strings.HasPrefix(libName, "std/") || (!strings.Contains(libName, "/") && !strings.Contains(libName, "\\")) {
 		basename := strings.TrimPrefix(libName, "std/")
 		basename = strings.TrimSuffix(basename, ".bn")
@@ -135,7 +134,6 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 		}
 	}
 
-	// Handle file imports
 	if strings.HasSuffix(libName, ".bn") || !strings.Contains(libName, ".") {
 		path := libName
 
@@ -143,11 +141,10 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 			path = path + ".bn"
 		}
 
-		// Try multiple search paths
 		searchPaths := []string{
-			path,                              // Direct path
-			"src/lib/std/" + path,             // Standard library path
-			filepath.Join("src", "lib", path), // Library path
+			path,
+			"src/lib/std/" + path,
+			filepath.Join("src", "lib", path),
 		}
 
 		var source []byte
@@ -179,25 +176,24 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 		}
 
 		importInterpreter := New()
+		importInterpreter.addBuiltins()
+		importInterpreter.RegisterBuiltinStandardLibraries()
 
-		// Share the imported modules tracking to prevent circular imports
 		for mod := range i.importedModules {
 			importInterpreter.importedModules[mod] = true
 		}
 
-		// Run the imported code
 		_, err = importInterpreter.Interpret(program)
 		if err != nil {
 			return fmt.Errorf("error interpreting import %s: %v", foundPath, err)
 		}
 
-		// Copy types, functions, and classes from the imported module
 		for name, typeDef := range importInterpreter.types {
 			i.types[name] = typeDef
 		}
 
 		for name, fn := range importInterpreter.functions {
-			if name != "main" { // Don't import main function
+			if name != "main" {
 				i.functions[name] = fn
 			}
 		}
@@ -206,10 +202,15 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 			i.classes[name] = class
 		}
 
+		for name, value := range importInterpreter.environment {
+			if _, exists := i.environment[name]; !exists {
+				i.environment[name] = value
+			}
+		}
+
 		return nil
 	}
 
-	// Legacy standard library import handling
 	basename := filepath.Base(libName)
 
 	if lib, exists := stdlib.StdLibFiles[basename]; exists {
@@ -243,6 +244,8 @@ func (i *Interpreter) interpretStdLib(name, source string) error {
 	}
 
 	importInterpreter := New()
+	importInterpreter.addBuiltins()
+	importInterpreter.RegisterBuiltinStandardLibraries()
 
 	_, err = importInterpreter.Interpret(program)
 	if err != nil {
@@ -257,6 +260,12 @@ func (i *Interpreter) interpretStdLib(name, source string) error {
 
 	for name, class := range importInterpreter.classes {
 		i.classes[name] = class
+	}
+
+	for name, value := range importInterpreter.environment {
+		if _, exists := i.environment[name]; !exists {
+			i.environment[name] = value
+		}
 	}
 
 	return nil
@@ -404,7 +413,17 @@ func (i *Interpreter) executeFunction(fn *ast.FunctionDeclaration, args []Value)
 		prevEnv[k] = v
 	}
 
-	i.environment = make(map[string]Value)
+	// Create new environment but preserve built-in functions
+	newEnv := make(map[string]Value)
+
+	// Copy built-in functions from the previous environment
+	for k, v := range i.environment {
+		if _, ok := v.(*BuiltinFunction); ok {
+			newEnv[k] = v
+		}
+	}
+
+	i.environment = newEnv
 
 	for j, param := range fn.Parameters {
 		if j < len(args) {
@@ -443,4 +462,18 @@ func (i *Interpreter) setErrorPos(pos int) {
 
 func (i *Interpreter) Position() int {
 	return i.errorPos
+}
+
+func (i *Interpreter) AddFunction(name string, fn *ast.FunctionDeclaration) {
+	i.functions[name] = fn
+}
+
+func (i *Interpreter) GetFunctions() map[string]*ast.FunctionDeclaration {
+	return i.functions
+}
+
+func (i *Interpreter) AddVariable(name string, value interface{}) {
+	if _, exists := i.environment[name]; !exists {
+		i.environment[name] = value
+	}
 }

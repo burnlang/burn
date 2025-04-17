@@ -125,10 +125,12 @@ func main() {
 }
 
 func runBurnProgram() int {
-    
+    // Create a new interpreter and ensure all built-ins are registered
     interp := interpreter.New()
     
+	interp.RegisterBuiltinStandardLibraries()
     
+    // Register imports
     for path, source := range importSources {
         if err := registerImport(interp, path, source); err != nil {
             fmt.Fprintf(os.Stderr, "Import error: %%v\n", err)
@@ -136,7 +138,7 @@ func runBurnProgram() int {
         }
     }
 
-    
+    // Parse and interpret the main source
     lex := lexer.New(mainSource)
     tokens, err := lex.Tokenize()
     if err != nil {
@@ -179,15 +181,27 @@ func registerImport(interp *interpreter.Interpreter, path, source string) error 
         return err
     }
     
+    // Create a new interpreter for the import
     importInterp := interpreter.New()
+    
+    // Interpret the import
     _, err = importInterp.Interpret(program)
     if err != nil {
         return err
     }
     
+    // Copy functions (except main) from the import to the main interpreter
     for name, fn := range importInterp.GetFunctions() {
         if name != "main" {
             interp.AddFunction(name, fn)
+        }
+    }
+    
+    // Also copy environment values to ensure builtins are available
+    for name, val := range importInterp.GetVariables() {
+        if name != "main" && val != nil {
+            // Don't overwrite existing values
+            interp.AddVariable(name, val)
         }
     }
 

@@ -1,3 +1,14 @@
+// Define types first
+type Human {
+    name: string,
+    age: int
+}
+
+type Dog {
+    name: string,
+    breed: string
+}
+
 //class implementation in Burn
 //classes are like a wrapper in burn
 class Human {
