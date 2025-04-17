@@ -9,7 +9,6 @@ import (
 	"github.com/burnlang/burn/pkg/lexer"
 )
 
-// formattedError creates a nicely formatted error message with line and column information
 func formattedError(errType string, err error, source string, pos int) error {
 	errMsg := err.Error()
 
@@ -31,7 +30,6 @@ func formattedError(errType string, err error, source string, pos int) error {
 	return fmt.Errorf("%s at line %d, column %d: %v", errType, line, col, err)
 }
 
-// getLineAndCol calculates line and column numbers from a position in the source
 func getLineAndCol(source string, pos int) (int, int) {
 	lineStart := 0
 	line := 1
@@ -47,7 +45,6 @@ func getLineAndCol(source string, pos int) (int, int) {
 	return line, column
 }
 
-// tokenTypeToString converts a lexer token type to a human-readable string
 func tokenTypeToString(tokenType lexer.TokenType) string {
 	switch tokenType {
 	case lexer.TokenIdentifier:
@@ -62,14 +59,13 @@ func tokenTypeToString(tokenType lexer.TokenType) string {
 		return "VAR"
 	case lexer.TokenConst:
 		return "CONST"
-	case lexer.TokenDef:
+	case lexer.TokenTypeKeyword:
 		return "DEF"
 	default:
 		return fmt.Sprintf("TOKEN(%d)", int(tokenType))
 	}
 }
 
-// printAST prints an AST node and its children with proper indentation
 func printAST(node ast.Node, indent int, w io.Writer) {
 	indentStr := strings.Repeat("  ", indent)
 

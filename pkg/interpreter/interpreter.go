@@ -15,8 +15,11 @@ import (
 type Interpreter struct {
 	environment map[string]Value
 	functions   map[string]*ast.FunctionDeclaration
+	types       map[string]*ast.TypeDefinition
 	classes     map[string]*Class
 	errorPos    int
+
+	importedModules map[string]bool
 }
 
 type Environment struct {
@@ -33,10 +36,12 @@ func NewEnvironment(enclosing *Environment) *Environment {
 
 func New() *Interpreter {
 	i := &Interpreter{
-		environment: make(map[string]Value),
-		functions:   make(map[string]*ast.FunctionDeclaration),
-		classes:     make(map[string]*Class),
-		errorPos:    0,
+		environment:     make(map[string]Value),
+		functions:       make(map[string]*ast.FunctionDeclaration),
+		types:           make(map[string]*ast.TypeDefinition),
+		classes:         make(map[string]*Class),
+		errorPos:        0,
+		importedModules: make(map[string]bool),
 	}
 	i.addBuiltins()
 	return i
@@ -49,9 +54,11 @@ func (i *Interpreter) RegisterBuiltinStandardLibraries() {
 }
 
 func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
-
+	// First pass: process type definitions and classes
 	for _, decl := range program.Declarations {
-		if classDef, ok := decl.(*ast.ClassDeclaration); ok {
+		if typeDef, ok := decl.(*ast.TypeDefinition); ok {
+			i.types[typeDef.Name] = typeDef
+		} else if classDef, ok := decl.(*ast.ClassDeclaration); ok {
 			class := NewClass(classDef.Name)
 			for _, method := range classDef.Methods {
 				class.AddMethod(method.Name, method)
@@ -65,6 +72,7 @@ func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
 
 	i.RegisterBuiltinStandardLibraries()
 
+	// Second pass: handle imports, functions, and other declarations
 	for _, decl := range program.Declarations {
 		if fn, ok := decl.(*ast.FunctionDeclaration); ok {
 			i.functions[fn.Name] = fn
@@ -101,57 +109,107 @@ func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
 
 func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 	libName := imp.Path
-	
+
+	// Avoid circular imports
+	if i.importedModules[libName] {
+		return nil
+	}
+
+	i.importedModules[libName] = true
+
+	// Handle standard library imports
+	if strings.HasPrefix(libName, "std/") || (!strings.Contains(libName, "/") && !strings.Contains(libName, "\\")) {
+		basename := strings.TrimPrefix(libName, "std/")
+		basename = strings.TrimSuffix(basename, ".bn")
+
+		switch basename {
+		case "date":
+			i.registerDateLibrary()
+			return nil
+		case "http":
+			i.registerHTTPLibrary()
+			return nil
+		case "time":
+			i.registerTimeLibrary()
+			return nil
+		}
+	}
+
+	// Handle file imports
 	if strings.HasSuffix(libName, ".bn") || !strings.Contains(libName, ".") {
 		path := libName
-		
+
 		if !strings.HasSuffix(path, ".bn") {
 			path = path + ".bn"
 		}
 
-		source, err := os.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("could not read imported file %s: %v", path, err)
+		// Try multiple search paths
+		searchPaths := []string{
+			path,                              // Direct path
+			"src/lib/std/" + path,             // Standard library path
+			filepath.Join("src", "lib", path), // Library path
+		}
+
+		var source []byte
+		var err error
+		var foundPath string
+
+		for _, searchPath := range searchPaths {
+			source, err = os.ReadFile(searchPath)
+			if err == nil {
+				foundPath = searchPath
+				break
+			}
+		}
+
+		if foundPath == "" {
+			return fmt.Errorf("could not find import file: %s", libName)
 		}
 
 		l := lexer.New(string(source))
 		tokens, err := l.Tokenize()
 		if err != nil {
-			return err
+			return fmt.Errorf("lexical error in import %s: %v", foundPath, err)
 		}
 
 		p := parser.New(tokens)
 		program, err := p.Parse()
 		if err != nil {
-			return err
+			return fmt.Errorf("parse error in import %s: %v", foundPath, err)
 		}
 
 		importInterpreter := New()
 
-		
-		defer func() {
-			
-			for name, fn := range importInterpreter.functions {
-				if name != "main" {
-					i.functions[name] = fn
-				}
-			}
+		// Share the imported modules tracking to prevent circular imports
+		for mod := range i.importedModules {
+			importInterpreter.importedModules[mod] = true
+		}
 
-			
-			for name, class := range importInterpreter.classes {
-				i.classes[name] = class
-			}
-		}()
-
+		// Run the imported code
 		_, err = importInterpreter.Interpret(program)
 		if err != nil {
-			return err
+			return fmt.Errorf("error interpreting import %s: %v", foundPath, err)
+		}
+
+		// Copy types, functions, and classes from the imported module
+		for name, typeDef := range importInterpreter.types {
+			i.types[name] = typeDef
+		}
+
+		for name, fn := range importInterpreter.functions {
+			if name != "main" { // Don't import main function
+				i.functions[name] = fn
+			}
+		}
+
+		for name, class := range importInterpreter.classes {
+			i.classes[name] = class
 		}
 
 		return nil
 	}
 
-	
+	// Legacy standard library import handling
 	basename := filepath.Base(libName)
 
 	if lib, exists := stdlib.StdLibFiles[basename]; exists {

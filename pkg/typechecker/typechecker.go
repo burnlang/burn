@@ -134,6 +134,28 @@ func (t *TypeChecker) registerClass(class *ast.ClassDeclaration) error {
 		}
 	}
 
+	for _, method := range class.StaticMethods {
+		methodKey := "static." + method.Name
+		if _, exists := classMethods[methodKey]; exists {
+			return fmt.Errorf("static method %s is already defined in class %s", method.Name, class.Name)
+		}
+
+		paramTypes := make([]string, len(method.Parameters))
+		for i, param := range method.Parameters {
+			paramTypes[i] = param.Type
+		}
+
+		classMethods[methodKey] = FunctionType{
+			Parameters: paramTypes,
+			ReturnType: method.ReturnType,
+		}
+
+		t.functions[class.Name+".static."+method.Name] = FunctionType{
+			Parameters: paramTypes,
+			ReturnType: method.ReturnType,
+		}
+	}
+
 	return nil
 }
 
@@ -202,17 +224,42 @@ func (t *TypeChecker) processImport(imp *ast.ImportDeclaration, baseDir string) 
 }
 
 func (t *TypeChecker) registerImportedDeclarations(declarations []ast.Declaration, imp *ast.ImportDeclaration) error {
-
+	
 	for _, decl := range declarations {
 		if typeDef, ok := decl.(*ast.TypeDefinition); ok {
-			if err := t.checkTypeDefinition(typeDef); err != nil {
-				return fmt.Errorf("in import %s: %v", imp.Path, err)
+			
+			if _, exists := t.types[typeDef.Name]; exists {
+				continue
+			}
+
+			
+			fields := make(map[string]string)
+			for _, field := range typeDef.Fields {
+				fields[field.Name] = field.Type
+			}
+			t.types[typeDef.Name] = fields
+
+		} else if class, ok := decl.(*ast.ClassDeclaration); ok {
+			
+			if _, exists := t.classes[class.Name]; exists {
+				continue
+			}
+
+			
+			if _, exists := t.types[class.Name]; !exists {
+				t.types[class.Name] = make(map[string]string)
 			}
 		}
 	}
 
+	
 	for _, decl := range declarations {
 		if fn, ok := decl.(*ast.FunctionDeclaration); ok {
+			
+			if _, exists := t.functions[fn.Name]; exists {
+				continue
+			}
+
 			paramTypes := make([]string, len(fn.Parameters))
 			for i, param := range fn.Parameters {
 				paramTypes[i] = param.Type
@@ -223,25 +270,46 @@ func (t *TypeChecker) registerImportedDeclarations(declarations []ast.Declaratio
 				ReturnType: fn.ReturnType,
 			}
 		} else if class, ok := decl.(*ast.ClassDeclaration); ok {
-			classMethods := make(map[string]FunctionType)
-			t.classes[class.Name] = classMethods
+			
+			if _, exists := t.classes[class.Name]; !exists {
+				classMethods := make(map[string]FunctionType)
+				t.classes[class.Name] = classMethods
 
-			t.types[class.Name] = make(map[string]string)
+				
+				for _, method := range class.Methods {
+					paramTypes := make([]string, len(method.Parameters))
+					for i, param := range method.Parameters {
+						paramTypes[i] = param.Type
+					}
 
-			for _, method := range class.Methods {
-				paramTypes := make([]string, len(method.Parameters))
-				for i, param := range method.Parameters {
-					paramTypes[i] = param.Type
+					classMethods[method.Name] = FunctionType{
+						Parameters: paramTypes,
+						ReturnType: method.ReturnType,
+					}
+
+					t.functions[class.Name+"."+method.Name] = FunctionType{
+						Parameters: paramTypes,
+						ReturnType: method.ReturnType,
+					}
 				}
 
-				classMethods[method.Name] = FunctionType{
-					Parameters: paramTypes,
-					ReturnType: method.ReturnType,
-				}
+				
+				for _, method := range class.StaticMethods {
+					methodKey := "static." + method.Name
+					paramTypes := make([]string, len(method.Parameters))
+					for i, param := range method.Parameters {
+						paramTypes[i] = param.Type
+					}
 
-				t.functions[class.Name+"."+method.Name] = FunctionType{
-					Parameters: paramTypes,
-					ReturnType: method.ReturnType,
+					classMethods[methodKey] = FunctionType{
+						Parameters: paramTypes,
+						ReturnType: method.ReturnType,
+					}
+
+					t.functions[class.Name+".static."+method.Name] = FunctionType{
+						Parameters: paramTypes,
+						ReturnType: method.ReturnType,
+					}
 				}
 			}
 		}

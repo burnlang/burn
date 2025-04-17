@@ -128,7 +128,7 @@ fun add(a: int, b: int): int {
 ### Types
 
 ```bn
-def Person {
+type Person {
     name: string,
     age: int,
     active: bool

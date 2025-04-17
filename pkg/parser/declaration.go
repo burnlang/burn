@@ -24,7 +24,7 @@ func (p *Parser) declaration() (ast.Declaration, error) {
 	if p.match(lexer.TokenConst) {
 		return p.variableDeclaration(true)
 	}
-	if p.match(lexer.TokenDef) {
+	if p.match(lexer.TokenTypeKeyword) {
 		return p.typeDefinition()
 	}
 

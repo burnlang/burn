@@ -7,16 +7,20 @@ import (
 )
 
 type Class struct {
-	Name    string
-	Methods map[string]*ast.FunctionDeclaration
-	Statics map[string]*ast.FunctionDeclaration
+	Name       string
+	Methods    map[string]*ast.FunctionDeclaration
+	Statics    map[string]*ast.FunctionDeclaration
+	Fields     []ast.TypeField
+	Interfaces []string
 }
 
 func NewClass(name string) *Class {
 	return &Class{
-		Name:    name,
-		Methods: make(map[string]*ast.FunctionDeclaration),
-		Statics: make(map[string]*ast.FunctionDeclaration),
+		Name:       name,
+		Methods:    make(map[string]*ast.FunctionDeclaration),
+		Statics:    make(map[string]*ast.FunctionDeclaration),
+		Fields:     []ast.TypeField{},
+		Interfaces: []string{},
 	}
 }
 
@@ -28,6 +32,17 @@ func (c *Class) AddStatic(name string, fn *ast.FunctionDeclaration) {
 	c.Statics[name] = fn
 }
 
+func (c *Class) AddField(name string, typeName string) {
+	c.Fields = append(c.Fields, ast.TypeField{
+		Name: name,
+		Type: typeName,
+	})
+}
+
+func (c *Class) ImplementsInterface(name string) {
+	c.Interfaces = append(c.Interfaces, name)
+}
+
 func (c *Class) Call(methodName string, interpreter *Interpreter, args []Value) (Value, error) {
 	if method, exists := c.Methods[methodName]; exists {
 		return interpreter.executeFunction(method, args)
@@ -37,7 +52,6 @@ func (c *Class) Call(methodName string, interpreter *Interpreter, args []Value) 
 		return interpreter.executeFunction(static, args)
 	}
 
-	
 	builtinMethodName := fmt.Sprintf("%s.%s", c.Name, methodName)
 	if builtinFunc, exists := interpreter.environment[builtinMethodName]; exists {
 		if bf, ok := builtinFunc.(*BuiltinFunction); ok {
@@ -61,4 +75,17 @@ func (c *Class) CallStatic(methodName string, interpreter *Interpreter, args []V
 	}
 
 	return nil, fmt.Errorf("undefined static method '%s' in class '%s'", methodName, c.Name)
+}
+
+func (c *Class) ToTypeDefinition() *ast.TypeDefinition {
+	return &ast.TypeDefinition{
+		Name:   c.Name,
+		Fields: c.Fields,
+	}
+}
+
+func TypeDefinitionToClass(typeDef *ast.TypeDefinition) *Class {
+	class := NewClass(typeDef.Name)
+	class.Fields = typeDef.Fields
+	return class
 }

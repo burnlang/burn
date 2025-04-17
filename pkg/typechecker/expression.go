@@ -169,10 +169,32 @@ func (t *TypeChecker) checkCallExpression(expr *ast.CallExpression) (string, err
 				ClassName:  className,
 				MethodName: methodName,
 				Arguments:  expr.Arguments,
+				IsStatic:   false,
 				Position:   expr.Position,
 			}
 
 			return t.checkClassMethodCallExpression(classMethodCall)
+		}
+	}
+
+	if getExpr, ok := expr.Callee.(*ast.GetExpression); ok {
+
+		if classExpr, ok := getExpr.Object.(*ast.VariableExpression); ok {
+			className := classExpr.Name
+			methodName := getExpr.Name
+
+			if _, exists := t.classes[className]; exists {
+
+				classMethodCall := &ast.ClassMethodCallExpression{
+					ClassName:  className,
+					MethodName: methodName,
+					Arguments:  expr.Arguments,
+					IsStatic:   true,
+					Position:   expr.Position,
+				}
+
+				return t.checkClassMethodCallExpression(classMethodCall)
+			}
 		}
 	}
 
@@ -345,15 +367,32 @@ func (t *TypeChecker) checkIndexExpression(expr *ast.IndexExpression) (string, e
 func (t *TypeChecker) checkClassMethodCallExpression(expr *ast.ClassMethodCallExpression) (string, error) {
 	className := expr.ClassName
 	methodName := expr.MethodName
+	isStatic := expr.IsStatic
 
 	classMethods, exists := t.classes[className]
 	if !exists {
 		return "", fmt.Errorf("undefined class: %s", className)
 	}
 
-	method, exists := classMethods[methodName]
+	methodKey := methodName
+	if isStatic {
+		methodKey = "static." + methodName
+	}
+
+	method, exists := classMethods[methodKey]
 	if !exists {
-		return "", fmt.Errorf("undefined method %s.%s", className, methodName)
+		if isStatic {
+			return "", fmt.Errorf("undefined static method %s.%s", className, methodName)
+		} else {
+
+			methodKey = "static." + methodName
+			method, exists = classMethods[methodKey]
+			if !exists {
+				return "", fmt.Errorf("undefined method %s.%s", className, methodName)
+			}
+
+			return "", fmt.Errorf("static method %s.%s cannot be called on instance", className, methodName)
+		}
 	}
 
 	if len(expr.Arguments) != len(method.Parameters) {

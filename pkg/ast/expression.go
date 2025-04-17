@@ -141,6 +141,7 @@ type ClassMethodCallExpression struct {
 	ClassName  string
 	MethodName string
 	Arguments  []Expression
+	IsStatic   bool
 	Position   int
 }
 
@@ -150,7 +151,11 @@ func (c *ClassMethodCallExpression) Pos() int {
 }
 
 func (c *ClassMethodCallExpression) String() string {
-	return "ClassMethodCallExpression: " + c.ClassName + "." + c.MethodName
+	methodType := "instance"
+	if c.IsStatic {
+		methodType = "static"
+	}
+	return "ClassMethodCallExpression: " + c.ClassName + "." + c.MethodName + " (" + methodType + ")"
 }
 
 type VariableExpression struct {

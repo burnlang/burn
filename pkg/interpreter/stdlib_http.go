@@ -55,6 +55,15 @@ func (i *Interpreter) registerHTTPLibrary() {
 		ReturnType: "bool",
 	})
 
+	i.types["HTTPResponse"] = &ast.TypeDefinition{
+		Name: "HTTPResponse",
+		Fields: []ast.TypeField{
+			{Name: "statusCode", Type: "int"},
+			{Name: "body", Type: "string"},
+			{Name: "headers", Type: "array"},
+		},
+	}
+
 	i.classes["HTTP"] = httpClass
 	i.environment["HTTP"] = httpClass
 
@@ -87,10 +96,7 @@ func (i *Interpreter) registerHTTPLibrary() {
 		Fn:   i.httpSetHeaders,
 	}
 
-	i.environment["setHeaders"] = &BuiltinFunction{
-		Name: "setHeaders",
-		Fn:   i.httpSetHeaders,
-	}
+	i.environment["setHeaders"] = i.environment["HTTP.setHeaders"]
 }
 
 func (i *Interpreter) httpGet(args []Value) (Value, error) {

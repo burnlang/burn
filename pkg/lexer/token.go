@@ -31,7 +31,7 @@ const (
 	TokenFun
 	TokenVar
 	TokenConst
-	TokenDef
+	TokenTypeKeyword
 	TokenIf
 	TokenElse
 	TokenReturn
@@ -65,7 +65,7 @@ func GetKeywords() map[string]TokenType {
 		"fun":    TokenFun,
 		"var":    TokenVar,
 		"const":  TokenConst,
-		"def":    TokenDef,
+		"type":   TokenTypeKeyword,
 		"if":     TokenIf,
 		"else":   TokenElse,
 		"return": TokenReturn,
@@ -79,5 +79,6 @@ func GetKeywords() map[string]TokenType {
 		"bool":   TokenTypeBool,
 		"import": TokenImport,
 		"class":  TokenClass,
+		"void":   TokenTypeVoid,
 	}
 }

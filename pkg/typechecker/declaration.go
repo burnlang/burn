@@ -20,8 +20,7 @@ func (t *TypeChecker) checkDeclaration(decl ast.Declaration) error {
 		_, err := t.checkExpression(d.Expression)
 		return err
 	case *ast.TypeDefinition:
-
-		return nil
+		return t.checkTypeDefinition(d)
 	case *ast.ImportDeclaration:
 
 		return nil
@@ -181,27 +180,45 @@ func (t *TypeChecker) functionHasValidReturn(body []ast.Declaration, expectedTyp
 func (t *TypeChecker) checkTypeDefinition(decl *ast.TypeDefinition) error {
 	t.setErrorPos(decl.Pos())
 
+	
 	if _, exists := t.types[decl.Name]; exists {
-		return fmt.Errorf("type %s is already defined", decl.Name)
+		
+		
+		
 	}
 
+	
 	fields := make(map[string]string)
 	for _, field := range decl.Fields {
-		if _, exists := fields[field.Name]; exists {
-			return fmt.Errorf("field %s is already defined in type %s", field.Name, decl.Name)
+		if !isBuiltinType(field.Type) && field.Type != decl.Name {
+			if _, exists := t.types[field.Type]; !exists {
+				return fmt.Errorf("unknown type %s for field %s", field.Type, field.Name)
+			}
 		}
 		fields[field.Name] = field.Type
 	}
-
 	t.types[decl.Name] = fields
+
 	return nil
+}
+
+func isBuiltinType(typeName string) bool {
+	switch typeName {
+	case "int", "float", "string", "bool", "void", "any":
+		return true
+	default:
+		return false
+	}
 }
 
 func (t *TypeChecker) checkClassDeclaration(decl *ast.ClassDeclaration) error {
 	t.setErrorPos(decl.Pos())
 
-	for _, method := range decl.Methods {
+	if _, exists := t.types[decl.Name]; !exists {
+		t.types[decl.Name] = make(map[string]string)
+	}
 
+	for _, method := range decl.Methods {
 		prevVars := make(map[string]string)
 		for k, v := range t.variables {
 			prevVars[k] = v
@@ -234,10 +251,42 @@ func (t *TypeChecker) checkClassDeclaration(decl *ast.ClassDeclaration) error {
 		t.currentFn = prevFn
 	}
 
+	for _, method := range decl.StaticMethods {
+		prevVars := make(map[string]string)
+		for k, v := range t.variables {
+			prevVars[k] = v
+		}
+		prevFn := t.currentFn
+
+		t.currentFn = decl.Name + ".static." + method.Name
+		t.variables = make(map[string]string)
+
+		for _, param := range method.Parameters {
+			t.variables[param.Name] = param.Type
+		}
+
+		for _, stmt := range method.Body {
+			if err := t.checkDeclaration(stmt); err != nil {
+				return fmt.Errorf("in static method %s.%s: %w", decl.Name, method.Name, err)
+			}
+		}
+
+		if method.ReturnType != "" && method.ReturnType != "void" {
+			if !t.functionHasValidReturn(method.Body, method.ReturnType) {
+				return fmt.Errorf("static method %s.%s must return a value of type %s",
+					decl.Name, method.Name, method.ReturnType)
+			}
+		}
+
+		t.variables = prevVars
+		t.currentFn = prevFn
+	}
+
 	return nil
 }
 
 func (t *TypeChecker) checkReturnStatement(stmt *ast.ReturnStatement) error {
+	t.setErrorPos(stmt.Pos())
 
 	if t.currentFn == "" {
 		return fmt.Errorf("return statement outside of function")
@@ -245,12 +294,22 @@ func (t *TypeChecker) checkReturnStatement(stmt *ast.ReturnStatement) error {
 
 	var expectedType string
 	if strings.Contains(t.currentFn, ".") {
-
 		parts := strings.Split(t.currentFn, ".")
-		class, method := parts[0], parts[1]
-		if classMethods, exists := t.classes[class]; exists {
-			if fn, exists := classMethods[method]; exists {
-				expectedType = fn.ReturnType
+
+		if len(parts) == 3 && parts[1] == "static" {
+			className, methodName := parts[0], parts[2]
+			if classMethods, exists := t.classes[className]; exists {
+				if fn, exists := classMethods["static."+methodName]; exists {
+					expectedType = fn.ReturnType
+				}
+			}
+		} else if len(parts) == 2 {
+
+			className, methodName := parts[0], parts[1]
+			if classMethods, exists := t.classes[className]; exists {
+				if fn, exists := classMethods[methodName]; exists {
+					expectedType = fn.ReturnType
+				}
 			}
 		}
 	} else {
@@ -258,6 +317,10 @@ func (t *TypeChecker) checkReturnStatement(stmt *ast.ReturnStatement) error {
 		if fn, exists := t.functions[t.currentFn]; exists {
 			expectedType = fn.ReturnType
 		}
+	}
+
+	if expectedType == "" {
+		return fmt.Errorf("could not determine return type for function %s", t.currentFn)
 	}
 
 	if expectedType == "void" {

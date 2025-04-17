@@ -320,10 +320,9 @@ func (i *Interpreter) evaluateCall(expr *ast.CallExpression) (Value, error) {
 					return nil, err
 				}
 
-				
 				if methodName == "create" {
 					if mapResult, ok := result.(map[string]interface{}); ok {
-						
+
 						return &Struct{
 							TypeName: className,
 							Fields:   mapResult,
@@ -339,10 +338,9 @@ func (i *Interpreter) evaluateCall(expr *ast.CallExpression) (Value, error) {
 					return nil, err
 				}
 
-				
 				if methodName == "create" {
 					if mapResult, ok := result.(map[string]interface{}); ok {
-						
+
 						return &Struct{
 							TypeName: className,
 							Fields:   mapResult,
@@ -360,10 +358,9 @@ func (i *Interpreter) evaluateCall(expr *ast.CallExpression) (Value, error) {
 						return nil, err
 					}
 
-					
 					if methodName == "create" {
 						if mapResult, ok := result.(map[string]interface{}); ok {
-							
+
 							return &Struct{
 								TypeName: className,
 								Fields:   mapResult,
