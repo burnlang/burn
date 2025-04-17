@@ -121,12 +121,11 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 	libName := imp.Path
 
 	if i.importedModules[libName] {
-		return nil 
+		return nil
 	}
 
 	i.importedModules[libName] = true
 
-	
 	if strings.HasPrefix(libName, "std/") || (!strings.Contains(libName, "/") && !strings.Contains(libName, "\\")) {
 		basename := strings.TrimPrefix(libName, "std/")
 		basename = strings.TrimSuffix(basename, ".bn")
@@ -144,7 +143,6 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 		}
 	}
 
-	
 	if strings.HasSuffix(libName, ".bn") || !strings.Contains(libName, ".") {
 		path := libName
 
@@ -152,13 +150,11 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 			path = path + ".bn"
 		}
 
-		
 		workingDir, err := os.Getwd()
 		if err != nil {
 			return fmt.Errorf("error getting current directory: %v", err)
 		}
 
-		
 		searchPaths := []string{
 			path,
 			filepath.Join(workingDir, path),
@@ -166,7 +162,7 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 			filepath.Join("src", "lib", path),
 			filepath.Join("src", "lib", "std", strings.TrimSuffix(path, ".bn")+".bn"),
 			filepath.Join("src", "lib", strings.TrimSuffix(path, ".bn")+".bn"),
-			
+
 			filepath.Join("test", strings.TrimPrefix(path, "test/")),
 		}
 
@@ -182,6 +178,23 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 		}
 
 		if foundPath == "" {
+			baseName := filepath.Base(strings.TrimSuffix(libName, ".bn"))
+			if lib, exists := stdlib.StdLibFiles[baseName]; exists {
+				switch baseName {
+				case "date":
+					i.registerDateLibrary()
+					return nil
+				case "http":
+					i.registerHTTPLibrary()
+					return nil
+				case "time":
+					i.registerTimeLibrary()
+					return nil
+				default:
+					return i.interpretStdLib(baseName, lib)
+				}
+			}
+
 			return fmt.Errorf("could not find import file: %s (tried paths: %v)", libName, searchPaths)
 		}
 
@@ -197,12 +210,10 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 			return fmt.Errorf("parse error in import %s: %v", foundPath, err)
 		}
 
-		
 		importInterpreter := New()
 		importInterpreter.addBuiltins()
 		importInterpreter.RegisterBuiltinStandardLibraries()
 
-		
 		for mod := range i.importedModules {
 			importInterpreter.importedModules[mod] = true
 		}
@@ -212,13 +223,12 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 			return fmt.Errorf("error interpreting import %s: %v", foundPath, err)
 		}
 
-		
 		for name, typeDef := range importInterpreter.types {
 			i.types[name] = typeDef
 		}
 
 		for name, fn := range importInterpreter.functions {
-			if name != "main" { 
+			if name != "main" {
 				i.functions[name] = fn
 			}
 		}
@@ -236,8 +246,11 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 		return nil
 	}
 
-	
 	basename := filepath.Base(libName)
+	if strings.HasSuffix(basename, ".bn") {
+		basename = strings.TrimSuffix(basename, ".bn")
+	}
+
 	if lib, exists := stdlib.StdLibFiles[basename]; exists {
 		switch basename {
 		case "date":

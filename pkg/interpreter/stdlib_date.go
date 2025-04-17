@@ -2,7 +2,6 @@ package interpreter
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/burnlang/burn/pkg/ast"
@@ -20,6 +19,7 @@ func (i *Interpreter) registerDateLibrary() {
 
 	dateClass := NewClass("Date")
 
+	
 	dateClass.AddStatic("now", &ast.FunctionDeclaration{
 		Name:       "now",
 		Parameters: []ast.Parameter{},
@@ -111,10 +111,12 @@ func (i *Interpreter) registerDateLibrary() {
 		ReturnType: "Date",
 	})
 
+	
 	i.classes["Date"] = dateClass
 	i.environment["Date"] = dateClass
 
-	// Define now() function directly instead of using getNow()
+	
+
 	i.environment["Date.now"] = &BuiltinFunction{
 		Name: "Date.now",
 		Fn: func(args []Value) (Value, error) {
@@ -363,8 +365,8 @@ func (i *Interpreter) registerDateLibrary() {
 		},
 	}
 
-	// Make sure all date functions are properly registered
-	for oldName, newName := range map[string]string{
+	
+	aliases := map[string]string{
 		"now":          "Date.now",
 		"formatDate":   "Date.formatDate",
 		"currentYear":  "Date.currentYear",
@@ -377,8 +379,9 @@ func (i *Interpreter) registerDateLibrary() {
 		"addDays":      "Date.addDays",
 		"subtractDays": "Date.subtractDays",
 		"today":        "Date.today",
-	} {
+	}
+
+	for oldName, newName := range aliases {
 		i.environment[oldName] = i.environment[newName]
-		i.functions[oldName] = dateClass.Methods[strings.TrimPrefix(newName, "Date.")]
 	}
 }
