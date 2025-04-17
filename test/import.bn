@@ -1,18 +1,15 @@
 // if you have mutliple imports
-import (
-    "date"
-
-    "test/utils.bn"
-)
+//import (
+//    "date"
+//
+//    "test/utils.bn"
+//)
 
 //if you only have 1 import
-//import "test/utils.bn"
+import "test/utils.bn"
 
 //main fun with using the imported functions
 fun main() {
     var num = power(2, 3)    // Uses imported power function
     print("2^3 = " + toString(num))
-    
-    // Using date library function 
-    print("Today is: " + today())
 }

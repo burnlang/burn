@@ -48,9 +48,18 @@ func New() *Interpreter {
 }
 
 func (i *Interpreter) RegisterBuiltinStandardLibraries() {
+
 	i.registerDateLibrary()
 	i.registerHTTPLibrary()
 	i.registerTimeLibrary()
+
+	for name, lib := range stdlib.StdLibFiles {
+		if name == "date" || name == "http" || name == "time" {
+
+			continue
+		}
+		_ = i.interpretStdLib(name, lib)
+	}
 }
 
 func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
@@ -112,11 +121,12 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 	libName := imp.Path
 
 	if i.importedModules[libName] {
-		return nil
+		return nil 
 	}
 
 	i.importedModules[libName] = true
 
+	
 	if strings.HasPrefix(libName, "std/") || (!strings.Contains(libName, "/") && !strings.Contains(libName, "\\")) {
 		basename := strings.TrimPrefix(libName, "std/")
 		basename = strings.TrimSuffix(basename, ".bn")
@@ -134,6 +144,7 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 		}
 	}
 
+	
 	if strings.HasSuffix(libName, ".bn") || !strings.Contains(libName, ".") {
 		path := libName
 
@@ -141,14 +152,25 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 			path = path + ".bn"
 		}
 
+		
+		workingDir, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("error getting current directory: %v", err)
+		}
+
+		
 		searchPaths := []string{
 			path,
-			"src/lib/std/" + path,
+			filepath.Join(workingDir, path),
+			filepath.Join("src", "lib", "std", path),
 			filepath.Join("src", "lib", path),
+			filepath.Join("src", "lib", "std", strings.TrimSuffix(path, ".bn")+".bn"),
+			filepath.Join("src", "lib", strings.TrimSuffix(path, ".bn")+".bn"),
+			
+			filepath.Join("test", strings.TrimPrefix(path, "test/")),
 		}
 
 		var source []byte
-		var err error
 		var foundPath string
 
 		for _, searchPath := range searchPaths {
@@ -160,7 +182,7 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 		}
 
 		if foundPath == "" {
-			return fmt.Errorf("could not find import file: %s", libName)
+			return fmt.Errorf("could not find import file: %s (tried paths: %v)", libName, searchPaths)
 		}
 
 		l := lexer.New(string(source))
@@ -175,10 +197,12 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 			return fmt.Errorf("parse error in import %s: %v", foundPath, err)
 		}
 
+		
 		importInterpreter := New()
 		importInterpreter.addBuiltins()
 		importInterpreter.RegisterBuiltinStandardLibraries()
 
+		
 		for mod := range i.importedModules {
 			importInterpreter.importedModules[mod] = true
 		}
@@ -188,12 +212,13 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 			return fmt.Errorf("error interpreting import %s: %v", foundPath, err)
 		}
 
+		
 		for name, typeDef := range importInterpreter.types {
 			i.types[name] = typeDef
 		}
 
 		for name, fn := range importInterpreter.functions {
-			if name != "main" {
+			if name != "main" { 
 				i.functions[name] = fn
 			}
 		}
@@ -211,8 +236,8 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 		return nil
 	}
 
+	
 	basename := filepath.Base(libName)
-
 	if lib, exists := stdlib.StdLibFiles[basename]; exists {
 		switch basename {
 		case "date":
@@ -413,10 +438,8 @@ func (i *Interpreter) executeFunction(fn *ast.FunctionDeclaration, args []Value)
 		prevEnv[k] = v
 	}
 
-	// Create new environment but preserve built-in functions
 	newEnv := make(map[string]Value)
 
-	// Copy built-in functions from the previous environment
 	for k, v := range i.environment {
 		if _, ok := v.(*BuiltinFunction); ok {
 			newEnv[k] = v

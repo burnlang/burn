@@ -7,7 +7,7 @@ import (
 	"github.com/burnlang/burn/pkg/ast"
 )
 
-// registerTimeLibrary registers all time-related functions in the interpreter
+
 func (i *Interpreter) registerTimeLibrary() {
 	timeClass := NewClass("Time")
 
@@ -89,7 +89,7 @@ func (i *Interpreter) registerTimeLibrary() {
 		},
 	}
 
-	// Add aliases for direct function access
+	
 	i.environment["now"] = i.environment["Time.now"]
 	i.environment["sleep"] = i.environment["Time.sleep"]
 	i.environment["timestamp"] = i.environment["Time.timestamp"]

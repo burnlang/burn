@@ -9,6 +9,15 @@ import (
 )
 
 func (i *Interpreter) registerDateLibrary() {
+	i.types["Date"] = &ast.TypeDefinition{
+		Name: "Date",
+		Fields: []ast.TypeField{
+			{Name: "year", Type: "int"},
+			{Name: "month", Type: "int"},
+			{Name: "day", Type: "int"},
+		},
+	}
+
 	dateClass := NewClass("Date")
 
 	dateClass.AddStatic("now", &ast.FunctionDeclaration{
@@ -105,10 +114,19 @@ func (i *Interpreter) registerDateLibrary() {
 	i.classes["Date"] = dateClass
 	i.environment["Date"] = dateClass
 
+	// Define now() function directly instead of using getNow()
 	i.environment["Date.now"] = &BuiltinFunction{
 		Name: "Date.now",
 		Fn: func(args []Value) (Value, error) {
-			return getNow(), nil
+			currentTime := time.Now()
+			return &Struct{
+				TypeName: "Date",
+				Fields: map[string]interface{}{
+					"year":  currentTime.Year(),
+					"month": int(currentTime.Month()),
+					"day":   currentTime.Day(),
+				},
+			}, nil
 		},
 	}
 
@@ -345,6 +363,7 @@ func (i *Interpreter) registerDateLibrary() {
 		},
 	}
 
+	// Make sure all date functions are properly registered
 	for oldName, newName := range map[string]string{
 		"now":          "Date.now",
 		"formatDate":   "Date.formatDate",
@@ -362,19 +381,4 @@ func (i *Interpreter) registerDateLibrary() {
 		i.environment[oldName] = i.environment[newName]
 		i.functions[oldName] = dateClass.Methods[strings.TrimPrefix(newName, "Date.")]
 	}
-}
-
-func getNow() *Struct {
-	currentTime := time.Now()
-
-	dateStruct := &Struct{
-		TypeName: "Date",
-		Fields: map[string]interface{}{
-			"year":  currentTime.Year(),
-			"month": int(currentTime.Month()),
-			"day":   currentTime.Day(),
-		},
-	}
-
-	return dateStruct
 }

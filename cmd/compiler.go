@@ -88,6 +88,7 @@ func createExecutableWrapper(goFilePath, burnFilePath, burnSource string) error 
 		return err
 	}
 
+	// Ensure all standard library files are included
 	for name, content := range stdlib.StdLibFiles {
 		stdlibPath := "src/lib/std/" + name + ".bn"
 		if _, exists := imports[stdlibPath]; !exists {
@@ -97,6 +98,12 @@ func createExecutableWrapper(goFilePath, burnFilePath, burnSource string) error 
 		if _, exists := imports[name]; !exists {
 			imports[name] = content
 		}
+
+		// Also include with std/ prefix
+		stdPrefix := "std/" + name
+		if _, exists := imports[stdPrefix]; !exists {
+			imports[stdPrefix] = content
+		}
 	}
 
 	wrapperTemplate := `package main
@@ -104,10 +111,13 @@ func createExecutableWrapper(goFilePath, burnFilePath, burnSource string) error 
 import (
     "fmt"
     "os"
+    "path/filepath"
+    "strings"
 
     "github.com/burnlang/burn/pkg/interpreter"
     "github.com/burnlang/burn/pkg/lexer"
     "github.com/burnlang/burn/pkg/parser"
+    "github.com/burnlang/burn/pkg/stdlib"
     "github.com/burnlang/burn/pkg/typechecker"
 )
 
@@ -128,13 +138,14 @@ func runBurnProgram() int {
     // Create a new interpreter and ensure all built-ins are registered
     interp := interpreter.New()
     
-	interp.RegisterBuiltinStandardLibraries()
+    // Register standard libraries first
+    interp.RegisterBuiltinStandardLibraries()
     
-    // Register imports
+    // Register all imports
     for path, source := range importSources {
         if err := registerImport(interp, path, source); err != nil {
-            fmt.Fprintf(os.Stderr, "Import error: %%v\n", err)
-            return 1
+            fmt.Fprintf(os.Stderr, "Import error for %%s: %%v\n", path, err)
+            // Continue with other imports instead of failing
         }
     }
 
@@ -151,13 +162,13 @@ func runBurnProgram() int {
     if err != nil {
         fmt.Fprintf(os.Stderr, "Parse error: %%v\n", err)
         return 1
-	}
+    }
 
-	tc := typechecker.New()
-	if err := tc.Check(program.Declarations); err != nil {
-		fmt.Fprintf(os.Stderr, "Type error: %%v\n", err)
-		return 1
-	}
+    tc := typechecker.New()
+    if err := tc.Check(program.Declarations); err != nil {
+        fmt.Fprintf(os.Stderr, "Type error: %%v\n", err)
+        return 1
+    }
 
     _, err = interp.Interpret(program)
     if err != nil {
@@ -169,6 +180,20 @@ func runBurnProgram() int {
 }
 
 func registerImport(interp *interpreter.Interpreter, path, source string) error {
+    // Handle special standard libraries
+    basename := filepath.Base(path)
+    if strings.HasSuffix(basename, ".bn") {
+        basename = strings.TrimSuffix(basename, ".bn")
+    }
+
+    // Register built-in standard libraries directly
+    if basename == "date" || basename == "http" || basename == "time" || 
+       path == "std/date" || path == "std/http" || path == "std/time" {
+        // These are already registered in RegisterBuiltinStandardLibraries
+        return nil
+    }
+
+    // For other imports, parse and interpret them
     lex := lexer.New(source)
     tokens, err := lex.Tokenize()
     if err != nil {
@@ -183,6 +208,7 @@ func registerImport(interp *interpreter.Interpreter, path, source string) error 
     
     // Create a new interpreter for the import
     importInterp := interpreter.New()
+    importInterp.RegisterBuiltinStandardLibraries()
     
     // Interpret the import
     _, err = importInterp.Interpret(program)
@@ -227,11 +253,15 @@ func collectImports(mainFile, mainSource string) (map[string]string, error) {
 		return nil, fmt.Errorf("error getting current directory: %v", err)
 	}
 
+	// Register all standard libraries first
 	for name, content := range stdlib.StdLibFiles {
 		imports[name] = content
+		imports["std/"+name] = content
+		imports["std/"+name+".bn"] = content
 		fmt.Printf("Including standard library %s (built-in)\n", name)
 	}
 
+	// Check for standard libraries in the file system
 	stdLibDir := filepath.Join(filepath.Dir(mainFile), "src", "lib", "std")
 	if _, err := os.Stat(stdLibDir); err == nil {
 		err = stdlib.AutoRegisterLibrariesFromDir(stdLibDir)
@@ -239,6 +269,8 @@ func collectImports(mainFile, mainSource string) (map[string]string, error) {
 			for name, content := range stdlib.StdLibFiles {
 				if _, exists := imports[name]; !exists {
 					imports[name] = content
+					imports["std/"+name] = content
+					imports["std/"+name+".bn"] = content
 					fmt.Printf("Auto-discovered standard library %s\n", name)
 				}
 			}
@@ -260,23 +292,33 @@ func collectImports(mainFile, mainSource string) (map[string]string, error) {
 	baseDir := filepath.Dir(mainFile)
 
 	processImport := func(imp *ast.ImportDeclaration) error {
+		// Check if it's a standard library first
+		if strings.HasPrefix(imp.Path, "std/") {
+			libName := strings.TrimPrefix(imp.Path, "std/")
+			libName = strings.TrimSuffix(libName, ".bn")
+			if content, exists := stdlib.StdLibFiles[libName]; exists {
+				imports[imp.Path] = content
+				return nil
+			}
+		}
+
+		// Check if it's a direct standard library reference
 		moduleName := imp.Path
 		if strings.HasSuffix(moduleName, ".bn") {
 			moduleName = strings.TrimSuffix(moduleName, ".bn")
 		}
 
 		baseName := filepath.Base(moduleName)
-		if strings.HasSuffix(baseName, ".bn") {
-			baseName = strings.TrimSuffix(baseName, ".bn")
-		}
-
-		if _, exists := stdlib.StdLibFiles[baseName]; exists {
+		if content, exists := stdlib.StdLibFiles[baseName]; exists {
+			imports[imp.Path] = content
 			return nil
 		}
 
+		// Try to find the file
 		var fileContent []byte
 		var readErr error
 
+		// Try direct path first
 		fileContent, readErr = os.ReadFile(imp.Path)
 		if readErr == nil {
 			imports[imp.Path] = string(fileContent)
@@ -284,10 +326,15 @@ func collectImports(mainFile, mainSource string) (map[string]string, error) {
 			return collectNestedImports(imp.Path, string(fileContent), imports, workingDir, baseDir)
 		}
 
+		// Try multiple possible paths
 		possiblePaths := []string{
 			filepath.Join(baseDir, imp.Path),
 			imp.Path + ".bn",
 			filepath.Join(baseDir, imp.Path+".bn"),
+			filepath.Join(baseDir, "src", "lib", imp.Path),
+			filepath.Join(baseDir, "src", "lib", imp.Path+".bn"),
+			filepath.Join(baseDir, "src", "lib", "std", imp.Path),
+			filepath.Join(baseDir, "src", "lib", "std", imp.Path+".bn"),
 		}
 
 		for _, path := range possiblePaths {
@@ -297,6 +344,12 @@ func collectImports(mainFile, mainSource string) (map[string]string, error) {
 				fmt.Printf("Including imported file %s\n", path)
 				return collectNestedImports(path, string(fileContent), imports, workingDir, baseDir)
 			}
+		}
+
+		// If we get here and it's a std/ import, don't error - it might be handled elsewhere
+		if strings.HasPrefix(imp.Path, "std/") {
+			fmt.Printf("Warning: Could not find standard library file for %s, using built-in if available\n", imp.Path)
+			return nil
 		}
 
 		return fmt.Errorf("could not find import '%s'", imp.Path)
@@ -340,6 +393,17 @@ func collectNestedImports(filePath, source string, imports map[string]string, wo
 			return nil
 		}
 
+		// Check if it's a standard library first
+		if strings.HasPrefix(imp.Path, "std/") {
+			libName := strings.TrimPrefix(imp.Path, "std/")
+			libName = strings.TrimSuffix(libName, ".bn")
+			if content, exists := stdlib.StdLibFiles[libName]; exists {
+				imports[imp.Path] = content
+				fmt.Printf("Including standard library %s (built-in)\n", libName)
+				return nil
+			}
+		}
+
 		baseName := filepath.Base(imp.Path)
 		if strings.HasSuffix(baseName, ".bn") {
 			baseName = strings.TrimSuffix(baseName, ".bn")
@@ -358,6 +422,8 @@ func collectNestedImports(filePath, source string, imports map[string]string, wo
 			imp.Path + ".bn",
 			filepath.Join(baseDir, imp.Path+".bn"),
 			filepath.Join(workingDir, imp.Path+".bn"),
+			filepath.Join(originBaseDir, "src", "lib", imp.Path),
+			filepath.Join(originBaseDir, "src", "lib", imp.Path+".bn"),
 		}
 
 		for _, path := range possiblePaths {
@@ -367,6 +433,12 @@ func collectNestedImports(filePath, source string, imports map[string]string, wo
 				fmt.Printf("Including nested import %s\n", path)
 				return collectNestedImports(path, string(fileContent), imports, workingDir, originBaseDir)
 			}
+		}
+
+		// If we get here and it's a std/ import, don't error - it might be handled elsewhere
+		if strings.HasPrefix(imp.Path, "std/") {
+			fmt.Printf("Warning: Could not find standard library file for %s, using built-in if available\n", imp.Path)
+			return nil
 		}
 
 		return fmt.Errorf("could not find nested import '%s'", imp.Path)

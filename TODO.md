@@ -10,6 +10,8 @@
 
 ## Add Interfaces
 
+## Add Better Documentation using MDX
+
 ## Add compiling to JS 
 - Basic implementation added
 - Need to complete all expression and statement types

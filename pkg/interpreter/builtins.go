@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Value interface{}
@@ -134,19 +135,16 @@ func (i *Interpreter) addBuiltins() {
 		},
 	}
 
-	
 	i.environment["now"] = &BuiltinFunction{
 		Name: "now",
 		Fn: func(args []Value) (Value, error) {
 			if len(args) != 0 {
 				return nil, fmt.Errorf("now expects no arguments")
 			}
-			currentTime := getNow()
+			currentTime := float64(time.Now().UnixNano()) / 1e9
 			return currentTime, nil
 		},
 	}
-
-	
 	i.registerDateLibrary()
 	i.registerHTTPLibrary()
 	i.registerTimeLibrary()

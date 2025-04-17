@@ -17,6 +17,16 @@ var httpHeaders = map[string]string{
 }
 
 func (i *Interpreter) registerHTTPLibrary() {
+	
+	i.types["HTTPResponse"] = &ast.TypeDefinition{
+		Name: "HTTPResponse",
+		Fields: []ast.TypeField{
+			{Name: "statusCode", Type: "int"},
+			{Name: "body", Type: "string"},
+			{Name: "headers", Type: "array"},
+		},
+	}
+
 	httpClass := NewClass("HTTP")
 
 	httpClass.AddStatic("get", &ast.FunctionDeclaration{
@@ -55,18 +65,10 @@ func (i *Interpreter) registerHTTPLibrary() {
 		ReturnType: "bool",
 	})
 
-	i.types["HTTPResponse"] = &ast.TypeDefinition{
-		Name: "HTTPResponse",
-		Fields: []ast.TypeField{
-			{Name: "statusCode", Type: "int"},
-			{Name: "body", Type: "string"},
-			{Name: "headers", Type: "array"},
-		},
-	}
-
 	i.classes["HTTP"] = httpClass
 	i.environment["HTTP"] = httpClass
 
+	
 	i.environment["HTTP.get"] = &BuiltinFunction{
 		Name: "HTTP.get",
 		Fn:   i.httpGet,
@@ -96,6 +98,13 @@ func (i *Interpreter) registerHTTPLibrary() {
 		Fn:   i.httpSetHeaders,
 	}
 
+	
+	i.environment["get"] = i.environment["HTTP.get"]
+	i.environment["post"] = i.environment["HTTP.post"]
+	i.environment["put"] = i.environment["HTTP.put"]
+	i.environment["delete"] = i.environment["HTTP.delete"]
+	i.environment["getHeader"] = i.environment["HTTP.getHeader"]
+	i.environment["parseJSON"] = i.environment["HTTP.parseJSON"]
 	i.environment["setHeaders"] = i.environment["HTTP.setHeaders"]
 }
 
