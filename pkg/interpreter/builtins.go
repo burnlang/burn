@@ -6,14 +6,14 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 )
 
 type Value interface{}
 
 type BuiltinFunction struct {
-	Name string
-	Fn   func(args []Value) (Value, error)
+	Name   string
+	Fn     func(args []Value) (Value, error)
+	Caller func(args []Value) (Value, error)
 }
 
 func (b *BuiltinFunction) Call(args []Value) (Value, error) {
@@ -24,9 +24,40 @@ func (i *Interpreter) addBuiltins() {
 	i.environment["print"] = &BuiltinFunction{
 		Name: "print",
 		Fn: func(args []Value) (Value, error) {
-			for _, arg := range args {
-				fmt.Println(arg)
+			if len(args) == 0 {
+				fmt.Println()
+				os.Stdout.Sync()
+				return nil, nil
 			}
+
+			var output strings.Builder
+			for j, arg := range args {
+				if j > 0 {
+					output.WriteString(" ")
+				}
+
+				switch v := arg.(type) {
+				case string:
+					output.WriteString(v)
+				case int:
+					output.WriteString(strconv.Itoa(v))
+				case float64:
+					if v == float64(int(v)) {
+						output.WriteString(fmt.Sprintf("%.0f", v))
+					} else {
+						output.WriteString(fmt.Sprintf("%g", v))
+					}
+				case bool:
+					output.WriteString(strconv.FormatBool(v))
+				case nil:
+					output.WriteString("null")
+				default:
+					output.WriteString(fmt.Sprintf("%v", v))
+				}
+			}
+
+			fmt.Print(output.String() + "\n")
+			os.Stdout.Sync()
 			return nil, nil
 		},
 	}
@@ -135,16 +166,6 @@ func (i *Interpreter) addBuiltins() {
 		},
 	}
 
-	i.environment["now"] = &BuiltinFunction{
-		Name: "now",
-		Fn: func(args []Value) (Value, error) {
-			if len(args) != 0 {
-				return nil, fmt.Errorf("now expects no arguments")
-			}
-			currentTime := float64(time.Now().UnixNano()) / 1e9
-			return currentTime, nil
-		},
-	}
 	i.registerDateLibrary()
 	i.registerHTTPLibrary()
 	i.registerTimeLibrary()

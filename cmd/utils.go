@@ -61,6 +61,8 @@ func tokenTypeToString(tokenType lexer.TokenType) string {
 		return "CONST"
 	case lexer.TokenTypeKeyword:
 		return "DEF"
+	case lexer.TokenAs:
+		return "AS"
 	default:
 		return fmt.Sprintf("TOKEN(%d)", int(tokenType))
 	}

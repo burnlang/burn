@@ -11,7 +11,6 @@ import (
 	"github.com/burnlang/burn/pkg/ast"
 	"github.com/burnlang/burn/pkg/lexer"
 	"github.com/burnlang/burn/pkg/parser"
-	"github.com/burnlang/burn/pkg/stdlib"
 	"github.com/burnlang/burn/pkg/typechecker"
 )
 
@@ -88,24 +87,6 @@ func createExecutableWrapper(goFilePath, burnFilePath, burnSource string) error 
 		return err
 	}
 
-	// Ensure all standard library files are included
-	for name, content := range stdlib.StdLibFiles {
-		stdlibPath := "src/lib/std/" + name + ".bn"
-		if _, exists := imports[stdlibPath]; !exists {
-			imports[stdlibPath] = content
-		}
-
-		if _, exists := imports[name]; !exists {
-			imports[name] = content
-		}
-
-		// Also include with std/ prefix
-		stdPrefix := "std/" + name
-		if _, exists := imports[stdPrefix]; !exists {
-			imports[stdPrefix] = content
-		}
-	}
-
 	wrapperTemplate := `package main
 
 import (
@@ -117,85 +98,56 @@ import (
     "github.com/burnlang/burn/pkg/interpreter"
     "github.com/burnlang/burn/pkg/lexer"
     "github.com/burnlang/burn/pkg/parser"
-    "github.com/burnlang/burn/pkg/stdlib"
-    "github.com/burnlang/burn/pkg/typechecker"
 )
 
-
-var mainSource = %q
-
-
-var importSources = map[string]string{
-%s
-}
-
 func main() {
-    exitCode := runBurnProgram()
-    os.Exit(exitCode)
-}
+    mainSource := %s
 
-func runBurnProgram() int {
-    // Create a new interpreter and ensure all built-ins are registered
-    interp := interpreter.New()
-    
-    // Register standard libraries first
-    interp.RegisterBuiltinStandardLibraries()
-    
-    // Register all imports
-    for path, source := range importSources {
-        if err := registerImport(interp, path, source); err != nil {
-            fmt.Fprintf(os.Stderr, "Import error for %%s: %%v\n", path, err)
-            // Continue with other imports instead of failing
-        }
+    imports := map[string]string{
+%s
     }
 
-    // Parse and interpret the main source
-    lex := lexer.New(mainSource)
-    tokens, err := lex.Tokenize()
+    l := lexer.New(mainSource)
+    tokens, err := l.Tokenize()
     if err != nil {
         fmt.Fprintf(os.Stderr, "Lexical error: %%v\n", err)
-        return 1
+        os.Exit(1)
     }
 
     p := parser.New(tokens)
     program, err := p.Parse()
     if err != nil {
         fmt.Fprintf(os.Stderr, "Parse error: %%v\n", err)
-        return 1
+        os.Exit(1)
     }
 
-    tc := typechecker.New()
-    if err := tc.Check(program.Declarations); err != nil {
-        fmt.Fprintf(os.Stderr, "Type error: %%v\n", err)
-        return 1
+    i := interpreter.New()
+
+    
+    for importPath, importSource := range imports {
+        if err := processImport(i, importPath, importSource); err != nil {
+            fmt.Fprintf(os.Stderr, "Import error for '%%s': %%v\n", importPath, err)
+            os.Exit(1)
+        }
     }
 
-    _, err = interp.Interpret(program)
+    _, err = i.Interpret(program)
     if err != nil {
         fmt.Fprintf(os.Stderr, "Runtime error: %%v\n", err)
-        return 1
+        os.Exit(1)
     }
-
-    return 0
 }
 
-func registerImport(interp *interpreter.Interpreter, path, source string) error {
-    // Handle special standard libraries
-    basename := filepath.Base(path)
-    if strings.HasSuffix(basename, ".bn") {
-        basename = strings.TrimSuffix(basename, ".bn")
-    }
-
-    // Register built-in standard libraries directly
-    if basename == "date" || basename == "http" || basename == "time" || 
-       path == "std/date" || path == "std/http" || path == "std/time" {
-        // These are already registered in RegisterBuiltinStandardLibraries
+func processImport(i *interpreter.Interpreter, importPath, importSource string) error {
+    
+    if strings.HasPrefix(importPath, "std/") || 
+       (!strings.Contains(importPath, "/") && !strings.Contains(importPath, "\\") && 
+        (importPath == "date" || importPath == "http" || importPath == "time")) {
         return nil
     }
 
-    // For other imports, parse and interpret them
-    lex := lexer.New(source)
-    tokens, err := lex.Tokenize()
+    l := lexer.New(importSource)
+    tokens, err := l.Tokenize()
     if err != nil {
         return err
     }
@@ -205,44 +157,47 @@ func registerImport(interp *interpreter.Interpreter, path, source string) error 
     if err != nil {
         return err
     }
-    
-    // Create a new interpreter for the import
-    importInterp := interpreter.New()
-    importInterp.RegisterBuiltinStandardLibraries()
-    
-    // Interpret the import
-    _, err = importInterp.Interpret(program)
+
+    importInterpreter := interpreter.New()
+
+    _, err = importInterpreter.Interpret(program)
     if err != nil {
         return err
     }
+
     
-    // Copy functions (except main) from the import to the main interpreter
-    for name, fn := range importInterp.GetFunctions() {
+    for name, fn := range importInterpreter.GetFunctions() {
         if name != "main" {
-            interp.AddFunction(name, fn)
+            i.AddFunction(name, fn)
         }
     }
-    
-    // Also copy environment values to ensure builtins are available
-    for name, val := range importInterp.GetVariables() {
-        if name != "main" && val != nil {
-            // Don't overwrite existing values
-            interp.AddVariable(name, val)
-        }
+
+    for name, value := range importInterpreter.GetVariables() {
+        i.AddVariable(name, value)
     }
 
     return nil
 }
 `
 
-	var importSourcesContent strings.Builder
-	for path, source := range imports {
-		importSourcesContent.WriteString(fmt.Sprintf("\t%q: %q,\n", path, source))
+	var importStrings []string
+	for name, content := range imports {
+
+		if strings.HasPrefix(name, "std/") ||
+			(!strings.Contains(name, "/") && !strings.Contains(name, "\\") &&
+				(name == "date" || name == "http" || name == "time")) {
+			continue
+		}
+
+		escapedContent := strings.ReplaceAll(content, "`", "` + \"`\" + `")
+		importStrings = append(importStrings, fmt.Sprintf("        %q: `%s`,", name, escapedContent))
 	}
 
-	wrapperCode := fmt.Sprintf(wrapperTemplate, burnSource, importSourcesContent.String())
+	escapedSource := strings.ReplaceAll(burnSource, "`", "` + \"`\" + `")
 
-	return os.WriteFile(goFilePath, []byte(wrapperCode), 0644)
+	finalCode := fmt.Sprintf(wrapperTemplate, fmt.Sprintf("`%s`", escapedSource), strings.Join(importStrings, "\n"))
+
+	return os.WriteFile(goFilePath, []byte(finalCode), 0644)
 }
 
 func collectImports(mainFile, mainSource string) (map[string]string, error) {
@@ -251,30 +206,6 @@ func collectImports(mainFile, mainSource string) (map[string]string, error) {
 	workingDir, err := os.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("error getting current directory: %v", err)
-	}
-
-	// Register all standard libraries first
-	for name, content := range stdlib.StdLibFiles {
-		imports[name] = content
-		imports["std/"+name] = content
-		imports["std/"+name+".bn"] = content
-		fmt.Printf("Including standard library %s (built-in)\n", name)
-	}
-
-	// Check for standard libraries in the file system
-	stdLibDir := filepath.Join(filepath.Dir(mainFile), "src", "lib", "std")
-	if _, err := os.Stat(stdLibDir); err == nil {
-		err = stdlib.AutoRegisterLibrariesFromDir(stdLibDir)
-		if err == nil {
-			for name, content := range stdlib.StdLibFiles {
-				if _, exists := imports[name]; !exists {
-					imports[name] = content
-					imports["std/"+name] = content
-					imports["std/"+name+".bn"] = content
-					fmt.Printf("Auto-discovered standard library %s\n", name)
-				}
-			}
-		}
 	}
 
 	lex := lexer.New(mainSource)
@@ -292,49 +223,25 @@ func collectImports(mainFile, mainSource string) (map[string]string, error) {
 	baseDir := filepath.Dir(mainFile)
 
 	processImport := func(imp *ast.ImportDeclaration) error {
-		// Check if it's a standard library first
-		if strings.HasPrefix(imp.Path, "std/") {
-			libName := strings.TrimPrefix(imp.Path, "std/")
-			libName = strings.TrimSuffix(libName, ".bn")
-			if content, exists := stdlib.StdLibFiles[libName]; exists {
-				imports[imp.Path] = content
-				return nil
-			}
-		}
 
-		// Check if it's a direct standard library reference
-		moduleName := imp.Path
-		if strings.HasSuffix(moduleName, ".bn") {
-			moduleName = strings.TrimSuffix(moduleName, ".bn")
-		}
-
-		baseName := filepath.Base(moduleName)
-		if content, exists := stdlib.StdLibFiles[baseName]; exists {
-			imports[imp.Path] = content
+		if strings.HasPrefix(imp.Path, "std/") ||
+			(!strings.Contains(imp.Path, "/") && !strings.Contains(imp.Path, "\\") &&
+				(imp.Path == "date" || imp.Path == "http" || imp.Path == "time")) {
 			return nil
 		}
 
-		// Try to find the file
 		var fileContent []byte
 		var readErr error
 
-		// Try direct path first
-		fileContent, readErr = os.ReadFile(imp.Path)
-		if readErr == nil {
-			imports[imp.Path] = string(fileContent)
-			fmt.Printf("Including imported file %s\n", imp.Path)
-			return collectNestedImports(imp.Path, string(fileContent), imports, workingDir, baseDir)
-		}
-
-		// Try multiple possible paths
 		possiblePaths := []string{
+			imp.Path,
 			filepath.Join(baseDir, imp.Path),
+			filepath.Join(workingDir, imp.Path),
 			imp.Path + ".bn",
 			filepath.Join(baseDir, imp.Path+".bn"),
-			filepath.Join(baseDir, "src", "lib", imp.Path),
-			filepath.Join(baseDir, "src", "lib", imp.Path+".bn"),
-			filepath.Join(baseDir, "src", "lib", "std", imp.Path),
-			filepath.Join(baseDir, "src", "lib", "std", imp.Path+".bn"),
+			filepath.Join(workingDir, imp.Path+".bn"),
+			filepath.Join(baseDir, "test", imp.Path),
+			filepath.Join(baseDir, "test", imp.Path+".bn"),
 		}
 
 		for _, path := range possiblePaths {
@@ -344,12 +251,6 @@ func collectImports(mainFile, mainSource string) (map[string]string, error) {
 				fmt.Printf("Including imported file %s\n", path)
 				return collectNestedImports(path, string(fileContent), imports, workingDir, baseDir)
 			}
-		}
-
-		// If we get here and it's a std/ import, don't error - it might be handled elsewhere
-		if strings.HasPrefix(imp.Path, "std/") {
-			fmt.Printf("Warning: Could not find standard library file for %s, using built-in if available\n", imp.Path)
-			return nil
 		}
 
 		return fmt.Errorf("could not find import '%s'", imp.Path)
@@ -393,25 +294,9 @@ func collectNestedImports(filePath, source string, imports map[string]string, wo
 			return nil
 		}
 
-		// Check if it's a standard library first
-		if strings.HasPrefix(imp.Path, "std/") {
-			libName := strings.TrimPrefix(imp.Path, "std/")
-			libName = strings.TrimSuffix(libName, ".bn")
-			if content, exists := stdlib.StdLibFiles[libName]; exists {
-				imports[imp.Path] = content
-				fmt.Printf("Including standard library %s (built-in)\n", libName)
-				return nil
-			}
-		}
-
-		baseName := filepath.Base(imp.Path)
-		if strings.HasSuffix(baseName, ".bn") {
-			baseName = strings.TrimSuffix(baseName, ".bn")
-		}
-
-		if stdLib, exists := stdlib.StdLibFiles[baseName]; exists {
-			imports[imp.Path] = stdLib
-			fmt.Printf("Including standard library %s (built-in)\n", baseName)
+		if strings.HasPrefix(imp.Path, "std/") ||
+			(!strings.Contains(imp.Path, "/") && !strings.Contains(imp.Path, "\\") &&
+				(imp.Path == "date" || imp.Path == "http" || imp.Path == "time")) {
 			return nil
 		}
 
@@ -433,12 +318,6 @@ func collectNestedImports(filePath, source string, imports map[string]string, wo
 				fmt.Printf("Including nested import %s\n", path)
 				return collectNestedImports(path, string(fileContent), imports, workingDir, originBaseDir)
 			}
-		}
-
-		// If we get here and it's a std/ import, don't error - it might be handled elsewhere
-		if strings.HasPrefix(imp.Path, "std/") {
-			fmt.Printf("Warning: Could not find standard library file for %s, using built-in if available\n", imp.Path)
-			return nil
 		}
 
 		return fmt.Errorf("could not find nested import '%s'", imp.Path)

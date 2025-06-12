@@ -75,6 +75,7 @@ func (v *VariableDeclaration) String() string {
 
 type ImportDeclaration struct {
 	Path     string
+	Alias    string
 	Position int
 }
 

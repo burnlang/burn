@@ -1,6 +1,6 @@
 // HTTP API example for Burn
 
-import "http"
+import "http" as HTTP
 
 fun main() {
     // Default headers are already set, but we can override them if needed

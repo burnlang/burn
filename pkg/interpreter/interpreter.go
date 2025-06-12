@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/burnlang/burn/pkg/ast"
 	"github.com/burnlang/burn/pkg/lexer"
 	"github.com/burnlang/burn/pkg/parser"
-	"github.com/burnlang/burn/pkg/stdlib"
 )
 
 type Interpreter struct {
@@ -47,71 +47,31 @@ func New() *Interpreter {
 	return i
 }
 
-func (i *Interpreter) RegisterBuiltinStandardLibraries() {
-
-	i.registerDateLibrary()
-	i.registerHTTPLibrary()
-	i.registerTimeLibrary()
-
-	for name, lib := range stdlib.StdLibFiles {
-		if name == "date" || name == "http" || name == "time" {
-
-			continue
-		}
-		_ = i.interpretStdLib(name, lib)
-	}
-}
-
 func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
+	var result Value
 
 	for _, decl := range program.Declarations {
-		if typeDef, ok := decl.(*ast.TypeDefinition); ok {
-			i.types[typeDef.Name] = typeDef
-		} else if classDef, ok := decl.(*ast.ClassDeclaration); ok {
-			class := NewClass(classDef.Name)
-			for _, method := range classDef.Methods {
-				class.AddMethod(method.Name, method)
-			}
-			for _, method := range classDef.StaticMethods {
-				class.AddStatic(method.Name, method)
-			}
-			i.classes[classDef.Name] = class
-		}
-	}
-
-	i.addBuiltins()
-
-	i.RegisterBuiltinStandardLibraries()
-
-	for _, decl := range program.Declarations {
-		if fn, ok := decl.(*ast.FunctionDeclaration); ok {
-			i.functions[fn.Name] = fn
-		}
 		if imp, ok := decl.(*ast.ImportDeclaration); ok {
 			if err := i.handleImport(imp); err != nil {
 				return nil, err
 			}
+			continue
 		}
+
 		if multiImp, ok := decl.(*ast.MultiImportDeclaration); ok {
 			for _, imp := range multiImp.Imports {
 				if err := i.handleImport(imp); err != nil {
 					return nil, err
 				}
 			}
+			continue
 		}
-	}
 
-	if mainFn, exists := i.functions["main"]; exists {
-		return i.executeFunction(mainFn, []Value{})
-	}
-
-	var result Value
-	for _, decl := range program.Declarations {
-		var err error
-		result, err = i.executeDeclaration(decl)
+		val, err := i.executeDeclaration(decl)
 		if err != nil {
 			return nil, err
 		}
+		result = val
 	}
 
 	return result, nil
@@ -132,162 +92,85 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 
 		switch basename {
 		case "date":
-			i.registerDateLibrary()
+
 			return nil
 		case "http":
-			i.registerHTTPLibrary()
+
 			return nil
 		case "time":
-			i.registerTimeLibrary()
+
 			return nil
+		default:
+			return fmt.Errorf("unknown standard library: %s", basename)
 		}
 	}
 
 	if strings.HasSuffix(libName, ".bn") || !strings.Contains(libName, ".") {
-		path := libName
-
-		if !strings.HasSuffix(path, ".bn") {
-			path = path + ".bn"
-		}
-
-		workingDir, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("error getting current directory: %v", err)
-		}
-
-		searchPaths := []string{
-			path,
-			filepath.Join(workingDir, path),
-			filepath.Join("src", "lib", "std", path),
-			filepath.Join("src", "lib", path),
-			filepath.Join("src", "lib", "std", strings.TrimSuffix(path, ".bn")+".bn"),
-			filepath.Join("src", "lib", strings.TrimSuffix(path, ".bn")+".bn"),
-
-			filepath.Join("test", strings.TrimPrefix(path, "test/")),
-		}
-
-		var source []byte
-		var foundPath string
-
-		for _, searchPath := range searchPaths {
-			source, err = os.ReadFile(searchPath)
-			if err == nil {
-				foundPath = searchPath
-				break
-			}
-		}
-
-		if foundPath == "" {
-			baseName := filepath.Base(strings.TrimSuffix(libName, ".bn"))
-			if lib, exists := stdlib.StdLibFiles[baseName]; exists {
-				switch baseName {
-				case "date":
-					i.registerDateLibrary()
-					return nil
-				case "http":
-					i.registerHTTPLibrary()
-					return nil
-				case "time":
-					i.registerTimeLibrary()
-					return nil
-				default:
-					return i.interpretStdLib(baseName, lib)
-				}
-			}
-
-			return fmt.Errorf("could not find import file: %s (tried paths: %v)", libName, searchPaths)
-		}
-
-		l := lexer.New(string(source))
-		tokens, err := l.Tokenize()
-		if err != nil {
-			return fmt.Errorf("lexical error in import %s: %v", foundPath, err)
-		}
-
-		p := parser.New(tokens)
-		program, err := p.Parse()
-		if err != nil {
-			return fmt.Errorf("parse error in import %s: %v", foundPath, err)
-		}
-
-		importInterpreter := New()
-		importInterpreter.addBuiltins()
-		importInterpreter.RegisterBuiltinStandardLibraries()
-
-		for mod := range i.importedModules {
-			importInterpreter.importedModules[mod] = true
-		}
-
-		_, err = importInterpreter.Interpret(program)
-		if err != nil {
-			return fmt.Errorf("error interpreting import %s: %v", foundPath, err)
-		}
-
-		for name, typeDef := range importInterpreter.types {
-			i.types[name] = typeDef
-		}
-
-		for name, fn := range importInterpreter.functions {
-			if name != "main" {
-				i.functions[name] = fn
-			}
-		}
-
-		for name, class := range importInterpreter.classes {
-			i.classes[name] = class
-		}
-
-		for name, value := range importInterpreter.environment {
-			if _, exists := i.environment[name]; !exists {
-				i.environment[name] = value
-			}
-		}
-
-		return nil
-	}
-
-	basename := filepath.Base(libName)
-	if strings.HasSuffix(basename, ".bn") {
-		basename = strings.TrimSuffix(basename, ".bn")
-	}
-
-	if lib, exists := stdlib.StdLibFiles[basename]; exists {
-		switch basename {
-		case "date":
-			i.registerDateLibrary()
-		case "http":
-			i.registerHTTPLibrary()
-		case "time":
-			i.registerTimeLibrary()
-		default:
-			return i.interpretStdLib(basename, lib)
-		}
-		return nil
+		return i.handleFileImport(libName)
 	}
 
 	return fmt.Errorf("could not find import: %s", imp.Path)
 }
 
-func (i *Interpreter) interpretStdLib(name, source string) error {
-	l := lexer.New(source)
+func (i *Interpreter) handleFileImport(libName string) error {
+	path := libName
+	if !strings.HasSuffix(path, ".bn") {
+		path = path + ".bn"
+	}
+
+	workingDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("error getting current directory: %v", err)
+	}
+
+	searchPaths := []string{
+		path,
+		filepath.Join(workingDir, path),
+		filepath.Join("test", path),
+		filepath.Join("src", path),
+		filepath.Join(".", path),
+	}
+
+	var source []byte
+	var foundPath string
+
+	for _, searchPath := range searchPaths {
+		source, err = os.ReadFile(searchPath)
+		if err == nil {
+			foundPath = searchPath
+			break
+		}
+	}
+
+	if foundPath == "" {
+		return fmt.Errorf("could not find import file: %s (tried paths: %v)", libName, searchPaths)
+	}
+
+	l := lexer.New(string(source))
 	tokens, err := l.Tokenize()
 	if err != nil {
-		return err
+		return fmt.Errorf("lexical error in import %s: %v", foundPath, err)
 	}
 
 	p := parser.New(tokens)
 	program, err := p.Parse()
 	if err != nil {
-		return err
+		return fmt.Errorf("parse error in import %s: %v", foundPath, err)
 	}
 
 	importInterpreter := New()
-	importInterpreter.addBuiltins()
-	importInterpreter.RegisterBuiltinStandardLibraries()
+
+	for mod := range i.importedModules {
+		importInterpreter.importedModules[mod] = true
+	}
 
 	_, err = importInterpreter.Interpret(program)
 	if err != nil {
-		return err
+		return fmt.Errorf("error interpreting import %s: %v", foundPath, err)
+	}
+
+	for name, typeDef := range importInterpreter.types {
+		i.types[name] = typeDef
 	}
 
 	for name, fn := range importInterpreter.functions {
@@ -512,4 +395,60 @@ func (i *Interpreter) AddVariable(name string, value interface{}) {
 	if _, exists := i.environment[name]; !exists {
 		i.environment[name] = value
 	}
+}
+
+func (i *Interpreter) callBuiltinFunction(name string, args []interface{}) (interface{}, error) {
+	switch name {
+	case "print":
+		
+		
+		
+
+		if len(args) == 0 {
+			fmt.Println()
+			os.Stdout.Sync() 
+			return nil, nil
+		}
+
+		var output strings.Builder
+		for j, arg := range args {
+			if j > 0 {
+				output.WriteString(" ")
+			}
+
+			
+			
+			
+
+			switch v := arg.(type) {
+			case string:
+				output.WriteString(v)
+			case int:
+				output.WriteString(strconv.Itoa(v))
+			case int64: 
+				output.WriteString(strconv.FormatInt(v, 10))
+			case float64:
+				output.WriteString(strconv.FormatFloat(v, 'f', -1, 64))
+			case bool:
+				output.WriteString(strconv.FormatBool(v))
+			case nil:
+				output.WriteString("null")
+			default:
+				
+				if stringer, ok := v.(interface{ String() string }); ok {
+					output.WriteString(stringer.String())
+				} else {
+					output.WriteString(fmt.Sprintf("%v", v))
+				}
+			}
+		}
+
+		fmt.Println(output.String())
+		os.Stdout.Sync() 
+
+		return nil, nil
+
+	}
+
+	return nil, fmt.Errorf("unknown builtin function: %s", name)
 }
