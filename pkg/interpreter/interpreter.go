@@ -2,6 +2,7 @@ package interpreter
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,6 +21,8 @@ type Interpreter struct {
 	errorPos    int
 
 	importedModules map[string]bool
+
+	stdout io.Writer
 }
 
 type Environment struct {
@@ -35,16 +38,14 @@ func NewEnvironment(enclosing *Environment) *Environment {
 }
 
 func New() *Interpreter {
-	i := &Interpreter{
+	return &Interpreter{
 		environment:     make(map[string]Value),
 		functions:       make(map[string]*ast.FunctionDeclaration),
 		types:           make(map[string]*ast.TypeDefinition),
 		classes:         make(map[string]*Class),
-		errorPos:        0,
 		importedModules: make(map[string]bool),
+		stdout:          os.Stdout,
 	}
-	i.addBuiltins()
-	return i
 }
 
 func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
@@ -400,13 +401,9 @@ func (i *Interpreter) AddVariable(name string, value interface{}) {
 func (i *Interpreter) callBuiltinFunction(name string, args []interface{}) (interface{}, error) {
 	switch name {
 	case "print":
-		
-		
-		
 
 		if len(args) == 0 {
-			fmt.Println()
-			os.Stdout.Sync() 
+			fmt.Fprintln(i.stdout)
 			return nil, nil
 		}
 
@@ -416,16 +413,12 @@ func (i *Interpreter) callBuiltinFunction(name string, args []interface{}) (inte
 				output.WriteString(" ")
 			}
 
-			
-			
-			
-
 			switch v := arg.(type) {
 			case string:
 				output.WriteString(v)
 			case int:
 				output.WriteString(strconv.Itoa(v))
-			case int64: 
+			case int64:
 				output.WriteString(strconv.FormatInt(v, 10))
 			case float64:
 				output.WriteString(strconv.FormatFloat(v, 'f', -1, 64))
@@ -434,7 +427,6 @@ func (i *Interpreter) callBuiltinFunction(name string, args []interface{}) (inte
 			case nil:
 				output.WriteString("null")
 			default:
-				
 				if stringer, ok := v.(interface{ String() string }); ok {
 					output.WriteString(stringer.String())
 				} else {
@@ -443,12 +435,15 @@ func (i *Interpreter) callBuiltinFunction(name string, args []interface{}) (inte
 			}
 		}
 
-		fmt.Println(output.String())
-		os.Stdout.Sync() 
+		fmt.Fprintln(i.stdout, output.String())
 
 		return nil, nil
 
 	}
 
 	return nil, fmt.Errorf("unknown builtin function: %s", name)
+}
+
+func (i *Interpreter) SetStdout(w io.Writer) {
+	i.stdout = w
 }

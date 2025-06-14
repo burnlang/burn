@@ -21,43 +21,19 @@ func (b *BuiltinFunction) Call(args []Value) (Value, error) {
 }
 
 func (i *Interpreter) addBuiltins() {
+
 	i.environment["print"] = &BuiltinFunction{
 		Name: "print",
 		Fn: func(args []Value) (Value, error) {
-			if len(args) == 0 {
-				fmt.Println()
-				os.Stdout.Sync()
-				return nil, nil
+			var output string
+			for _, arg := range args {
+				output += fmt.Sprintf("%v ", arg)
 			}
-
-			var output strings.Builder
-			for j, arg := range args {
-				if j > 0 {
-					output.WriteString(" ")
-				}
-
-				switch v := arg.(type) {
-				case string:
-					output.WriteString(v)
-				case int:
-					output.WriteString(strconv.Itoa(v))
-				case float64:
-					if v == float64(int(v)) {
-						output.WriteString(fmt.Sprintf("%.0f", v))
-					} else {
-						output.WriteString(fmt.Sprintf("%g", v))
-					}
-				case bool:
-					output.WriteString(strconv.FormatBool(v))
-				case nil:
-					output.WriteString("null")
-				default:
-					output.WriteString(fmt.Sprintf("%v", v))
-				}
+			if i.stdout != nil {
+				fmt.Fprintln(i.stdout, output)
+			} else {
+				fmt.Println(output)
 			}
-
-			fmt.Print(output.String() + "\n")
-			os.Stdout.Sync()
 			return nil, nil
 		},
 	}
@@ -81,25 +57,26 @@ func (i *Interpreter) addBuiltins() {
 		Name: "toString",
 		Fn: func(args []Value) (Value, error) {
 			if len(args) != 1 {
-				return nil, fmt.Errorf("toString expects exactly one argument")
+				return nil, fmt.Errorf("toString expects 1 argument, got %d", len(args))
 			}
 
-			switch val := args[0].(type) {
-			case float64:
-				if val == float64(int(val)) {
-					return fmt.Sprintf("%.0f", val), nil
-				}
-				return fmt.Sprintf("%g", val), nil
-			case int:
-				return fmt.Sprintf("%d", val), nil
+			arg := args[0]
+			switch v := arg.(type) {
 			case string:
-				return val, nil
+				return v, nil
+			case int:
+				return fmt.Sprintf("%d", v), nil
+			case float64:
+				if v == float64(int(v)) {
+					return fmt.Sprintf("%.0f", v), nil
+				}
+				return fmt.Sprintf("%g", v), nil
 			case bool:
-				return fmt.Sprintf("%t", val), nil
+				return fmt.Sprintf("%t", v), nil
 			case nil:
 				return "null", nil
 			default:
-				return fmt.Sprintf("%v", val), nil
+				return fmt.Sprintf("%v", v), nil
 			}
 		},
 	}

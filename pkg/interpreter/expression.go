@@ -295,144 +295,68 @@ func (i *Interpreter) evaluateUnary(expr *ast.UnaryExpression) (Value, error) {
 }
 
 func (i *Interpreter) evaluateCall(expr *ast.CallExpression) (Value, error) {
-	if getExpr, ok := expr.Callee.(*ast.GetExpression); ok {
-		if classNameExpr, ok := getExpr.Object.(*ast.VariableExpression); ok {
-			className := classNameExpr.Name
-			methodName := getExpr.Name
 
-			class, exists := i.classes[className]
-			if !exists {
-				return nil, fmt.Errorf("undefined class: %s", className)
-			}
+	if varExpr, ok := expr.Callee.(*ast.VariableExpression); ok {
 
-			args := make([]Value, 0, len(expr.Arguments))
-			for _, arg := range expr.Arguments {
-				value, err := i.evaluateExpression(arg)
-				if err != nil {
-					return nil, err
-				}
-				args = append(args, value)
-			}
+		if builtinFunc, exists := i.environment[varExpr.Name]; exists {
+			if bf, ok := builtinFunc.(*BuiltinFunction); ok {
 
-			if static, exists := class.Statics[methodName]; exists {
-				result, err := i.executeFunction(static, args)
-				if err != nil {
-					return nil, err
-				}
-
-				if methodName == "create" {
-					if mapResult, ok := result.(map[string]interface{}); ok {
-
-						return &Struct{
-							TypeName: className,
-							Fields:   mapResult,
-						}, nil
-					}
-				}
-				return result, nil
-			}
-
-			if instanceMethod, exists := class.Methods[methodName]; exists {
-				result, err := i.executeFunction(instanceMethod, args)
-				if err != nil {
-					return nil, err
-				}
-
-				if methodName == "create" {
-					if mapResult, ok := result.(map[string]interface{}); ok {
-
-						return &Struct{
-							TypeName: className,
-							Fields:   mapResult,
-						}, nil
-					}
-				}
-				return result, nil
-			}
-
-			builtinFuncName := fmt.Sprintf("%s.%s", className, methodName)
-			if builtinFunc, exists := i.environment[builtinFuncName]; exists {
-				if bf, ok := builtinFunc.(*BuiltinFunction); ok {
-					result, err := bf.Call(args)
+				var args []Value
+				for _, arg := range expr.Arguments {
+					val, err := i.evaluateExpression(arg)
 					if err != nil {
 						return nil, err
 					}
-
-					if methodName == "create" {
-						if mapResult, ok := result.(map[string]interface{}); ok {
-
-							return &Struct{
-								TypeName: className,
-								Fields:   mapResult,
-							}, nil
-						}
-					}
-					return result, nil
+					args = append(args, val)
 				}
+
+				return bf.Fn(args)
 			}
-
-			return nil, fmt.Errorf("undefined static method '%s' in class '%s'", methodName, className)
 		}
 
-		object, err := i.evaluateExpression(getExpr.Object)
-		if err != nil {
-			return nil, err
-		}
+		if function, exists := i.functions[varExpr.Name]; exists {
 
-		if structObj, ok := object.(*Struct); ok {
-			methodName := getExpr.Name
-
-			args := make([]Value, len(expr.Arguments))
-			for j, arg := range expr.Arguments {
+			var args []Value
+			for _, arg := range expr.Arguments {
 				val, err := i.evaluateExpression(arg)
 				if err != nil {
 					return nil, err
 				}
-				args[j] = val
+				args = append(args, val)
 			}
 
-			if class, exists := i.classes[structObj.TypeName]; exists {
-				allArgs := make([]Value, len(args)+1)
-				allArgs[0] = structObj
-				copy(allArgs[1:], args)
+			oldEnv := i.environment
+			i.environment = make(map[string]Value)
 
-				if method, exists := class.Methods[methodName]; exists {
-					return i.executeFunction(method, allArgs)
+			for k, v := range oldEnv {
+				i.environment[k] = v
+			}
+
+			for j, param := range function.Parameters {
+				if j < len(args) {
+					i.environment[param.Name] = args[j]
 				}
 			}
 
-			return nil, fmt.Errorf("undefined method '%s' on type '%s'", methodName, structObj.TypeName)
-		}
+			for _, decl := range function.Body {
+				_, err := i.executeDeclaration(decl)
+				if err != nil {
+					i.environment = oldEnv
+					return nil, err
+				}
+			}
 
-		return nil, fmt.Errorf("cannot call method on expression of type %T", object)
-	}
+			i.environment = oldEnv
 
-	callee, ok := expr.Callee.(*ast.VariableExpression)
-	if !ok {
-		return nil, fmt.Errorf("callee is not a function name")
-	}
-
-	args := make([]Value, 0, len(expr.Arguments))
-	for _, arg := range expr.Arguments {
-		value, err := i.evaluateExpression(arg)
-		if err != nil {
-			return nil, err
-		}
-		args = append(args, value)
-	}
-
-	if builtinFunc, exists := i.environment[callee.Name]; exists {
-		if bf, ok := builtinFunc.(*BuiltinFunction); ok {
-			return bf.Call(args)
+			return nil, nil
 		}
 	}
 
-	fn, exists := i.functions[callee.Name]
-	if !exists {
-		return nil, fmt.Errorf("undefined function: %s", callee.Name)
+	if getExpr, ok := expr.Callee.(*ast.GetExpression); ok {
+		return i.evaluateExpression(getExpr)
 	}
 
-	return i.executeFunction(fn, args)
+	return nil, fmt.Errorf("function not found: %v", expr.Callee)
 }
 
 func (i *Interpreter) evaluateLiteral(expr *ast.LiteralExpression) (Value, error) {

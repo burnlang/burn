@@ -1,8 +1,5 @@
 # TODO (sometimes i forget to update it)
 
-# Fix Date [IN PROGESS]
-- Build in Functions are not Registered
-
 ## Fix compilation to executable 
 
 ## Add Interfaces
