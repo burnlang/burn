@@ -52,6 +52,25 @@ func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
 	var result Value
 
 	for _, decl := range program.Declarations {
+		if typeDef, ok := decl.(*ast.TypeDefinition); ok {
+			i.types[typeDef.Name] = typeDef
+		} else if classDef, ok := decl.(*ast.ClassDeclaration); ok {
+
+			class := &Class{
+				Name:    classDef.Name,
+				Methods: make(map[string]*ast.FunctionDeclaration),
+			}
+
+			for _, method := range classDef.Methods {
+				class.Methods[method.Name] = method
+			}
+
+			i.classes[classDef.Name] = class
+			i.environment[classDef.Name] = class
+		}
+	}
+
+	for _, decl := range program.Declarations {
 		if imp, ok := decl.(*ast.ImportDeclaration); ok {
 			if err := i.handleImport(imp); err != nil {
 				return nil, err
@@ -68,11 +87,28 @@ func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
 			continue
 		}
 
+		if _, ok := decl.(*ast.ClassDeclaration); ok {
+			continue
+		}
+		if _, ok := decl.(*ast.TypeDefinition); ok {
+			continue
+		}
+
 		val, err := i.executeDeclaration(decl)
 		if err != nil {
 			return nil, err
 		}
 		result = val
+	}
+
+	if mainFunc, exists := i.functions["main"]; exists {
+		mainResult, err := i.executeFunction(mainFunc, []Value{})
+		if err != nil {
+			return nil, fmt.Errorf("error in main function: %v", err)
+		}
+		if mainResult != nil {
+			result = mainResult
+		}
 	}
 
 	return result, nil
@@ -194,123 +230,51 @@ func (i *Interpreter) handleFileImport(libName string) error {
 }
 
 func (i *Interpreter) executeDeclaration(decl ast.Declaration) (Value, error) {
-	if decl != nil {
-		i.setErrorPos(decl.Pos())
-	}
-
 	switch d := decl.(type) {
-	case *ast.ClassDeclaration:
-		return nil, nil
-	case *ast.TypeDefinition:
-		return nil, nil
 	case *ast.FunctionDeclaration:
 		i.functions[d.Name] = d
 		return nil, nil
+
 	case *ast.VariableDeclaration:
+		var value Value
 		if d.Value != nil {
-			value, err := i.evaluateExpression(d.Value)
+			val, err := i.evaluateExpression(d.Value)
 			if err != nil {
 				return nil, err
 			}
-			i.environment[d.Name] = value
+			value = val
 		}
+		i.environment[d.Name] = value
+		return value, nil
+
+	case *ast.ClassDeclaration:
+
+		class := &Class{
+			Name:    d.Name,
+			Methods: make(map[string]*ast.FunctionDeclaration),
+		}
+
+		for _, method := range d.Methods {
+			class.Methods[method.Name] = method
+		}
+
+		i.classes[d.Name] = class
+		i.environment[d.Name] = class
+		return class, nil
+
+	case *ast.TypeDefinition:
+		i.types[d.Name] = d
 		return nil, nil
+
 	case *ast.ExpressionStatement:
 		return i.evaluateExpression(d.Expression)
+
 	case *ast.ReturnStatement:
-		if d.Value == nil {
-			return nil, nil
-		}
-		return i.evaluateExpression(d.Value)
-	case *ast.IfStatement:
-		condition, err := i.evaluateExpression(d.Condition)
-		if err != nil {
-			return nil, err
-		}
-
-		if cond, ok := condition.(bool); ok {
-			if cond {
-				for _, stmt := range d.ThenBranch {
-					result, err := i.executeDeclaration(stmt)
-					if err != nil {
-						return nil, err
-					}
-					if _, ok := stmt.(*ast.ReturnStatement); ok {
-						return result, nil
-					}
-				}
-			} else if d.ElseBranch != nil {
-				for _, stmt := range d.ElseBranch {
-					result, err := i.executeDeclaration(stmt)
-					if err != nil {
-						return nil, err
-					}
-					if _, ok := stmt.(*ast.ReturnStatement); ok {
-						return result, nil
-					}
-				}
-			}
+		if d.Value != nil {
+			return i.evaluateExpression(d.Value)
 		}
 		return nil, nil
-	case *ast.WhileStatement:
-		for {
-			condition, err := i.evaluateExpression(d.Condition)
-			if err != nil {
-				return nil, err
-			}
 
-			if cond, ok := condition.(bool); ok && cond {
-				for _, stmt := range d.Body {
-					result, err := i.executeDeclaration(stmt)
-					if err != nil {
-						return nil, err
-					}
-					if _, ok := stmt.(*ast.ReturnStatement); ok {
-						return result, nil
-					}
-				}
-			} else {
-				break
-			}
-		}
-		return nil, nil
-	case *ast.ForStatement:
-		if d.Initializer != nil {
-			_, err := i.executeDeclaration(d.Initializer)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		for {
-			if d.Condition != nil {
-				condition, err := i.evaluateExpression(d.Condition)
-				if err != nil {
-					return nil, err
-				}
-				if cond, ok := condition.(bool); !ok || !cond {
-					break
-				}
-			}
-
-			for _, stmt := range d.Body {
-				result, err := i.executeDeclaration(stmt)
-				if err != nil {
-					return nil, err
-				}
-				if _, ok := stmt.(*ast.ReturnStatement); ok {
-					return result, nil
-				}
-			}
-
-			if d.Increment != nil {
-				_, err := i.evaluateExpression(d.Increment)
-				if err != nil {
-					return nil, err
-				}
-			}
-		}
-		return nil, nil
 	default:
 		return nil, fmt.Errorf("unknown declaration type: %T", decl)
 	}
