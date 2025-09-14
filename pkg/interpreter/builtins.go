@@ -25,14 +25,37 @@ func (i *Interpreter) addBuiltins() {
 	i.environment["print"] = &BuiltinFunction{
 		Name: "print",
 		Fn: func(args []Value) (Value, error) {
-			var output string
-			for _, arg := range args {
-				output += fmt.Sprintf("%v ", arg)
+			for idx, arg := range args {
+				if idx > 0 {
+					fmt.Print(" ")
+				}
+				if i.stdout != nil {
+					fmt.Fprint(i.stdout, arg)
+				} else {
+					fmt.Print(arg)
+				}
+			}
+			return nil, nil
+		},
+	}
+
+	i.environment["println"] = &BuiltinFunction{
+		Name: "println",
+		Fn: func(args []Value) (Value, error) {
+			for idx, arg := range args {
+				if idx > 0 {
+					fmt.Print(" ")
+				}
+				if i.stdout != nil {
+					fmt.Fprint(i.stdout, arg)
+				} else {
+					fmt.Print(arg)
+				}
 			}
 			if i.stdout != nil {
-				fmt.Fprintln(i.stdout, output)
+				fmt.Fprintln(i.stdout)
 			} else {
-				fmt.Println(output)
+				fmt.Println()
 			}
 			return nil, nil
 		},

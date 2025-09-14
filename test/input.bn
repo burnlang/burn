@@ -6,8 +6,8 @@ type Human {
 
 fun main() {
     var name = input("Enter your name: ")
-    print("Hello, " + name)
+    println("Hello, " + name)
 
     var age = input("Enter your age: ")
-    print("You are " + age + " years old")
+    println("You are " + age + " years old")
 }

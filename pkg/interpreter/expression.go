@@ -32,6 +32,8 @@ func (i *Interpreter) evaluateExpression(expr ast.Expression) (Value, error) {
 		return value, nil
 	case *ast.CallExpression:
 		return i.evaluateCall(e)
+	case *ast.ClassMethodCallExpression:
+		return i.evaluateClassMethodCall(e)
 	case *ast.GetExpression:
 		object, err := i.evaluateExpression(e.Object)
 		if err != nil {
@@ -338,21 +340,39 @@ func (i *Interpreter) evaluateCall(expr *ast.CallExpression) (Value, error) {
 				}
 			}
 
+			var result Value
 			for _, decl := range function.Body {
-				_, err := i.executeDeclaration(decl)
+				val, err := i.executeDeclaration(decl)
 				if err != nil {
 					i.environment = oldEnv
 					return nil, err
+				}
+				if val != nil {
+					result = val
 				}
 			}
 
 			i.environment = oldEnv
 
-			return nil, nil
+			return result, nil
 		}
 	}
 
 	if getExpr, ok := expr.Callee.(*ast.GetExpression); ok {
+		if varExpr, ok := getExpr.Object.(*ast.VariableExpression); ok {
+			if class, exists := i.classes[varExpr.Name]; exists {
+				var args []Value
+				for _, arg := range expr.Arguments {
+					val, err := i.evaluateExpression(arg)
+					if err != nil {
+						return nil, err
+					}
+					args = append(args, val)
+				}
+
+				return class.Call(getExpr.Name, i, args)
+			}
+		}
 		return i.evaluateExpression(getExpr)
 	}
 

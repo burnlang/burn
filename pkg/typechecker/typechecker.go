@@ -51,6 +51,11 @@ func initStandardLibrary(tc *TypeChecker) {
 		ReturnType: "void",
 	}
 
+	tc.functions["println"] = FunctionType{
+		Parameters: []string{"any"},
+		ReturnType: "void",
+	}
+
 	tc.functions["input"] = FunctionType{
 		Parameters: []string{},
 		ReturnType: "string",
@@ -508,13 +513,19 @@ func (t *TypeChecker) registerDateLibrary(className string) {
 	t.classes[className] = make(map[string]FunctionType)
 	t.types[className] = make(map[string]string)
 
-	t.functions[className+".now"] = FunctionType{
-		Parameters: []string{},
-		ReturnType: "string",
+	t.types["Date"] = map[string]string{
+		"year":  "int",
+		"month": "int",
+		"day":   "int",
 	}
 
-	t.functions[className+".format"] = FunctionType{
-		Parameters: []string{"string", "string"},
+	t.functions[className+".now"] = FunctionType{
+		Parameters: []string{},
+		ReturnType: "Date",
+	}
+
+	t.functions[className+".formatDate"] = FunctionType{
+		Parameters: []string{"Date"},
 		ReturnType: "string",
 	}
 
@@ -523,19 +534,119 @@ func (t *TypeChecker) registerDateLibrary(className string) {
 		ReturnType: "int",
 	}
 
-	t.classes[className]["static.now"] = FunctionType{
+	t.functions[className+".currentYear"] = FunctionType{
+		Parameters: []string{},
+		ReturnType: "int",
+	}
+
+	t.functions[className+".currentMonth"] = FunctionType{
+		Parameters: []string{},
+		ReturnType: "int",
+	}
+
+	t.functions[className+".currentDay"] = FunctionType{
+		Parameters: []string{},
+		ReturnType: "int",
+	}
+
+	t.functions[className+".isLeapYear"] = FunctionType{
+		Parameters: []string{"int"},
+		ReturnType: "bool",
+	}
+
+	t.functions[className+".daysInMonth"] = FunctionType{
+		Parameters: []string{"int", "int"},
+		ReturnType: "int",
+	}
+
+	t.functions[className+".createDate"] = FunctionType{
+		Parameters: []string{"int", "int", "int"},
+		ReturnType: "Date",
+	}
+
+	t.functions[className+".dayOfWeek"] = FunctionType{
+		Parameters: []string{"Date"},
+		ReturnType: "int",
+	}
+
+	t.functions[className+".addDays"] = FunctionType{
+		Parameters: []string{"Date", "int"},
+		ReturnType: "Date",
+	}
+
+	t.functions[className+".subtractDays"] = FunctionType{
+		Parameters: []string{"Date", "int"},
+		ReturnType: "Date",
+	}
+
+	t.functions[className+".today"] = FunctionType{
 		Parameters: []string{},
 		ReturnType: "string",
 	}
 
-	t.classes[className]["static.format"] = FunctionType{
-		Parameters: []string{"string", "string"},
+	t.classes[className]["static.now"] = FunctionType{
+		Parameters: []string{},
+		ReturnType: "Date",
+	}
+
+	t.classes[className]["static.formatDate"] = FunctionType{
+		Parameters: []string{"Date"},
 		ReturnType: "string",
 	}
 
 	t.classes[className]["static.parse"] = FunctionType{
 		Parameters: []string{"string"},
 		ReturnType: "int",
+	}
+
+	t.classes[className]["static.currentYear"] = FunctionType{
+		Parameters: []string{},
+		ReturnType: "int",
+	}
+
+	t.classes[className]["static.currentMonth"] = FunctionType{
+		Parameters: []string{},
+		ReturnType: "int",
+	}
+
+	t.classes[className]["static.currentDay"] = FunctionType{
+		Parameters: []string{},
+		ReturnType: "int",
+	}
+
+	t.classes[className]["static.isLeapYear"] = FunctionType{
+		Parameters: []string{"int"},
+		ReturnType: "bool",
+	}
+
+	t.classes[className]["static.daysInMonth"] = FunctionType{
+		Parameters: []string{"int", "int"},
+		ReturnType: "int",
+	}
+
+	t.classes[className]["static.createDate"] = FunctionType{
+		Parameters: []string{"int", "int", "int"},
+		ReturnType: "Date",
+	}
+
+	t.classes[className]["static.dayOfWeek"] = FunctionType{
+		Parameters: []string{"Date"},
+		ReturnType: "int",
+	}
+
+	t.classes[className]["static.addDays"] = FunctionType{
+		Parameters: []string{"Date", "int"},
+		ReturnType: "Date",
+	}
+
+	t.classes[className]["static.subtractDays"] = FunctionType{
+		Parameters: []string{"Date", "int"},
+		ReturnType: "Date",
+	}
+
+	t.classes[className]["static.today"] = FunctionType{
+		Parameters: []string{},
+		ReturnType: "string",
 	}
 }
 

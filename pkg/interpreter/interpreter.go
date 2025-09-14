@@ -38,7 +38,7 @@ func NewEnvironment(enclosing *Environment) *Environment {
 }
 
 func New() *Interpreter {
-	return &Interpreter{
+	i := &Interpreter{
 		environment:     make(map[string]Value),
 		functions:       make(map[string]*ast.FunctionDeclaration),
 		types:           make(map[string]*ast.TypeDefinition),
@@ -46,6 +46,8 @@ func New() *Interpreter {
 		importedModules: make(map[string]bool),
 		stdout:          os.Stdout,
 	}
+	i.addBuiltins()
+	return i
 }
 
 func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
@@ -59,10 +61,16 @@ func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
 			class := &Class{
 				Name:    classDef.Name,
 				Methods: make(map[string]*ast.FunctionDeclaration),
+				Statics: make(map[string]*ast.FunctionDeclaration),
 			}
 
 			for _, method := range classDef.Methods {
 				class.Methods[method.Name] = method
+				class.Statics[method.Name] = method
+			}
+
+			for _, method := range classDef.StaticMethods {
+				class.Statics[method.Name] = method
 			}
 
 			i.classes[classDef.Name] = class
@@ -252,10 +260,16 @@ func (i *Interpreter) executeDeclaration(decl ast.Declaration) (Value, error) {
 		class := &Class{
 			Name:    d.Name,
 			Methods: make(map[string]*ast.FunctionDeclaration),
+			Statics: make(map[string]*ast.FunctionDeclaration),
 		}
 
 		for _, method := range d.Methods {
 			class.Methods[method.Name] = method
+			class.Statics[method.Name] = method 
+		}
+
+		for _, method := range d.StaticMethods {
+			class.Statics[method.Name] = method
 		}
 
 		i.classes[d.Name] = class
@@ -274,6 +288,18 @@ func (i *Interpreter) executeDeclaration(decl ast.Declaration) (Value, error) {
 			return i.evaluateExpression(d.Value)
 		}
 		return nil, nil
+
+	case *ast.IfStatement:
+		return i.executeIfStatement(d)
+
+	case *ast.WhileStatement:
+		return i.executeWhileStatement(d)
+
+	case *ast.ForStatement:
+		return i.executeForStatement(d)
+
+	case *ast.BlockStatement:
+		return i.executeBlockStatement(d)
 
 	default:
 		return nil, fmt.Errorf("unknown declaration type: %T", decl)
@@ -406,6 +432,125 @@ func (i *Interpreter) callBuiltinFunction(name string, args []interface{}) (inte
 	}
 
 	return nil, fmt.Errorf("unknown builtin function: %s", name)
+}
+
+func (i *Interpreter) executeIfStatement(stmt *ast.IfStatement) (Value, error) {
+	condition, err := i.evaluateExpression(stmt.Condition)
+	if err != nil {
+		return nil, err
+	}
+
+	if i.isTruthy(condition) {
+		return i.executeStatements(stmt.ThenBranch)
+	} else if len(stmt.ElseBranch) > 0 {
+		return i.executeStatements(stmt.ElseBranch)
+	}
+	return nil, nil
+}
+
+func (i *Interpreter) executeWhileStatement(stmt *ast.WhileStatement) (Value, error) {
+	var result Value
+	for {
+		condition, err := i.evaluateExpression(stmt.Condition)
+		if err != nil {
+			return nil, err
+		}
+
+		if !i.isTruthy(condition) {
+			break
+		}
+
+		result, err = i.executeStatements(stmt.Body)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func (i *Interpreter) executeForStatement(stmt *ast.ForStatement) (Value, error) {
+	prevEnv := make(map[string]Value)
+	for k, v := range i.environment {
+		prevEnv[k] = v
+	}
+
+	var result Value
+	var err error
+
+	if stmt.Initializer != nil {
+		_, err = i.executeDeclaration(stmt.Initializer)
+		if err != nil {
+			i.environment = prevEnv
+			return nil, err
+		}
+	}
+
+	for {
+		if stmt.Condition != nil {
+			condition, err := i.evaluateExpression(stmt.Condition)
+			if err != nil {
+				i.environment = prevEnv
+				return nil, err
+			}
+			if !i.isTruthy(condition) {
+				break
+			}
+		}
+
+		result, err = i.executeStatements(stmt.Body)
+		if err != nil {
+			i.environment = prevEnv
+			return nil, err
+		}
+
+		if stmt.Increment != nil {
+			_, err = i.evaluateExpression(stmt.Increment)
+			if err != nil {
+				i.environment = prevEnv
+				return nil, err
+			}
+		}
+	}
+
+	for k, v := range prevEnv {
+		if _, exists := i.environment[k]; !exists || i.environment[k] != v {
+			i.environment[k] = v
+		}
+	}
+
+	return result, nil
+}
+
+func (i *Interpreter) executeBlockStatement(stmt *ast.BlockStatement) (Value, error) {
+	return i.executeStatements(stmt.Statements)
+}
+
+func (i *Interpreter) executeStatements(statements []ast.Declaration) (Value, error) {
+	var result Value
+	for _, stmt := range statements {
+		val, err := i.executeDeclaration(stmt)
+		if err != nil {
+			return nil, err
+		}
+		result = val
+	}
+	return result, nil
+}
+
+func (i *Interpreter) isTruthy(value Value) bool {
+	if value == nil {
+		return false
+	}
+	if b, ok := value.(bool); ok {
+		return b
+	}
+	if f, ok := value.(float64); ok {
+		return f != 0
+	}
+	if s, ok := value.(string); ok {
+		return s != ""
+	}
+	return true
 }
 
 func (i *Interpreter) SetStdout(w io.Writer) {

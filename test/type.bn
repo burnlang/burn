@@ -13,6 +13,6 @@ fun createPerson(name: string, age: int): Person {
     }
 }
 
-//print the created person
+//println the created person
 var person = createPerson("John", 30)
-print("Person name: " + person.name)
+println("Person name: " + person.name)
