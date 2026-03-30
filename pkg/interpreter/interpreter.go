@@ -2,14 +2,15 @@ package interpreter
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/burnlang/burn/pkg/ast"
 	"github.com/burnlang/burn/pkg/lexer"
 	"github.com/burnlang/burn/pkg/parser"
-	"github.com/burnlang/burn/pkg/stdlib"
 )
 
 type Interpreter struct {
@@ -20,6 +21,8 @@ type Interpreter struct {
 	errorPos    int
 
 	importedModules map[string]bool
+
+	stdout io.Writer
 }
 
 type Environment struct {
@@ -40,77 +43,79 @@ func New() *Interpreter {
 		functions:       make(map[string]*ast.FunctionDeclaration),
 		types:           make(map[string]*ast.TypeDefinition),
 		classes:         make(map[string]*Class),
-		errorPos:        0,
 		importedModules: make(map[string]bool),
+		stdout:          os.Stdout,
 	}
 	i.addBuiltins()
 	return i
 }
 
-func (i *Interpreter) RegisterBuiltinStandardLibraries() {
-
-	i.registerDateLibrary()
-	i.registerHTTPLibrary()
-	i.registerTimeLibrary()
-
-	for name, lib := range stdlib.StdLibFiles {
-		if name == "date" || name == "http" || name == "time" {
-
-			continue
-		}
-		_ = i.interpretStdLib(name, lib)
-	}
-}
-
 func (i *Interpreter) Interpret(program *ast.Program) (Value, error) {
+	var result Value
 
 	for _, decl := range program.Declarations {
 		if typeDef, ok := decl.(*ast.TypeDefinition); ok {
 			i.types[typeDef.Name] = typeDef
 		} else if classDef, ok := decl.(*ast.ClassDeclaration); ok {
-			class := NewClass(classDef.Name)
+
+			class := &Class{
+				Name:    classDef.Name,
+				Methods: make(map[string]*ast.FunctionDeclaration),
+				Statics: make(map[string]*ast.FunctionDeclaration),
+			}
+
 			for _, method := range classDef.Methods {
-				class.AddMethod(method.Name, method)
+				class.Methods[method.Name] = method
+				class.Statics[method.Name] = method
 			}
+
 			for _, method := range classDef.StaticMethods {
-				class.AddStatic(method.Name, method)
+				class.Statics[method.Name] = method
 			}
+
 			i.classes[classDef.Name] = class
+			i.environment[classDef.Name] = class
 		}
 	}
 
-	i.addBuiltins()
-
-	i.RegisterBuiltinStandardLibraries()
-
 	for _, decl := range program.Declarations {
-		if fn, ok := decl.(*ast.FunctionDeclaration); ok {
-			i.functions[fn.Name] = fn
-		}
 		if imp, ok := decl.(*ast.ImportDeclaration); ok {
 			if err := i.handleImport(imp); err != nil {
 				return nil, err
 			}
+			continue
 		}
+
 		if multiImp, ok := decl.(*ast.MultiImportDeclaration); ok {
 			for _, imp := range multiImp.Imports {
 				if err := i.handleImport(imp); err != nil {
 					return nil, err
 				}
 			}
+			continue
 		}
-	}
 
-	if mainFn, exists := i.functions["main"]; exists {
-		return i.executeFunction(mainFn, []Value{})
-	}
+		if _, ok := decl.(*ast.ClassDeclaration); ok {
+			continue
+		}
+		if _, ok := decl.(*ast.TypeDefinition); ok {
+			continue
+		}
 
-	var result Value
-	for _, decl := range program.Declarations {
-		var err error
-		result, err = i.executeDeclaration(decl)
+		val, err := i.executeDeclaration(decl)
 		if err != nil {
 			return nil, err
+		}
+		result = val
+	}
+
+	if mainFunc, exists := i.functions["main"]; exists {
+		mainResult, err := i.executeFunction(mainFunc, []Value{})
+		if err != nil {
+			return nil, fmt.Errorf("error in main function: %v", err)
+		}
+		if mainResult != nil {
+			result = mainResult
 		}
 	}
 
@@ -132,162 +137,85 @@ func (i *Interpreter) handleImport(imp *ast.ImportDeclaration) error {
 
 		switch basename {
 		case "date":
-			i.registerDateLibrary()
+
 			return nil
 		case "http":
-			i.registerHTTPLibrary()
+
 			return nil
 		case "time":
-			i.registerTimeLibrary()
+
 			return nil
+		default:
+			return fmt.Errorf("unknown standard library: %s", basename)
 		}
 	}
 
 	if strings.HasSuffix(libName, ".bn") || !strings.Contains(libName, ".") {
-		path := libName
-
-		if !strings.HasSuffix(path, ".bn") {
-			path = path + ".bn"
-		}
-
-		workingDir, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("error getting current directory: %v", err)
-		}
-
-		searchPaths := []string{
-			path,
-			filepath.Join(workingDir, path),
-			filepath.Join("src", "lib", "std", path),
-			filepath.Join("src", "lib", path),
-			filepath.Join("src", "lib", "std", strings.TrimSuffix(path, ".bn")+".bn"),
-			filepath.Join("src", "lib", strings.TrimSuffix(path, ".bn")+".bn"),
-
-			filepath.Join("test", strings.TrimPrefix(path, "test/")),
-		}
-
-		var source []byte
-		var foundPath string
-
-		for _, searchPath := range searchPaths {
-			source, err = os.ReadFile(searchPath)
-			if err == nil {
-				foundPath = searchPath
-				break
-			}
-		}
-
-		if foundPath == "" {
-			baseName := filepath.Base(strings.TrimSuffix(libName, ".bn"))
-			if lib, exists := stdlib.StdLibFiles[baseName]; exists {
-				switch baseName {
-				case "date":
-					i.registerDateLibrary()
-					return nil
-				case "http":
-					i.registerHTTPLibrary()
-					return nil
-				case "time":
-					i.registerTimeLibrary()
-					return nil
-				default:
-					return i.interpretStdLib(baseName, lib)
-				}
-			}
-
-			return fmt.Errorf("could not find import file: %s (tried paths: %v)", libName, searchPaths)
-		}
-
-		l := lexer.New(string(source))
-		tokens, err := l.Tokenize()
-		if err != nil {
-			return fmt.Errorf("lexical error in import %s: %v", foundPath, err)
-		}
-
-		p := parser.New(tokens)
-		program, err := p.Parse()
-		if err != nil {
-			return fmt.Errorf("parse error in import %s: %v", foundPath, err)
-		}
-
-		importInterpreter := New()
-		importInterpreter.addBuiltins()
-		importInterpreter.RegisterBuiltinStandardLibraries()
-
-		for mod := range i.importedModules {
-			importInterpreter.importedModules[mod] = true
-		}
-
-		_, err = importInterpreter.Interpret(program)
-		if err != nil {
-			return fmt.Errorf("error interpreting import %s: %v", foundPath, err)
-		}
-
-		for name, typeDef := range importInterpreter.types {
-			i.types[name] = typeDef
-		}
-
-		for name, fn := range importInterpreter.functions {
-			if name != "main" {
-				i.functions[name] = fn
-			}
-		}
-
-		for name, class := range importInterpreter.classes {
-			i.classes[name] = class
-		}
-
-		for name, value := range importInterpreter.environment {
-			if _, exists := i.environment[name]; !exists {
-				i.environment[name] = value
-			}
-		}
-
-		return nil
-	}
-
-	basename := filepath.Base(libName)
-	if strings.HasSuffix(basename, ".bn") {
-		basename = strings.TrimSuffix(basename, ".bn")
-	}
-
-	if lib, exists := stdlib.StdLibFiles[basename]; exists {
-		switch basename {
-		case "date":
-			i.registerDateLibrary()
-		case "http":
-			i.registerHTTPLibrary()
-		case "time":
-			i.registerTimeLibrary()
-		default:
-			return i.interpretStdLib(basename, lib)
-		}
-		return nil
+		return i.handleFileImport(libName)
 	}
 
 	return fmt.Errorf("could not find import: %s", imp.Path)
 }
 
-func (i *Interpreter) interpretStdLib(name, source string) error {
-	l := lexer.New(source)
+func (i *Interpreter) handleFileImport(libName string) error {
+	path := libName
+	if !strings.HasSuffix(path, ".bn") {
+		path = path + ".bn"
+	}
+
+	workingDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("error getting current directory: %v", err)
+	}
+
+	searchPaths := []string{
+		path,
+		filepath.Join(workingDir, path),
+		filepath.Join("test", path),
+		filepath.Join("src", path),
+		filepath.Join(".", path),
+	}
+
+	var source []byte
+	var foundPath string
+
+	for _, searchPath := range searchPaths {
+		source, err = os.ReadFile(searchPath)
+		if err == nil {
+			foundPath = searchPath
+			break
+		}
+	}
+
+	if foundPath == "" {
+		return fmt.Errorf("could not find import file: %s (tried paths: %v)", libName, searchPaths)
+	}
+
+	l := lexer.New(string(source))
 	tokens, err := l.Tokenize()
 	if err != nil {
-		return err
+		return fmt.Errorf("lexical error in import %s: %v", foundPath, err)
 	}
 
 	p := parser.New(tokens)
 	program, err := p.Parse()
 	if err != nil {
-		return err
+		return fmt.Errorf("parse error in import %s: %v", foundPath, err)
 	}
 
 	importInterpreter := New()
-	importInterpreter.addBuiltins()
-	importInterpreter.RegisterBuiltinStandardLibraries()
+
+	for mod := range i.importedModules {
+		importInterpreter.importedModules[mod] = true
+	}
 
 	_, err = importInterpreter.Interpret(program)
 	if err != nil {
-		return err
+		return fmt.Errorf("error interpreting import %s: %v", foundPath, err)
+	}
+
+	for name, typeDef := range importInterpreter.types {
+		i.types[name] = typeDef
 	}
 
 	for name, fn := range importInterpreter.functions {
@@ -310,123 +238,69 @@ func (i *Interpreter) interpretStdLib(name, source string) error {
 }
 
 func (i *Interpreter) executeDeclaration(decl ast.Declaration) (Value, error) {
-	if decl != nil {
-		i.setErrorPos(decl.Pos())
-	}
-
 	switch d := decl.(type) {
-	case *ast.ClassDeclaration:
-		return nil, nil
-	case *ast.TypeDefinition:
-		return nil, nil
 	case *ast.FunctionDeclaration:
 		i.functions[d.Name] = d
 		return nil, nil
+
 	case *ast.VariableDeclaration:
+		var value Value
 		if d.Value != nil {
-			value, err := i.evaluateExpression(d.Value)
+			val, err := i.evaluateExpression(d.Value)
 			if err != nil {
 				return nil, err
 			}
-			i.environment[d.Name] = value
+			value = val
 		}
+		i.environment[d.Name] = value
+		return value, nil
+
+	case *ast.ClassDeclaration:
+
+		class := &Class{
+			Name:    d.Name,
+			Methods: make(map[string]*ast.FunctionDeclaration),
+			Statics: make(map[string]*ast.FunctionDeclaration),
+		}
+
+		for _, method := range d.Methods {
+			class.Methods[method.Name] = method
+			class.Statics[method.Name] = method 
+		}
+
+		for _, method := range d.StaticMethods {
+			class.Statics[method.Name] = method
+		}
+
+		i.classes[d.Name] = class
+		i.environment[d.Name] = class
+		return class, nil
+
+	case *ast.TypeDefinition:
+		i.types[d.Name] = d
 		return nil, nil
+
 	case *ast.ExpressionStatement:
 		return i.evaluateExpression(d.Expression)
+
 	case *ast.ReturnStatement:
-		if d.Value == nil {
-			return nil, nil
+		if d.Value != nil {
+			return i.evaluateExpression(d.Value)
 		}
-		return i.evaluateExpression(d.Value)
+		return nil, nil
+
 	case *ast.IfStatement:
-		condition, err := i.evaluateExpression(d.Condition)
-		if err != nil {
-			return nil, err
-		}
+		return i.executeIfStatement(d)
 
-		if cond, ok := condition.(bool); ok {
-			if cond {
-				for _, stmt := range d.ThenBranch {
-					result, err := i.executeDeclaration(stmt)
-					if err != nil {
-						return nil, err
-					}
-					if _, ok := stmt.(*ast.ReturnStatement); ok {
-						return result, nil
-					}
-				}
-			} else if d.ElseBranch != nil {
-				for _, stmt := range d.ElseBranch {
-					result, err := i.executeDeclaration(stmt)
-					if err != nil {
-						return nil, err
-					}
-					if _, ok := stmt.(*ast.ReturnStatement); ok {
-						return result, nil
-					}
-				}
-			}
-		}
-		return nil, nil
 	case *ast.WhileStatement:
-		for {
-			condition, err := i.evaluateExpression(d.Condition)
-			if err != nil {
-				return nil, err
-			}
+		return i.executeWhileStatement(d)
 
-			if cond, ok := condition.(bool); ok && cond {
-				for _, stmt := range d.Body {
-					result, err := i.executeDeclaration(stmt)
-					if err != nil {
-						return nil, err
-					}
-					if _, ok := stmt.(*ast.ReturnStatement); ok {
-						return result, nil
-					}
-				}
-			} else {
-				break
-			}
-		}
-		return nil, nil
 	case *ast.ForStatement:
-		if d.Initializer != nil {
-			_, err := i.executeDeclaration(d.Initializer)
-			if err != nil {
-				return nil, err
-			}
-		}
+		return i.executeForStatement(d)
 
-		for {
-			if d.Condition != nil {
-				condition, err := i.evaluateExpression(d.Condition)
-				if err != nil {
-					return nil, err
-				}
-				if cond, ok := condition.(bool); !ok || !cond {
-					break
-				}
-			}
+	case *ast.BlockStatement:
+		return i.executeBlockStatement(d)
 
-			for _, stmt := range d.Body {
-				result, err := i.executeDeclaration(stmt)
-				if err != nil {
-					return nil, err
-				}
-				if _, ok := stmt.(*ast.ReturnStatement); ok {
-					return result, nil
-				}
-			}
-
-			if d.Increment != nil {
-				_, err := i.evaluateExpression(d.Increment)
-				if err != nil {
-					return nil, err
-				}
-			}
-		}
-		return nil, nil
 	default:
 		return nil, fmt.Errorf("unknown declaration type: %T", decl)
 	}
@@ -512,4 +386,173 @@ func (i *Interpreter) AddVariable(name string, value interface{}) {
 	if _, exists := i.environment[name]; !exists {
 		i.environment[name] = value
 	}
+}
+
+func (i *Interpreter) callBuiltinFunction(name string, args []interface{}) (interface{}, error) {
+	switch name {
+	case "print":
+
+		if len(args) == 0 {
+			fmt.Fprintln(i.stdout)
+			return nil, nil
+		}
+
+		var output strings.Builder
+		for j, arg := range args {
+			if j > 0 {
+				output.WriteString(" ")
+			}
+
+			switch v := arg.(type) {
+			case string:
+				output.WriteString(v)
+			case int:
+				output.WriteString(strconv.Itoa(v))
+			case int64:
+				output.WriteString(strconv.FormatInt(v, 10))
+			case float64:
+				output.WriteString(strconv.FormatFloat(v, 'f', -1, 64))
+			case bool:
+				output.WriteString(strconv.FormatBool(v))
+			case nil:
+				output.WriteString("null")
+			default:
+				if stringer, ok := v.(interface{ String() string }); ok {
+					output.WriteString(stringer.String())
+				} else {
+					output.WriteString(fmt.Sprintf("%v", v))
+				}
+			}
+		}
+
+		fmt.Fprintln(i.stdout, output.String())
+
+		return nil, nil
+
+	}
+
+	return nil, fmt.Errorf("unknown builtin function: %s", name)
+}
+
+func (i *Interpreter) executeIfStatement(stmt *ast.IfStatement) (Value, error) {
+	condition, err := i.evaluateExpression(stmt.Condition)
+	if err != nil {
+		return nil, err
+	}
+
+	if i.isTruthy(condition) {
+		return i.executeStatements(stmt.ThenBranch)
+	} else if len(stmt.ElseBranch) > 0 {
+		return i.executeStatements(stmt.ElseBranch)
+	}
+	return nil, nil
+}
+
+func (i *Interpreter) executeWhileStatement(stmt *ast.WhileStatement) (Value, error) {
+	var result Value
+	for {
+		condition, err := i.evaluateExpression(stmt.Condition)
+		if err != nil {
+			return nil, err
+		}
+
+		if !i.isTruthy(condition) {
+			break
+		}
+
+		result, err = i.executeStatements(stmt.Body)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func (i *Interpreter) executeForStatement(stmt *ast.ForStatement) (Value, error) {
+	prevEnv := make(map[string]Value)
+	for k, v := range i.environment {
+		prevEnv[k] = v
+	}
+
+	var result Value
+	var err error
+
+	if stmt.Initializer != nil {
+		_, err = i.executeDeclaration(stmt.Initializer)
+		if err != nil {
+			i.environment = prevEnv
+			return nil, err
+		}
+	}
+
+	for {
+		if stmt.Condition != nil {
+			condition, err := i.evaluateExpression(stmt.Condition)
+			if err != nil {
+				i.environment = prevEnv
+				return nil, err
+			}
+			if !i.isTruthy(condition) {
+				break
+			}
+		}
+
+		result, err = i.executeStatements(stmt.Body)
+		if err != nil {
+			i.environment = prevEnv
+			return nil, err
+		}
+
+		if stmt.Increment != nil {
+			_, err = i.evaluateExpression(stmt.Increment)
+			if err != nil {
+				i.environment = prevEnv
+				return nil, err
+			}
+		}
+	}
+
+	for k, v := range prevEnv {
+		if _, exists := i.environment[k]; !exists || i.environment[k] != v {
+			i.environment[k] = v
+		}
+	}
+
+	return result, nil
+}
+
+func (i *Interpreter) executeBlockStatement(stmt *ast.BlockStatement) (Value, error) {
+	return i.executeStatements(stmt.Statements)
+}
+
+func (i *Interpreter) executeStatements(statements []ast.Declaration) (Value, error) {
+	var result Value
+	for _, stmt := range statements {
+		val, err := i.executeDeclaration(stmt)
+		if err != nil {
+			return nil, err
+		}
+		result = val
+	}
+	return result, nil
+}
+
+func (i *Interpreter) isTruthy(value Value) bool {
+	if value == nil {
+		return false
+	}
+	if b, ok := value.(bool); ok {
+		return b
+	}
+	if f, ok := value.(float64); ok {
+		return f != 0
+	}
+	if s, ok := value.(string); ok {
+		return s != ""
+	}
+	return true
+}
+
+func (i *Interpreter) SetStdout(w io.Writer) {
+	i.stdout = w
 }

@@ -11,5 +11,5 @@ import "test/utils.bn"
 //main fun with using the imported functions
 fun main() {
     var num = power(2, 3)    // Uses imported power function
-    print("2^3 = " + toString(num))
+    println("2^3 = " + toString(num))
 }

@@ -7,7 +7,6 @@ import (
 	"github.com/burnlang/burn/pkg/ast"
 )
 
-
 func (i *Interpreter) registerTimeLibrary() {
 	timeClass := NewClass("Time")
 
@@ -46,6 +45,7 @@ func (i *Interpreter) registerTimeLibrary() {
 		Name: "Time.now",
 		Fn: func(args []Value) (Value, error) {
 			return time.Now(), nil
+		},
 	}
 
 	i.environment["Time.sleep"] = &BuiltinFunction{
@@ -88,7 +88,7 @@ func (i *Interpreter) registerTimeLibrary() {
 		},
 	}
 
-	
+	// Create aliases for direct access
 	i.environment["now"] = i.environment["Time.now"]
 	i.environment["sleep"] = i.environment["Time.sleep"]
 	i.environment["timestamp"] = i.environment["Time.timestamp"]

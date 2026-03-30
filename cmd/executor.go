@@ -84,6 +84,7 @@ func execute(source string, debug bool, stdout io.Writer) (interface{}, error) {
 	}
 
 	interpreter := interpreter.New()
+	interpreter.SetStdout(stdout)
 	result, err := interpreter.Interpret(program)
 	if err != nil {
 		return nil, formattedError("Runtime error", err, source, interpreter.Position())

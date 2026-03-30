@@ -165,6 +165,18 @@ func (t *TypeChecker) checkCallExpression(expr *ast.CallExpression) (string, err
 			className := classNameExpr.Name
 			methodName := getExpr.Name
 
+			if _, exists := t.classes[className]; exists {
+				classMethodCall := &ast.ClassMethodCallExpression{
+					ClassName:  className,
+					MethodName: methodName,
+					Arguments:  expr.Arguments,
+					IsStatic:   true,
+					Position:   expr.Position,
+				}
+
+				return t.checkClassMethodCallExpression(classMethodCall)
+			}
+
 			classMethodCall := &ast.ClassMethodCallExpression{
 				ClassName:  className,
 				MethodName: methodName,
@@ -177,27 +189,6 @@ func (t *TypeChecker) checkCallExpression(expr *ast.CallExpression) (string, err
 		}
 	}
 
-	if getExpr, ok := expr.Callee.(*ast.GetExpression); ok {
-
-		if classExpr, ok := getExpr.Object.(*ast.VariableExpression); ok {
-			className := classExpr.Name
-			methodName := getExpr.Name
-
-			if _, exists := t.classes[className]; exists {
-
-				classMethodCall := &ast.ClassMethodCallExpression{
-					ClassName:  className,
-					MethodName: methodName,
-					Arguments:  expr.Arguments,
-					IsStatic:   true,
-					Position:   expr.Position,
-				}
-
-				return t.checkClassMethodCallExpression(classMethodCall)
-			}
-		}
-	}
-
 	callee, ok := expr.Callee.(*ast.VariableExpression)
 	if !ok {
 		return "", fmt.Errorf("callee is not a function name")
@@ -206,6 +197,22 @@ func (t *TypeChecker) checkCallExpression(expr *ast.CallExpression) (string, err
 	fn, exists := t.functions[callee.Name]
 	if !exists {
 		return "", fmt.Errorf("undefined function: %s", callee.Name)
+	}
+
+	if callee.Name == "input" {
+		if len(expr.Arguments) > 1 {
+			return "", fmt.Errorf("function input expects 0 or 1 arguments but got %d", len(expr.Arguments))
+		}
+		if len(expr.Arguments) == 1 {
+			argType, err := t.checkExpression(expr.Arguments[0])
+			if err != nil {
+				return "", err
+			}
+			if argType != "string" {
+				return "", fmt.Errorf("argument 1 of function input expects string but got %s", argType)
+			}
+		}
+		return fn.ReturnType, nil
 	}
 
 	if len(expr.Arguments) != len(fn.Parameters) {
@@ -259,6 +266,10 @@ func (t *TypeChecker) checkGetExpression(expr *ast.GetExpression) (string, error
 	objectType, err := t.checkExpression(expr.Object)
 	if err != nil {
 		return "", err
+	}
+
+	if objectType == "object" {
+		return "any", nil
 	}
 
 	typeDef, exists := t.types[objectType]

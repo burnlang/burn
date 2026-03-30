@@ -43,8 +43,17 @@ func (p *Parser) importDeclaration() (ast.Declaration, error) {
 			path := p.previous().Value
 			processedPath := p.processImportPath(path)
 
+			alias := ""
+			if p.match(lexer.TokenAs) {
+				if !p.check(lexer.TokenIdentifier) {
+					return nil, fmt.Errorf("expected alias name after 'as' at line %d", p.peek().Line)
+				}
+				alias = p.advance().Value
+			}
+
 			imports = append(imports, &ast.ImportDeclaration{
-				Path: processedPath,
+				Path:  processedPath,
+				Alias: alias,
 			})
 		}
 
@@ -64,16 +73,31 @@ func (p *Parser) importDeclaration() (ast.Declaration, error) {
 	path := p.previous().Value
 	processedPath := p.processImportPath(path)
 
+	alias := ""
+	if p.match(lexer.TokenAs) {
+		if !p.check(lexer.TokenIdentifier) {
+			return nil, fmt.Errorf("expected alias name after 'as' at line %d", p.peek().Line)
+		}
+		alias = p.advance().Value
+	}
+
 	return &ast.ImportDeclaration{
-		Path: processedPath,
+		Path:  processedPath,
+		Alias: alias,
 	}, nil
 }
 
 func (p *Parser) processImportPath(path string) string {
 	trimmedPath := strings.Trim(path, "\"")
 
+	if strings.HasPrefix(trimmedPath, "std/") ||
+		(!strings.Contains(trimmedPath, "/") && !strings.Contains(trimmedPath, "\\") &&
+			(trimmedPath == "date" || trimmedPath == "http" || trimmedPath == "time")) {
+		return trimmedPath
+	}
+
 	if !strings.Contains(trimmedPath, "/") && !strings.Contains(trimmedPath, "\\") {
-		return "src/lib/std/" + trimmedPath + ".bn"
+		return trimmedPath + ".bn"
 	}
 
 	if strings.HasSuffix(trimmedPath, ".bn") {

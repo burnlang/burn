@@ -17,7 +17,7 @@ var httpHeaders = map[string]string{
 }
 
 func (i *Interpreter) registerHTTPLibrary() {
-	
+
 	i.types["HTTPResponse"] = &ast.TypeDefinition{
 		Name: "HTTPResponse",
 		Fields: []ast.TypeField{
@@ -68,7 +68,6 @@ func (i *Interpreter) registerHTTPLibrary() {
 	i.classes["HTTP"] = httpClass
 	i.environment["HTTP"] = httpClass
 
-	
 	i.environment["HTTP.get"] = &BuiltinFunction{
 		Name: "HTTP.get",
 		Fn:   i.httpGet,
@@ -98,7 +97,6 @@ func (i *Interpreter) registerHTTPLibrary() {
 		Fn:   i.httpSetHeaders,
 	}
 
-	
 	i.environment["get"] = i.environment["HTTP.get"]
 	i.environment["post"] = i.environment["HTTP.post"]
 	i.environment["put"] = i.environment["HTTP.put"]
@@ -145,13 +143,10 @@ func (i *Interpreter) httpGet(args []Value) (Value, error) {
 		}
 	}
 
-	return &Struct{
-		TypeName: "HTTPResponse",
-		Fields: map[string]interface{}{
-			"statusCode": resp.StatusCode,
-			"body":       string(body),
-			"headers":    headers,
-		},
+	return map[string]interface{}{
+		"statusCode": float64(resp.StatusCode),
+		"body":       string(body),
+		"headers":    headers,
 	}, nil
 }
 
@@ -196,13 +191,10 @@ func (i *Interpreter) httpPost(args []Value) (Value, error) {
 		}
 	}
 
-	return &Struct{
-		TypeName: "HTTPResponse",
-		Fields: map[string]interface{}{
-			"statusCode": resp.StatusCode,
-			"body":       string(body),
-			"headers":    headers,
-		},
+	return map[string]interface{}{
+		"statusCode": float64(resp.StatusCode),
+		"body":       string(body),
+		"headers":    headers,
 	}, nil
 }
 
@@ -247,13 +239,10 @@ func (i *Interpreter) httpPut(args []Value) (Value, error) {
 		}
 	}
 
-	return &Struct{
-		TypeName: "HTTPResponse",
-		Fields: map[string]interface{}{
-			"statusCode": resp.StatusCode,
-			"body":       string(body),
-			"headers":    headers,
-		},
+	return map[string]interface{}{
+		"statusCode": float64(resp.StatusCode),
+		"body":       string(body),
+		"headers":    headers,
 	}, nil
 }
 
@@ -294,13 +283,10 @@ func (i *Interpreter) httpDelete(args []Value) (Value, error) {
 		}
 	}
 
-	return &Struct{
-		TypeName: "HTTPResponse",
-		Fields: map[string]interface{}{
-			"statusCode": resp.StatusCode,
-			"body":       string(body),
-			"headers":    headers,
-		},
+	return map[string]interface{}{
+		"statusCode": float64(resp.StatusCode),
+		"body":       string(body),
+		"headers":    headers,
 	}, nil
 }
 
@@ -308,64 +294,69 @@ func (i *Interpreter) httpSetHeaders(args []Value) (Value, error) {
 	if len(args) != 1 {
 		return nil, fmt.Errorf("HTTP.setHeaders expects exactly one array argument")
 	}
-	headerArray, ok := args[0].([]Value)
+
+	headers, ok := args[0].([]Value)
 	if !ok {
-		return nil, fmt.Errorf("HTTP.setHeaders expects an array of header strings")
+		return nil, fmt.Errorf("HTTP.setHeaders expects an array of strings")
 	}
 
-	newHeaders := make(map[string]string)
-	for _, hv := range headerArray {
-		headerStr, ok := hv.(string)
+	httpHeaders = make(map[string]string)
+
+	for _, header := range headers {
+		headerStr, ok := header.(string)
 		if !ok {
-			return nil, fmt.Errorf("each header must be a string")
+			return nil, fmt.Errorf("HTTP.setHeaders expects an array of strings")
 		}
+
 		parts := strings.SplitN(headerStr, ":", 2)
 		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid header format: %s", headerStr)
+			return nil, fmt.Errorf("Invalid header format: %s", headerStr)
 		}
-		name := strings.TrimSpace(parts[0])
+
+		key := strings.TrimSpace(parts[0])
 		value := strings.TrimSpace(parts[1])
-		newHeaders[name] = value
+		httpHeaders[key] = value
 	}
 
-	httpHeaders = newHeaders
 	return true, nil
 }
 
 func (i *Interpreter) httpGetHeader(args []Value) (Value, error) {
 	if len(args) != 2 {
-		return nil, fmt.Errorf("HTTP.getHeader expects exactly two arguments")
-	}
-	respObj, ok := args[0].(*Struct)
-	if !ok || respObj.TypeName != "HTTPResponse" {
-		return nil, fmt.Errorf("HTTP.getHeader expects an HTTPResponse as first argument")
-	}
-	headerName, ok := args[1].(string)
-	if !ok {
-		return nil, fmt.Errorf("HTTP.getHeader expects a string header name")
+		return nil, fmt.Errorf("HTTP.getHeader expects exactly two arguments (response, headerName)")
 	}
 
-	headers, ok := respObj.Fields["headers"].([]Value)
+	response, ok := args[0].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("HTTP.getHeader expects an HTTPResponse as first argument")
+	}
+
+	headerName, ok := args[1].(string)
+	if !ok {
+		return nil, fmt.Errorf("HTTP.getHeader expects a string header name as second argument")
+	}
+
+	headers, ok := response["headers"].([]Value)
 	if !ok {
 		return "", nil
 	}
 
-	headerName = strings.ToLower(headerName)
-	for _, h := range headers {
-		headerStr, ok := h.(string)
+	for _, header := range headers {
+		headerStr, ok := header.(string)
 		if !ok {
 			continue
 		}
+
 		parts := strings.SplitN(headerStr, ":", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		name := strings.ToLower(strings.TrimSpace(parts[0]))
-		value := strings.TrimSpace(parts[1])
-		if name == headerName {
-			return value, nil
+		if len(parts) == 2 {
+			key := strings.TrimSpace(parts[0])
+			value := strings.TrimSpace(parts[1])
+			if strings.ToLower(key) == strings.ToLower(headerName) {
+				return value, nil
+			}
 		}
 	}
+
 	return "", nil
 }
 
@@ -389,29 +380,26 @@ func (i *Interpreter) httpParseJSON(args []Value) (Value, error) {
 
 func convertJSONToBurn(value interface{}) Value {
 	switch v := value.(type) {
-	case map[string]interface{}:
-		fields := make(map[string]interface{})
-		for key, val := range v {
-			fields[key] = convertJSONToBurn(val)
-		}
-		return &Struct{
-			TypeName: "Object",
-			Fields:   fields,
-		}
-	case []interface{}:
-		array := make([]Value, len(v))
-		for i, val := range v {
-			array[i] = convertJSONToBurn(val)
-		}
-		return array
-	case string:
+	case nil:
+		return nil
+	case bool:
 		return v
 	case float64:
 		return v
-	case bool:
+	case string:
 		return v
-	case nil:
-		return nil
+	case []interface{}:
+		arr := make([]Value, len(v))
+		for i, item := range v {
+			arr[i] = convertJSONToBurn(item)
+		}
+		return arr
+	case map[string]interface{}:
+		obj := make(map[string]interface{})
+		for key, val := range v {
+			obj[key] = convertJSONToBurn(val)
+		}
+		return obj
 	default:
 		return fmt.Sprintf("%v", v)
 	}

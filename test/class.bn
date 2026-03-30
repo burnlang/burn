@@ -39,9 +39,10 @@ class Dog {
 }
 //at the main function that triggers the classes
 fun main() {
-    var john = Human.create("John", 30)
-    print(Human.greet(john))
+    //var john = Human.create("John", 30)
+    var ren = Human.create("Ren", 17)
+    println(Human.greet(ren))
     
     var rex = Dog.create("Rex", "Golden Retriever")
-    print(Dog.bark(rex))
+    println(Dog.bark(rex))
 }

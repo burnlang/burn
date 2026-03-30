@@ -50,6 +50,7 @@ const (
 	TokenModulo
 	TokenClass
 	TokenTypeVoid
+	TokenAs
 )
 
 type Token struct {
@@ -80,5 +81,6 @@ func GetKeywords() map[string]TokenType {
 		"import": TokenImport,
 		"class":  TokenClass,
 		"void":   TokenTypeVoid,
+		"as":     TokenAs,
 	}
 }

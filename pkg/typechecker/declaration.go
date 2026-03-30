@@ -296,10 +296,11 @@ func (t *TypeChecker) checkReturnStatement(stmt *ast.ReturnStatement) error {
 				}
 			}
 		} else if len(parts) == 2 {
-
 			className, methodName := parts[0], parts[1]
 			if classMethods, exists := t.classes[className]; exists {
-				if fn, exists := classMethods[methodName]; exists {
+				if fn, exists := classMethods["static."+methodName]; exists {
+					expectedType = fn.ReturnType
+				} else if fn, exists := classMethods[methodName]; exists {
 					expectedType = fn.ReturnType
 				}
 			}
