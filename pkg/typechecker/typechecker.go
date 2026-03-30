@@ -160,7 +160,8 @@ func (t *TypeChecker) registerClass(class *ast.ClassDeclaration) error {
 	t.types[class.Name] = make(map[string]string)
 
 	for _, method := range class.Methods {
-		if _, exists := classMethods[method.Name]; exists {
+		methodKey := "static." + method.Name
+		if _, exists := classMethods[methodKey]; exists {
 			return fmt.Errorf("method %s is already defined in class %s", method.Name, class.Name)
 		}
 
@@ -169,7 +170,7 @@ func (t *TypeChecker) registerClass(class *ast.ClassDeclaration) error {
 			paramTypes[i] = param.Type
 		}
 
-		classMethods[method.Name] = FunctionType{
+		classMethods[methodKey] = FunctionType{
 			Parameters: paramTypes,
 			ReturnType: method.ReturnType,
 		}
