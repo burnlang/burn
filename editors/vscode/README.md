@@ -20,5 +20,5 @@ Install Burn and make sure `burn` is on your `PATH`, or set `burn.path` in the s
 cd editors/vscode
 npm install
 npx vsce package
-code --install-extension burn-language-server-2.0.0.vsix
+code --install-extension burn-language-server-26.1.0.vsix
 ```
