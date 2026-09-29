@@ -66,6 +66,16 @@ fn flush_locked(o: &mut Vec<u8>) {
     o.clear();
 }
 
+pub fn flush_for_signal() {
+    if let Ok(mut o) = OUT.try_lock() {
+        if !o.is_empty() {
+            let _ = std::io::stdout().write_all(&o);
+            let _ = std::io::stdout().flush();
+            o.clear();
+        }
+    }
+}
+
 pub fn flush() {
     let mut o = OUT.lock().unwrap_or_else(|e| e.into_inner());
     flush_locked(&mut o);

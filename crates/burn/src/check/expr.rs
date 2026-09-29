@@ -992,12 +992,20 @@ impl<'a> Checker<'a> {
                 }
                 if let Some(st) = self.fx.last().and_then(|c| c.self_ty) {
                     if let Some(rec) = self.types.record_of(st) {
-                        if let Some(fid) = rec.methods.get(name).copied() {
-                            let s = Expr::new(ExprKind::Local(0), st);
-                            return self.direct_call(fid, Some(s), args, span, callee.span);
+                        let method = rec.methods.get(name).copied();
+                        let stat = rec.statics.get(name).copied();
+                        let m = self.cur_module();
+                        let has_outer = builtins::is_builtin(name) || self.lookup_value_entry(m, name).is_some();
+                        if let Some(fid) = method {
+                            if !has_outer || self.funcs[fid as usize].params.len() == args.len() + 1 {
+                                let s = Expr::new(ExprKind::Local(0), st);
+                                return self.direct_call(fid, Some(s), args, span, callee.span);
+                            }
                         }
-                        if let Some(fid) = rec.statics.get(name).copied() {
-                            return self.direct_call(fid, None, args, span, callee.span);
+                        if let Some(fid) = stat {
+                            if !has_outer || self.funcs[fid as usize].params.len() == args.len() {
+                                return self.direct_call(fid, None, args, span, callee.span);
+                            }
                         }
                     }
                     if self.self_field(name).is_some() {

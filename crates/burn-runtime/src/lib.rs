@@ -9,6 +9,7 @@ pub mod io;
 pub mod json;
 pub mod meta;
 pub mod obj;
+pub mod signal;
 pub mod task;
 pub mod time;
 

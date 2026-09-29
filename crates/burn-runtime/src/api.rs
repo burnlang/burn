@@ -880,6 +880,7 @@ pub fn rt_init(meta_ptr: u64, meta_len: u64, globals: u64, nglobals: u64, stack_
         gc::add_root_range(globals as usize, nglobals as usize);
     }
     gc::set_stack_base(stack_base as usize);
+    crate::signal::install(stack_base as usize);
     TRAMPOLINE.store(trampoline as usize, Ordering::SeqCst);
     0
 }
