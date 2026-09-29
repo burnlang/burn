@@ -1,0 +1,7 @@
+def annotation Route {
+    string path
+}
+
+@Route
+fun handler() {
+}

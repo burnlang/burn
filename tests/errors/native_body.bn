@@ -1,0 +1,5 @@
+fun now(): int
+
+fun main() {
+    print(now())
+}

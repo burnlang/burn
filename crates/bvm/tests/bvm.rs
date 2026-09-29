@@ -314,3 +314,208 @@ fn command_line_tool_assembles_runs_and_disassembles() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("pop needs 1 values"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+const LIB: &str = r#"
+module greetlib
+type Point = record { x: int, y: int }
+
+func greet(name: string): string
+    str "hello "
+    load name
+    rt str_concat
+    ret
+end
+
+func make(x: int): Point
+    load x
+    load x
+    new Point
+    ret
+end
+
+func secret(): int
+    const 7
+    ret
+end
+"#;
+
+const APP: &str = r#"
+module app
+type Point = record { x: int, y: int }
+extern func greet(name: string): string
+extern func "greetlib::make"(x: int): Point
+
+func main(): int
+    str "bvm"
+    call greet
+    pop
+    const 2
+    call "greetlib::make"
+    getf Point.y
+    ret
+end
+"#;
+
+fn link_src(srcs: &[&str]) -> Result<bvm::Module, String> {
+    let ms: Vec<bvm::Module> = srcs.iter().map(|s| assemble(s).unwrap_or_else(|e| panic!("{}", e))).collect();
+    bvm::link(&ms)
+}
+
+#[test]
+fn linker_resolves_externs_and_merges_types() {
+    let m = link_src(&[APP, LIB]).unwrap();
+    assert!(m.funcs.iter().all(|f| !f.external));
+    let points = m.types.iter().filter(|d| matches!(d, Desc::Record { name, .. } if name == "Point")).count();
+    assert_eq!(points, 1, "identical record types are merged");
+    assert_eq!(m.name, "app");
+    assert_eq!(m.funcs[m.entry.unwrap() as usize].name, "main");
+    let err = link_src(&[APP]).unwrap_err();
+    assert!(err.contains("needs function greet"), "{}", err);
+    let dup = LIB.replace("module greetlib", "module other");
+    let err = link_src(&[APP, LIB, &dup]).unwrap_err();
+    assert!(err.contains("defined in several modules"), "{}", err);
+    let partial = bvm::link_with(
+        &[assemble(APP).unwrap()],
+        &bvm::LinkOptions {
+            allow_unresolved: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(partial.funcs.iter().filter(|f| f.external).count(), 2);
+    let bad = APP.replace("extern func greet(name: string): string", "extern func greet(name: int): string");
+    let err = link_src(&[&bad, LIB]).unwrap_err();
+    assert!(err.contains("different parameter or return types"), "{}", err);
+}
+
+fn run_capture(m: &bvm::Module, host: &Host) -> String {
+    let prog = bvm::load(m, host).unwrap_or_else(|e| panic!("{}", e));
+    io::start_capture();
+    let mut r = Runner::new(prog.clone(), Vec::new());
+    r.call(prog.entry.unwrap());
+    r.finish();
+    io::take_capture()
+}
+
+const MIXIN_TARGETS: &str = r#"
+func shout(s: string): string
+    load s
+    rt str_upper
+    ret
+end
+
+func show(s: string): void
+    load s
+    rt print
+    pop
+    retv
+end
+
+func main()
+    str "a"
+    call shout
+    call show
+    pop
+    str "abcdefgh"
+    call shout
+    call show
+    pop
+    retv
+end
+"#;
+
+const MIXIN_HOOKS: &str = r#"
+@Inject target="shout" at="head" cancellable=true
+func guard(s: string): string
+    load s
+    rt str_len
+    const 3
+    igt
+    jz ok
+    str "(long)"
+    ret
+ok:
+    const 0
+    ret
+end
+
+@Inject target="shout" at="return"
+func bang(s: string, result: string): string
+    load result
+    str "!"
+    rt str_concat
+    ret
+end
+
+@Redirect target="show" rt="print"
+func framed(s: string): int
+    str "["
+    load s
+    rt str_concat
+    str "]"
+    rt str_concat
+    rt print
+    ret
+end
+"#;
+
+#[test]
+fn mixins_inject_redirect_and_refuse_native_targets() {
+    let m = link_src(&[MIXIN_TARGETS, MIXIN_HOOKS]).unwrap();
+    assert_eq!(run_capture(&m, &Host::new()), "[A!]\n[(long)]\n");
+    let relinked = bvm::link(std::slice::from_ref(&m)).unwrap();
+    assert_eq!(bvm::binary::encode(&relinked), bvm::binary::encode(&m), "applying mixins twice changes nothing");
+    let text = disassemble(&m);
+    assert!(text.contains("@Mixed by=\"guard\""), "{}", text);
+    let native = "import clock 0\n@Overwrite target=\"clock\"\nfunc fake(): int\n    const 1\n    ret\nend\n";
+    let err = link_src(&[native]).unwrap_err();
+    assert!(err.contains("native host function"), "{}", err);
+    let overwrite = "@Overwrite target=\"shout\"\nfunc quiet(s: string): string\n    load s\n    rt str_lower\n    ret\nend\n";
+    let m = link_src(&[MIXIN_TARGETS, overwrite]).unwrap();
+    assert_eq!(run_capture(&m, &Host::new()), "a\nabcdefgh\n");
+    let missing = "@Inject target=\"nope\" at=\"head\"\nfunc h(): void\n    retv\nend\n";
+    assert!(link_src(&[MIXIN_TARGETS, missing]).unwrap_err().contains("no function has that name"));
+}
+
+#[test]
+fn imports_bind_to_exported_functions() {
+    let plugin = "import log 1\nfunc plugin(): void\n    str \"hi\"\n    host log\n    pop\n    retv\nend\n";
+    let host = "extern func plugin(): void\n@Export\nfunc log(s: string): void\n    str \"log: \"\n    load s\n    rt str_concat\n    rt print\n    pop\n    retv\nend\nfunc main()\n    call plugin\n    pop\n    retv\nend\n";
+    let m = link_src(&[host, plugin]).unwrap();
+    assert!(m.imports.is_empty());
+    assert_eq!(run_capture(&m, &Host::new()), "log: hi\n");
+}
+
+#[test]
+fn archives_bundle_modules_and_resources() {
+    use bvm::archive::Archive;
+    let mut a = Archive::new("demo");
+    a.manifest.version = "1.2.3".into();
+    a.add_module("app", assemble(APP).unwrap());
+    a.add_module("greetlib", assemble(LIB).unwrap());
+    let reader = "module reader\nimport resource 1\nfunc main()\n    str \"hello.txt\"\n    host resource\n    rt print\n    pop\n    retv\nend\n";
+    a.add_module("reader", assemble(reader).unwrap());
+    a.add_resource("hello.txt", b"hi from a resource".to_vec());
+    a.manifest.main = "reader".into();
+    let bytes = a.encode(true);
+    assert!(bytes.starts_with(b"#!/usr/bin/env bvm\n"));
+    assert!(bvm::archive::is_archive(&bytes));
+    let back = Archive::decode(&bytes).unwrap();
+    assert_eq!(back, a);
+    let (m, host) = bvm::load_bytes(&bytes).unwrap();
+    assert_eq!(m.name, "reader");
+    assert_eq!(run_capture(&m, &host), "hi from a resource\n");
+    let mut damaged = bytes.clone();
+    let last = damaged.len() - 1;
+    damaged[last] ^= 1;
+    assert!(Archive::decode(&damaged).unwrap_err().contains("damaged"));
+    for n in 0..bytes.len() {
+        assert!(Archive::decode(&bytes[..n]).is_err());
+    }
+    let mut entry = a.clone();
+    entry.manifest.main = "app".into();
+    entry.manifest.entry = Some("main".into());
+    assert!(entry.link().is_ok());
+    entry.manifest.entry = Some("missing".into());
+    assert!(entry.link().is_err());
+}

@@ -1,0 +1,12 @@
+Ann 31 true
+X1
+User has 1 annotations
+  table users version 3
+Gadget has 1 annotations
+  tag gadget 2.0 true shiny
+Plain has 0 annotations
+string has 0 annotations
+user Ann 1
+gadget X1 1
+[Table { name: "users", version: 3 }]
+[Tag { value: "gadget", weight: 2.0, visible: true, note: "shiny" }]
