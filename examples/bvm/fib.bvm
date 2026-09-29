@@ -1,5 +1,3 @@
-; Recursive Fibonacci, written by hand in bvm assembly.
-
 func fib(n)
     load n
     const 2

@@ -1,5 +1,3 @@
-# Ember is a tiny language that compiles to bvm. See crates/bvm/examples/ember.rs.
-
 fn fib(n) {
     if n < 2 { return n }
     return fib(n - 1) + fib(n - 2)
