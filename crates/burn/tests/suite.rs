@@ -191,3 +191,19 @@ fn formatter_is_idempotent() {
         let _ = src;
     }
 }
+
+#[test]
+fn repository_sources_are_formatted() {
+    let root = root();
+    let mut files = Vec::new();
+    for dir in ["tests/cases", "examples", "lib/std", "tests/modules"] {
+        for e in std::fs::read_dir(root.join(dir)).unwrap() {
+            let p = e.unwrap().path();
+            if p.extension().map(|x| x == "bn").unwrap_or(false) {
+                files.push(p);
+            }
+        }
+    }
+    let (out, code) = output(burn().arg("fmt").arg("--check").args(&files));
+    assert_eq!(code, 0, "{}", out);
+}
