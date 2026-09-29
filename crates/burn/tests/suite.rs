@@ -207,3 +207,56 @@ fn repository_sources_are_formatted() {
     let (out, code) = output(burn().arg("fmt").arg("--check").args(&files));
     assert_eq!(code, 0, "{}", out);
 }
+
+#[test]
+fn burnfmt_written_in_burn_matches_the_builtin_formatter() {
+    let root = root();
+    let tool = root.join("tools/burnfmt/burnfmt.bn");
+    let mut files = vec![tool.clone()];
+    for dir in ["tests/cases", "examples", "lib/std"] {
+        for e in std::fs::read_dir(root.join(dir)).unwrap() {
+            let p = e.unwrap().path();
+            if p.extension().map(|x| x == "bn").unwrap_or(false) {
+                files.push(p);
+            }
+        }
+    }
+    files.sort();
+    let mut failures = Vec::new();
+    for f in &files {
+        let (ours, _) = output(burn().arg(&tool).arg(f));
+        let (builtin, _) = output(burn().arg("fmt").arg(f));
+        if ours != builtin {
+            failures.push(f.display().to_string());
+        }
+    }
+    assert!(failures.is_empty(), "burnfmt differs from burn fmt on: {:?}", failures);
+    let messy = "fun   f( a:int ){\nreturn a*2}\n";
+    let mut child = burn()
+        .arg(&tool)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::io::Write::write_all(child.stdin.as_mut().unwrap(), messy.as_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "fun f(a: int) {\n    return a * 2\n}\n");
+}
+
+#[test]
+fn toolchain_names_select_the_right_mode() {
+    let dir = std::env::temp_dir().join(format!("burn-toolchain-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = std::path::PathBuf::from(env!("CARGO_BIN_EXE_burn"));
+    let burni = dir.join("burni");
+    let burnc = dir.join("burnc");
+    std::fs::copy(&exe, &burni).unwrap();
+    std::fs::copy(&exe, &burnc).unwrap();
+    let (out, code) = output(Command::new(&burni).args(["-e", "print(6 * 7)"]));
+    assert_eq!((out.as_str(), code), ("42\n", 0));
+    let (out, _) = output(Command::new(&burnc).arg("--version"));
+    assert!(out.starts_with("burnc "), "{}", out);
+    let (out, code) = output(Command::new(&burnc).arg("--check").arg(root().join("examples/fib.bn")));
+    assert_eq!(code, 0, "{}", out);
+    let _ = std::fs::remove_dir_all(&dir);
+}

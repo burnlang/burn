@@ -1,0 +1,33 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: burn-linux-x86_64.tar.gz
+          - os: macos-13
+            asset: burn-macos-x86_64.tar.gz
+          - os: macos-14
+            asset: burn-macos-aarch64.tar.gz
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build the toolchain
+        run: ./install.sh --from-source --no-modify-path --prefix "$PWD/dist/burn"
+      - name: Package
+        run: |
+          rm -f dist/burn/env
+          tar -czf ${{ matrix.asset }} -C dist burn
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.asset }}
