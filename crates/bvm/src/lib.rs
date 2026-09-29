@@ -1,3 +1,4 @@
+pub mod archive;
 pub mod asm;
 pub mod binary;
 pub mod builder;
@@ -22,11 +23,35 @@ pub const FORMAT_VERSION: u16 = 2;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub fn parse(bytes: &[u8]) -> Result<Module, String> {
+    if archive::is_archive(bytes) {
+        return archive::Archive::decode(bytes)?.link();
+    }
     if binary::is_binary(bytes) {
         return binary::decode(bytes);
     }
     let src = std::str::from_utf8(bytes).map_err(|_| "the file is neither bytecode nor UTF-8 assembly".to_string())?;
     asm::assemble(src).map_err(|e| e.to_string())
+}
+
+pub fn load_bytes(bytes: &[u8]) -> Result<(Module, Host), String> {
+    if archive::is_archive(bytes) {
+        let a = archive::Archive::decode(bytes)?;
+        let m = a.link()?;
+        return Ok((m, a.host()));
+    }
+    Ok((parse(bytes)?, Host::new()))
+}
+
+pub fn run_file(path: &std::path::Path, args: Vec<String>) -> Result<i32, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("could not read {}: {}", path.display(), e))?;
+    let (m, host) = load_bytes(&bytes).map_err(|e| format!("{}: {}", path.display(), e))?;
+    if m.entry.is_none() {
+        return Err(format!(
+            "{} has no entry function (add `entry <name>` or a function called main)",
+            path.display()
+        ));
+    }
+    run(&m, &host, args).map_err(|e| format!("{}: {}", path.display(), e))
 }
 
 pub fn read(path: &std::path::Path) -> Result<Module, String> {

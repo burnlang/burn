@@ -73,21 +73,14 @@ fn compile(path: &Path) -> Option<driver::Compiled> {
 }
 
 fn is_bvm_file(file: &Path) -> bool {
-    matches!(file.extension().and_then(|e| e.to_str()), Some("bvm") | Some("bvmc"))
+    matches!(file.extension().and_then(|e| e.to_str()), Some("bvm") | Some("bvmc") | Some("bar"))
 }
 
 fn run_bvm(file: &Path, args: Vec<String>) -> ExitCode {
-    let m = match bvm::read(file) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("error: {}", e);
-            return ExitCode::from(1);
-        }
-    };
-    match bvm::run(&m, &bvm::Host::new(), args) {
+    match bvm::run_file(file, args) {
         Ok(code) => ExitCode::from(code as u8),
         Err(e) => {
-            eprintln!("error: {}: {}", file.display(), e);
+            eprintln!("error: {}", e);
             ExitCode::from(1)
         }
     }
