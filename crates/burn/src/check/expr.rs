@@ -888,6 +888,7 @@ impl<'a> Checker<'a> {
     }
 
     pub fn direct_call(&mut self, fid: FuncId, recv: Option<Expr>, args: &[ast::Expr], span: Span, name_span: Span) -> Expr {
+        self.warn_deprecated_func(fid, name_span);
         let ret = self.func_ret(fid);
         let info = &self.funcs[fid as usize];
         let params: Vec<TyId> = info.params.iter().map(|p| p.1).collect();
@@ -1857,7 +1858,7 @@ impl<'a> Checker<'a> {
             let t = self.types.func(ps, r);
             return Expr::new(ExprKind::Int(0), t);
         }
-        let fid = self.declare_fun(m, f, None, false);
+        let fid = self.declare_fun(m, f, None, false, false);
         let (line, _) = self.sm.file(f.span.file).line_col(f.span.start as usize);
         self.funcs[fid as usize].name = format!("<lambda:{}>", line);
         self.lambdas.insert(key, fid);

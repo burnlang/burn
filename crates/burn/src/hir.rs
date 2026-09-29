@@ -85,6 +85,49 @@ pub enum Stmt {
     Continue,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum Const {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Str(String),
+    Null,
+}
+
+#[derive(Clone, Debug)]
+pub struct Annotation {
+    pub name: String,
+    pub ty: Option<TyId>,
+    pub args: Vec<(String, Const)>,
+    pub span: Span,
+}
+
+impl Annotation {
+    pub fn arg(&self, key: &str) -> Option<&Const> {
+        self.args.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+    }
+
+    pub fn str_arg(&self, key: &str) -> Option<&str> {
+        match self.arg(key) {
+            Some(Const::Str(s)) => Some(s),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum External {
+    Lib { lib: u32, name: String },
+    Native { name: String },
+}
+
+#[derive(Clone, Debug)]
+pub struct Library {
+    pub name: String,
+    pub path: std::path::PathBuf,
+    pub bytes: Vec<u8>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Func {
     pub name: String,
@@ -95,6 +138,8 @@ pub struct Func {
     pub is_async: bool,
     pub span: Span,
     pub end_loc: u32,
+    pub annotations: Vec<Annotation>,
+    pub external: Option<External>,
 }
 
 #[derive(Clone, Debug)]
@@ -121,6 +166,9 @@ pub struct Program {
     pub slots: Vec<IfaceSlot>,
     pub inits: Vec<(String, FuncId)>,
     pub main: Option<FuncId>,
+    pub type_annotations: Vec<(TyId, Vec<Annotation>)>,
+    pub libs: Vec<Library>,
+    pub name: String,
 }
 
 impl Program {

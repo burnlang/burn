@@ -36,7 +36,58 @@ fn temp_dir() -> PathBuf {
     std::env::temp_dir().join(format!("burn-build-{}-{}", std::process::id(), nanos))
 }
 
+pub fn validate(p: &Program) -> Result<(), String> {
+    use crate::hir::External;
+    if let Some(f) = p.funcs.iter().find(|f| matches!(f.external, Some(External::Native { .. }))) {
+        return Err(format!(
+            "`{}` is marked @Native: functions provided by a host program only exist on bvm, so build this with `--target bvm` or `--target bar`, or run it with burni",
+            f.name
+        ));
+    }
+    let mut lib_funcs: Vec<String> = Vec::new();
+    for l in &p.libs {
+        let ms = crate::check::libs::library_modules(&l.bytes).map_err(|e| format!("{}: {}", l.path.display(), e))?;
+        for m in ms {
+            for (i, f) in m.funcs.iter().enumerate() {
+                if f.external {
+                    continue;
+                }
+                lib_funcs.push(f.name.clone());
+                if let Some(e) = bvm::link::export_name(&m, i as u32) {
+                    lib_funcs.push(e);
+                }
+                if !m.name.is_empty() {
+                    lib_funcs.push(format!("{}::{}", m.name, f.name));
+                }
+            }
+        }
+    }
+    for f in &p.funcs {
+        for a in &f.annotations {
+            if !x86::MIXINS.contains(&a.name.as_str()) {
+                continue;
+            }
+            let target = a.str_arg("target").unwrap_or("");
+            if lib_funcs.iter().any(|n| n == target) {
+                continue;
+            }
+            if p.funcs.iter().any(|g| g.name == target && g.external.is_none()) {
+                return Err(format!(
+                    "@{} on `{}` targets `{}`, which is compiled to native code; mixins can only change bvm bytecode (use burni or `--target bvm`, or target a function in an imported bytecode library)",
+                    a.name, f.name, target
+                ));
+            }
+            return Err(format!(
+                "@{} on `{}` targets `{}`, but no imported bytecode library has a function with that name",
+                a.name, f.name, target
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub fn build(p: &Program, opts: &BuildOptions) -> Result<(), String> {
+    validate(p)?;
     let asm = assembly(p);
     if let Some(path) = &opts.emit_asm {
         std::fs::write(path, &asm).map_err(|e| format!("cannot write {}: {}", path.display(), e))?;

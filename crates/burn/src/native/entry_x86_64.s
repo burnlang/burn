@@ -28,7 +28,7 @@
     and rsp, -16
     call {P}burn_rt_set_args{PLT}
     mov rsp, r12
-    call burn_entry
+{PRE_ENTRY}    call burn_entry
     xor edi, edi
     mov r12, rsp
     and rsp, -16

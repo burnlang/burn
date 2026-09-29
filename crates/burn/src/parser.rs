@@ -194,8 +194,41 @@ impl Parser {
         items
     }
 
+    fn annotations(&mut self) -> PResult<Vec<Annotation>> {
+        let mut out = Vec::new();
+        while self.at(&Tok::At) {
+            let start = self.advance().span;
+            let name = self.ident("annotation name")?;
+            let mut args = Vec::new();
+            if self.at(&Tok::LParen) && !self.peek().nl_before {
+                self.advance();
+                while !self.at(&Tok::RParen) && !self.at(&Tok::Eof) {
+                    let key = if matches!(self.peek().kind, Tok::Ident(_)) && self.peek_at(1).kind == Tok::Colon {
+                        let k = self.ident("argument name")?;
+                        self.advance();
+                        Some(k)
+                    } else {
+                        None
+                    };
+                    args.push((key, self.expr()?));
+                    if !self.eat(&Tok::Comma) {
+                        break;
+                    }
+                }
+                self.expect(Tok::RParen, "`)` to close the annotation")?;
+            }
+            out.push(Annotation {
+                name,
+                args,
+                span: start.to(self.prev_span()),
+            });
+        }
+        Ok(out)
+    }
+
     fn item(&mut self) -> PResult<Item> {
         let start = self.peek().span;
+        let annotations = self.annotations()?;
         let vis = if self.eat(&Tok::Pub) {
             Vis::Pub
         } else if self.eat(&Tok::Priv) {
@@ -214,7 +247,9 @@ impl Parser {
                 if self.at(&Tok::Fun) || self.at(&Tok::Async) {
                     ItemKind::Fun(self.fun_decl(false)?)
                 } else {
-                    ItemKind::Def(self.def()?)
+                    let mut d = self.def()?;
+                    self.expand_accessors(&mut d, &annotations);
+                    ItemKind::Def(d)
                 }
             }
             Tok::Ident(w) if is_old_def_word(w) && matches!(self.peek_at(1).kind, Tok::Ident(_)) && !self.peek_at(1).nl_before => {
@@ -239,7 +274,150 @@ impl Parser {
             }
         };
         let span = start.to(self.prev_span());
-        Ok(Item { kind, vis, span })
+        let mut kind = kind;
+        let mut item_annotations = annotations;
+        match &mut kind {
+            ItemKind::Fun(f) => f.annotations = std::mem::take(&mut item_annotations),
+            ItemKind::Def(_) => {}
+            _ => {
+                if let Some(a) = item_annotations.first() {
+                    let s = a.span;
+                    self.err(s, "annotations can only be placed on definitions, functions, fields and methods");
+                }
+                item_annotations.clear();
+            }
+        }
+        Ok(Item {
+            kind,
+            vis,
+            span,
+            annotations: item_annotations,
+        })
+    }
+
+    fn expand_accessors(&mut self, d: &mut Def, annotations: &[Annotation]) {
+        let on = |anns: &[Annotation], n: &str| anns.iter().find(|a| a.name.name == n).map(|a| a.span);
+        let class_get = on(annotations, "Getter");
+        let class_set = on(annotations, "Setter");
+        match d {
+            Def::Class { fields, methods, .. } => {
+                let mut extra = Vec::new();
+                for f in fields.iter() {
+                    let get = on(&f.annotations, "Getter").or(class_get);
+                    let set = on(&f.annotations, "Setter").or(class_set);
+                    let cap = {
+                        let mut c = f.name.name.chars();
+                        match c.next() {
+                            Some(h) => h.to_uppercase().collect::<String>() + c.as_str(),
+                            None => String::new(),
+                        }
+                    };
+                    let field_ref = |span: Span| Expr {
+                        kind: ExprKind::Field {
+                            obj: Box::new(Expr {
+                                kind: ExprKind::Ident("self".into()),
+                                span,
+                            }),
+                            name: Ident {
+                                name: f.name.name.clone(),
+                                span,
+                            },
+                        },
+                        span,
+                    };
+                    if let Some(span) = get {
+                        let is_bool = matches!(&f.ty.kind, TypeExprKind::Named(n, a) if n == "bool" && a.is_empty());
+                        let name = format!("{}{}", if is_bool { "is" } else { "get" }, cap);
+                        if !methods.iter().any(|(_, m)| m.name.name == name) {
+                            extra.push((
+                                f.vis,
+                                FunDecl {
+                                    name: Ident { name, span },
+                                    params: Vec::new(),
+                                    ret: Some(f.ty.clone()),
+                                    body: Block {
+                                        stmts: vec![Stmt {
+                                            kind: StmtKind::Return(Some(field_ref(span))),
+                                            span,
+                                        }],
+                                        span,
+                                    },
+                                    is_async: false,
+                                    is_static: false,
+                                    span,
+                                    annotations: Vec::new(),
+                                    bodyless: false,
+                                },
+                            ));
+                        }
+                    }
+                    if let Some(span) = set {
+                        let name = format!("set{}", cap);
+                        if !methods.iter().any(|(_, m)| m.name.name == name) {
+                            let value = Expr {
+                                kind: ExprKind::Ident(f.name.name.clone()),
+                                span,
+                            };
+                            extra.push((
+                                f.vis,
+                                FunDecl {
+                                    name: Ident { name, span },
+                                    params: vec![Param {
+                                        name: Ident {
+                                            name: f.name.name.clone(),
+                                            span,
+                                        },
+                                        ty: f.ty.clone(),
+                                    }],
+                                    ret: None,
+                                    body: Block {
+                                        stmts: vec![Stmt {
+                                            kind: StmtKind::Expr(Expr {
+                                                kind: ExprKind::Assign {
+                                                    target: Box::new(field_ref(span)),
+                                                    op: None,
+                                                    value: Box::new(value),
+                                                },
+                                                span,
+                                            }),
+                                            span,
+                                        }],
+                                        span,
+                                    },
+                                    is_async: false,
+                                    is_static: false,
+                                    span,
+                                    annotations: Vec::new(),
+                                    bodyless: false,
+                                },
+                            ));
+                        }
+                    }
+                }
+                methods.extend(extra);
+            }
+            _ => {
+                let spans: Vec<Span> = annotations
+                    .iter()
+                    .filter(|a| a.name.name == "Getter" || a.name.name == "Setter")
+                    .map(|a| a.span)
+                    .collect();
+                for s in spans {
+                    self.err(s, "@Getter and @Setter generate methods, so they can only be used on classes and their fields");
+                }
+                if let Def::Type { fields, .. } | Def::Annotation { fields, .. } = d {
+                    let spans: Vec<Span> = fields
+                        .iter()
+                        .flat_map(|f| f.annotations.iter())
+                        .filter(|a| a.name.name == "Getter" || a.name.name == "Setter")
+                        .map(|a| a.span)
+                        .collect();
+                    for s in spans {
+                        self.err(s, "@Getter and @Setter generate methods, so they can only be used on classes and their fields");
+                    }
+                }
+            }
+        }
     }
 
     fn is_lambda_start(&self) -> bool {
@@ -290,7 +468,15 @@ impl Parser {
         self.expect(Tok::Fun, "`fun`")?;
         let name = self.ident("function name")?;
         let (params, ret) = self.signature()?;
-        let body = self.block()?;
+        let bodyless = !self.at(&Tok::LBrace) && (self.peek().nl_before || matches!(self.peek().kind, Tok::Eof | Tok::Semi | Tok::RBrace));
+        let body = if bodyless {
+            Block {
+                stmts: Vec::new(),
+                span: self.prev_span(),
+            }
+        } else {
+            self.block()?
+        };
         Ok(FunDecl {
             name,
             params,
@@ -299,6 +485,8 @@ impl Parser {
             is_async,
             is_static,
             span: start.to(self.prev_span()),
+            annotations: Vec::new(),
+            bodyless,
         })
     }
 
@@ -344,7 +532,7 @@ impl Parser {
             Tok::Ident(s) => s.clone(),
             other => {
                 let msg = format!(
-                    "expected `type`, `interface`, `class`, `enum` or `fun` after `def` but found {}",
+                    "expected `type`, `interface`, `class`, `enum`, `annotation` or `fun` after `def` but found {}",
                     describe(other)
                 );
                 let span = self.peek().span;
@@ -355,24 +543,38 @@ impl Parser {
         let kw_span = self.advance().span;
         let name = self.ident("a name")?;
         match kw.as_str() {
-            "type" | "struct" | "record" => {
-                if self.eat(&Tok::Assign) {
+            "type" | "struct" | "record" | "annotation" => {
+                if kw != "annotation" && self.eat(&Tok::Assign) {
                     let ty = self.ty()?;
                     self.end_stmt();
                     return Ok(Def::Alias { name, ty });
                 }
-                self.expect(Tok::LBrace, "`{`")?;
-                let mut fields = Vec::new();
-                while !self.at(&Tok::RBrace) && !self.at(&Tok::Eof) {
-                    if self.eat(&Tok::Comma) || self.eat(&Tok::Semi) {
-                        continue;
+                let fields = if kw == "annotation" && !self.at(&Tok::LBrace) {
+                    Vec::new()
+                } else {
+                    self.expect(Tok::LBrace, "`{`")?;
+                    let mut fields = Vec::new();
+                    while !self.at(&Tok::RBrace) && !self.at(&Tok::Eof) {
+                        if self.eat(&Tok::Comma) || self.eat(&Tok::Semi) {
+                            continue;
+                        }
+                        let r = self.annotations().and_then(|anns| {
+                            self.field(Vis::Default).map(|mut f| {
+                                f.annotations = anns;
+                                f
+                            })
+                        });
+                        match r {
+                            Ok(f) => fields.push(f),
+                            Err(()) => self.sync_member(),
+                        }
                     }
-                    match self.field(Vis::Default) {
-                        Ok(f) => fields.push(f),
-                        Err(()) => self.sync_member(),
-                    }
+                    self.expect(Tok::RBrace, "`}`")?;
+                    fields
+                };
+                if kw == "annotation" {
+                    return Ok(Def::Annotation { name, fields });
                 }
-                self.expect(Tok::RBrace, "`}`")?;
                 Ok(Def::Type { name, fields })
             }
             "interface" | "trait" => {
@@ -424,6 +626,13 @@ impl Parser {
                     if self.eat(&Tok::Comma) || self.eat(&Tok::Semi) {
                         continue;
                     }
+                    let member_anns = match self.annotations() {
+                        Ok(a) => a,
+                        Err(()) => {
+                            self.sync_member();
+                            continue;
+                        }
+                    };
                     let vis = if self.eat(&Tok::Pub) {
                         Vis::Pub
                     } else if self.eat(&Tok::Priv) {
@@ -435,7 +644,10 @@ impl Parser {
                         self.at(&Tok::Fun) || self.at(&Tok::Async) || (self.at_ident("static") && matches!(self.peek_at(1).kind, Tok::Fun | Tok::Async));
                     if is_method {
                         match self.fun_decl(true) {
-                            Ok(f) => methods.push((vis, f)),
+                            Ok(mut f) => {
+                                f.annotations = member_anns;
+                                methods.push((vis, f))
+                            }
                             Err(()) => self.sync_member(),
                         }
                     } else {
@@ -443,7 +655,10 @@ impl Parser {
                             self.advance();
                         }
                         match self.field(vis) {
-                            Ok(f) => fields.push(f),
+                            Ok(mut f) => {
+                                f.annotations = member_anns;
+                                fields.push(f)
+                            }
                             Err(()) => self.sync_member(),
                         }
                     }
@@ -471,7 +686,10 @@ impl Parser {
             other => {
                 self.err(
                     kw_span,
-                    format!("unknown definition kind `{}` (expected `type`, `interface`, `class`, `enum` or `fun`)", other),
+                    format!(
+                        "unknown definition kind `{}` (expected `type`, `interface`, `class`, `enum`, `annotation` or `fun`)",
+                        other
+                    ),
                 );
                 Err(())
             }
@@ -510,7 +728,13 @@ impl Parser {
             (self.ident("field name")?, ty)
         };
         let default = if self.eat(&Tok::Assign) { Some(self.expr()?) } else { None };
-        Ok(Field { name, ty, default, vis })
+        Ok(Field {
+            name,
+            ty,
+            default,
+            vis,
+            annotations: Vec::new(),
+        })
     }
 
     pub fn ty(&mut self) -> PResult<TypeExpr> {
@@ -1298,6 +1522,8 @@ impl Parser {
                     body,
                     is_async,
                     is_static: false,
+                    annotations: Vec::new(),
+                    bodyless: false,
                     span,
                 };
                 ExprKind::Lambda(Box::new(f))

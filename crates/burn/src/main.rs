@@ -171,6 +171,10 @@ fn cmd_build(args: &[String]) -> ExitCode {
     match target.as_str() {
         "js" | "javascript" | "node" => {
             let out = output.unwrap_or_else(|| default_output(&file, "js"));
+            if let Err(e) = js::validate(&c.program) {
+                eprintln!("error: {}", e);
+                return ExitCode::from(1);
+            }
             let js = js::generate(&c.program);
             if let Err(e) = std::fs::write(&out, js) {
                 eprintln!("error: cannot write {}: {}", out.display(), e);
@@ -181,7 +185,13 @@ fn cmd_build(args: &[String]) -> ExitCode {
         }
         "bvm" | "bytecode" => {
             let out = output.unwrap_or_else(|| default_output(&file, "bvmc"));
-            let m = vm::module(&c.program);
+            let m = match vm::linked(&c.program) {
+                Ok((m, _)) => m,
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                    return ExitCode::from(1);
+                }
+            };
             if let Err(e) = bvm::verify(&m) {
                 eprintln!("internal error: the compiler produced an invalid bvm module: {}", e);
                 return ExitCode::from(70);
@@ -195,6 +205,55 @@ fn cmd_build(args: &[String]) -> ExitCode {
             if let Err(e) = std::fs::write(&out, bvm::binary::encode(&m)) {
                 eprintln!("error: cannot write {}: {}", out.display(), e);
                 return ExitCode::from(1);
+            }
+            println!("wrote {}", out.display());
+            ExitCode::SUCCESS
+        }
+        "bar" => {
+            let out = output.unwrap_or_else(|| default_output(&file, "bar"));
+            let p = &c.program;
+            let mut a = bvm::archive::Archive::new(&p.name);
+            a.add_module(&p.name, vm::module(p));
+            for l in &p.libs {
+                let parts = match check::libs::library_modules(&l.bytes) {
+                    Ok(ms) => ms,
+                    Err(e) => {
+                        eprintln!("error: {}: {}", l.path.display(), e);
+                        return ExitCode::from(1);
+                    }
+                };
+                for (k, m) in parts.into_iter().enumerate() {
+                    let name = if !m.name.is_empty() {
+                        m.name.clone()
+                    } else if k == 0 {
+                        l.name.clone()
+                    } else {
+                        format!("{}.{}", l.name, k)
+                    };
+                    a.add_module(&name, m);
+                }
+                if let Ok(lib) = bvm::archive::Archive::decode(&l.bytes) {
+                    for (n, d) in lib.resources {
+                        a.add_resource(&n, d);
+                    }
+                }
+            }
+            if let Err(e) = a.link() {
+                eprintln!("error: {}", e);
+                return ExitCode::from(1);
+            }
+            if let Err(e) = std::fs::write(&out, a.encode(true)) {
+                eprintln!("error: cannot write {}: {}", out.display(), e);
+                return ExitCode::from(1);
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(meta) = std::fs::metadata(&out) {
+                    let mut perm = meta.permissions();
+                    perm.set_mode(perm.mode() | 0o111);
+                    let _ = std::fs::set_permissions(&out, perm);
+                }
             }
             println!("wrote {}", out.display());
             ExitCode::SUCCESS
@@ -218,7 +277,7 @@ fn cmd_build(args: &[String]) -> ExitCode {
             }
         }
         other => {
-            eprintln!("error: unknown target `{}` (expected `native`, `js` or `bvm`)", other);
+            eprintln!("error: unknown target `{}` (expected `native`, `js`, `bvm` or `bar`)", other);
             ExitCode::from(2)
         }
     }

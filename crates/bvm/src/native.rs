@@ -18,6 +18,7 @@ struct Lib {
 
 static LIBS: Mutex<Vec<Arc<Lib>>> = Mutex::new(Vec::new());
 static EXPORTS: Mutex<Vec<(String, u64, u32)>> = Mutex::new(Vec::new());
+static MIXINS: Mutex<String> = Mutex::new(String::new());
 
 struct PooledVm(Box<Vm>);
 
@@ -46,6 +47,36 @@ pub extern "C" fn burn_bvm_register_exports(table: u64, n: u64) -> u64 {
         ex.push((cstr(e[0]), e[1], e[2] as u32));
     }
     0
+}
+
+#[no_mangle]
+pub extern "C" fn burn_bvm_register_mixins(text: u64) -> u64 {
+    *MIXINS.lock().unwrap_or_else(|e| e.into_inner()) = cstr(text);
+    0
+}
+
+fn with_native_mixins(lib: Module) -> Result<Module, String> {
+    let text = MIXINS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if text.trim().is_empty() {
+        return Ok(lib);
+    }
+    let mut mixins = crate::asm::assemble(&text).map_err(|e| format!("native mixins: {}", e))?;
+    let has = |name: &str| {
+        lib.funcs.iter().enumerate().any(|(i, f)| {
+            !f.external
+                && (f.name == name
+                    || export_name(&lib, i as u32).as_deref() == Some(name)
+                    || (!lib.name.is_empty() && format!("{}::{}", lib.name, f.name) == name))
+        })
+    };
+    mixins.annotations.retain(|a| match a.arg("target").and_then(|v| v.as_str()) {
+        Some(t) => has(t),
+        None => false,
+    });
+    if mixins.annotations.is_empty() {
+        return Ok(lib);
+    }
+    link(&[lib, mixins])
 }
 
 fn call_native(fnptr: u64, args: &[u64]) -> u64 {
@@ -78,6 +109,7 @@ fn prepare(bytes: &[u8]) -> Result<(Module, Option<Host>), String> {
 fn load_lib(key: usize, bytes: &[u8]) -> Result<Arc<Lib>, String> {
     let (m, extra) = prepare(bytes)?;
     let m = if needs_link(&m) { link(std::slice::from_ref(&m))? } else { m };
+    let m = with_native_mixins(m)?;
     let base = meta::meta();
     let rebased = rebase(&m, &base.types, base.locs.len() as u32)?;
     let mut locs = base.locs.clone();

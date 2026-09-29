@@ -26,6 +26,12 @@ impl Host {
         self
     }
 
+    pub fn extend(&mut self, other: &Host) {
+        for (k, v) in &other.fns {
+            self.fns.insert(k.clone(), v.clone());
+        }
+    }
+
     pub fn names(&self) -> Vec<String> {
         let mut v: Vec<String> = self.fns.keys().cloned().collect();
         v.sort();

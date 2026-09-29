@@ -20,10 +20,18 @@ pub struct Module {
 }
 
 #[derive(Clone, Debug)]
+pub struct Annotation {
+    pub name: Ident,
+    pub args: Vec<(Option<Ident>, Expr)>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
 pub struct Item {
     pub kind: ItemKind,
     pub vis: Vis,
     pub span: Span,
+    pub annotations: Vec<Annotation>,
 }
 
 #[derive(Clone, Debug)]
@@ -49,6 +57,8 @@ pub struct FunDecl {
     pub is_async: bool,
     pub is_static: bool,
     pub span: Span,
+    pub annotations: Vec<Annotation>,
+    pub bodyless: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -65,6 +75,7 @@ pub struct Field {
     pub ty: TypeExpr,
     pub default: Option<Expr>,
     pub vis: Vis,
+    pub annotations: Vec<Annotation>,
 }
 
 #[derive(Clone, Debug)]
@@ -91,12 +102,21 @@ pub enum Def {
         name: Ident,
         variants: Vec<Ident>,
     },
+    Annotation {
+        name: Ident,
+        fields: Vec<Field>,
+    },
 }
 
 impl Def {
     pub fn name(&self) -> &Ident {
         match self {
-            Def::Type { name, .. } | Def::Alias { name, .. } | Def::Interface { name, .. } | Def::Class { name, .. } | Def::Enum { name, .. } => name,
+            Def::Type { name, .. }
+            | Def::Alias { name, .. }
+            | Def::Interface { name, .. }
+            | Def::Class { name, .. }
+            | Def::Enum { name, .. }
+            | Def::Annotation { name, .. } => name,
         }
     }
 }

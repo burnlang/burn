@@ -64,6 +64,7 @@ pub enum Tok {
     DotDotEq,
     Question,
     Arrow,
+    At,
     Eof,
 }
 
@@ -177,6 +178,7 @@ pub fn symbol(t: &Tok) -> &'static str {
         Tok::DotDotEq => "..=",
         Tok::Question => "?",
         Tok::Arrow => "->",
+        Tok::At => "@",
         _ => "?",
     }
 }
@@ -312,6 +314,7 @@ impl<'a> Lexer<'a> {
                     b':' => (Tok::Colon, 1),
                     b'.' => (Tok::Dot, 1),
                     b'?' => (Tok::Question, 1),
+                    b'@' => (Tok::At, 1),
                     _ => {
                         let ch = self.src[self.pos..].chars().next().unwrap_or('?');
                         self.pos += ch.len_utf8();

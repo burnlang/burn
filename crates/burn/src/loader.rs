@@ -52,12 +52,20 @@ pub struct LoadedModule {
     pub file: FileId,
     pub ast: Module,
     pub imports: Vec<(usize, Span)>,
+    pub libs: Vec<(usize, Span)>,
     pub key: String,
+}
+
+pub struct LoadedLib {
+    pub name: String,
+    pub path: PathBuf,
+    pub bytes: Vec<u8>,
 }
 
 pub struct Loaded {
     pub sm: SourceMap,
     pub modules: Vec<LoadedModule>,
+    pub libs: Vec<LoadedLib>,
     pub order: Vec<usize>,
     pub diags: Vec<Diagnostic>,
     pub root: usize,
@@ -66,9 +74,14 @@ pub struct Loaded {
 pub struct Loader {
     pub sm: SourceMap,
     pub modules: Vec<LoadedModule>,
+    pub libs: Vec<LoadedLib>,
     pub diags: Vec<Diagnostic>,
     by_key: HashMap<String, usize>,
     pub overrides: HashMap<PathBuf, String>,
+}
+
+pub fn is_library_path(p: &str) -> bool {
+    p.ends_with(".bvmc") || p.ends_with(".bar") || p.ends_with(".bvm")
 }
 
 fn canonical(p: &Path) -> PathBuf {
@@ -89,10 +102,33 @@ impl Loader {
         Loader {
             sm: SourceMap::default(),
             modules: Vec::new(),
+            libs: Vec::new(),
             diags: Vec::new(),
             by_key: HashMap::new(),
             overrides: HashMap::new(),
         }
+    }
+
+    fn load_library(&mut self, p: &str, base: Option<&Path>) -> Result<usize, String> {
+        let mut candidates = Vec::new();
+        if let Some(b) = base {
+            candidates.push(b.join(p));
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            candidates.push(cwd.join(p));
+        }
+        let path = candidates
+            .into_iter()
+            .find(|c| c.is_file())
+            .ok_or_else(|| format!("cannot find bytecode library `{}`", p))?;
+        let c = canonical(&path);
+        if let Some(i) = self.libs.iter().position(|l| l.path == c) {
+            return Ok(i);
+        }
+        let bytes = std::fs::read(&c).map_err(|e| format!("cannot read `{}`: {}", p, e))?;
+        let name = c.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        self.libs.push(LoadedLib { name, path: c, bytes });
+        Ok(self.libs.len() - 1)
     }
 
     fn read(&self, p: &Path) -> Option<String> {
@@ -131,6 +167,7 @@ impl Loader {
             file,
             ast,
             imports: Vec::new(),
+            libs: Vec::new(),
             key,
         });
         let base = path
@@ -138,6 +175,7 @@ impl Loader {
             .and_then(|p| p.parent().map(|d| d.to_path_buf()))
             .or_else(|| std::env::current_dir().ok());
         let mut imports = Vec::new();
+        let mut libs = Vec::new();
         let items: Vec<(String, Span)> = self.modules[idx]
             .ast
             .items
@@ -149,6 +187,17 @@ impl Loader {
             .flatten()
             .collect();
         for (p, span) in items {
+            if is_library_path(&p) {
+                match self.load_library(&p, base.as_deref()) {
+                    Ok(li) => {
+                        if !libs.iter().any(|(x, _)| *x == li) {
+                            libs.push((li, span));
+                        }
+                    }
+                    Err(e) => self.diags.push(Diagnostic::error(span, e)),
+                }
+                continue;
+            }
             match self.resolve_import(&p, base.as_deref(), is_std) {
                 Ok(m) => {
                     if m == idx {
@@ -161,6 +210,7 @@ impl Loader {
             }
         }
         self.modules[idx].imports = imports;
+        self.modules[idx].libs = libs;
         idx
     }
 
@@ -227,6 +277,7 @@ impl Loader {
         Loaded {
             sm: self.sm,
             modules: self.modules,
+            libs: self.libs,
             order,
             diags: self.diags,
             root,
