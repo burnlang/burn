@@ -1,4 +1,4 @@
-use crate::module::{Function, Module};
+use crate::module::{Function, Module, Target};
 use crate::op::{rt_name, Op};
 use burn_runtime::meta::Desc;
 use burn_runtime::RtFn;
@@ -53,6 +53,7 @@ pub fn analyze(m: &Module) -> Result<Vec<u32>, VerifyError> {
         match m.funcs.get(e as usize) {
             None => return Err(err(format!("entry function @{} does not exist", e))),
             Some(f) if f.params != 0 => return Err(err(format!("entry function {} must not take parameters", f.name))),
+            Some(f) if f.external => return Err(err(format!("entry function {} is external", f.name))),
             _ => {}
         }
     }
@@ -76,6 +77,17 @@ pub fn analyze(m: &Module) -> Result<Vec<u32>, VerifyError> {
             return Err(err(format!("table {} must take at least the receiver as an argument", t.name)));
         }
     }
+    for a in &m.annotations {
+        let ok = match a.target {
+            Target::Module => true,
+            Target::Func(i) => i < nf,
+            Target::Type(t) => t < nt,
+            Target::Global(g) => (g as usize) < m.globals.len(),
+        };
+        if !ok {
+            return Err(err(format!("annotation @{} is attached to something that does not exist", a.name)));
+        }
+    }
     let mut max = Vec::with_capacity(m.funcs.len());
     for f in &m.funcs {
         max.push(verify_func(m, f, nf, nt).map_err(|(at, msg)| VerifyError {
@@ -88,6 +100,20 @@ pub fn analyze(m: &Module) -> Result<Vec<u32>, VerifyError> {
 }
 
 fn verify_func(m: &Module, f: &Function, nf: u32, nt: u32) -> Result<u32, (Option<usize>, String)> {
+    if let Some(sig) = &f.sig {
+        if sig.params.len() as u32 != f.params {
+            return Err((None, format!("its signature lists {} parameters but it takes {}", sig.params.len(), f.params)));
+        }
+        if let Some(bad) = sig.params.iter().chain(std::iter::once(&sig.ret)).find(|t| **t >= nt) {
+            return Err((None, format!("its signature refers to type #{}, which does not exist", bad)));
+        }
+    }
+    if f.external {
+        if !f.code.is_empty() {
+            return Err((None, "is external but has code".into()));
+        }
+        return Ok(0);
+    }
     if f.locals < f.params {
         return Err((None, format!("has {} locals but {} parameters", f.locals, f.params)));
     }
@@ -140,7 +166,7 @@ fn verify_func(m: &Module, f: &Function, nf: u32, nt: u32) -> Result<u32, (Optio
 
 fn effect(m: &Module, op: &Op) -> (u32, u32) {
     match op {
-        Op::Const(_) | Op::Str(_) | Op::FuncRef(_) | Op::Load(_) | Op::GLoad(_) => (0, 1),
+        Op::Const(_) | Op::TypeConst(_) | Op::LocConst(_) | Op::Str(_) | Op::FuncRef(_) | Op::Load(_) | Op::GLoad(_) => (0, 1),
         Op::Store(_) | Op::GStore(_) | Op::Pop => (1, 0),
         Op::Tee(_) | Op::GTee(_) => (1, 1),
         Op::Dup => (1, 2),
@@ -215,6 +241,7 @@ fn check_operands(m: &Module, f: &Function, op: &Op, nf: u32, nt: u32) -> Result
     match *op {
         Op::Str(i) if i as usize >= m.strings.len() => Err(format!("string @{} does not exist", i)),
         Op::FuncRef(i) | Op::Call(i) => func(i),
+        Op::TypeConst(t) => ty(t),
         Op::Load(s) | Op::Store(s) | Op::Tee(s) => local(s),
         Op::GLoad(g) | Op::GStore(g) | Op::GTee(g) => global(g),
         Op::Dispatch(t, n) => match m.tables.get(t as usize) {

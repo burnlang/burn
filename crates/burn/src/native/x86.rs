@@ -70,7 +70,14 @@ fn inv(c: Cmp) -> Cmp {
 fn is_const(e: &Expr) -> bool {
     matches!(
         e.kind,
-        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Null | ExprKind::FuncRef(_)
+        ExprKind::Int(_)
+            | ExprKind::TypeId(_)
+            | ExprKind::LocId(_)
+            | ExprKind::Float(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Str(_)
+            | ExprKind::Null
+            | ExprKind::FuncRef(_)
     )
 }
 
@@ -419,6 +426,13 @@ impl<'p> Gen<'p> {
                     self.e(&format!("movabs {}, {}", reg, v));
                 }
             }
+            ExprKind::TypeId(v) | ExprKind::LocId(v) => {
+                if *v <= i32::MAX as u32 {
+                    self.e(&format!("mov {}, {}", reg, v));
+                } else {
+                    self.e(&format!("movabs {}, {}", reg, v));
+                }
+            }
             ExprKind::Float(f) => {
                 let b = f.to_bits();
                 if b == 0 {
@@ -445,6 +459,8 @@ impl<'p> Gen<'p> {
         matches!(
             e.kind,
             ExprKind::Int(_)
+                | ExprKind::TypeId(_)
+                | ExprKind::LocId(_)
                 | ExprKind::Float(_)
                 | ExprKind::Bool(_)
                 | ExprKind::Str(_)
@@ -503,6 +519,7 @@ impl<'p> Gen<'p> {
         for a in args {
             match &a.kind {
                 ExprKind::Int(v) if *v >= i32::MIN as i64 && *v <= i32::MAX as i64 => self.e(&format!("push {}", v)),
+                ExprKind::TypeId(v) | ExprKind::LocId(v) if *v <= i32::MAX as u32 => self.e(&format!("push {}", v)),
                 ExprKind::Local(s) => self.e(&format!("push {}", Self::local(*s))),
                 _ => {
                     self.expr(a);

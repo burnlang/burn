@@ -37,6 +37,7 @@ impl Host {
 pub enum LoadError {
     Verify(VerifyError),
     MissingImport(String),
+    Unlinked(String),
     ImportArity { name: String, module: u32, host: u32 },
 }
 
@@ -45,6 +46,7 @@ impl fmt::Display for LoadError {
         match self {
             LoadError::Verify(e) => write!(f, "{}", e),
             LoadError::MissingImport(n) => write!(f, "the module imports {}, but the host does not provide it", n),
+            LoadError::Unlinked(n) => write!(f, "function {} is external; link the module that defines it", n),
             LoadError::ImportArity { name, module, host } => {
                 write!(f, "the module imports {} with {} arguments, but the host function takes {}", name, module, host)
             }
@@ -87,6 +89,9 @@ impl Program {
 
 pub fn load(m: &Module, host: &Host) -> Result<Arc<Program>, LoadError> {
     let max = analyze(m)?;
+    if let Some(f) = m.funcs.iter().find(|f| f.external) {
+        return Err(LoadError::Unlinked(f.name.clone()));
+    }
     let mut hosts = Vec::with_capacity(m.imports.len());
     for imp in &m.imports {
         match host.fns.get(&imp.name) {
@@ -414,6 +419,7 @@ impl Vm {
             pc += 1;
             match op {
                 Op::Const(v) => push!(v),
+                Op::TypeConst(v) | Op::LocConst(v) => push!(v as u64),
                 Op::Str(i) => push!(unsafe { *prog.strings.get_unchecked(i as usize) }),
                 Op::FuncRef(i) => push!(i as u64),
                 Op::Load(s) => push!(local!(s)),

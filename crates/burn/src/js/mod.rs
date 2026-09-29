@@ -230,6 +230,7 @@ impl<'p> Gen<'p> {
 
     fn expr(&mut self, e: &Expr) -> String {
         match &e.kind {
+            ExprKind::TypeId(v) | ExprKind::LocId(v) => v.to_string(),
             ExprKind::Int(v) => {
                 if *v < 0 {
                     format!("({})", v)

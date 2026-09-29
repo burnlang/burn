@@ -11,11 +11,11 @@ pub use burn_runtime as runtime;
 pub use burn_runtime::meta::Desc;
 pub use burn_runtime::RtFn;
 pub use exec::{load, run, Host, LoadError, Program, Runner};
-pub use module::{Function, Import, Module, Table};
+pub use module::{Annotation, Function, Import, Module, Sig, Table, Target, Value};
 pub use op::{Cmp, Op};
 pub use verify::{verify, VerifyError};
 
-pub const FORMAT_VERSION: u16 = 1;
+pub const FORMAT_VERSION: u16 = 2;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub fn parse(bytes: &[u8]) -> Result<Module, String> {

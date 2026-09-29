@@ -43,6 +43,8 @@ pub struct Expr {
 #[derive(Clone, Debug)]
 pub enum ExprKind {
     Int(i64),
+    TypeId(u32),
+    LocId(u32),
     Float(f64),
     Bool(bool),
     Str(u32),
@@ -146,6 +148,8 @@ impl Expr {
         !matches!(
             self.kind,
             ExprKind::Int(_)
+                | ExprKind::TypeId(_)
+                | ExprKind::LocId(_)
                 | ExprKind::Float(_)
                 | ExprKind::Bool(_)
                 | ExprKind::Str(_)

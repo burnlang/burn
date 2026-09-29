@@ -144,6 +144,8 @@ impl Compiler {
     fn expr(&mut self, e: &Expr) {
         match &e.kind {
             ExprKind::Int(v) => self.emit(Op::Const(*v as u64)),
+            ExprKind::TypeId(t) => self.emit(Op::TypeConst(*t)),
+            ExprKind::LocId(l) => self.emit(Op::LocConst(*l)),
             ExprKind::Float(f) => self.emit(Op::Const(f.to_bits())),
             ExprKind::Bool(b) => self.emit(Op::Const(*b as u64)),
             ExprKind::Str(i) => self.emit(Op::Str(*i)),

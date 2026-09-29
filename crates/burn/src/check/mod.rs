@@ -311,11 +311,11 @@ impl<'a> Checker<'a> {
 
     pub fn loc_expr(&mut self, span: Span) -> Expr {
         let l = self.loc(span);
-        Expr::int(l as i64)
+        Expr::new(ExprKind::LocId(l), T_INT)
     }
 
     pub fn tid(t: TyId) -> Expr {
-        Expr::int(t as i64)
+        Expr::new(ExprKind::TypeId(t), T_INT)
     }
 
     pub fn ctx(&mut self) -> &mut FnCtx {
