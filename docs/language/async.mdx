@@ -1,0 +1,33 @@
+---
+title: Async
+description: Running work concurrently with async functions and await.
+order: 7
+---
+
+# Async
+
+Calling an `async fun` starts it in the background and immediately returns a `Future<T>`. `await` waits for the
+result.
+
+```burn
+async fun download(name: string, ms: int): string {
+    sleep(ms)
+    return name + " done"
+}
+
+fun main() {
+    var a = download("first", 200)
+    var b = download("second", 200)
+    print(await a)
+    print(await b)
+}
+```
+
+Both downloads run at the same time, so the program takes about 200ms instead of 400ms.
+
+- `async fun` can be a top level function or a class method.
+- Futures can be stored in variables and arrays (`[Future<int>]`) and awaited later.
+- A program waits for all running tasks before it exits.
+- In the native and VM backends every task runs on its own thread. The JavaScript backend runs tasks when they
+  are called, one after another.
+- Tasks share global variables and objects. Do not modify the same array or map from several tasks at once.

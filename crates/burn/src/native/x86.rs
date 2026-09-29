@@ -1,0 +1,788 @@
+use crate::hir::{BinOp, Cmp, Conv, Expr, ExprKind, Func, Program, Stmt, UnOp};
+use burn_runtime::RtFn;
+use std::fmt::Write;
+
+pub struct Target {
+    pub prefix: &'static str,
+    pub macos: bool,
+}
+
+impl Target {
+    pub fn host() -> Target {
+        if cfg!(target_os = "macos") {
+            Target { prefix: "_", macos: true }
+        } else {
+            Target { prefix: "", macos: false }
+        }
+    }
+}
+
+const ENTRY: &str = include_str!("entry_x86_64.s");
+
+const ARG_REGS: [&str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
+
+struct Gen<'p> {
+    p: &'p Program,
+    t: &'p Target,
+    out: String,
+    cold: String,
+    label: usize,
+    fid: usize,
+    loops: Vec<(String, String)>,
+}
+
+pub fn generate(p: &Program, meta: &[u8], t: &Target) -> String {
+    let mut g = Gen {
+        p,
+        t,
+        out: String::with_capacity(1 << 20),
+        cold: String::new(),
+        label: 0,
+        fid: 0,
+        loops: Vec::new(),
+    };
+    g.emit_all(meta);
+    g.out
+}
+
+fn cc(c: Cmp) -> &'static str {
+    match c {
+        Cmp::Eq => "e",
+        Cmp::Ne => "ne",
+        Cmp::Lt => "l",
+        Cmp::Le => "le",
+        Cmp::Gt => "g",
+        Cmp::Ge => "ge",
+    }
+}
+
+fn inv(c: Cmp) -> Cmp {
+    match c {
+        Cmp::Eq => Cmp::Ne,
+        Cmp::Ne => Cmp::Eq,
+        Cmp::Lt => Cmp::Ge,
+        Cmp::Le => Cmp::Gt,
+        Cmp::Gt => Cmp::Le,
+        Cmp::Ge => Cmp::Lt,
+    }
+}
+
+fn is_const(e: &Expr) -> bool {
+    matches!(
+        e.kind,
+        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Null | ExprKind::FuncRef(_)
+    )
+}
+
+fn writes_local(e: &Expr, slot: u32) -> bool {
+    let mut found = false;
+    visit(e, &mut |x| {
+        if let ExprKind::SetLocal(s, _) = x.kind {
+            if s == slot {
+                found = true;
+            }
+        }
+    });
+    found
+}
+
+fn writes_global(e: &Expr) -> bool {
+    let mut found = false;
+    visit(e, &mut |x| {
+        if matches!(
+            x.kind,
+            ExprKind::SetGlobal(..) | ExprKind::Call(..) | ExprKind::CallIndirect(..) | ExprKind::CallIface(..) | ExprKind::Seq(..)
+        ) {
+            found = true;
+        }
+    });
+    found
+}
+
+fn visit(e: &Expr, f: &mut dyn FnMut(&Expr)) {
+    f(e);
+    match &e.kind {
+        ExprKind::SetLocal(_, x)
+        | ExprKind::SetGlobal(_, x)
+        | ExprKind::Unary(_, x)
+        | ExprKind::Conv(_, x)
+        | ExprKind::GetField(x, _)
+        | ExprKind::ArrLen(x)
+        | ExprKind::BoxVal(x) => visit(x, f),
+        ExprKind::Binary(_, a, b) | ExprKind::And(a, b) | ExprKind::Or(a, b) | ExprKind::Index(a, b, _) | ExprKind::SetField(a, _, b) => {
+            visit(a, f);
+            visit(b, f);
+        }
+        ExprKind::SetIndex(a, b, c, _) => {
+            visit(a, f);
+            visit(b, f);
+            visit(c, f);
+        }
+        ExprKind::Call(_, xs)
+        | ExprKind::CallIface(_, xs)
+        | ExprKind::Rt(_, xs)
+        | ExprKind::Spawn(_, xs)
+        | ExprKind::NewStruct(_, xs)
+        | ExprKind::NewArray(_, xs) => {
+            for x in xs {
+                visit(x, f);
+            }
+        }
+        ExprKind::CallIndirect(c, xs) => {
+            visit(c, f);
+            for x in xs {
+                visit(x, f);
+            }
+        }
+        ExprKind::Seq(ss, x) => {
+            for s in ss {
+                visit_stmt(s, f);
+            }
+            visit(x, f);
+        }
+        _ => {}
+    }
+}
+
+fn visit_stmt(s: &Stmt, f: &mut dyn FnMut(&Expr)) {
+    match s {
+        Stmt::Expr(e) | Stmt::Return(Some(e)) => visit(e, f),
+        Stmt::If(c, a, b) => {
+            visit(c, f);
+            a.iter().for_each(|x| visit_stmt(x, f));
+            b.iter().for_each(|x| visit_stmt(x, f));
+        }
+        Stmt::Loop { cond, body, step } => {
+            if let Some(c) = cond {
+                visit(c, f);
+            }
+            body.iter().for_each(|x| visit_stmt(x, f));
+            step.iter().for_each(|x| visit_stmt(x, f));
+        }
+        _ => {}
+    }
+}
+
+impl<'p> Gen<'p> {
+    fn sym(&self, name: &str) -> String {
+        format!("{}{}", self.t.prefix, name)
+    }
+
+    fn l(&mut self) -> String {
+        self.label += 1;
+        format!(".L{}", self.label)
+    }
+
+    fn e(&mut self, s: &str) {
+        self.out.push_str("    ");
+        self.out.push_str(s);
+        self.out.push('\n');
+    }
+
+    fn lbl(&mut self, l: &str) {
+        self.out.push_str(l);
+        self.out.push_str(":\n");
+    }
+
+    fn local(slot: u32) -> String {
+        format!("qword ptr [rbp - {}]", 8 * (slot as usize + 1))
+    }
+
+    fn global(&self, g: u32) -> String {
+        format!("qword ptr [rip + {} + {}]", self.sym("burn_globals"), 8 * g as usize)
+    }
+
+    fn call_rt_raw(&mut self, name: &str) {
+        let s = self.sym(name);
+        self.e("mov r12, rsp");
+        self.e("and rsp, -16");
+        if self.t.macos {
+            self.e(&format!("call {}", s));
+        } else {
+            self.e(&format!("call {}@PLT", s));
+        }
+        self.e("mov rsp, r12");
+    }
+
+    fn emit_all(&mut self, meta: &[u8]) {
+        let p = self.p;
+        let plt = if self.t.macos { "" } else { "@PLT" };
+        self.out.push_str(&ENTRY.replace("{P}", self.t.prefix).replace("{PLT}", plt));
+        writeln!(self.out, ".set burn_entry, bf_{}", p.entry).unwrap();
+        let meta_sym = "burn_meta";
+        let glob_sym = self.sym("burn_globals");
+        for (i, f) in p.funcs.iter().enumerate() {
+            self.fid = i;
+            self.func(f);
+        }
+        let rodata = if self.t.macos { ".section __TEXT,__const" } else { ".section .rodata" };
+        self.out.push_str(rodata);
+        self.out.push('\n');
+        self.out.push_str(".p2align 4\n");
+        writeln!(self.out, "burn_meta_len:\n    .quad {}", meta.len()).unwrap();
+        writeln!(self.out, "burn_nglobals:\n    .quad {}", p.globals.len()).unwrap();
+        writeln!(self.out, "{}:", meta_sym).unwrap();
+        self.bytes(meta);
+        for (i, s) in p.strings.iter().enumerate() {
+            let b = s.as_bytes();
+            let flags = 1 | if s.is_ascii() { 2 } else { 0 };
+            self.out.push_str(".p2align 4\n");
+            writeln!(self.out, "bs_{}:", i).unwrap();
+            writeln!(self.out, "    .byte 1, 0, {}, 0", flags).unwrap();
+            writeln!(self.out, "    .long {}", burn_runtime::meta::TID_STR).unwrap();
+            writeln!(self.out, "    .quad {}", 24 + b.len() + 1).unwrap();
+            writeln!(self.out, "    .quad {}", b.len()).unwrap();
+            let mut bb = b.to_vec();
+            bb.push(0);
+            self.bytes(&bb);
+        }
+        let relro = if self.t.macos { ".section __DATA,__const" } else { ".section .data.rel.ro" };
+        self.out.push_str(relro);
+        self.out.push('\n');
+        let ntypes = p.types.len();
+        for (i, s) in p.slots.iter().enumerate() {
+            let mut table = vec![String::from("0"); ntypes];
+            for (tid, f) in &s.impls {
+                table[*tid as usize] = format!("bf_{}", f);
+            }
+            self.out.push_str(".p2align 3\n");
+            writeln!(self.out, "bi_{}:", i).unwrap();
+            for chunk in table.chunks(8) {
+                writeln!(self.out, "    .quad {}", chunk.join(", ")).unwrap();
+            }
+        }
+        let bss = if self.t.macos { ".section __DATA,__bss" } else { ".bss" };
+        self.out.push_str(bss);
+        self.out.push('\n');
+        self.out.push_str(".p2align 4\n");
+        writeln!(self.out, "{}:", glob_sym).unwrap();
+        writeln!(self.out, "    .zero {}", 8 * p.globals.len().max(1)).unwrap();
+        if !self.t.macos {
+            self.out.push_str(".section .note.GNU-stack,\"\",@progbits\n");
+        }
+    }
+
+    fn bytes(&mut self, b: &[u8]) {
+        for chunk in b.chunks(32) {
+            let parts: Vec<String> = chunk.iter().map(|x| x.to_string()).collect();
+            writeln!(self.out, "    .byte {}", parts.join(",")).unwrap();
+        }
+    }
+
+    fn func(&mut self, f: &Func) {
+        self.out.push_str(".p2align 4\n");
+        writeln!(self.out, "bf_{}:", self.fid).unwrap();
+        self.e("push rbp");
+        self.e("mov rbp, rsp");
+        let n = f.locals.len().max(f.params as usize);
+        let frame = (n * 8 + 15) & !15;
+        if frame > 0 {
+            self.e(&format!("sub rsp, {}", frame));
+        }
+        let np = f.params as usize;
+        for i in 0..np {
+            self.e(&format!("mov rax, qword ptr [rbp + {}]", 16 + 8 * (np - 1 - i)));
+            self.e(&format!("mov {}, rax", Self::local(i as u32)));
+        }
+        for s in &f.body {
+            self.stmt(s);
+        }
+        self.e("xor eax, eax");
+        self.e("leave");
+        self.e("ret");
+        let cold = std::mem::take(&mut self.cold);
+        self.out.push_str(&cold);
+    }
+
+    fn stmts(&mut self, ss: &[Stmt]) {
+        for s in ss {
+            self.stmt(s);
+        }
+    }
+
+    fn stmt(&mut self, s: &Stmt) {
+        match s {
+            Stmt::Expr(e) => self.expr(e),
+            Stmt::If(c, a, b) => {
+                let else_l = self.l();
+                self.jump_false(c, &else_l);
+                self.stmts(a);
+                if b.is_empty() {
+                    self.lbl(&else_l);
+                } else {
+                    let end = self.l();
+                    self.e(&format!("jmp {}", end));
+                    self.lbl(&else_l);
+                    self.stmts(b);
+                    self.lbl(&end);
+                }
+            }
+            Stmt::Loop { cond, body, step } => {
+                let top = self.l();
+                let cont = self.l();
+                let end = self.l();
+                self.lbl(&top);
+                if let Some(c) = cond {
+                    self.jump_false(c, &end);
+                }
+                self.loops.push((cont.clone(), end.clone()));
+                self.stmts(body);
+                self.loops.pop();
+                self.lbl(&cont);
+                self.stmts(step);
+                self.e(&format!("jmp {}", top));
+                self.lbl(&end);
+            }
+            Stmt::Return(v) => {
+                match v {
+                    Some(e) => self.expr(e),
+                    None => self.e("xor eax, eax"),
+                }
+                self.e("leave");
+                self.e("ret");
+            }
+            Stmt::Break => {
+                let end = self.loops.last().unwrap().1.clone();
+                self.e(&format!("jmp {}", end));
+            }
+            Stmt::Continue => {
+                let c = self.loops.last().unwrap().0.clone();
+                self.e(&format!("jmp {}", c));
+            }
+        }
+    }
+
+    fn jump_false(&mut self, c: &Expr, target: &str) {
+        match &c.kind {
+            ExprKind::Bool(true) => {}
+            ExprKind::Bool(false) => self.e(&format!("jmp {}", target)),
+            ExprKind::Binary(BinOp::ICmp(k), a, b) => {
+                self.operands(a, b);
+                self.e("cmp rax, rcx");
+                self.e(&format!("j{} {}", cc(inv(*k)), target));
+            }
+            ExprKind::Unary(UnOp::Not, x) => self.jump_true(x, target),
+            ExprKind::And(a, b) => {
+                self.jump_false(a, target);
+                self.jump_false(b, target);
+            }
+            ExprKind::Or(a, b) => {
+                let t = self.l();
+                self.jump_true(a, &t);
+                self.jump_false(b, target);
+                self.lbl(&t);
+            }
+            _ => {
+                self.expr(c);
+                self.e("test rax, rax");
+                self.e(&format!("jz {}", target));
+            }
+        }
+    }
+
+    fn jump_true(&mut self, c: &Expr, target: &str) {
+        match &c.kind {
+            ExprKind::Bool(false) => {}
+            ExprKind::Bool(true) => self.e(&format!("jmp {}", target)),
+            ExprKind::Binary(BinOp::ICmp(k), a, b) => {
+                self.operands(a, b);
+                self.e("cmp rax, rcx");
+                self.e(&format!("j{} {}", cc(*k), target));
+            }
+            ExprKind::Unary(UnOp::Not, x) => self.jump_false(x, target),
+            ExprKind::Or(a, b) => {
+                self.jump_true(a, target);
+                self.jump_true(b, target);
+            }
+            ExprKind::And(a, b) => {
+                let f = self.l();
+                self.jump_false(a, &f);
+                self.jump_true(b, target);
+                self.lbl(&f);
+            }
+            _ => {
+                self.expr(c);
+                self.e("test rax, rax");
+                self.e(&format!("jnz {}", target));
+            }
+        }
+    }
+
+    fn simple_load(&mut self, e: &Expr, reg: &str) -> bool {
+        match &e.kind {
+            ExprKind::Int(v) => {
+                if *v == 0 {
+                    self.e(&format!("xor {}, {}", reg, reg));
+                } else if *v >= i32::MIN as i64 && *v <= i32::MAX as i64 {
+                    self.e(&format!("mov {}, {}", reg, v));
+                } else {
+                    self.e(&format!("movabs {}, {}", reg, v));
+                }
+            }
+            ExprKind::Float(f) => {
+                let b = f.to_bits();
+                if b == 0 {
+                    self.e(&format!("xor {}, {}", reg, reg));
+                } else {
+                    self.e(&format!("movabs {}, {}", reg, b as i64));
+                }
+            }
+            ExprKind::Bool(b) => self.e(&format!("mov {}, {}", reg, *b as u8)),
+            ExprKind::Null => self.e(&format!("xor {}, {}", reg, reg)),
+            ExprKind::Str(i) => self.e(&format!("lea {}, [rip + bs_{}]", reg, i)),
+            ExprKind::FuncRef(f) => self.e(&format!("lea {}, [rip + bf_{}]", reg, f)),
+            ExprKind::Local(s) => self.e(&format!("mov {}, {}", reg, Self::local(*s))),
+            ExprKind::Global(g) => {
+                let m = self.global(*g);
+                self.e(&format!("mov {}, {}", reg, m))
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    fn is_simple(e: &Expr) -> bool {
+        matches!(
+            e.kind,
+            ExprKind::Int(_)
+                | ExprKind::Float(_)
+                | ExprKind::Bool(_)
+                | ExprKind::Str(_)
+                | ExprKind::Null
+                | ExprKind::FuncRef(_)
+                | ExprKind::Local(_)
+                | ExprKind::Global(_)
+        )
+    }
+
+    fn operands(&mut self, a: &Expr, b: &Expr) {
+        if Self::is_simple(b) {
+            self.expr(a);
+            self.simple_load(b, "rcx");
+        } else if is_const(a) {
+            self.expr(b);
+            self.e("mov rcx, rax");
+            self.simple_load(a, "rax");
+        } else {
+            self.expr(a);
+            self.e("push rax");
+            self.expr(b);
+            self.e("mov rcx, rax");
+            self.e("pop rax");
+        }
+    }
+
+    fn late_ok(arg: &Expr, all: &[Expr]) -> bool {
+        match arg.kind {
+            ExprKind::Local(s) => !all.iter().any(|x| writes_local(x, s)),
+            ExprKind::Global(_) => !all.iter().any(writes_global),
+            _ => is_const(arg),
+        }
+    }
+
+    fn rt_call(&mut self, f: RtFn, args: &[Expr]) {
+        let n = args.len();
+        let late: Vec<bool> = args.iter().map(|a| Self::late_ok(a, args)).collect();
+        for (i, a) in args.iter().enumerate() {
+            if !late[i] {
+                self.expr(a);
+                self.e("push rax");
+            }
+        }
+        for i in (0..n).rev() {
+            if late[i] {
+                self.simple_load(&args[i], ARG_REGS[i]);
+            } else {
+                self.e(&format!("pop {}", ARG_REGS[i]));
+            }
+        }
+        self.call_rt_raw(f.symbol());
+    }
+
+    fn push_args(&mut self, args: &[Expr]) {
+        for a in args {
+            match &a.kind {
+                ExprKind::Int(v) if *v >= i32::MIN as i64 && *v <= i32::MAX as i64 => self.e(&format!("push {}", v)),
+                ExprKind::Local(s) => self.e(&format!("push {}", Self::local(*s))),
+                _ => {
+                    self.expr(a);
+                    self.e("push rax");
+                }
+            }
+        }
+    }
+
+    fn pop_args(&mut self, n: usize) {
+        if n > 0 {
+            self.e(&format!("add rsp, {}", 8 * n));
+        }
+    }
+
+    fn div(&mut self, is_mod: bool, loc: u32) {
+        let dz = self.l();
+        let normal = self.l();
+        let done = self.l();
+        self.e("test rcx, rcx");
+        self.e(&format!("jz {}", dz));
+        self.e("cmp rcx, -1");
+        self.e(&format!("jne {}", normal));
+        if is_mod {
+            self.e("xor eax, eax");
+        } else {
+            self.e("neg rax");
+        }
+        self.e(&format!("jmp {}", done));
+        self.lbl(&normal);
+        self.e("cqo");
+        self.e("idiv rcx");
+        if is_mod {
+            self.e("mov rax, rdx");
+        }
+        self.lbl(&done);
+        let sym = self.sym(RtFn::ErrDivZero.symbol());
+        let call = if self.t.macos { format!("call {}", sym) } else { format!("call {}@PLT", sym) };
+        writeln!(self.cold, "{}:\n    mov edi, {}\n    and rsp, -16\n    {}\n    ud2", dz, loc, call).unwrap();
+    }
+
+    fn expr(&mut self, e: &Expr) {
+        if self.simple_load(e, "rax") {
+            return;
+        }
+        match &e.kind {
+            ExprKind::SetLocal(s, v) => {
+                self.expr(v);
+                self.e(&format!("mov {}, rax", Self::local(*s)));
+            }
+            ExprKind::SetGlobal(g, v) => {
+                self.expr(v);
+                let m = self.global(*g);
+                self.e(&format!("mov {}, rax", m));
+            }
+            ExprKind::Unary(op, x) => {
+                self.expr(x);
+                match op {
+                    UnOp::INeg => self.e("neg rax"),
+                    UnOp::FNeg => self.e("btc rax, 63"),
+                    UnOp::Not => {
+                        self.e("test rax, rax");
+                        self.e("sete al");
+                        self.e("movzx eax, al");
+                    }
+                }
+            }
+            ExprKind::Binary(op, a, b) => {
+                self.operands(a, b);
+                match op {
+                    BinOp::IAdd => self.e("add rax, rcx"),
+                    BinOp::ISub => self.e("sub rax, rcx"),
+                    BinOp::IMul => self.e("imul rax, rcx"),
+                    BinOp::IDiv(l) => self.div(false, *l),
+                    BinOp::IMod(l) => self.div(true, *l),
+                    BinOp::FAdd | BinOp::FSub | BinOp::FMul | BinOp::FDiv => {
+                        self.e("movq xmm0, rax");
+                        self.e("movq xmm1, rcx");
+                        let ins = match op {
+                            BinOp::FAdd => "addsd",
+                            BinOp::FSub => "subsd",
+                            BinOp::FMul => "mulsd",
+                            _ => "divsd",
+                        };
+                        self.e(&format!("{} xmm0, xmm1", ins));
+                        self.e("movq rax, xmm0");
+                    }
+                    BinOp::ICmp(c) => {
+                        self.e("cmp rax, rcx");
+                        self.e(&format!("set{} al", cc(*c)));
+                        self.e("movzx eax, al");
+                    }
+                    BinOp::FCmp(c) => {
+                        self.e("movq xmm0, rax");
+                        self.e("movq xmm1, rcx");
+                        match c {
+                            Cmp::Eq => {
+                                self.e("ucomisd xmm0, xmm1");
+                                self.e("sete al");
+                                self.e("setnp cl");
+                                self.e("and al, cl");
+                            }
+                            Cmp::Ne => {
+                                self.e("ucomisd xmm0, xmm1");
+                                self.e("setne al");
+                                self.e("setp cl");
+                                self.e("or al, cl");
+                            }
+                            Cmp::Lt => {
+                                self.e("ucomisd xmm1, xmm0");
+                                self.e("seta al");
+                            }
+                            Cmp::Le => {
+                                self.e("ucomisd xmm1, xmm0");
+                                self.e("setae al");
+                            }
+                            Cmp::Gt => {
+                                self.e("ucomisd xmm0, xmm1");
+                                self.e("seta al");
+                            }
+                            Cmp::Ge => {
+                                self.e("ucomisd xmm0, xmm1");
+                                self.e("setae al");
+                            }
+                        }
+                        self.e("movzx eax, al");
+                    }
+                }
+            }
+            ExprKind::And(a, b) => {
+                let end = self.l();
+                self.expr(a);
+                self.e("test rax, rax");
+                self.e(&format!("jz {}", end));
+                self.expr(b);
+                self.lbl(&end);
+            }
+            ExprKind::Or(a, b) => {
+                let end = self.l();
+                self.expr(a);
+                self.e("test rax, rax");
+                self.e(&format!("jnz {}", end));
+                self.expr(b);
+                self.lbl(&end);
+            }
+            ExprKind::Conv(c, x) => {
+                self.expr(x);
+                match c {
+                    Conv::IntToFloat => {
+                        self.e("cvtsi2sd xmm0, rax");
+                        self.e("movq rax, xmm0");
+                    }
+                    Conv::FloatToInt => {
+                        self.e("movq xmm0, rax");
+                        self.e("cvttsd2si rax, xmm0");
+                    }
+                }
+            }
+            ExprKind::Call(f, args) => {
+                self.push_args(args);
+                self.e(&format!("call bf_{}", f));
+                self.pop_args(args.len());
+            }
+            ExprKind::CallIndirect(c, args) => {
+                self.push_args(args);
+                self.expr(c);
+                self.e("call rax");
+                self.pop_args(args.len());
+            }
+            ExprKind::CallIface(slot, args) => {
+                self.push_args(args);
+                let n = args.len();
+                self.e(&format!("mov rax, qword ptr [rsp + {}]", 8 * (n - 1)));
+                self.e("mov eax, dword ptr [rax + 4]");
+                self.e(&format!("lea rcx, [rip + bi_{}]", slot));
+                self.e("mov rax, qword ptr [rcx + rax*8]");
+                self.e("call rax");
+                self.pop_args(n);
+            }
+            ExprKind::Rt(f, args) => self.rt_call(*f, args),
+            ExprKind::Spawn(f, args) => {
+                self.push_args(args);
+                self.e(&format!("lea rdi, [rip + bf_{}]", f));
+                self.e(&format!("mov rsi, {}", args.len()));
+                self.e("mov rdx, rsp");
+                self.e(&format!("mov rcx, {}", e.ty));
+                self.call_rt_raw(RtFn::Spawn.symbol());
+                self.pop_args(args.len());
+            }
+            ExprKind::NewStruct(t, fields) => {
+                let n = fields.len();
+                self.push_args(fields);
+                self.e(&format!("mov edi, {}", t));
+                self.e(&format!("mov esi, {}", n));
+                self.call_rt_raw(RtFn::StructNew.symbol());
+                for i in (0..n).rev() {
+                    self.e("pop rcx");
+                    self.e(&format!("mov qword ptr [rax + {}], rcx", 16 + 8 * i));
+                }
+            }
+            ExprKind::GetField(o, i) => {
+                self.expr(o);
+                self.e(&format!("mov rax, qword ptr [rax + {}]", 16 + 8 * *i as usize));
+            }
+            ExprKind::SetField(o, i, v) => {
+                if Self::is_simple(v) {
+                    self.expr(o);
+                    self.simple_load(v, "rcx");
+                    self.e(&format!("mov qword ptr [rax + {}], rcx", 16 + 8 * *i as usize));
+                    self.e("mov rax, rcx");
+                } else {
+                    self.expr(o);
+                    self.e("push rax");
+                    self.expr(v);
+                    self.e("pop rcx");
+                    self.e(&format!("mov qword ptr [rcx + {}], rax", 16 + 8 * *i as usize));
+                }
+            }
+            ExprKind::NewArray(t, items) => {
+                let n = items.len();
+                self.push_args(items);
+                self.e(&format!("mov edi, {}", t));
+                self.e(&format!("mov esi, {}", n));
+                self.call_rt_raw(RtFn::ArrNew.symbol());
+                if n > 0 {
+                    self.e("mov rdx, qword ptr [rax + 32]");
+                    for i in (0..n).rev() {
+                        self.e("pop rcx");
+                        self.e(&format!("mov qword ptr [rdx + {}], rcx", 8 * i));
+                    }
+                }
+            }
+            ExprKind::Index(a, i, loc) => {
+                self.operands(a, i);
+                let bad = self.l();
+                self.e("cmp rcx, qword ptr [rax + 16]");
+                self.e(&format!("jae {}", bad));
+                self.e("mov rdx, qword ptr [rax + 32]");
+                self.e("mov rax, qword ptr [rdx + rcx*8]");
+                self.index_cold(&bad, "rax", *loc);
+            }
+            ExprKind::SetIndex(a, i, v, loc) => {
+                self.expr(a);
+                self.e("push rax");
+                self.expr(i);
+                self.e("push rax");
+                self.expr(v);
+                self.e("pop rcx");
+                self.e("pop rdx");
+                let bad = self.l();
+                self.e("cmp rcx, qword ptr [rdx + 16]");
+                self.e(&format!("jae {}", bad));
+                self.e("mov r8, qword ptr [rdx + 32]");
+                self.e("mov qword ptr [r8 + rcx*8], rax");
+                self.index_cold(&bad, "rdx", *loc);
+            }
+            ExprKind::ArrLen(a) => {
+                self.expr(a);
+                self.e("mov rax, qword ptr [rax + 16]");
+            }
+            ExprKind::BoxVal(x) => {
+                self.expr(x);
+                self.e("mov rax, qword ptr [rax + 16]");
+            }
+            ExprKind::Seq(ss, x) => {
+                self.stmts(ss);
+                self.expr(x);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn index_cold(&mut self, label: &str, arr: &str, loc: u32) {
+        let sym = self.sym(RtFn::ErrIndex.symbol());
+        let call = if self.t.macos { format!("call {}", sym) } else { format!("call {}@PLT", sym) };
+        writeln!(
+            self.cold,
+            "{}:\n    mov rsi, rcx\n    mov rdx, qword ptr [{} + 16]\n    mov edi, {}\n    and rsp, -16\n    {}\n    ud2",
+            label, arr, loc, call
+        )
+        .unwrap();
+    }
+}

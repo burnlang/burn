@@ -1,0 +1,9 @@
+fun find(flag: bool): string? {
+    if (flag) {
+        return "found"
+    }
+    return null
+}
+
+var result = find(true)
+print(result.length)

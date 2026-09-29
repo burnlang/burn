@@ -1,0 +1,21 @@
+import "http"
+
+fun main() {
+    HTTP.setHeaders(["User-Agent: BurnLang/2.0", "Accept: application/json"])
+
+    print("Making GET request to the otakugifs API...")
+    var response = HTTP.get("https://api.otakugifs.xyz/gif?reaction=kiss&format=gif")
+    print("Status code: " + response.statusCode)
+    print("Content-Type: " + HTTP.getHeader(response, "Content-Type"))
+
+    if (response.statusCode != 200) {
+        print("Request failed: " + response.body)
+        return
+    }
+
+    var json = HTTP.parseJSON(response.body)
+    var url = json["url"]
+    if (url is string) {
+        print("GIF: " + url)
+    }
+}

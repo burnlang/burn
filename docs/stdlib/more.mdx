@@ -1,0 +1,27 @@
+---
+title: std/math, std/strings and std/json
+description: Smaller standard library modules.
+order: 14
+---
+
+# `std/math`
+
+Constants `PI`, `E`, `TAU` and the `Math` class: `Math.clamp`, `Math.lerp`, `Math.toRadians`, `Math.toDegrees`,
+`Math.sign`, `Math.hypot`, `Math.gcd`, `Math.lcm`, `Math.factorial`, `Math.isPrime`, `Math.sum([float])`,
+`Math.average([float])`.
+
+# `std/strings`
+
+`padLeft(text, width, fill)`, `padRight`, `isEmpty`, `isBlank`, `capitalize`, `countOf(text, part)`,
+`lines(text)`, `words(text)`, `isDigits`, `isAlpha`. All of them can be used as methods:
+
+```burn
+import "strings"
+
+print("7".padLeft(3, "0"), "burn".capitalize())
+```
+
+# `std/json`
+
+The `JSON` class wraps the built-ins: `JSON.parse`, `JSON.stringify`, `JSON.get(value, key)`,
+`JSON.at(value, index)`, `JSON.isObject`, `JSON.isArray`.

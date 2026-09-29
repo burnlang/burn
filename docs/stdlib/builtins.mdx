@@ -1,0 +1,66 @@
+---
+title: Built-in functions
+description: Functions that are always available without an import.
+order: 10
+---
+
+# Built-in functions
+
+Built-ins can be called as functions or, when the first argument is the receiver, as methods:
+`len(names)` and `names.length`, `upper(s)` and `s.upper()`.
+
+## Output and input
+
+| Function | Description |
+| --- | --- |
+| `print(values...)` | prints the values separated by spaces and a newline |
+| `write(value)` | prints without a newline |
+| `input(prompt = "")` | reads a line from standard input |
+
+## Conversion
+
+| Function | Description |
+| --- | --- |
+| `toString(x)`, `str(x)` | any value as a string |
+| `toInt(x)`, `parseInt(s)` | string, float or bool to `int` (runtime error for invalid strings) |
+| `toFloat(x)`, `parseFloat(s)` | string or int to `float` |
+| `isInt(s)`, `isNumber(s)` | check a string before converting |
+| `typeOf(x)` | the runtime type name, e.g. `"int"`, `"[string]"`, `"Person"` |
+
+## Strings
+
+`len`, `upper`, `lower`, `trim`, `split(s, sep)`, `join(array, sep)`, `substring(s, start, end?)`,
+`charAt(s, i)`, `contains(s, part)`, `indexOf(s, part)`, `replace(s, from, to)`, `startsWith`, `endsWith`,
+`repeat(s, n)`, `chars(s)`, `reverse(s)`, `charCode(s)`, `fromCharCode(n)`. Indexing (`s[0]`) returns a
+one character string. Lengths and indexes count Unicode characters.
+
+## Arrays
+
+`len`, `push(a, v)`, `append(a, v)` (returns the array), `pop(a)`, `insert(a, i, v)`, `remove(a, i)`,
+`contains(a, v)`, `indexOf(a, v)`, `join(a, sep)`, `reverse(a)`, `sort(a)`, `slice(a, start, end?)`, `copy(a)`,
+`clear(a)`, and `a + b` to concatenate.
+
+## Maps
+
+`len`, `keys(m)`, `values(m)`, `has(m, k)`, `get(m, k, default)`, `remove(m, k)`, `m[k]`, `m[k] = v`.
+
+## Math
+
+`sqrt`, `pow`, `abs`, `floor`, `ceil`, `round`, `min`, `max`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`,
+`atan2`, `log`, `log10`, `exp`, `random()` (float in `[0, 1)`), `randomInt(min, max)`, `seed(n)`.
+`floor`, `ceil` and `round` return `int`; `pow`, `min`, `max` and `abs` keep `int` when all arguments are ints.
+
+## Time
+
+`now()` (seconds as float), `nowMs()` / `millis()` (milliseconds as int), `clock()` (monotonic nanoseconds),
+`sleep(ms)`.
+
+## JSON
+
+`parseJSON(text)` returns `any`: objects become `{string: any}`, arrays `[any]`. Read values with indexing
+(`data["name"]`, `data.tags[0]`) and narrow them with `is`. `toJSON(value)` serializes any value.
+
+## Files, environment and process
+
+`readFile(path)`, `writeFile(path, text)`, `appendFile(path, text)`, `fileExists(path)`, `env(name)`,
+`args()`, `exit(code = 0)`, `panic(message)`, `assert(condition, message?)`.

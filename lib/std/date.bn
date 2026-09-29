@@ -1,0 +1,149 @@
+priv fun pad2(n: int): string {
+    if (n < 10) {
+        return "0${n}"
+    }
+    return toString(n)
+}
+
+priv fun daysFromCivil(year: int, month: int, day: int): int {
+    var y = year
+    if (month <= 2) {
+        y -= 1
+    }
+    var era = y / 400
+    if (y < 0) {
+        era = (y - 399) / 400
+    }
+    var yoe = y - era * 400
+    var mp = month + 9
+    if (month > 2) {
+        mp = month - 3
+    }
+    var doy = (153 * mp + 2) / 5 + day - 1
+    var doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+    return era * 146097 + doe - 719468
+}
+
+priv fun civilFromDays(days: int): Date {
+    var z = days + 719468
+    var era = z / 146097
+    if (z < 0) {
+        era = (z - 146096) / 146097
+    }
+    var doe = z - era * 146097
+    var yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+    var y = yoe + era * 400
+    var doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+    var mp = (5 * doy + 2) / 153
+    var d = doy - (153 * mp + 2) / 5 + 1
+    var m = mp + 3
+    if (mp >= 10) {
+        m = mp - 9
+    }
+    if (m <= 2) {
+        y += 1
+    }
+    return Date { year: y, month: m, day: d }
+}
+
+pub def class Date {
+    int year
+    int month
+    int day
+
+    static fun now(): Date {
+        var t = __localTime()
+        return Date { year: t[0], month: t[1], day: t[2] }
+    }
+
+    static fun today(): string {
+        return Date.formatDate(Date.now())
+    }
+
+    static fun createDate(year: int, month: int, day: int): Date {
+        return Date { year: year, month: month, day: day }
+    }
+
+    static fun create(year: int, month: int, day: int): Date {
+        return Date { year: year, month: month, day: day }
+    }
+
+    static fun formatDate(date: Date): string {
+        return "${date.year}-${pad2(date.month)}-${pad2(date.day)}"
+    }
+
+    static fun parse(text: string): Date {
+        var parts = split(trim(text), "-")
+        if (len(parts) != 3) {
+            panic("invalid date \"${text}\", expected YYYY-MM-DD")
+        }
+        return Date { year: toInt(parts[0]), month: toInt(parts[1]), day: toInt(parts[2]) }
+    }
+
+    static fun currentYear(): int {
+        return __localTime()[0]
+    }
+
+    static fun currentMonth(): int {
+        return __localTime()[1]
+    }
+
+    static fun currentDay(): int {
+        return __localTime()[2]
+    }
+
+    static fun isLeapYear(year: int): bool {
+        return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+    }
+
+    static fun daysInMonth(year: int, month: int): int {
+        if (month == 2) {
+            if (Date.isLeapYear(year)) {
+                return 29
+            }
+            return 28
+        }
+        if (month == 4 || month == 6 || month == 9 || month == 11) {
+            return 30
+        }
+        return 31
+    }
+
+    static fun dayOfWeek(date: Date): int {
+        var d = daysFromCivil(date.year, date.month, date.day)
+        return ((d + 5) % 7 + 7) % 7
+    }
+
+    static fun dayName(date: Date): string {
+        var names = ["Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+        return names[Date.dayOfWeek(date)]
+    }
+
+    static fun addDays(date: Date, days: int): Date {
+        return civilFromDays(daysFromCivil(date.year, date.month, date.day) + days)
+    }
+
+    static fun subtractDays(date: Date, days: int): Date {
+        return civilFromDays(daysFromCivil(date.year, date.month, date.day) - days)
+    }
+
+    static fun daysBetween(from: Date, to: Date): int {
+        return daysFromCivil(to.year, to.month, to.day) - daysFromCivil(from.year, from.month, from.day)
+    }
+
+    fun format(): string {
+        return Date.formatDate(self)
+    }
+
+    fun plusDays(days: int): Date {
+        return Date.addDays(self, days)
+    }
+
+    fun isBefore(other: Date): bool {
+        return Date.daysBetween(self, other) > 0
+    }
+
+    fun isAfter(other: Date): bool {
+        return Date.daysBetween(self, other) < 0
+    }
+}

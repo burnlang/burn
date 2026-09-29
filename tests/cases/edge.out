@@ -1,0 +1,23 @@
+140.5
+[-2, 9]
+-9223372036854775808 -9223372036854775808 2 -2 -3
+4294967294
+6
+4 [1, null, 3]
+h false
+{1: "one", 2: "two", 3: "three"} two
+1
+true false true true true false
+Pair { first: 1, second: "x" } true false
+2 1 null 0
+42 b { name: "outer", inner: { value: 42, tags: ["a", "b"] } }
+quote inner 2 done 2
+6
+inner 2
+outer 1
+42
+true Low
+[3, 1, 2] [1, 2, 3] true true
+["apple", "fig", "pear"] apple, fig, pear
+[-1.0, 2.5, 10.0]
+int float bool string null [int] {string: int} int

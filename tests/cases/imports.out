@@ -1,0 +1,4 @@
+geometry module loaded
+5.0 Vec2 { x: 4.0, y: 5.0 } 2 default visibility is public
+3.141592653589793 6 120 true 10.0
+007 Burn ["many", "spaces", "here"] true 3

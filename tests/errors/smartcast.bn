@@ -1,0 +1,6 @@
+fun f(value: any): int {
+    if (value is string) {
+        return value.length
+    }
+    return value + 1
+}

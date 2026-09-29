@@ -1,0 +1,40 @@
+def type Node {
+    int value
+    Node? next
+}
+
+fun build(n: int): Node? {
+    Node? head = null
+    for i in 0..n {
+        head = Node { value: i, next: head }
+    }
+    return head
+}
+
+fun sum(list: Node?): int {
+    var total = 0
+    var cur = list
+    while (cur != null) {
+        total += cur.value
+        cur = cur.next
+    }
+    return total
+}
+
+var keep = build(1000)
+var churn = 0
+for round in 0..300 {
+    var tmp = build(2000)
+    churn += sum(tmp)
+    var text = ""
+    for i in 0..50 {
+        text += toString(i)
+    }
+    churn += len(text)
+}
+print(sum(keep), churn)
+var words: [string] = []
+for i in 0..100000 {
+    push(words, "w" + i)
+}
+print(len(words), words[99999])

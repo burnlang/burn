@@ -1,0 +1,51 @@
+def interface Shape {
+    fun area(): float
+    fun name(): string
+}
+
+def class Circle: Shape {
+    float radius
+
+    fun area(): float {
+        return 3.14159 * radius * radius
+    }
+
+    fun name(): string {
+        return "circle"
+    }
+}
+
+def class Square: Shape {
+    float side
+
+    fun area(): float {
+        return side * side
+    }
+
+    fun name(): string {
+        return "square"
+    }
+}
+
+def enum Size { Small, Medium, Large }
+
+fun classify(s: Shape): Size {
+    var a = s.area()
+    if (a < 5.0) {
+        return Size.Small
+    }
+    if (a < 20.0) {
+        return Size.Medium
+    }
+    return Size.Large
+}
+
+fun main() {
+    var shapes: [Shape] = [Circle { radius: 1 }, Square { side: 3 }, Circle { radius: 4 }]
+    for s in shapes {
+        print("${s.name()} area=${s.area()} size=${classify(s)}")
+        if (s is Circle) {
+            print("  radius " + s.radius)
+        }
+    }
+}

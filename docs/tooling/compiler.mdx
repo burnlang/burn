@@ -1,0 +1,54 @@
+---
+title: How the compiler works
+description: The pipeline from source to bytecode, machine code and JavaScript.
+order: 21
+---
+
+# How the compiler works
+
+```text
+source ──▶ lexer ──▶ parser ──▶ type checker ──▶ typed IR ─┬─▶ bytecode ──▶ VM            (burn run)
+                                    │                      ├─▶ x86-64 asm ──▶ cc + runtime (burn build)
+                                    ▼                      └─▶ JavaScript               (--target js)
+                          diagnostics, hover, completion
+```
+
+## Front end
+
+The lexer and a recursive descent parser build an AST. Newlines end statements, which is how `String name = x`
+and `var x = a` followed by `-1` on the next line stay unambiguous. Every node carries a byte span, so every error
+points at the right line and column.
+
+The type checker resolves names across modules, checks visibility, infers types, applies smart casts with a
+flow-sensitive analysis and lowers everything into a small typed IR. At that point every operation is explicit:
+integer and float arithmetic are different instructions, conversions are visible, and every runtime helper call
+knows the static type of its arguments.
+
+## Runtime
+
+All values are 64 bit words. Ints, floats, bools and enums are stored directly, everything else is a pointer to a
+heap object with a 16 byte header (kind, flags, type id, size). The runtime crate (Rust) implements strings,
+arrays, maps, boxing for `any`, formatting, JSON, HTTP, files and async tasks, plus a conservative mark-and-sweep
+garbage collector that scans the stack, the globals and the VM stack. The same runtime is used by the VM and linked
+into native executables, so both behave identically.
+
+## Bytecode VM
+
+`burn run` compiles the IR to a compact stack bytecode with a few fused instructions for loops and field access
+and runs it immediately. Checking and compiling a typical program takes a few milliseconds, so running a file
+feels like an interpreter.
+
+## Native code
+
+`burn build` turns the IR into x86-64 assembly (Intel syntax): locals live in the stack frame, expressions
+evaluate into `rax`, comparisons in conditions become compare-and-jump, array access and field access are inlined,
+and interface calls go through per-method dispatch tables. The program entry point and the trampoline that starts
+async tasks are hand-written assembly (`entry_x86_64.s`). The assembly is linked with a static build of the
+runtime that is embedded in the `burn` binary, so the result is a standalone executable. Compiling and linking
+usually takes around 100ms.
+
+## JavaScript
+
+`--target js` writes a single self-contained script for Node.js. Records become arrays tagged with their type id,
+`any` values are boxed, and the runtime helpers are implemented in a small prelude. Integers are JavaScript numbers,
+so values beyond 2^53 lose precision.

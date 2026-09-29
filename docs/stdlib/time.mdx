@@ -1,0 +1,29 @@
+---
+title: std/time
+description: Times of day and durations.
+order: 12
+---
+
+# `std/time`
+
+```burn
+import "time"
+
+var t = Time.create(9, 30, 0, 0)
+print(t.add(Time.create(1, 15, 0, 0)).format())
+print(formatTime(3661.0))
+```
+
+`Time` has the fields `hours`, `minutes`, `seconds` and `milliseconds`.
+
+| Function | Description |
+| --- | --- |
+| `Time.create(h, m, s, ms)`, `createTime(...)` | build a time |
+| `Time.now()` | the current local time |
+| `Time.fromMilliseconds(ms)`, `Time.fromSeconds(s)` | from a duration |
+| `Time.parse("HH:MM:SS.mmm")` | parse; the milliseconds part is optional |
+| `t.toMilliseconds()`, `t.toSeconds()` | as a duration |
+| `t.add(other)`, `t.subtract(other)` | arithmetic |
+| `t.format()`, `t.formatWithMs()` | `HH:MM:SS` and `HH:MM:SS.mmm` |
+| `formatTime(seconds)`, `parseTime(text)`, `currentTime()` | helpers on plain numbers and strings |
+| `hoursToMinutes`, `minutesToHours`, `hoursToSeconds`, `secondsToHours`, `minutesToSeconds`, `secondsToMinutes`, `secondsToMs`, `msToSeconds` | unit conversions |

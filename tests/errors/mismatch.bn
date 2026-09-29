@@ -1,0 +1,4 @@
+fun main() {
+    int count = 0
+    string name = count
+}

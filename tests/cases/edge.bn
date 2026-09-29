@@ -1,0 +1,105 @@
+fun many(a: int, b: int, c: int, d: int, e: int, f: int, g: int, h: float): float {
+    return a + b * 2 + c * 3 + d * 4 + e * 5 + f * 6 + g * 7 + h
+}
+
+fun minmax(xs: [int]) {
+    var lo = xs[0]
+    var hi = xs[0]
+    for x in xs {
+        lo = min(lo, x)
+        hi = max(hi, x)
+    }
+    return [lo, hi]
+}
+
+def type Pair {
+    first: any
+    second: any
+}
+
+def class Stack {
+    [int] items
+
+    fun push(v: int) {
+        items.push(v)
+    }
+
+    fun pop(): int? {
+        if (len(items) == 0) {
+            return null
+        }
+        return pop(items)
+    }
+
+    fun size(): int {
+        return len(items)
+    }
+}
+
+def enum Level { Low, Mid, High }
+
+print(many(1, 2, 3, 4, 5, 6, 7, 0.5))
+print(minmax([4, -2, 9, 0]))
+print(-9223372036854775807 - 1, (-9223372036854775807 - 1) / -1, 5 % -3, -5 % 3, -7 / 2)
+print(2147483647 * 2)
+int? maybe = 5
+if (maybe != null) {
+    print(maybe + 1)
+}
+var opts: [int?] = [1, null, 3]
+var sum = 0
+for o in opts {
+    if (o != null) {
+        sum += o
+    }
+}
+print(sum, opts)
+
+var levels = {Level.Low: "l", Level.High: "h"}
+print(levels[Level.High], has(levels, Level.Mid))
+var ids = {1: "one", 2: "two"}
+ids[3] = "three"
+print(ids, ids[2])
+var flags = {true: 1, false: 0}
+print(flags[true])
+
+fun same(a: any, b: any): bool {
+    return a == b
+}
+print(same(3, 3.0), same(3, "3"), same("3", "3"), same(null, null), same([1, 2], [1, 2]), same(3, null))
+
+var p = Pair { first: 1, second: "x" }
+print(p, p.first is int, p.second is int)
+
+var st = Stack { items: [] }
+st.push(1)
+st.push(2)
+print(st.pop(), st.pop(), st.pop(), st.size())
+
+var nested = { name: "outer", inner: { value: 42, tags: ["a", "b"] } }
+print(nested.inner.value, nested.inner.tags[1], nested)
+
+print("quote ${"inner ${1 + 1}"} done", "${[1, 2].length}")
+var größe = 3
+print(größe * 2)
+var x = 1
+{
+    var x = 2
+    print("inner", x)
+}
+print("outer", x)
+var fns: {string: fun(int): int} = {}
+fns["inc"] = fun(n: int): int { return n + 1 }
+print(fns["inc"](41))
+print(Level.High > Level.Low, Level.Low)
+var arr = [3, 1, 2]
+var sorted = copy(arr)
+sort(sorted)
+print(arr, sorted, arr == [3, 1, 2], arr != sorted)
+var words = ["pear", "apple", "fig"]
+sort(words)
+print(words, join(words, ", "))
+var fl = [2.5, -1.0, 10.0]
+sort(fl)
+print(fl)
+print(typeOf(1), typeOf(1.0), typeOf(true), typeOf("s"), typeOf(null), typeOf([1]), typeOf({"a": 1}), typeOf(maybe))

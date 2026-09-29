@@ -1,0 +1,33 @@
+pub def type Vec2 {
+    float x
+    float y
+}
+
+pub fun add(a: Vec2, b: Vec2): Vec2 {
+    return Vec2 { x: a.x + b.x, y: a.y + b.y }
+}
+
+pub fun length(v: Vec2): float {
+    return sqrt(square(v.x) + square(v.y))
+}
+
+priv fun square(x: float): float {
+    return x * x
+}
+
+priv var created = 0
+
+pub fun make(x: float, y: float): Vec2 {
+    created += 1
+    return Vec2 { x: x, y: y }
+}
+
+pub fun createdCount(): int {
+    return created
+}
+
+fun helper(): string {
+    return "default visibility is public"
+}
+
+print("geometry module loaded")

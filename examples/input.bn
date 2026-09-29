@@ -1,0 +1,11 @@
+fun main() {
+    var name = input("Enter your name: ")
+    print("Hello, " + name)
+
+    var age = input("Enter your age: ")
+    if (isInt(age)) {
+        print("Next year you will be ${toInt(age) + 1}")
+    } else {
+        print("That is not a number")
+    }
+}

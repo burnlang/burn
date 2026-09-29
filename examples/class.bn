@@ -1,0 +1,34 @@
+def class Human {
+    string name
+    int age
+
+    static fun create(name: string, age: int): Human {
+        return Human { name: name, age: age }
+    }
+
+    fun greet(): string {
+        return "Hello, " + name + "!"
+    }
+}
+
+def class Dog {
+    string name
+    string breed
+
+    static fun create(name: string, breed: string): Dog {
+        return Dog { name: name, breed: breed }
+    }
+
+    fun bark(): string {
+        return name + " says Woof!"
+    }
+}
+
+fun main() {
+    var john = Human.create("John", 30)
+    print(john.greet())
+
+    var rex = Dog.create("Rex", "Golden Retriever")
+    print(rex.bark())
+    print(Dog.bark(rex))
+}

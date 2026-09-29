@@ -1,0 +1,140 @@
+priv fun pad(n: int, width: int): string {
+    var s = toString(n)
+    while (len(s) < width) {
+        s = "0" + s
+    }
+    return s
+}
+
+pub def class Time {
+    int hours
+    int minutes
+    int seconds
+    int milliseconds
+
+    static fun create(hours: int, minutes: int, seconds: int, milliseconds: int): Time {
+        return Time { hours: hours, minutes: minutes, seconds: seconds, milliseconds: milliseconds }
+    }
+
+    static fun now(): Time {
+        var t = __localTime()
+        return Time { hours: t[3], minutes: t[4], seconds: t[5], milliseconds: t[6] }
+    }
+
+    static fun fromMilliseconds(ms: int): Time {
+        var rest = ms
+        var h = rest / 3600000
+        rest -= h * 3600000
+        var m = rest / 60000
+        rest -= m * 60000
+        var s = rest / 1000
+        rest -= s * 1000
+        return Time { hours: h, minutes: m, seconds: s, milliseconds: rest }
+    }
+
+    static fun fromSeconds(seconds: float): Time {
+        return Time.fromMilliseconds(round(seconds * 1000.0))
+    }
+
+    static fun parse(text: string): Time {
+        var main = text
+        var ms = 0
+        var dot = indexOf(text, ".")
+        if (dot >= 0) {
+            main = substring(text, 0, dot)
+            var frac = substring(text, dot + 1)
+            ms = toInt(frac)
+            if (len(frac) == 1) {
+                ms *= 100
+            } else if (len(frac) == 2) {
+                ms *= 10
+            }
+        }
+        var parts = split(main, ":")
+        var h = 0
+        var m = 0
+        var s = 0
+        if (len(parts) >= 1) {
+            h = toInt(parts[0])
+        }
+        if (len(parts) >= 2) {
+            m = toInt(parts[1])
+        }
+        if (len(parts) >= 3) {
+            s = toInt(parts[2])
+        }
+        return Time { hours: h, minutes: m, seconds: s, milliseconds: ms }
+    }
+
+    fun toMilliseconds(): int {
+        return self.hours * 3600000 + self.minutes * 60000 + self.seconds * 1000 + self.milliseconds
+    }
+
+    fun toSeconds(): float {
+        return self.toMilliseconds() / 1000.0
+    }
+
+    fun add(other: Time): Time {
+        return Time.fromMilliseconds(self.toMilliseconds() + other.toMilliseconds())
+    }
+
+    fun subtract(other: Time): Time {
+        return Time.fromMilliseconds(self.toMilliseconds() - other.toMilliseconds())
+    }
+
+    fun format(): string {
+        return "${pad(self.hours, 2)}:${pad(self.minutes, 2)}:${pad(self.seconds, 2)}"
+    }
+
+    fun formatWithMs(): string {
+        return "${self.format()}.${pad(self.milliseconds, 3)}"
+    }
+}
+
+pub fun createTime(hours: int, minutes: int, seconds: int, milliseconds: int): Time {
+    return Time.create(hours, minutes, seconds, milliseconds)
+}
+
+pub fun formatTime(totalSeconds: float): string {
+    return Time.fromSeconds(totalSeconds).format()
+}
+
+pub fun parseTime(text: string): float {
+    return Time.parse(text).toSeconds()
+}
+
+pub fun currentTime(): string {
+    return Time.now().format()
+}
+
+pub fun hoursToMinutes(hours: float): float {
+    return hours * 60.0
+}
+
+pub fun minutesToHours(minutes: float): float {
+    return minutes / 60.0
+}
+
+pub fun hoursToSeconds(hours: float): float {
+    return hours * 3600.0
+}
+
+pub fun secondsToHours(seconds: float): float {
+    return seconds / 3600.0
+}
+
+pub fun minutesToSeconds(minutes: float): float {
+    return minutes * 60.0
+}
+
+pub fun secondsToMinutes(seconds: float): float {
+    return seconds / 60.0
+}
+
+pub fun secondsToMs(seconds: float): float {
+    return seconds * 1000.0
+}
+
+pub fun msToSeconds(ms: float): float {
+    return ms / 1000.0
+}

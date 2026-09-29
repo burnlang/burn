@@ -1,0 +1,28 @@
+import "std/date"
+import "time"
+import "json"
+
+var d = Date.createDate(2024, 2, 28)
+print(Date.formatDate(d), d.format(), Date.isLeapYear(2024), Date.isLeapYear(1900), Date.daysInMonth(2024, 2))
+var next = Date.addDays(d, 2)
+print(next.format(), Date.subtractDays(next, 60).format(), Date.daysBetween(d, next))
+print(Date.dayOfWeek(Date.create(2000, 1, 1)), Date.dayName(Date.create(2024, 7, 4)), d.isBefore(next), next.isAfter(d))
+print(Date.parse("1999-12-31").plusDays(1).format())
+var today = Date.now()
+print(today.year >= 2024, today.month >= 1 && today.month <= 12)
+
+var t = Time.create(1, 2, 3, 45)
+print(t.format(), t.formatWithMs(), t.toMilliseconds(), Time.fromMilliseconds(3723045).format())
+print(Time.parse("10:20:30.5").formatWithMs(), formatTime(3661.0), parseTime("01:00:30"), hoursToMinutes(1.5))
+print(t.add(Time.create(0, 58, 0, 0)).format(), createTime(0, 0, 90, 0).toSeconds())
+
+var data = parseJSON("{\"name\": \"burn\", \"tags\": [\"fast\", \"typed\"], \"version\": 2, \"ratio\": 0.5, \"ok\": true, \"none\": null}")
+print(data["name"], data.tags, data["version"], data.ratio, data.ok, data.none, data.missing)
+print(len(data), len(data.tags), data.tags[1], typeOf(data), typeOf(data.version))
+var version = data.version
+if (version is int) {
+    print("version + 1 =", version + 1)
+}
+print(toJSON(data))
+print(JSON.stringify({ city: "Berlin", zip: 10115, tags: ["a"] }), toJSON([1.5, 2.0]), toJSON("q\"uote"))
+print(JSON.isObject(data), JSON.isArray(data.tags), JSON.get(data, "name"))

@@ -1,0 +1,100 @@
+{
+  "name": "burn-language-server",
+  "displayName": "Burn Language Support",
+  "description": "Syntax highlighting, diagnostics, completion, hover, go to definition and formatting for the Burn programming language",
+  "version": "2.0.0",
+  "publisher": "burn",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/burnlang/burn"
+  },
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Formatters",
+    "Snippets"
+  ],
+  "activationEvents": [
+    "onLanguage:burn"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "burn",
+        "aliases": [
+          "Burn",
+          "burn"
+        ],
+        "extensions": [
+          ".bn"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "burn",
+        "scopeName": "source.burn",
+        "path": "./syntaxes/burn.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "burn",
+        "path": "./snippets/burn.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "burn.run",
+        "title": "Burn: Run Current File"
+      },
+      {
+        "command": "burn.runNative",
+        "title": "Burn: Compile and Run Current File Natively"
+      },
+      {
+        "command": "burn.build",
+        "title": "Burn: Build Executable"
+      },
+      {
+        "command": "burn.restartServer",
+        "title": "Burn: Restart Language Server"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "Burn",
+      "properties": {
+        "burn.path": {
+          "type": "string",
+          "default": "burn",
+          "description": "Path to the burn executable used for the language server and commands."
+        },
+        "burn.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the Burn language server."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.2.1"
+  }
+}

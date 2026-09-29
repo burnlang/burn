@@ -1,0 +1,34 @@
+fun circleArea(radius: float): float {
+    const PI = 3.14159
+    return PI * radius * radius
+}
+
+fun greeting(): string {
+    const GREETING = "Hello"
+    const NAME = "Burn"
+    return GREETING + ", " + NAME + "!"
+}
+
+fun main() {
+    const MAX_VALUE = 100
+    const MIN_VALUE = 0
+    const float FACTOR = 2.5
+
+    print("MAX_VALUE: " + MAX_VALUE)
+    print("MIN_VALUE: " + MIN_VALUE)
+    print("FACTOR: " + FACTOR)
+
+    var result = MAX_VALUE * FACTOR
+    print("MAX_VALUE * FACTOR = " + result)
+    print("Circle area: " + circleArea(5))
+    print("Greeting: " + greeting())
+
+    const IS_DEBUG = true
+    const IS_PRODUCTION = false
+    if (IS_DEBUG) {
+        print("Debug mode is enabled")
+    }
+    if (!IS_PRODUCTION) {
+        print("Not in production mode")
+    }
+}

@@ -1,0 +1,34 @@
+---
+title: std/date
+description: Calendar dates.
+order: 11
+---
+
+# `std/date`
+
+```burn
+import "std/date"
+
+var today = Date.now()
+print(today.year, today.month, today.day)
+print(Date.today())
+print(Date.addDays(today, 30).format())
+```
+
+`Date` is a class with the fields `year`, `month` and `day`.
+
+| Function | Description |
+| --- | --- |
+| `Date.now()` | the current local date |
+| `Date.today()` | the current date as `YYYY-MM-DD` |
+| `Date.createDate(y, m, d)`, `Date.create(y, m, d)` | build a date |
+| `Date.parse("YYYY-MM-DD")` | parse a date |
+| `Date.formatDate(date)`, `date.format()` | format as `YYYY-MM-DD` |
+| `Date.currentYear()`, `currentMonth()`, `currentDay()` | parts of today |
+| `Date.isLeapYear(year)` | leap year check |
+| `Date.daysInMonth(year, month)` | 28 to 31 |
+| `Date.dayOfWeek(date)` | 0 = Saturday, 1 = Sunday, ..., 6 = Friday |
+| `Date.dayName(date)` | `"Monday"` and so on |
+| `Date.addDays(date, n)`, `Date.subtractDays(date, n)`, `date.plusDays(n)` | date arithmetic |
+| `Date.daysBetween(a, b)` | number of days from `a` to `b` |
+| `date.isBefore(other)`, `date.isAfter(other)` | comparisons |

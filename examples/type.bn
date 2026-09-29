@@ -1,0 +1,21 @@
+def type Person {
+    name: string,
+    age: int,
+    active: bool
+}
+
+fun createPerson(name: string, age: int): Person {
+    return {
+        name: name,
+        age: age,
+        active: true
+    }
+}
+
+var person = createPerson("John", 30)
+print("Person name: " + person.name)
+print(person)
+
+String city = "Berlin"
+int population = 3_700_000
+print("${city} has ${population} people")

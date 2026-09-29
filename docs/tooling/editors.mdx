@@ -1,0 +1,48 @@
+---
+title: Editor support
+description: The language server and the VS Code extension.
+order: 22
+---
+
+# Editor support
+
+## Language server
+
+`burn lsp` speaks the Language Server Protocol over stdio and uses the real compiler, so the editor shows exactly
+the errors the compiler reports. It supports:
+
+- diagnostics while you type, including errors in imported files
+- hover with inferred types, signatures and built-in documentation
+- completion for locals, globals, functions, types, keywords, built-ins and members after `.`
+- go to definition, including into imported modules
+- document outline
+- formatting (the same as `burn fmt`)
+
+Any editor with LSP support can use it. For Neovim:
+
+```lua
+vim.lsp.start({ name = "burn", cmd = { "burn", "lsp" }, root_dir = vim.fn.getcwd() })
+```
+
+## VS Code
+
+The extension lives in `editors/vscode`. It adds syntax highlighting, snippets, the language server client and
+commands to run, natively run and build the current file.
+
+```sh
+cd editors/vscode
+npm install
+npx vsce package
+code --install-extension burn-language-server-2.0.0.vsix
+```
+
+Set `burn.path` if `burn` is not on your `PATH`.
+
+## Related repositories
+
+| Repository | Purpose |
+| --- | --- |
+| [vscode-burn](https://github.com/burnlang/vscode-burn) | the VS Code extension (same code as `editors/vscode`) |
+| [burn-analyzer](https://github.com/burnlang/burn-analyzer) | a small launcher that runs `burn lsp`, for editors configured with `burn-analyzer` |
+| [bnfmt](https://github.com/burnlang/bnfmt) | the `burnfmt` command, which runs `burn fmt` |
+| [Burn.tmbundle](https://github.com/burnlang/burn.tmbundle) | TextMate bundle with the Burn grammar and snippets |

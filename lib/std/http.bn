@@ -1,0 +1,66 @@
+import "json"
+
+pub def type HTTPResponse {
+    int statusCode
+    string body
+    [string] headers
+}
+
+priv var defaultHeaders: [string] = ["User-Agent: BurnLang/2.0", "Accept: */*"]
+
+pub def class HTTP {
+    static fun request(method: string, url: string, body: string): HTTPResponse {
+        var raw = __httpRequest(method, url, body, defaultHeaders)
+        var headers: [string] = []
+        for line in split(raw[2], "\n") {
+            if (len(trim(line)) > 0) {
+                push(headers, line)
+            }
+        }
+        return HTTPResponse { statusCode: toInt(raw[0]), body: raw[1], headers: headers }
+    }
+
+    static fun get(url: string): HTTPResponse {
+        return HTTP.request("GET", url, "")
+    }
+
+    static fun post(url: string, body: string): HTTPResponse {
+        return HTTP.request("POST", url, body)
+    }
+
+    static fun put(url: string, body: string): HTTPResponse {
+        return HTTP.request("PUT", url, body)
+    }
+
+    static fun patch(url: string, body: string): HTTPResponse {
+        return HTTP.request("PATCH", url, body)
+    }
+
+    static fun delete(url: string): HTTPResponse {
+        return HTTP.request("DELETE", url, "")
+    }
+
+    static fun setHeaders(headers: [string]): bool {
+        defaultHeaders = headers
+        return true
+    }
+
+    static fun addHeader(header: string) {
+        push(defaultHeaders, header)
+    }
+
+    static fun getHeader(response: HTTPResponse, name: string): string {
+        var wanted = lower(name)
+        for header in response.headers {
+            var i = indexOf(header, ":")
+            if (i > 0 && lower(trim(substring(header, 0, i))) == wanted) {
+                return trim(substring(header, i + 1))
+            }
+        }
+        return ""
+    }
+
+    static fun parseJSON(body: string): any {
+        return JSON.parse(body)
+    }
+}

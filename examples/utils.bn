@@ -1,0 +1,19 @@
+pub fun power(base: int, exp: int): int {
+    var result = 1
+    for i in 0..exp {
+        result *= base
+    }
+    return result
+}
+
+pub fun isEven(num: int): bool {
+    return num % 2 == 0
+}
+
+pub fun join(first: string, second: string, separator: string): string {
+    return first + separator + second
+}
+
+priv fun secret(): string {
+    return "only visible inside utils.bn"
+}

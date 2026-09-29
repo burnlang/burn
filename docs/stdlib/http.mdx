@@ -1,0 +1,32 @@
+---
+title: std/http
+description: HTTP requests.
+order: 13
+---
+
+# `std/http`
+
+```burn
+import "http"
+
+var response = HTTP.get("https://api.github.com/repos/burnlang/burn")
+print(response.statusCode)
+var repo = HTTP.parseJSON(response.body)
+var stars = repo["stargazers_count"]
+if (stars is int) {
+    print("stars: ${stars}")
+}
+```
+
+| Function | Description |
+| --- | --- |
+| `HTTP.get(url)`, `HTTP.delete(url)` | request without a body |
+| `HTTP.post(url, body)`, `HTTP.put(url, body)`, `HTTP.patch(url, body)` | request with a body |
+| `HTTP.request(method, url, body)` | any method |
+| `HTTP.setHeaders([string])`, `HTTP.addHeader(string)` | default headers such as `"Accept: application/json"` |
+| `HTTP.getHeader(response, name)` | case-insensitive header lookup |
+| `HTTP.parseJSON(body)` | same as `parseJSON` |
+
+A response is an `HTTPResponse` with `statusCode: int`, `body: string` and `headers: [string]`.
+Plain `http://` requests are made directly; `https://` requests use the system `curl`. Network failures give a
+status code of `0` and the error message in `body`.

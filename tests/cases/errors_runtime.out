@@ -1,0 +1,4 @@
+before
+2
+runtime error: index 5 out of bounds (length 3)
+  --> tests/cases/errors_runtime.bn:2:12
