@@ -1,10 +1,14 @@
 ---
 title: Command line
 description: Every burn command.
-order: 20
+order: 22
 ---
 
 # Command line
+
+This page lists every subcommand of `burn`. The shorter toolchain commands map onto them:
+`burni` is `burn run`/`burn repl`/`burn eval`, `burnc` is `burn build`/`burn check`, `burn-lsp` is `burn lsp` and
+`burnfmt` behaves like `burn fmt`. See [the toolchain](./toolchain.mdx).
 
 | Command | Description |
 | --- | --- |
@@ -39,3 +43,14 @@ The older flags still work: `-r`, `-e`, `-exe <file> [name]` and `-d`.
 
 A program exits with the code passed to `exit`, `1` after a runtime error, and `0` otherwise. `burn check`,
 `burn build` and `burn run` exit with `1` when the program has compile errors.
+
+## Toolchain commands
+
+| Command | Description |
+| --- | --- |
+| `burni [file.bn [args...]]` | run a program, or start the REPL without arguments |
+| `burni -e '<code>'` | run a snippet |
+| `burnc <file.bn> [options]` | the same options as `burn build` |
+| `burnc --check <files...>` | the same as `burn check` |
+| `burnfmt [-w] [--check] [files...]` | the formatter written in Burn |
+| `burn-lsp` | the language server |

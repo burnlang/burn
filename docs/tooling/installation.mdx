@@ -1,0 +1,143 @@
+---
+title: Installation
+description: Install the Burn toolchain with the installer script, from a release, or by hand.
+order: 19
+---
+
+# Installation
+
+The Burn toolchain is five commands that share one compiler:
+
+| Command | What it is |
+| --- | --- |
+| `burn` | the all-in-one driver: run, build, check, fmt, repl, lsp |
+| `burni` | the interpreter: runs programs on the bytecode VM and starts the REPL |
+| `burnc` | the compiler: native executables and JavaScript |
+| `burnfmt` | the code formatter, written in Burn itself |
+| `burn-lsp` | the language server for editors |
+
+See [the toolchain](./toolchain.mdx) for what each command does.
+
+## Quick install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/burnlang/burn/master/install.sh | sh
+```
+
+The installer:
+
+1. downloads a prebuilt release for your platform if one exists, otherwise downloads the sources and builds them
+   with `cargo` (the first build takes about a minute)
+2. installs `burn` into `~/.burn/bin` and links `burni`, `burnc` and `burn-lsp` to it
+3. compiles `burnfmt` from its Burn source with `burnc`; where native compilation is not available it installs a
+   small launcher that runs `burnfmt` on the interpreter instead
+4. adds `~/.burn/bin` to your `PATH` in `~/.profile`, `~/.bashrc`, `~/.zshrc` (whichever exist) and fish
+5. checks that `burni` runs a program and `burnfmt` formats one
+
+Open a new terminal (or run `. ~/.burn/env`) and check the installation:
+
+```sh
+burn version
+burni -e 'print("hello")'
+```
+
+## Requirements
+
+- Linux or macOS (Windows: see [manual installation](#manual-installation))
+- `git` and a Rust toolchain (1.85 or newer) when building from source. Pass `--install-rust` to let the installer
+  install Rust with rustup if `cargo` is missing.
+- A C toolchain (`cc`) to build native executables with `burnc`. Everything else works without it.
+
+## Options
+
+| Option | Description |
+| --- | --- |
+| `--prefix <dir>` | install into `<dir>` instead of `~/.burn` |
+| `--ref <ref>` | build a specific branch, tag or commit |
+| `--from-source` | always build from source, even if a release exists |
+| `--install-rust` | install Rust with rustup when `cargo` is missing |
+| `--no-modify-path` | do not touch your shell profile |
+| `--uninstall` | remove an installation |
+| `-q`, `--quiet` | only print errors |
+| `-h`, `--help` | show the help |
+
+Pass options to a piped installer with `sh -s --`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/burnlang/burn/master/install.sh | sh -s -- --prefix /opt/burn --no-modify-path
+```
+
+The same settings can be given as environment variables: `BURN_HOME` (prefix), `BURN_REF` (ref) and `BURN_REPO`
+(the git repository to build from).
+
+## Installing from a checkout
+
+Running the script from a clone of the repository builds and installs that exact source tree:
+
+```sh
+git clone https://github.com/burnlang/burn.git
+cd burn
+./install.sh
+```
+
+## What gets installed
+
+```text
+~/.burn/
+├── bin/
+│   ├── burn          the compiler binary
+│   ├── burni -> burn
+│   ├── burnc -> burn
+│   ├── burn-lsp -> burn
+│   └── burnfmt       native executable compiled from Burn source
+├── share/burn/
+│   ├── tools/burnfmt/burnfmt.bn
+│   ├── examples/
+│   └── install.sh    used for updates and uninstalling
+└── env               adds bin/ to PATH
+```
+
+`burni`, `burnc` and `burn-lsp` are links to the same binary: `burn` looks at the name it was started with and
+behaves like that command. The standard library is built into the binary, so nothing else is needed at runtime.
+
+## Updating
+
+Run the installer again. It replaces the binaries and rebuilds `burnfmt`, and leaves your shell profile alone if
+it was already set up.
+
+## Uninstalling
+
+```sh
+sh ~/.burn/share/burn/install.sh --uninstall
+```
+
+This removes the installation directory and the lines the installer added to your shell profiles. Use
+`--prefix` if you installed somewhere else.
+
+## Prebuilt releases
+
+Tagged versions (`v*`) are built by the release workflow for `linux-x86_64`, `macos-x86_64` and `macos-aarch64`.
+Each archive contains the same layout as above. The installer picks the right one automatically; to install one by
+hand:
+
+```sh
+tar -xzf burn-linux-x86_64.tar.gz
+./burn/bin/burn version
+```
+
+## Manual installation
+
+Any platform with Rust can build the toolchain:
+
+```sh
+cargo build --release
+```
+
+Copy `target/release/burn` (`burn.exe` on Windows) somewhere on your `PATH`, then create `burni`, `burnc` and
+`burn-lsp` as links or copies of it. On Windows copy the file to `burni.exe`, `burnc.exe` and `burn-lsp.exe`.
+Native executables currently need x86-64 Linux or macOS; on other platforms `burni`, `burnc --target js`,
+`burn fmt` and `burn lsp` all work. To get `burnfmt` without native compilation, run it on the interpreter:
+
+```sh
+burni tools/burnfmt/burnfmt.bn -w file.bn
+```

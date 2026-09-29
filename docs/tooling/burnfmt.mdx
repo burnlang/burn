@@ -1,0 +1,82 @@
+---
+title: burnfmt
+description: The Burn code formatter, written in Burn.
+order: 21
+---
+
+# burnfmt
+
+`burnfmt` gives every Burn file the same layout. It is a Burn program: the source lives in
+`tools/burnfmt/burnfmt.bn`, and the installer compiles it to a native executable with `burnc`. It produces exactly
+the same output as the formatter built into the compiler (`burn fmt` and the language server's format command);
+the test suite checks this for every file in the repository.
+
+## Usage
+
+```sh
+burnfmt file.bn              # print the formatted file
+burnfmt -w file.bn other.bn  # rewrite files in place
+burnfmt --check src/*.bn     # list files that are not formatted, exit code 1 if any
+cat file.bn | burnfmt        # format standard input to standard output
+```
+
+| Option | Description |
+| --- | --- |
+| `-w`, `--write` | write the result back to the files |
+| `-l`, `--check` | only report unformatted files |
+| `-h`, `--help` | show the help |
+| `-v`, `--version` | show the version |
+
+Without an installed `burnfmt`, the same program runs on the interpreter:
+
+```sh
+burni tools/burnfmt/burnfmt.bn -w file.bn
+```
+
+## Rules
+
+- Indentation is 4 spaces per open brace, bracket or parenthesis.
+- A line that opens a block and continues is split after the `{`; a `}` that closes an earlier line starts its
+  own line.
+- A blank line separates a closing `}` from the declaration that follows it.
+- Consecutive blank lines become one; leading blank lines are removed.
+- One space around binary operators and after `,`, `:` and `;`, none before them.
+- No space inside `(` `)` and `[` `]`, after unary `-` and `!`, around `.` and ranges (`0..10`), or before `?`
+  and `!!`.
+- A space after keywords such as `if`, `while`, `for` and `return`, and before `{`.
+- Braces keep the padding of the source, so both `{ name: "x" }` and `{string: int}` stay as written.
+- Strings, comments and block comments are never changed.
+
+```burn
+fun area(w: float, h: float): float {
+    return w * h
+}
+
+def class Rect {
+    float w
+    float h
+
+    fun scale(k: float) {
+        w *= k
+        h *= k
+    }
+}
+
+for i in 0..3 {
+    print(i, -i, area(i, 2))
+}
+```
+
+## How it works
+
+`burnfmt` works line by line, which keeps comments and the user's line structure intact:
+
+1. Each line is split into tokens (words, numbers, strings, comments, operators and brackets). Every opening and
+   closing brace remembers whether it touched the neighbouring character in the source.
+2. Lines that open a block and keep going, or close one after other code, are split into segments.
+3. Each segment is indented by the current nesting depth, minus the closing brackets it starts with.
+4. Tokens are joined with the spacing rules above.
+
+Because it only uses the standard built-ins (`readFile`, `writeFile`, `readStdin`, `args`, string and array
+functions and the character class checks `isLetter`, `isAlphanumeric` and `isWhitespace`), it is also a compact
+example of a real command line program written in Burn.
