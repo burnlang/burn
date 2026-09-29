@@ -161,6 +161,9 @@ fn cmd_build(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    if is_bvm_file(&file) {
+        return build_bundle(&file, output, emit_asm, strip);
+    }
     let c = match compile(&file) {
         Some(c) => c,
         None => return ExitCode::from(1),
@@ -217,6 +220,59 @@ fn cmd_build(args: &[String]) -> ExitCode {
         other => {
             eprintln!("error: unknown target `{}` (expected `native`, `js` or `bvm`)", other);
             ExitCode::from(2)
+        }
+    }
+}
+
+fn build_bundle(file: &Path, output: Option<PathBuf>, emit_asm: Option<PathBuf>, strip: bool) -> ExitCode {
+    let bytes = match std::fs::read(file) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: cannot read {}: {}", file.display(), e);
+            return ExitCode::from(1);
+        }
+    };
+    let bytes = if bvm::archive::is_archive(&bytes) || bvm::binary::is_binary(&bytes) {
+        bytes
+    } else {
+        match bvm::parse(&bytes) {
+            Ok(m) => bvm::binary::encode(&m),
+            Err(e) => {
+                eprintln!("error: {}: {}", file.display(), e);
+                return ExitCode::from(1);
+            }
+        }
+    };
+    match bvm::load_bytes(&bytes) {
+        Ok((m, host)) => {
+            if m.entry.is_none() {
+                eprintln!("error: {} has no entry function", file.display());
+                return ExitCode::from(1);
+            }
+            if let Err(e) = bvm::load(&m, &host) {
+                eprintln!("error: {}: {}", file.display(), e);
+                return ExitCode::from(1);
+            }
+        }
+        Err(e) => {
+            eprintln!("error: {}: {}", file.display(), e);
+            return ExitCode::from(1);
+        }
+    }
+    let out = output.unwrap_or_else(|| default_output(file, ""));
+    let opts = native::BuildOptions {
+        output: out.clone(),
+        emit_asm,
+        strip,
+    };
+    match native::build_launcher(&bytes, &opts) {
+        Ok(()) => {
+            println!("built {}", out.display());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {}", e);
+            ExitCode::from(1)
         }
     }
 }

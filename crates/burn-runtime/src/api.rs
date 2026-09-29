@@ -936,6 +936,10 @@ pub fn rt_exit(code: u64) -> u64 {
     code
 }
 
+pub fn trampoline() -> usize {
+    TRAMPOLINE.load(Ordering::SeqCst)
+}
+
 pub fn spawn_native(fnptr: u64, argc: u64, argsptr: u64, tid: u64) -> u64 {
     let args: Vec<u64> = unsafe { std::slice::from_raw_parts(argsptr as usize as *const u64, argc as usize).to_vec() };
     let tramp = TRAMPOLINE.load(Ordering::SeqCst);

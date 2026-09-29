@@ -97,6 +97,10 @@ pub fn needs_link(m: &Module) -> bool {
 }
 
 pub fn load(m: &Module, host: &Host) -> Result<Arc<Program>, LoadError> {
+    load_with(m, host, true)
+}
+
+pub fn load_with(m: &Module, host: &Host, install_meta: bool) -> Result<Arc<Program>, LoadError> {
     let linked;
     let m = if needs_link(m) {
         analyze(m)?;
@@ -123,7 +127,9 @@ pub fn load(m: &Module, host: &Host) -> Result<Arc<Program>, LoadError> {
             Some((argc, f)) => hosts.push((*argc, f.clone())),
         }
     }
-    meta::set_meta(m.meta());
+    if install_meta {
+        meta::set_meta(m.meta());
+    }
     Ok(Arc::new(link(m, &max, hosts)))
 }
 

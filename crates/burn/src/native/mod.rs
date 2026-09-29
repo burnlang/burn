@@ -49,6 +49,48 @@ pub fn build(p: &Program, opts: &BuildOptions) -> Result<(), String> {
     result
 }
 
+pub fn launcher_assembly(bytes: &[u8]) -> String {
+    let t = x86::Target::host();
+    let p = t.prefix;
+    let plt = if t.macos { "" } else { "@PLT" };
+    let mut s = String::new();
+    s.push_str(".intel_syntax noprefix\n.text\n");
+    s.push_str(&format!(".globl {p}main\n{p}main:\n"));
+    s.push_str("    push rbp\n    mov rbp, rsp\n");
+    s.push_str("    mov rdx, rdi\n    mov rcx, rsi\n");
+    s.push_str("    lea rdi, [rip + burn_bundle]\n");
+    s.push_str("    mov rsi, qword ptr [rip + burn_bundle_len]\n");
+    s.push_str(&format!("    call {p}burn_bvm_main{plt}\n"));
+    s.push_str("    pop rbp\n    ret\n");
+    s.push_str(if t.macos { ".section __TEXT,__const\n" } else { ".section .rodata\n" });
+    s.push_str(".p2align 4\n");
+    s.push_str(&format!("burn_bundle_len:\n    .quad {}\n", bytes.len()));
+    s.push_str("burn_bundle:\n");
+    for chunk in bytes.chunks(32) {
+        let parts: Vec<String> = chunk.iter().map(|x| x.to_string()).collect();
+        s.push_str("    .byte ");
+        s.push_str(&parts.join(","));
+        s.push('\n');
+    }
+    if !t.macos {
+        s.push_str(".section .note.GNU-stack,\"\",@progbits\n");
+    }
+    s
+}
+
+pub fn build_launcher(bytes: &[u8], opts: &BuildOptions) -> Result<(), String> {
+    let asm = launcher_assembly(bytes);
+    if let Some(path) = &opts.emit_asm {
+        std::fs::write(path, &asm).map_err(|e| format!("cannot write {}: {}", path.display(), e))?;
+    }
+    supported()?;
+    let dir = temp_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let result = link(&dir, &asm, &opts.output, opts.strip);
+    let _ = std::fs::remove_dir_all(&dir);
+    result
+}
+
 fn link(dir: &Path, asm: &str, output: &Path, strip: bool) -> Result<(), String> {
     let asm_path = dir.join("program.s");
     let lib_path = dir.join("libburn_runtime.a");

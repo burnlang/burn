@@ -189,6 +189,9 @@ pub fn link_with(modules: &[Module], opts: &LinkOptions) -> Result<Module, Strin
         let m = &modules[*mi];
         let f = &m.funcs[*fi];
         by_name.entry(f.name.clone()).or_default().push(k);
+        if let Some(e) = export_name(m, *fi as u32).filter(|e| *e != f.name) {
+            by_name.entry(e).or_default().push(k);
+        }
         if !m.name.is_empty() {
             by_name.entry(qualified(m, f)).or_default().push(k);
         }
@@ -410,4 +413,73 @@ pub fn bind_exports(m: &mut Module) {
         }
     }
     m.imports = keep;
+}
+
+pub fn rebase(m: &Module, base_types: &[Desc], base_locs: u32) -> Result<Module, String> {
+    if base_types.len() < FIRST_USER_TYPE as usize || m.types.len() < FIRST_USER_TYPE as usize {
+        return Err("both type tables must start with the built-in types".into());
+    }
+    let mut types: Vec<Desc> = base_types.to_vec();
+    let n = m.types.len();
+    let mut map: Vec<u32> = (0..n as u32).collect();
+    let mut pending: Vec<usize> = Vec::new();
+    for i in FIRST_USER_TYPE as usize..n {
+        let d = &m.types[i];
+        let forward = std::cell::Cell::new(false);
+        let nd = map_desc(d, &|t| {
+            if (t as usize) >= i {
+                forward.set(true);
+            }
+            map.get(t as usize).copied().unwrap_or(0)
+        });
+        if !forward.get() {
+            if let Some(j) = types.iter().position(|x| *x == nd) {
+                map[i] = j as u32;
+                continue;
+            }
+        }
+        map[i] = types.len() as u32;
+        types.push(Desc::Error);
+        pending.push(i);
+    }
+    for i in pending {
+        types[map[i] as usize] = map_desc(&m.types[i], &|t| map[t as usize]);
+    }
+    let mut out = m.clone();
+    out.types = types;
+    let t = |x: u32| map[x as usize];
+    let loc = |l: u32| if l == NO_LOC { l } else { l + base_locs };
+    for f in &mut out.funcs {
+        if let Some(s) = &f.sig {
+            f.sig = Some(Sig {
+                params: s.params.iter().map(|x| t(*x)).collect(),
+                ret: t(s.ret),
+            });
+        }
+        for op in &mut f.code {
+            *op = match *op {
+                Op::TypeConst(x) => Op::TypeConst(t(x)),
+                Op::LocConst(x) => Op::LocConst(loc(x)),
+                Op::IDiv(l) => Op::IDiv(loc(l)),
+                Op::IRem(l) => Op::IRem(loc(l)),
+                Op::Index(l) => Op::Index(loc(l)),
+                Op::SetIndex(l) => Op::SetIndex(loc(l)),
+                Op::Spawn(f, n, ty) => Op::Spawn(f, n, t(ty)),
+                Op::NewRecord(x, n) => Op::NewRecord(t(x), n),
+                Op::NewArray(x, n) => Op::NewArray(t(x), n),
+                o => o,
+            };
+        }
+    }
+    for tab in &mut out.tables {
+        for e in &mut tab.entries {
+            e.0 = t(e.0);
+        }
+    }
+    for a in &mut out.annotations {
+        if let Target::Type(x) = a.target {
+            a.target = Target::Type(t(x));
+        }
+    }
+    Ok(out)
 }

@@ -6,6 +6,7 @@ pub mod exec;
 pub mod link;
 pub mod mixin;
 pub mod module;
+pub mod native;
 pub mod op;
 pub mod verify;
 
