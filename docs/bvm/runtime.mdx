@@ -1,0 +1,116 @@
+---
+title: Values and the runtime library
+description: Heap objects, type ids, garbage collection and the functions available through `rt`.
+order: 33
+---
+
+# Values and the runtime library
+
+## Type ids
+
+Every module starts with twelve built-in types. The types it declares are numbered from 12 on.
+
+| Id | Type | Id | Type |
+| --- | --- | --- | --- |
+| 0 | `error` | 6 | `string` |
+| 1 | `void` | 7 | `any` |
+| 2 | `null` | 8 | `[any]` |
+| 3 | `int` | 9 | `map<string, any>` |
+| 4 | `float` | 10 | `[string]` |
+| 5 | `bool` | 11 | `[int]` |
+
+Runtime functions that have to understand a value take its static type id as an extra argument. For example
+`to_str` takes the value and its type, so `const 3; rt to_str` formats an int and `const 11; rt to_str` formats
+an `[int]` array.
+
+## Heap objects
+
+Heap objects start with a 16-byte header: kind (1 byte), GC mark, flags, padding, type id (4 bytes) and size in
+bytes (8 bytes). After the header:
+
+| Kind | Layout |
+| --- | --- |
+| string | length at +16, UTF-8 bytes at +24 |
+| array | length at +16, capacity at +24, pointer to the elements at +32 |
+| record | field `i` at +16 + 8·i |
+| box | the boxed value at +16, with the type id of the value in the header |
+| map, future | opaque, used through runtime functions |
+
+Values of type `any` are boxes (or the object itself when it is already on the heap). `rt box v tid` creates one
+and `unbox` reads it. `rt is_type`, `rt cast` and `rt type_name` inspect it.
+
+## Garbage collection
+
+The collector is a conservative mark and sweep. It treats every word that looks like a pointer to a heap object
+as a reference: on the VM's operand stacks, on the native stack, in the globals and in registers. You don't need
+to declare roots or pointer maps. It runs after a number of bytes have been allocated (`BURN_GC_THRESHOLD`, 32 MB by default;
+`BURN_GC_STATS=1` prints a line after every collection) and never while spawned threads are running. Strings
+from the module's string pool are static and never collected.
+
+## Runtime functions
+
+`rt name` pops the function's arguments (the first argument is deepest on the stack) and pushes its result.
+Functions without a meaningful result return 0, so pop it. `bvm runtime` prints every name with its argument
+count. The most useful ones:
+
+### Text and output
+
+| Function | Arguments | Result |
+| --- | --- | --- |
+| `print`, `print_raw`, `print_err` | string | prints with a newline, without one, or to stderr |
+| `to_str` | value, type id | the value formatted as text (arrays, maps and records included) |
+| `str_concat` | a, b | a new string `a + b` |
+| `str_eq`, `str_cmp` | a, b | 1 if equal / -1, 0 or 1 |
+| `str_len` | s | length in characters |
+| `str_index` | s, i, loc | the character at `i` as a string |
+| `str_sub` | s, start, end | substring (character indexes) |
+| `str_find`, `str_contains`, `str_starts`, `str_ends` | s, t | index or -1 / bool |
+| `str_replace` | s, from, to | replaces every occurrence |
+| `str_split` | s, sep | `[string]` |
+| `str_trim`, `str_upper`, `str_lower`, `str_chars` | s | transformed string / `[string]` of characters |
+| `str_repeat` | s, n | `s` repeated `n` times |
+| `str_code`, `str_from_code` | s / n | code point of the first character / string from a code point |
+| `char_class` | s, kind | 1 if every character is a letter (0), digit (1), letter or digit (2), whitespace (3) |
+| `parse_int`, `parse_float` | s, loc | the parsed number; a runtime error if `s` isn't one |
+| `is_int_str`, `is_float_str` | s | bool |
+| `input` | prompt | a line from stdin |
+| `read_stdin` | | all of stdin |
+
+### Arrays and maps
+
+| Function | Arguments | Result |
+| --- | --- | --- |
+| `arr_new` | array type id, length | a zero-filled array |
+| `arr_push` | arr, v | appends |
+| `arr_pop` | arr, loc | removes and returns the last element |
+| `arr_insert`, `arr_remove` | arr, i, (v,) loc | inserts / removes and returns |
+| `arr_get`, `arr_set` | arr, i, (v,) loc | bounds-checked access (the `index` instruction is faster) |
+| `arr_slice` | arr, start, end | a new array |
+| `arr_concat`, `arr_copy`, `arr_reverse`, `arr_clear` | arr (, other) | new array / in place |
+| `arr_index_of`, `arr_contains` | arr, v, element type id | index or -1 / bool |
+| `arr_join` | arr, separator, element type id | a string |
+| `arr_sort` | arr, element type id | sorts in place |
+| `map_new` | map type id | an empty map |
+| `map_set`, `map_get`, `map_get_or` | map, key, value / loc / default | writes / reads |
+| `map_has`, `map_remove`, `map_len` | map (, key) | bool / removes / count |
+| `map_keys`, `map_values` | map, array type id | an array |
+
+### Everything else
+
+| Function | Arguments | Result |
+| --- | --- | --- |
+| `fmath` | op, x | 0 sqrt, 1 floor, 2 ceil, 3 round, 4 abs, 5 sin, 6 cos, 7 tan, 8 ln, 9 log10, 10 exp, 11 asin, 12 acos, 13 atan |
+| `fpow`, `fatan2`, `fmod`, `fmin`, `fmax` | a, b | float math |
+| `ipow`, `imin`, `imax`, `iabs` | a (, b) | integer math |
+| `random`, `random_int`, `seed` | / lo, hi / seed | float in [0, 1) / int in [lo, hi] / 0 |
+| `now_ms`, `now_sec`, `clock_ns`, `sleep` | / ms | wall clock and monotonic time |
+| `read_file`, `write_file`, `append_file`, `file_exists` | path (, content or loc) | file I/O |
+| `env`, `args` | name / | environment variable / `[string]` of program arguments |
+| `json_parse`, `json_stringify` | text, loc / value, type id | `any` / string |
+| `http_request` | method, url, body, `[string]` headers | `[status, body, headers]` |
+| `box`, `is_type`, `cast`, `unwrap`, `type_name` | value and type ids | dynamic typing helpers |
+| `eq`, `cmp` | a, b, type id | structural equality / ordering |
+| `await` | future | the result of a `spawn` |
+| `panic`, `assert` | message, loc / cond, message, loc | runtime errors |
+| `exit_now` | code | waits for spawned threads, flushes output and exits |
+| `gc_collect` | | forces a collection |

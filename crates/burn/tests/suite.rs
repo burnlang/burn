@@ -260,3 +260,42 @@ fn toolchain_names_select_the_right_mode() {
     assert_eq!(code, 0, "{}", out);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn bvm_modules_round_trip_and_run() {
+    let root = root();
+    let dir = std::env::temp_dir().join(format!("burn-bvm-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut failures = Vec::new();
+    for (file, expected) in cases() {
+        let rel = file.strip_prefix(&root).unwrap();
+        let stem = file.file_stem().unwrap().to_string_lossy().into_owned();
+        let bin = dir.join(format!("{}.bvmc", stem));
+        let text = dir.join(format!("{}.bvm", stem));
+        let (out, code) = output(
+            burn()
+                .current_dir(&root)
+                .args(["build", "--target", "bvm", "-o"])
+                .arg(&bin)
+                .arg("-S")
+                .arg(&text)
+                .arg(rel),
+        );
+        assert_eq!(code, 0, "{}", out);
+        let bytes = std::fs::read(&bin).unwrap();
+        let module = bvm::binary::decode(&bytes).unwrap();
+        let src = std::fs::read_to_string(&text).unwrap();
+        let assembled = bvm::asm::assemble(&src).unwrap_or_else(|e| panic!("{}: {}", text.display(), e));
+        if assembled != module || bvm::binary::encode(&assembled) != bytes {
+            failures.push(format!("{}: the text form does not assemble back to the same module", rel.display()));
+        }
+        for m in [&bin, &text] {
+            let (out, _) = output(burn().current_dir(&root).arg(m));
+            if out != expected {
+                failures.push(format!("{}:\n--- expected\n{}\n--- got\n{}", m.display(), expected, out));
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

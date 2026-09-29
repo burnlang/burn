@@ -47,8 +47,9 @@ usage() {
     cat <<EOF
 Burn toolchain installer
 
-Installs burn, burni (interpreter), burnc (compiler), burnfmt (formatter)
-and burn-lsp (language server) into \$BURN_HOME/bin (default: ~/.burn/bin).
+Installs burn, burni (interpreter), burnc (compiler), burnfmt (formatter),
+burn-lsp (language server) and bvm (the Burn virtual machine) into
+\$BURN_HOME/bin (default: ~/.burn/bin).
 
 Usage:
   install.sh [options]
@@ -163,7 +164,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
         die "no Burn installation found in $PREFIX"
     fi
     step "Removing $PREFIX"
-    rm -f "$BIN/burn" "$BIN/burni" "$BIN/burnc" "$BIN/burnfmt" "$BIN/burn-lsp"
+    rm -f "$BIN/burn" "$BIN/burni" "$BIN/burnc" "$BIN/burnfmt" "$BIN/burn-lsp" "$BIN/bvm"
     rm -rf "$SHARE" "$ENV_FILE"
     rmdir "$BIN" 2>/dev/null || true
     rmdir "$PREFIX/share" 2>/dev/null || true
@@ -222,6 +223,9 @@ install_release() {
     [ -x "$root/bin/burn" ] || return 1
     mkdir -p "$BIN" "$SHARE"
     cp -f "$root/bin/burn" "$BIN/burn"
+    if [ -f "$root/bin/bvm" ]; then
+        cp -f "$root/bin/bvm" "$BIN/bvm"
+    fi
     if [ -d "$root/share/burn" ]; then
         cp -R "$root/share/burn/." "$SHARE/"
     fi
@@ -282,6 +286,8 @@ install_source() {
     mkdir -p "$BIN" "$SHARE"
     cp -f "$SRC/target/release/burn" "$BIN/burn.new"
     mv -f "$BIN/burn.new" "$BIN/burn"
+    cp -f "$SRC/target/release/bvm" "$BIN/bvm.new"
+    mv -f "$BIN/bvm.new" "$BIN/bvm"
     rm -rf "$SHARE/tools" "$SHARE/examples"
     mkdir -p "$SHARE/tools"
     cp -R "$SRC/tools/burnfmt" "$SHARE/tools/burnfmt"
@@ -379,15 +385,22 @@ check="$WORK/hello.bn"
 printf 'print("ok")\n' >"$check"
 [ "$("$BIN/burni" "$check")" = "ok" ] || die "burni could not run a test program"
 [ "$(printf 'var  x=1\n' | "$BIN/burnfmt")" = "var x = 1" ] || die "burnfmt did not format a test program"
+if [ -x "$BIN/bvm" ]; then
+    "$BIN/burnc" "$check" --target bvm -o "$WORK/hello.bvmc" >/dev/null || die "burnc could not compile a test program to bvm bytecode"
+    [ "$("$BIN/bvm" "$WORK/hello.bvmc")" = "ok" ] || die "bvm could not run a test program"
+else
+    warn "this release has no bvm binary; reinstall with --from-source to get it"
+fi
 
 say ""
 say "${GREEN}Burn $("$BIN/burn" version | sed 's/^Burn //') is installed.${RESET}"
 say ""
 say "  burn      $BIN/burn        run, build, check, fmt, repl, lsp"
 say "  burni     $BIN/burni       interpreter and REPL"
-say "  burnc     $BIN/burnc       native and JavaScript compiler"
+say "  burnc     $BIN/burnc       native, JavaScript and bvm bytecode compiler"
 say "  burnfmt   $BIN/burnfmt     code formatter (written in Burn)"
 say "  burn-lsp  $BIN/burn-lsp    language server for editors"
+say "  bvm       $BIN/bvm         the Burn virtual machine: run, assemble, inspect bytecode"
 say ""
 if [ "$PATH_CHANGED" -eq 1 ]; then
     say "Restart your shell or run:  . \"$ENV_FILE\""

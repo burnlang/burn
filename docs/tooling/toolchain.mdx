@@ -1,18 +1,18 @@
 ---
 title: The toolchain
-description: burn, burni, burnc, burnfmt and burn-lsp.
+description: burn, burni, burnc, burnfmt, burn-lsp and bvm.
 order: 20
 ---
 
 # The toolchain
 
-All commands come from a single compiler binary. `burni`, `burnc` and `burn-lsp` are links to `burn`; the binary
-checks the name it was started with. `burnfmt` is a separate program written in Burn.
+`burni`, `burnc` and `burn-lsp` are links to the `burn` binary, which checks the name it was started with.
+`burnfmt` is a separate program written in Burn, and `bvm` is the standalone virtual machine.
 
 ## `burni`: the interpreter
 
-`burni` type-checks a program, compiles it to bytecode in memory and runs it on the VM. There is no build step:
-a program starts in a few milliseconds.
+`burni` type-checks a program, compiles it to a [bvm](../bvm/overview.mdx) module in memory and runs it. There is
+no build step: a program starts in a few milliseconds. `burni` also runs `.bvm` and `.bvmc` files.
 
 ```sh
 burni app.bn                 # run a program
@@ -33,13 +33,14 @@ understands `:help`, `:reset`, `:source` and `:quit`.
 
 ## `burnc`: the compiler
 
-`burnc` compiles a program to a standalone native executable, or to JavaScript.
+`burnc` compiles a program to a standalone native executable, to JavaScript or to bvm bytecode.
 
 ```sh
 burnc app.bn                          # ./app
 burnc app.bn -o bin/app               # choose the output path
 burnc app.bn --emit-asm app.s         # also write the generated assembly
 burnc app.bn --target js -o app.js    # Node.js script
+burnc app.bn --target bvm             # app.bvmc, bytecode for bvm
 burnc app.bn --no-strip               # keep symbols for debuggers and profilers
 burnc --check a.bn b.bn               # type-check only
 ```
@@ -49,7 +50,8 @@ burnc --check a.bn b.bn               # type-check only
 | `-o`, `--output <path>` | output file; defaults to the source name without `.bn` (`.js` for JavaScript) |
 | `--target native` | x86-64 machine code linked into an executable (default) |
 | `--target js` | a self-contained Node.js script |
-| `--emit-asm <path>` | write the generated assembly as well |
+| `--target bvm` | a `.bvmc` bytecode module for [bvm](../bvm/overview.mdx) |
+| `--emit-asm <path>` | write the generated assembly as well (bvm assembly for `--target bvm`) |
 | `--no-strip` | keep the symbol table |
 | `--check <files...>` | report errors and warnings without producing output |
 
@@ -73,6 +75,19 @@ cat file.bn | burnfmt        # format standard input
 `burn-lsp` is the language server over stdio, the same as `burn lsp`. Point any LSP client at it; see
 [editor support](./editors.mdx).
 
+## `bvm`: the Burn virtual machine
+
+`bvm` runs, assembles, disassembles and verifies bvm modules. Burn programs run on it, and other languages can
+target it too. See [the Burn Virtual Machine](../bvm/overview.mdx).
+
+```sh
+bvm app.bvmc                 # run bytecode (or a .bvm assembly file)
+bvm asm app.bvm -o app.bvmc  # assemble
+bvm dis app.bvmc             # disassemble
+bvm check app.bvm            # verify without running
+bvm runtime                  # list the runtime functions
+```
+
 ## `burn`: everything in one
 
 `burn` includes all of the above as subcommands: `burn run`, `burn build`, `burn check`, `burn fmt`, `burn repl`,
@@ -85,5 +100,7 @@ cat file.bn | burnfmt        # format standard input
 | try something quickly | `burni` |
 | run a script or develop a program | `burni app.bn` |
 | ship a program | `burnc app.bn` |
+| ship portable bytecode | `burnc app.bn --target bvm`, run with `bvm` |
+| write a language or a code generator | emit bvm assembly or use the `bvm` crate |
 | check a project in CI | `burnc --check` and `burnfmt --check` |
 | format on save in an editor | the language server (`burn-lsp`) or `burnfmt` |

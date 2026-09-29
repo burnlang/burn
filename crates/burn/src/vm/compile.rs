@@ -1,187 +1,61 @@
-use crate::hir::{BinOp, Cmp, Conv, Expr, ExprKind, Program, Stmt, UnOp};
-use burn_runtime::RtFn;
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Op {
-    Const(u64),
-    Load(u32),
-    Store(u32),
-    Tee(u32),
-    GLoad(u32),
-    GTee(u32),
-    Pop,
-    IAdd,
-    ISub,
-    IMul,
-    IDiv(u32),
-    IMod(u32),
-    INeg,
-    FAdd,
-    FSub,
-    FMul,
-    FDiv,
-    FNeg,
-    ICmp(Cmp),
-    FCmp(Cmp),
-    Not,
-    I2F,
-    F2I,
-    Jmp(u32),
-    Jz(u32),
-    JzKeep(u32),
-    JnzKeep(u32),
-    Call(u32),
-    CallInd(u32),
-    CallIface(u32, u32),
-    Ret,
-    RetVoid,
-    Rt(RtFn),
-    Spawn(u32, u32, u32),
-    NewStruct(u32, u32),
-    GetField(u32),
-    SetField(u32),
-    NewArray(u32, u32),
-    Index(u32),
-    SetIndex(u32),
-    ArrLen,
-    BoxVal,
-    IncLocal(u32, i32),
-    JCmpLL(Cmp, u32, u32, u32),
-    JCmpLC(Cmp, u32, i32, u32),
-    LoadField(u32, u32),
-}
-
-#[derive(Clone, Debug)]
-pub struct FuncCode {
-    pub name: String,
-    pub entry: u32,
-    pub params: u32,
-    pub locals: u32,
-}
-
-pub struct Code {
-    pub ops: Vec<Op>,
-    pub funcs: Vec<FuncCode>,
-    pub iface: Vec<Vec<u32>>,
-    pub entry: u32,
-    pub nglobals: usize,
-}
+use crate::hir::{BinOp, Conv, Expr, ExprKind, Program, Stmt, UnOp};
+use bvm::{FuncBuilder, Function, Label, Module, Op, Table};
 
 struct Loop {
-    breaks: Vec<usize>,
-    continues: Vec<usize>,
+    brk: Label,
+    cont: Label,
 }
 
-pub struct Compiler {
-    ops: Vec<Op>,
+struct Compiler {
+    f: FuncBuilder,
     loops: Vec<Loop>,
-    strings: Vec<u64>,
 }
 
-pub fn compile(p: &Program, strings: Vec<u64>) -> Code {
+pub fn compile(p: &Program) -> Module {
+    let mut m = Module::new();
+    let meta = p.meta();
+    m.types = meta.types;
+    m.locs = meta.locs;
+    m.strings = p.strings.clone();
+    m.globals = p
+        .globals
+        .iter()
+        .map(|g| {
+            if g.module.is_empty() {
+                g.name.clone()
+            } else {
+                format!("{}.{}", g.module, g.name)
+            }
+        })
+        .collect();
+    m.funcs = p.funcs.iter().map(func).collect();
+    m.tables = p
+        .slots
+        .iter()
+        .map(|s| Table {
+            name: s.name.clone(),
+            argc: s.argc,
+            entries: s.impls.clone(),
+        })
+        .collect();
+    m.entry = Some(p.entry);
+    m
+}
+
+fn func(f: &crate::hir::Func) -> Function {
     let mut c = Compiler {
-        ops: Vec::new(),
+        f: FuncBuilder::new(f.params),
         loops: Vec::new(),
-        strings,
     };
-    let mut funcs = Vec::with_capacity(p.funcs.len());
-    for f in &p.funcs {
-        let entry = c.ops.len() as u32;
-        for s in &f.body {
-            c.stmt(s);
-        }
-        c.ops.push(Op::RetVoid);
-        funcs.push(FuncCode {
-            name: f.name.clone(),
-            entry,
-            params: f.params,
-            locals: f.locals.len().max(f.params as usize) as u32,
-        });
+    c.f.reserve_locals(f.locals.len() as u32);
+    c.stmts(&f.body);
+    if c.f.reachable_end() {
+        c.f.ret_void();
     }
-    let ntypes = p.types.len();
-    let mut iface = Vec::with_capacity(p.slots.len());
-    for s in &p.slots {
-        let mut t = vec![u32::MAX; ntypes];
-        for (tid, f) in &s.impls {
-            t[*tid as usize] = *f;
-        }
-        iface.push(t);
-    }
-    let mut ops = c.ops;
-    peephole(&mut ops);
-    Code {
-        ops,
-        funcs,
-        iface,
-        entry: p.entry,
-        nglobals: p.globals.len(),
-    }
-}
-
-fn peephole(ops: &mut [Op]) {
-    let n = ops.len();
-    let mut targets = vec![false; n + 1];
-    for op in ops.iter() {
-        match op {
-            Op::Jmp(t) | Op::Jz(t) | Op::JzKeep(t) | Op::JnzKeep(t) => targets[*t as usize] = true,
-            _ => {}
-        }
-    }
-    let mut i = 0;
-    while i + 3 < n {
-        match (ops[i], ops[i + 1], ops[i + 2], ops[i + 3]) {
-            (Op::Load(a), Op::Load(b), Op::ICmp(c), Op::Jz(t)) if !targets[i + 1] && !targets[i + 2] && !targets[i + 3] => {
-                ops[i] = Op::JCmpLL(c, a, b, t);
-                i += 4;
-                continue;
-            }
-            (Op::Load(a), Op::Const(k), Op::ICmp(c), Op::Jz(t))
-                if !targets[i + 1] && !targets[i + 2] && !targets[i + 3] && (k as i64) >= i32::MIN as i64 && (k as i64) <= i32::MAX as i64 =>
-            {
-                ops[i] = Op::JCmpLC(c, a, k as i64 as i32, t);
-                i += 4;
-                continue;
-            }
-            (Op::Load(a), Op::Const(k), Op::IAdd, Op::Store(b))
-                if a == b && !targets[i + 1] && !targets[i + 2] && !targets[i + 3] && (k as i64).abs() < i32::MAX as i64 =>
-            {
-                ops[i] = Op::IncLocal(a, k as i64 as i32);
-                i += 4;
-                continue;
-            }
-            _ => {}
-        }
-        if let (Op::Load(a), Op::GetField(f)) = (ops[i], ops[i + 1]) {
-            if !targets[i + 1] {
-                ops[i] = Op::LoadField(a, f);
-                i += 2;
-                continue;
-            }
-        }
-        i += 1;
-    }
+    c.f.finish(&f.name)
 }
 
 impl Compiler {
-    fn emit(&mut self, op: Op) -> usize {
-        self.ops.push(op);
-        self.ops.len() - 1
-    }
-
-    fn here(&self) -> u32 {
-        self.ops.len() as u32
-    }
-
-    fn patch(&mut self, at: usize, target: u32) {
-        self.ops[at] = match self.ops[at] {
-            Op::Jmp(_) => Op::Jmp(target),
-            Op::Jz(_) => Op::Jz(target),
-            Op::JzKeep(_) => Op::JzKeep(target),
-            Op::JnzKeep(_) => Op::JnzKeep(target),
-            o => o,
-        };
-    }
-
     fn stmts(&mut self, ss: &[Stmt]) {
         for s in ss {
             self.stmt(s);
@@ -193,60 +67,49 @@ impl Compiler {
             Stmt::Expr(e) => self.expr_discard(e),
             Stmt::If(c, a, b) => {
                 self.expr(c);
-                let jz = self.emit(Op::Jz(0));
+                let other = self.f.label();
+                self.f.jz(other);
                 self.stmts(a);
                 if b.is_empty() {
-                    let h = self.here();
-                    self.patch(jz, h);
+                    self.f.bind(other);
                 } else {
-                    let j = self.emit(Op::Jmp(0));
-                    let h = self.here();
-                    self.patch(jz, h);
+                    let end = self.f.label();
+                    self.f.jmp(end);
+                    self.f.bind(other);
                     self.stmts(b);
-                    let h = self.here();
-                    self.patch(j, h);
+                    self.f.bind(end);
                 }
             }
             Stmt::Loop { cond, body, step } => {
-                let top = self.here();
-                let exit = cond.as_ref().map(|c| {
+                let top = self.f.here();
+                let brk = self.f.label();
+                let cont = self.f.label();
+                if let Some(c) = cond {
                     self.expr(c);
-                    self.emit(Op::Jz(0))
-                });
-                self.loops.push(Loop {
-                    breaks: Vec::new(),
-                    continues: Vec::new(),
-                });
+                    self.f.jz(brk);
+                }
+                self.loops.push(Loop { brk, cont });
                 self.stmts(body);
-                let cont = self.here();
+                self.f.bind(cont);
                 self.stmts(step);
-                self.emit(Op::Jmp(top));
-                let end = self.here();
-                let l = self.loops.pop().unwrap();
-                for b in l.breaks {
-                    self.patch(b, end);
-                }
-                for c in l.continues {
-                    self.patch(c, cont);
-                }
-                if let Some(x) = exit {
-                    self.patch(x, end);
-                }
+                self.f.jmp(top);
+                self.f.bind(brk);
+                self.loops.pop();
             }
             Stmt::Return(Some(e)) => {
                 self.expr(e);
-                self.emit(Op::Ret);
+                self.f.ret();
             }
             Stmt::Return(None) => {
-                self.emit(Op::RetVoid);
+                self.f.ret_void();
             }
             Stmt::Break => {
-                let j = self.emit(Op::Jmp(0));
-                self.loops.last_mut().unwrap().breaks.push(j);
+                let l = self.loops.last().unwrap().brk;
+                self.f.jmp(l);
             }
             Stmt::Continue => {
-                let j = self.emit(Op::Jmp(0));
-                self.loops.last_mut().unwrap().continues.push(j);
+                let l = self.loops.last().unwrap().cont;
+                self.f.jmp(l);
             }
         }
     }
@@ -255,11 +118,15 @@ impl Compiler {
         match &e.kind {
             ExprKind::SetLocal(s, v) => {
                 self.expr(v);
-                self.emit(Op::Store(*s));
+                self.f.emit(Op::Store(*s));
+            }
+            ExprKind::SetGlobal(g, v) => {
+                self.expr(v);
+                self.f.emit(Op::GStore(*g));
             }
             _ => {
                 self.expr(e);
-                self.emit(Op::Pop);
+                self.f.emit(Op::Pop);
             }
         }
     }
@@ -270,30 +137,19 @@ impl Compiler {
         }
     }
 
+    fn emit(&mut self, op: Op) {
+        self.f.emit(op);
+    }
+
     fn expr(&mut self, e: &Expr) {
         match &e.kind {
-            ExprKind::Int(v) => {
-                self.emit(Op::Const(*v as u64));
-            }
-            ExprKind::Float(f) => {
-                self.emit(Op::Const(f.to_bits()));
-            }
-            ExprKind::Bool(b) => {
-                self.emit(Op::Const(*b as u64));
-            }
-            ExprKind::Str(i) => {
-                let v = self.strings[*i as usize];
-                self.emit(Op::Const(v));
-            }
-            ExprKind::Null => {
-                self.emit(Op::Const(0));
-            }
-            ExprKind::Local(s) => {
-                self.emit(Op::Load(*s));
-            }
-            ExprKind::Global(g) => {
-                self.emit(Op::GLoad(*g));
-            }
+            ExprKind::Int(v) => self.emit(Op::Const(*v as u64)),
+            ExprKind::Float(f) => self.emit(Op::Const(f.to_bits())),
+            ExprKind::Bool(b) => self.emit(Op::Const(*b as u64)),
+            ExprKind::Str(i) => self.emit(Op::Str(*i)),
+            ExprKind::Null => self.emit(Op::Const(0)),
+            ExprKind::Local(s) => self.emit(Op::Load(*s)),
+            ExprKind::Global(g) => self.emit(Op::GLoad(*g)),
             ExprKind::SetLocal(s, v) => {
                 self.expr(v);
                 self.emit(Op::Tee(*s));
@@ -318,7 +174,7 @@ impl Compiler {
                     BinOp::ISub => Op::ISub,
                     BinOp::IMul => Op::IMul,
                     BinOp::IDiv(l) => Op::IDiv(*l),
-                    BinOp::IMod(l) => Op::IMod(*l),
+                    BinOp::IMod(l) => Op::IRem(*l),
                     BinOp::FAdd => Op::FAdd,
                     BinOp::FSub => Op::FSub,
                     BinOp::FMul => Op::FMul,
@@ -329,19 +185,19 @@ impl Compiler {
             }
             ExprKind::And(a, b) => {
                 self.expr(a);
-                let j = self.emit(Op::JzKeep(0));
+                let end = self.f.label();
+                self.f.jz_keep(end);
                 self.emit(Op::Pop);
                 self.expr(b);
-                let h = self.here();
-                self.patch(j, h);
+                self.f.bind(end);
             }
             ExprKind::Or(a, b) => {
                 self.expr(a);
-                let j = self.emit(Op::JnzKeep(0));
+                let end = self.f.label();
+                self.f.jnz_keep(end);
                 self.emit(Op::Pop);
                 self.expr(b);
-                let h = self.here();
-                self.patch(j, h);
+                self.f.bind(end);
             }
             ExprKind::Conv(c, x) => {
                 self.expr(x);
@@ -361,7 +217,7 @@ impl Compiler {
             }
             ExprKind::CallIface(slot, xs) => {
                 self.args(xs);
-                self.emit(Op::CallIface(*slot, xs.len() as u32));
+                self.emit(Op::Dispatch(*slot, xs.len() as u32));
             }
             ExprKind::Rt(f, xs) => {
                 self.args(xs);
@@ -371,12 +227,10 @@ impl Compiler {
                 self.args(xs);
                 self.emit(Op::Spawn(*f, xs.len() as u32, e.ty));
             }
-            ExprKind::FuncRef(f) => {
-                self.emit(Op::Const(*f as u64));
-            }
+            ExprKind::FuncRef(f) => self.emit(Op::FuncRef(*f)),
             ExprKind::NewStruct(t, xs) => {
                 self.args(xs);
-                self.emit(Op::NewStruct(*t, xs.len() as u32));
+                self.emit(Op::NewRecord(*t, xs.len() as u32));
             }
             ExprKind::GetField(o, i) => {
                 self.expr(o);
@@ -404,11 +258,11 @@ impl Compiler {
             }
             ExprKind::ArrLen(a) => {
                 self.expr(a);
-                self.emit(Op::ArrLen);
+                self.emit(Op::Len);
             }
             ExprKind::BoxVal(x) => {
                 self.expr(x);
-                self.emit(Op::BoxVal);
+                self.emit(Op::Unbox);
             }
             ExprKind::Seq(ss, x) => {
                 self.stmts(ss);

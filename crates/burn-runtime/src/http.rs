@@ -90,7 +90,7 @@ fn plain(method: &str, u: &Url, body: &[u8], headers: &[String]) -> Result<(i64,
     let mut req = format!("{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n", method, u.path, u.host);
     let has = |name: &str| headers.iter().any(|h| h.to_ascii_lowercase().starts_with(&format!("{}:", name)));
     if !has("user-agent") {
-        req.push_str("User-Agent: BurnLang/2.0\r\n");
+        req.push_str("User-Agent: BurnLang/26.1.0-experimental-1\r\n");
     }
     for h in headers {
         req.push_str(h);
@@ -117,7 +117,7 @@ fn curl(method: &str, url: &str, body: &[u8], headers: &[String]) -> Result<(i64
     cmd.arg("-sS").arg("-i").arg("-X").arg(method);
     let has_ua = headers.iter().any(|h| h.to_ascii_lowercase().starts_with("user-agent:"));
     if !has_ua {
-        cmd.arg("-H").arg("User-Agent: BurnLang/2.0");
+        cmd.arg("-H").arg("User-Agent: BurnLang/26.1.0-experimental-1");
     }
     for h in headers {
         cmd.arg("-H").arg(h);

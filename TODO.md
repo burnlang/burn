@@ -13,6 +13,7 @@
 - Add async: `async fun`, `Future<T>` and `await`
 - Toolchain installer with `burni`, `burnc`, `burnfmt` and `burn-lsp`
 - Formatter written in Burn (`tools/burnfmt`)
+- bvm: a general-purpose virtual machine with an assembler, bytecode format, verifier, host functions and an example language (Ember)
 
 ## Next
 
@@ -24,3 +25,5 @@
 - Package manager
 - Self-hosting (the formatter is the first tool written in Burn)
 - Windows installer
+- bvm: a JIT or threaded-code dispatch, a debugger and a module linker for multi-file bytecode
+- More languages on bvm (a Burn-to-bvm compiler written in Burn, a Lisp)

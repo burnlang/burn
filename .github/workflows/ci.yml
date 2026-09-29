@@ -19,9 +19,12 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --release
+      - name: Ember, the example language built on bvm
+        run: cargo run --release -p bvm --example ember -- examples/bvm/ember/demo.em
       - name: Installer smoke test
         run: |
           ./install.sh --from-source --no-modify-path --prefix "$RUNNER_TEMP/burn"
           "$RUNNER_TEMP/burn/bin/burnfmt" --check examples/*.bn lib/std/*.bn tools/burnfmt/burnfmt.bn
           "$RUNNER_TEMP/burn/bin/burni" examples/fib.bn
+          "$RUNNER_TEMP/burn/bin/bvm" examples/bvm/fib.bvm
           sh "$RUNNER_TEMP/burn/share/burn/install.sh" --uninstall --prefix "$RUNNER_TEMP/burn"

@@ -1,0 +1,103 @@
+---
+title: The Burn Virtual Machine
+description: bvm is the general-purpose bytecode VM that runs Burn, and any other language that targets it.
+order: 30
+---
+
+# The Burn Virtual Machine (bvm)
+
+bvm is the virtual machine that `burn run` and `burni` use. It isn't tied to Burn: it has its own instruction set,
+a text assembly language, a binary bytecode format, a verifier and a Rust API, so other languages can use it as
+their backend. Burn is one front end among many that could target it.
+
+```text
+ your language ─┐
+ Burn ──────────┼─▶ bvm module ──▶ verifier ──▶ linker + fusion ──▶ interpreter
+ hand-written   │   (.bvm text or                                      │
+ assembly ──────┘    .bvmc bytecode)                runtime library ◀──┘ (GC, strings, arrays, maps, I/O, threads)
+```
+
+What a language gets by targeting bvm:
+
+- **A garbage-collected heap** with strings, growable arrays, hash maps, records and boxed values, plus a
+  library of about 100 runtime functions for text, collections, math, time, files, JSON, HTTP and threads.
+- **A verifier** that rejects malformed code before it runs: stack underflow, stack height mismatches between
+  paths, jumps outside the function, bad local, global, function, type and table references, and code that can
+  run off the end of a function.
+- **Fast execution.** Verified code runs on an interpreter with a precomputed frame size per function, so pushes
+  and pops aren't bounds-checked. At load time common instruction sequences are fused into
+  superinstructions.
+- **Two interchangeable file formats**: readable assembly (`.bvm`) and compact bytecode (`.bvmc`). They convert
+  both ways without loss.
+- **Host functions.** Programs can import functions that the embedding Rust program provides.
+- **Threads.** `spawn` runs a function on its own thread and returns a future that can be awaited.
+
+## Hello, bvm
+
+```bvm
+func main()
+    str "Hello from bvm!"
+    rt print
+    pop
+    retv
+end
+```
+
+```sh
+bvm hello.bvm                    # assemble, verify and run
+bvm asm hello.bvm -o hello.bvmc  # write bytecode
+bvm hello.bvmc                   # run the bytecode
+bvm dis hello.bvmc               # turn bytecode back into text
+bvm check hello.bvm              # verify only
+bvm runtime                      # list the runtime functions available to `rt`
+```
+
+`burn` and `burni` run `.bvm` and `.bvmc` files too.
+
+## Burn on bvm
+
+Every Burn program becomes a bvm module:
+
+```sh
+burnc app.bn --target bvm -o app.bvmc --emit-asm app.bvm
+bvm app.bvmc
+burn dump --bytecode app.bn      # print the module as assembly
+```
+
+A Burn class becomes a `class` type, an interface method becomes a dispatch table, `async` calls become
+`spawn`, and every place that can fail at runtime carries a source location. Running a `.bvmc` file skips
+parsing and type checking.
+
+## Values
+
+Every value is one 64-bit word. What the word means is decided by the instructions that use it:
+
+| Kind | Representation |
+| --- | --- |
+| int | a two's complement `i64` |
+| float | the bits of an `f64` (`const 1.5` stores those bits) |
+| bool | 0 or 1 |
+| null | 0 |
+| function | its index, as produced by `fref` and used by `calli` |
+| string, array, map, record, box, future | a pointer to a heap object |
+
+There are separate integer, unsigned and float instructions, as in WebAssembly, so the VM never guesses a
+type. Heap objects carry a type id, which is what `dispatch`, `to_str`, `is_type` and error messages use.
+[Values and the runtime library](./runtime.mdx) covers the object layouts and the runtime functions.
+
+## What the verifier guarantees
+
+A module that passes verification can't corrupt the VM's own state: the operand stack stays within its frame,
+every jump lands on an instruction, and every index names something that exists. It doesn't check value types,
+because words are untyped. The VM checks what it can cheaply at runtime (`getf` on null or on something that
+isn't a record, `index` on something that isn't an array, a division by zero, an out-of-bounds index, a
+`calli` with the wrong number of arguments) and reports a runtime error. Beyond that, a front end must not
+use an integer as a pointer. Native machine code has the same rule.
+
+## Next
+
+- [Assembly language](./assembly.mdx)
+- [Instruction set](./instructions.mdx)
+- [Values and the runtime library](./runtime.mdx)
+- [Embedding bvm and generating code from Rust](./embedding.mdx)
+- [Building a language on bvm](./new-language.mdx)

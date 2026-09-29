@@ -1,0 +1,51 @@
+func fib(n)
+    load n
+    const 2
+    ilt
+    jz recurse
+    load n
+    ret
+recurse:
+    load n
+    const 1
+    isub
+    call fib
+    load n
+    const 2
+    isub
+    call fib
+    iadd
+    ret
+end
+
+func main()
+    local i
+    const 0
+    store i
+loop:
+    load i
+    const 15
+    ilt
+    jz done
+    str "fib("
+    load i
+    const 3
+    rt to_str
+    rt str_concat
+    str ") = "
+    rt str_concat
+    load i
+    call fib
+    const 3
+    rt to_str
+    rt str_concat
+    rt print
+    pop
+    load i
+    const 1
+    iadd
+    store i
+    jmp loop
+done:
+    retv
+end

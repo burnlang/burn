@@ -6,15 +6,16 @@ order: 19
 
 # Installation
 
-The Burn toolchain is five commands that share one compiler:
+The Burn toolchain is six commands:
 
 | Command | What it is |
 | --- | --- |
 | `burn` | the all-in-one driver: run, build, check, fmt, repl, lsp |
-| `burni` | the interpreter: runs programs on the bytecode VM and starts the REPL |
-| `burnc` | the compiler: native executables and JavaScript |
+| `burni` | the interpreter: runs programs on bvm and starts the REPL |
+| `burnc` | the compiler: native executables, JavaScript and bvm bytecode |
 | `burnfmt` | the code formatter, written in Burn itself |
 | `burn-lsp` | the language server for editors |
+| `bvm` | the Burn virtual machine: runs, assembles and inspects bytecode |
 
 See [the toolchain](./toolchain.mdx) for what each command does.
 
@@ -28,11 +29,11 @@ The installer:
 
 1. downloads a prebuilt release for your platform if one exists, otherwise downloads the sources and builds them
    with `cargo` (the first build takes about a minute)
-2. installs `burn` into `~/.burn/bin` and links `burni`, `burnc` and `burn-lsp` to it
+2. installs `burn` and `bvm` into `~/.burn/bin` and links `burni`, `burnc` and `burn-lsp` to `burn`
 3. compiles `burnfmt` from its Burn source with `burnc`; where native compilation is not available it installs a
    small launcher that runs `burnfmt` on the interpreter instead
 4. adds `~/.burn/bin` to your `PATH` in `~/.profile`, `~/.bashrc`, `~/.zshrc` (whichever exist) and fish
-5. checks that `burni` runs a program and `burnfmt` formats one
+5. checks that `burni` runs a program, `burnfmt` formats one and `bvm` runs compiled bytecode
 
 Open a new terminal (or run `. ~/.burn/env`) and check the installation:
 
@@ -89,10 +90,11 @@ cd burn
 │   ├── burni -> burn
 │   ├── burnc -> burn
 │   ├── burn-lsp -> burn
-│   └── burnfmt       native executable compiled from Burn source
+│   ├── burnfmt       native executable compiled from Burn source
+│   └── bvm           the Burn virtual machine
 ├── share/burn/
 │   ├── tools/burnfmt/burnfmt.bn
-│   ├── examples/
+│   ├── examples/     including examples/bvm/ (assembly and Ember)
 │   └── install.sh    used for updates and uninstalling
 └── env               adds bin/ to PATH
 ```
@@ -133,10 +135,10 @@ Any platform with Rust can build the toolchain:
 cargo build --release
 ```
 
-Copy `target/release/burn` (`burn.exe` on Windows) somewhere on your `PATH`, then create `burni`, `burnc` and
-`burn-lsp` as links or copies of it. On Windows copy the file to `burni.exe`, `burnc.exe` and `burn-lsp.exe`.
-Native executables currently need x86-64 Linux or macOS; on other platforms `burni`, `burnc --target js`,
-`burn fmt` and `burn lsp` all work. To get `burnfmt` without native compilation, run it on the interpreter:
+Copy `target/release/burn` and `target/release/bvm` (`burn.exe` and `bvm.exe` on Windows) somewhere on your
+`PATH`, then create `burni`, `burnc` and `burn-lsp` as links or copies of `burn`. On Windows copy the file to `burni.exe`, `burnc.exe` and `burn-lsp.exe`.
+Native executables currently need x86-64 Linux or macOS; on other platforms `burni`, `bvm`,
+`burnc --target js`, `burnc --target bvm`, `burn fmt` and `burn lsp` all work. To get `burnfmt` without native compilation, run it on the interpreter:
 
 ```sh
 burni tools/burnfmt/burnfmt.bn -w file.bn

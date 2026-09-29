@@ -1,0 +1,119 @@
+---
+title: Embedding bvm
+description: Building, loading and running bvm modules from Rust, host functions and the bytecode format.
+order: 34
+---
+
+# Embedding bvm
+
+The `bvm` crate is a library as well as a command. Add it to a Rust project with a path or git dependency:
+
+```toml
+[dependencies]
+bvm = { git = "https://github.com/burnlang/burn" }
+```
+
+## Generating code
+
+`ModuleBuilder` collects functions, strings, globals, types, imports and dispatch tables. `FuncBuilder` emits
+instructions and handles jump labels for you.
+
+```rust
+use bvm::{Cmp, FuncBuilder, ModuleBuilder, Op, RtFn};
+
+let mut mb = ModuleBuilder::new();
+
+let fact = mb.declare("fact", 1);            // declare first so it can call itself
+let mut f = FuncBuilder::with_params(&["n"]);
+let base = f.label();
+f.load(0).int(1).icmp(Cmp::Le).jnz(base);
+f.load(0).load(0).int(1).emit(Op::ISub).call(fact).emit(Op::IMul).ret();
+f.bind(base).int(1).ret();
+mb.define(fact, f);
+
+let mut main = FuncBuilder::new(0);
+main.int(10).call(fact).int(3).rt(RtFn::ToStr).rt(RtFn::Print).ret_void();
+let main = mb.function("main", main);
+mb.entry(main);
+
+let module = mb.finish();
+```
+
+Useful builder calls:
+
+| Call | Does |
+| --- | --- |
+| `mb.string(s)` | interns a string and returns its index for `Op::Str` |
+| `mb.global(name)` | adds a global and returns its index |
+| `mb.import(name, argc)` | declares a host function for `Op::Host` |
+| `mb.ty(desc)` / `mb.new_type(desc)` | interns / appends a type descriptor and returns its id |
+| `mb.table(name, argc)` + `mb.table_entry(t, tid, f)` | builds a dispatch table |
+| `mb.loc("file:line")` | adds a source location for error messages |
+| `f.local(name)` | adds a local and returns its slot |
+| `f.label()`, `f.bind(l)`, `f.here()` | creates, places and creates-and-places labels |
+| `f.jmp(l)`, `f.jz(l)`, `f.jnz(l)`, `f.jz_keep(l)`, `f.jnz_keep(l)` | jumps to labels |
+| `f.reachable_end()` | true if execution can reach the current end, so you know whether to append `ret_void` |
+
+A `Module` is plain data (`types`, `strings`, `globals`, `imports`, `funcs`, `tables`, `locs`, `entry`), so a front
+end can also build one directly.
+
+## Checking, saving and loading
+
+```rust
+bvm::verify(&module)?;                                // structural checks
+let text = bvm::asm::disassemble(&module);            // .bvm
+let bytes = bvm::binary::encode(&module);             // .bvmc
+let again = bvm::binary::decode(&bytes)?;             // back to a Module
+let parsed = bvm::asm::assemble(&text)?;              // from text
+let from_disk = bvm::read(std::path::Path::new("app.bvmc"))?;   // either format
+```
+
+## Running with host functions
+
+```rust
+use bvm::{Host, Runner};
+
+let mut host = Host::new();
+host.register("square", 1, |args| (args[0] as i64 * args[0] as i64) as u64);
+
+// run the entry function and wait for spawned threads
+bvm::run(&module, &host, Vec::new())?;
+
+// or keep control: call functions yourself and read globals afterwards
+let program = bvm::load(&module, &host)?;          // verifies, links and fuses
+let mut runner = Runner::new(program.clone(), Vec::new());
+let fact = program.func("fact").unwrap();
+assert_eq!(runner.call_with(fact, &[5]), 120);
+let globals = runner.finish();
+```
+
+`load` fails with a `LoadError` if the module doesn't verify, imports a function the host doesn't provide, or
+imports it with a different argument count. Host functions receive their arguments as raw words and return one
+word. The runtime helpers in `bvm::runtime::obj` (`string`, `str_ref`, `array_new`, `field`, ...) read and create
+heap values. A host function may allocate: the arguments stay on the VM stack, so the collector can see them.
+
+Runtime errors print a message and exit the process by default. Call
+`bvm::runtime::io::set_panic_mode(true)` to turn them into panics that carry `bvm::runtime::io::BurnError`, which
+you can catch with `std::panic::catch_unwind`. Burn's REPL does this.
+
+## The bytecode format
+
+`.bvmc` files are little-endian:
+
+```text
+"BVM\0"   u16 format version (1)   u16 flags (0)
+types     u32 count, then one descriptor per type from id 12 on
+strings   u32 count, then (u32 length, UTF-8 bytes) each
+locs      same layout as strings
+globals   same layout as strings
+imports   u32 count, then (name, u32 argc) each
+tables    u32 count, then (name, u32 argc, u32 entries, (u32 type id, u32 function) each) each
+entry     u32 function index, or 0xffffffff for none
+runtime   u32 count, then the names of the runtime functions the code uses
+functions u32 count, then (name, u32 params, u32 locals, u32 name count, names, u32 op count, ops) each
+```
+
+Each instruction is a one-byte opcode followed by fixed-size operands (u32 indexes, a u64 for `const`, one byte for
+a comparison). `rt` operands index the file's runtime name list rather than the VM's internal numbering, so
+bytecode keeps working when the runtime gains functions. The decoder checks every length and index. A damaged
+file is rejected with an error instead of crashing the VM.
