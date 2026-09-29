@@ -33,7 +33,6 @@ pub struct ModScope {
     pub types: HashMap<String, Entry<TyId>>,
     pub imports: Vec<usize>,
     pub init: FuncId,
-    pub is_std: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,7 +84,6 @@ pub struct FnCtx {
     pub self_ty: Option<TyId>,
     pub is_init: bool,
     pub dry: bool,
-    pub is_async: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -172,8 +170,16 @@ pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
         .funcs
         .iter()
         .map(|f| {
-            let ps: Vec<String> = f.params.iter().filter(|p| p.0 != "self").map(|p| format!("{}: {}", p.0, c.types.display(p.1))).collect();
-            let ret = f.ret.map(|r| if r == T_VOID { String::new() } else { format!(": {}", c.types.display(r)) }).unwrap_or_default();
+            let ps: Vec<String> = f
+                .params
+                .iter()
+                .filter(|p| p.0 != "self")
+                .map(|p| format!("{}: {}", p.0, c.types.display(p.1)))
+                .collect();
+            let ret = f
+                .ret
+                .map(|r| if r == T_VOID { String::new() } else { format!(": {}", c.types.display(r)) })
+                .unwrap_or_default();
             let sig = format!("{}fun {}({}){}", if f.is_async { "async " } else { "" }, f.name, ps.join(", "), ret);
             (f.name.clone(), sig, f.span, f.module)
         })
@@ -186,7 +192,15 @@ pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
     }
     let mut diags = c.diags;
     diags.sort_by_key(|d| (d.span.file, d.span.start));
-    CheckResult { program, diags, index: c.index, types: c.types, globals, funcs, type_names }
+    CheckResult {
+        program,
+        diags,
+        index: c.index,
+        types: c.types,
+        globals,
+        funcs,
+        type_names,
+    }
 }
 
 pub fn edit_distance(a: &str, b: &str) -> usize {
@@ -284,7 +298,11 @@ impl<'a> Checker<'a> {
         if let Some(i) = self.loc_ids.get(&key) {
             return *i;
         }
-        let s = if (span.file as usize) < self.sm.files.len() { self.sm.location(span) } else { "<unknown>".into() };
+        let s = if (span.file as usize) < self.sm.files.len() {
+            self.sm.location(span)
+        } else {
+            "<unknown>".into()
+        };
         let i = self.locs.len() as u32;
         self.locs.push(s);
         self.loc_ids.insert(key, i);
@@ -320,7 +338,12 @@ impl<'a> Checker<'a> {
         c.scopes.last_mut().unwrap().insert(name.to_string(), LocalSym { slot, is_const, span });
         c.narrow.remove(&slot);
         if self.opts.want_index && !self.is_dry() {
-            self.index.locals.push(LocalInfo { name: name.to_string(), ty, decl: span, scope: scope_span });
+            self.index.locals.push(LocalInfo {
+                name: name.to_string(),
+                ty,
+                decl: span,
+                scope: scope_span,
+            });
         }
         slot
     }
@@ -370,7 +393,10 @@ impl<'a> Checker<'a> {
     }
 
     pub fn is_private_elsewhere(&self, module: usize, name: &str) -> bool {
-        self.mods[module].imports.iter().any(|i| self.mods[*i].values.get(name).map(|e| e.vis == Vis::Priv).unwrap_or(false) || self.mods[*i].types.get(name).map(|e| e.vis == Vis::Priv).unwrap_or(false))
+        self.mods[module].imports.iter().any(|i| {
+            self.mods[*i].values.get(name).map(|e| e.vis == Vis::Priv).unwrap_or(false)
+                || self.mods[*i].types.get(name).map(|e| e.vis == Vis::Priv).unwrap_or(false)
+        })
     }
 
     pub fn lookup_type_name(&mut self, module: usize, name: &str, span: Span) -> Option<TyId> {
@@ -426,7 +452,12 @@ impl<'a> Checker<'a> {
                 if let Some(p) = Self::primitive(name) {
                     return p;
                 }
-                let cands: Vec<String> = self.mods[module].types.keys().cloned().chain(["int", "float", "string", "bool", "void", "any"].iter().map(|s| s.to_string())).collect();
+                let cands: Vec<String> = self.mods[module]
+                    .types
+                    .keys()
+                    .cloned()
+                    .chain(["int", "float", "string", "bool", "void", "any"].iter().map(|s| s.to_string()))
+                    .collect();
                 match suggest(name, cands.iter().map(|s| s.as_str())) {
                     Some(s) => self.error_note(te.span, format!("unknown type `{}`", name), format!("did you mean `{}`?", s)),
                     None => {
@@ -500,7 +531,6 @@ impl<'a> Checker<'a> {
                 types: HashMap::new(),
                 imports: m.imports.iter().map(|(i, _)| *i).collect(),
                 init,
-                is_std: m.is_std,
             });
         }
         let mut aliases: Vec<(usize, String, TypeExpr, Span)> = Vec::new();
@@ -556,7 +586,9 @@ impl<'a> Checker<'a> {
                                 self.funcs[fid as usize].name = format!("{}.{}", name.name, mdecl.name.name);
                                 self.funcs[fid as usize].is_static = mdecl.is_static;
                                 let rec = &mut self.types.records[ri as usize];
-                                let dup = rec.methods.contains_key(&mdecl.name.name) || rec.statics.contains_key(&mdecl.name.name) || rec.field_index(&mdecl.name.name).is_some();
+                                let dup = rec.methods.contains_key(&mdecl.name.name)
+                                    || rec.statics.contains_key(&mdecl.name.name)
+                                    || rec.field_index(&mdecl.name.name).is_some();
                                 if mdecl.is_static {
                                     rec.statics.insert(mdecl.name.name.clone(), fid);
                                 } else {
@@ -575,7 +607,13 @@ impl<'a> Checker<'a> {
                     ItemKind::Stmt(s) => {
                         if let ast::StmtKind::Var { name, is_const, .. } = &s.kind {
                             let gi = self.globals.len() as u32;
-                            self.globals.push(GlobalInfo { name: name.name.clone(), ty: None, is_const: *is_const, module: mi, span: name.span });
+                            self.globals.push(GlobalInfo {
+                                name: name.name.clone(),
+                                ty: None,
+                                is_const: *is_const,
+                                module: mi,
+                                span: name.span,
+                            });
                             self.add_value(mi, &name.name, ValSym::Global(gi), item.vis, name.span);
                         }
                     }
@@ -595,7 +633,10 @@ impl<'a> Checker<'a> {
             i += 1;
         }
         let root = loaded.root;
-        if let Some(Entry { sym: ValSym::Func(f), span, .. }) = self.mods[root].values.get("main").cloned() {
+        if let Some(Entry {
+            sym: ValSym::Func(f), span, ..
+        }) = self.mods[root].values.get("main").cloned()
+        {
             if !self.funcs[f as usize].params.is_empty() {
                 self.error(span, "`main` must not take parameters (use `args()` to read command line arguments)");
             }
@@ -645,7 +686,13 @@ impl<'a> Checker<'a> {
                 self.add_type(mi, name, t, vis);
             }
             Def::Interface { name, .. } => {
-                let ii = self.types.new_iface(IfaceDef { name: name.name.clone(), methods: Vec::new(), module: mi as u32, span: name.span, ty: 0 });
+                let ii = self.types.new_iface(IfaceDef {
+                    name: name.name.clone(),
+                    methods: Vec::new(),
+                    module: mi as u32,
+                    span: name.span,
+                    ty: 0,
+                });
                 let t = self.types.ifaces[ii as usize].ty;
                 self.add_type(mi, name, t, vis);
             }
@@ -695,7 +742,13 @@ impl<'a> Checker<'a> {
                         self.error(f.name.span, format!("duplicate field `{}`", f.name.name));
                         continue;
                     }
-                    out.push(FieldDef { name: f.name.name.clone(), ty: ft, default: f.default.clone(), private: f.vis == Vis::Priv, span: f.name.span });
+                    out.push(FieldDef {
+                        name: f.name.name.clone(),
+                        ty: ft,
+                        default: f.default.clone(),
+                        private: f.vis == Vis::Priv,
+                        span: f.name.span,
+                    });
                 }
                 self.types.records[ri as usize].fields = out;
                 if let Def::Class { implements, .. } = d {
@@ -730,8 +783,19 @@ impl<'a> Checker<'a> {
                     let params: Vec<TyId> = m.params.iter().map(|p| self.resolve_type_in(&p.ty, mi)).collect();
                     let ret = m.ret.as_ref().map(|r| self.resolve_type_in(r, mi)).unwrap_or(T_VOID);
                     let slot = self.slots.len() as u32;
-                    self.slots.push(IfaceSlot { name: format!("{}.{}", name.name, m.name.name), argc: params.len() as u32 + 1, impls: Vec::new() });
-                    out.push(IfaceMethod { name: m.name.name.clone(), params, ret, is_async: m.is_async, span: m.name.span, slot });
+                    self.slots.push(IfaceSlot {
+                        name: format!("{}.{}", name.name, m.name.name),
+                        argc: params.len() as u32 + 1,
+                        impls: Vec::new(),
+                    });
+                    out.push(IfaceMethod {
+                        name: m.name.name.clone(),
+                        params,
+                        ret,
+                        is_async: m.is_async,
+                        span: m.name.span,
+                        slot,
+                    });
                 }
                 self.iface_slot_base.insert(ii, 0);
                 self.types.ifaces[ii as usize].methods = out;
@@ -801,7 +865,11 @@ impl<'a> Checker<'a> {
                         }
                         None => {
                             let want = self.method_sig_str(&m.params, m.ret, m.is_async);
-                            self.error_note(rec.span, format!("class `{}` does not implement `{}.{}`", rec.name, iface.name, m.name), format!("add `{}`", want.replacen("fun(", &format!("fun {}(", m.name), 1)));
+                            self.error_note(
+                                rec.span,
+                                format!("class `{}` does not implement `{}.{}`", rec.name, iface.name, m.name),
+                                format!("add `{}`", want.replacen("fun(", &format!("fun {}(", m.name), 1)),
+                            );
                         }
                     }
                 }
@@ -828,7 +896,11 @@ impl<'a> Checker<'a> {
                 let span = self.funcs[fid as usize].span;
                 let name = self.funcs[fid as usize].name.clone();
                 if !self.is_dry() {
-                    self.error_note(span, format!("cannot infer the return type of `{}` because it calls itself", name), "add a return type, for example `fun f(): int`");
+                    self.error_note(
+                        span,
+                        format!("cannot infer the return type of `{}` because it calls itself", name),
+                        "add a return type, for example `fun f(): int`",
+                    );
                 }
                 T_ERROR
             }
@@ -857,7 +929,6 @@ impl<'a> Checker<'a> {
             self_ty: info.self_ty,
             is_init: false,
             dry,
-            is_async: info.is_async,
         }
     }
 
@@ -903,8 +974,17 @@ impl<'a> Checker<'a> {
         info.state = FnState::Done;
         let sig = {
             let info = &self.funcs[fid as usize];
-            let ps: Vec<String> = info.params.iter().filter(|p| p.0 != "self").map(|p| format!("{}: {}", p.0, self.types.display(p.1))).collect();
-            let r = if ret == T_VOID { String::new() } else { format!(": {}", self.types.display(ret)) };
+            let ps: Vec<String> = info
+                .params
+                .iter()
+                .filter(|p| p.0 != "self")
+                .map(|p| format!("{}: {}", p.0, self.types.display(p.1)))
+                .collect();
+            let r = if ret == T_VOID {
+                String::new()
+            } else {
+                format!(": {}", self.types.display(ret))
+            };
             format!("{}fun {}({}){}", if info.is_async { "async " } else { "" }, info.name, ps.join(", "), r)
         };
         self.hover(decl.name.span, sig);
@@ -914,9 +994,21 @@ impl<'a> Checker<'a> {
         let params = self.funcs[fid as usize].params.clone();
         for (i, (name, ty, span)) in params.iter().enumerate() {
             ctx.locals.push(*ty);
-            ctx.scopes[0].insert(name.clone(), LocalSym { slot: i as u32, is_const: false, span: *span });
+            ctx.scopes[0].insert(
+                name.clone(),
+                LocalSym {
+                    slot: i as u32,
+                    is_const: false,
+                    span: *span,
+                },
+            );
             if self.opts.want_index && !dry && name != "self" {
-                self.index.locals.push(LocalInfo { name: name.clone(), ty: *ty, decl: *span, scope: decl.span });
+                self.index.locals.push(LocalInfo {
+                    name: name.clone(),
+                    ty: *ty,
+                    decl: *span,
+                    scope: decl.span,
+                });
                 self.index.hovers.push((*span, format!("{}: {}", name, self.types.display(*ty))));
             }
         }
@@ -1004,7 +1096,16 @@ impl<'a> Checker<'a> {
         let ctx = self.fx.pop().unwrap();
         let end_loc = self.loc(Span::new(file, 0, 0));
         let info = &mut self.funcs[fid as usize];
-        info.hir = Some(hir::Func { name: info.name.clone(), params: 0, locals: ctx.locals, ret: T_VOID, body, is_async: false, span: info.span, end_loc });
+        info.hir = Some(hir::Func {
+            name: info.name.clone(),
+            params: 0,
+            locals: ctx.locals,
+            ret: T_VOID,
+            body,
+            is_async: false,
+            span: info.span,
+            end_loc,
+        });
     }
 
     fn repl_echo(&mut self, e: &ast::Expr) -> Vec<Stmt> {
@@ -1012,7 +1113,7 @@ impl<'a> Checker<'a> {
         if h.ty == T_VOID || h.ty == T_ERROR || matches!(e.kind, ast::ExprKind::Assign { .. }) {
             return vec![Stmt::Expr(h)];
         }
-        let s = self.to_str(h);
+        let s = self.stringify(h);
         vec![Stmt::Expr(Expr::new(ExprKind::Rt(RtFn::Print, vec![s]), T_VOID))]
     }
 
@@ -1048,15 +1149,33 @@ impl<'a> Checker<'a> {
                 end_loc: 0,
             }));
         }
-        funcs.push(hir::Func { name: "<entry>".into(), params: 0, locals: vec![], ret: T_VOID, body, is_async: false, span: Span::default(), end_loc: 0 });
+        funcs.push(hir::Func {
+            name: "<entry>".into(),
+            params: 0,
+            locals: vec![],
+            ret: T_VOID,
+            body,
+            is_async: false,
+            span: Span::default(),
+            end_loc: 0,
+        });
         let types = self.types.clone();
-        let globals = self.globals.iter().map(|g| hir::Global { name: g.name.clone(), ty: g.ty.unwrap_or(T_ERROR), module: loaded.modules[g.module].key.clone() }).collect();
+        let globals = self
+            .globals
+            .iter()
+            .map(|g| hir::Global {
+                name: g.name.clone(),
+                ty: g.ty.unwrap_or(T_ERROR),
+                module: loaded.modules[g.module].key.clone(),
+            })
+            .collect();
         let inits = loaded.order.iter().map(|&mi| (loaded.modules[mi].key.clone(), self.mods[mi].init)).collect();
         let main = match self.mods[loaded.root].values.get("main") {
             Some(Entry { sym: ValSym::Func(f), .. }) => Some(*f),
             _ => None,
         };
-        let prog = hir::Program {
+
+        hir::Program {
             types,
             funcs,
             globals,
@@ -1066,7 +1185,6 @@ impl<'a> Checker<'a> {
             slots: self.slots.clone(),
             inits,
             main,
-        };
-        prog
+        }
     }
 }

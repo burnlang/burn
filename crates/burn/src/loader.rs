@@ -12,17 +12,39 @@ pub struct Stdlib {
 }
 
 pub const STDLIB: &[Stdlib] = &[
-    Stdlib { name: "date", src: include_str!("../../../lib/std/date.bn") },
-    Stdlib { name: "time", src: include_str!("../../../lib/std/time.bn") },
-    Stdlib { name: "http", src: include_str!("../../../lib/std/http.bn") },
-    Stdlib { name: "math", src: include_str!("../../../lib/std/math.bn") },
-    Stdlib { name: "strings", src: include_str!("../../../lib/std/strings.bn") },
-    Stdlib { name: "json", src: include_str!("../../../lib/std/json.bn") },
+    Stdlib {
+        name: "date",
+        src: include_str!("../../../lib/std/date.bn"),
+    },
+    Stdlib {
+        name: "time",
+        src: include_str!("../../../lib/std/time.bn"),
+    },
+    Stdlib {
+        name: "http",
+        src: include_str!("../../../lib/std/http.bn"),
+    },
+    Stdlib {
+        name: "math",
+        src: include_str!("../../../lib/std/math.bn"),
+    },
+    Stdlib {
+        name: "strings",
+        src: include_str!("../../../lib/std/strings.bn"),
+    },
+    Stdlib {
+        name: "json",
+        src: include_str!("../../../lib/std/json.bn"),
+    },
 ];
 
 pub fn stdlib_name(path: &str) -> Option<&'static Stdlib> {
     let p = path.trim_end_matches(".bn");
-    let p = p.strip_prefix("std/").or_else(|| p.strip_prefix("std:")).or_else(|| p.strip_prefix("src/lib/std/")).unwrap_or(p);
+    let p = p
+        .strip_prefix("std/")
+        .or_else(|| p.strip_prefix("std:"))
+        .or_else(|| p.strip_prefix("src/lib/std/"))
+        .unwrap_or(p);
     STDLIB.iter().find(|s| s.name == p)
 }
 
@@ -31,7 +53,6 @@ pub struct LoadedModule {
     pub ast: Module,
     pub imports: Vec<(usize, Span)>,
     pub key: String,
-    pub is_std: bool,
 }
 
 pub struct Loaded {
@@ -65,7 +86,13 @@ fn display_name(p: &Path) -> String {
 
 impl Loader {
     pub fn new() -> Loader {
-        Loader { sm: SourceMap::default(), modules: Vec::new(), diags: Vec::new(), by_key: HashMap::new(), overrides: HashMap::new() }
+        Loader {
+            sm: SourceMap::default(),
+            modules: Vec::new(),
+            diags: Vec::new(),
+            by_key: HashMap::new(),
+            overrides: HashMap::new(),
+        }
     }
 
     fn read(&self, p: &Path) -> Option<String> {
@@ -100,8 +127,16 @@ impl Loader {
         self.diags.extend(pd);
         let idx = self.modules.len();
         self.by_key.insert(key.clone(), idx);
-        self.modules.push(LoadedModule { file, ast, imports: Vec::new(), key, is_std });
-        let base = path.as_ref().and_then(|p| p.parent().map(|d| d.to_path_buf())).or_else(|| std::env::current_dir().ok());
+        self.modules.push(LoadedModule {
+            file,
+            ast,
+            imports: Vec::new(),
+            key,
+        });
+        let base = path
+            .as_ref()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            .or_else(|| std::env::current_dir().ok());
         let mut imports = Vec::new();
         let items: Vec<(String, Span)> = self.modules[idx]
             .ast
@@ -189,7 +224,13 @@ impl Loader {
         for i in 0..self.modules.len() {
             visit(i, &self.modules, &mut state, &mut order);
         }
-        Loaded { sm: self.sm, modules: self.modules, order, diags: self.diags, root }
+        Loaded {
+            sm: self.sm,
+            modules: self.modules,
+            order,
+            diags: self.diags,
+            root,
+        }
     }
 }
 

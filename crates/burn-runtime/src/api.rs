@@ -724,7 +724,11 @@ static RNG: AtomicU64 = AtomicU64::new(0);
 fn next_rand() -> u64 {
     let mut x = RNG.load(Ordering::Relaxed);
     if x == 0 {
-        x = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(88172645463325252) | 1;
+        x = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(88172645463325252)
+            | 1;
     }
     x ^= x << 13;
     x ^= x >> 7;
@@ -752,11 +756,17 @@ pub fn seed(s: u64) -> u64 {
 }
 
 pub fn now_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 pub fn now_sec() -> u64 {
-    fv(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0))
+    fv(std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0))
 }
 
 pub fn clock_ns() -> u64 {
@@ -809,7 +819,11 @@ pub fn write_file(path: u64, content: u64) -> u64 {
 
 pub fn append_file(path: u64, content: u64) -> u64 {
     use std::io::Write;
-    let r = std::fs::OpenOptions::new().create(true).append(true).open(str_ref(path)).and_then(|mut f| f.write_all(str_bytes(content)));
+    let r = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(str_ref(path))
+        .and_then(|mut f| f.write_all(str_bytes(content)));
     b(r.is_ok())
 }
 
@@ -894,10 +908,13 @@ pub fn rt_exit(code: u64) -> u64 {
 pub fn spawn_native(fnptr: u64, argc: u64, argsptr: u64, tid: u64) -> u64 {
     let args: Vec<u64> = unsafe { std::slice::from_raw_parts(argsptr as usize as *const u64, argc as usize).to_vec() };
     let tramp = TRAMPOLINE.load(Ordering::SeqCst);
-    crate::task::spawn(tid as u32, Box::new(move || {
-        let t: extern "C" fn(u64, u64, u64) -> u64 = unsafe { std::mem::transmute(tramp) };
-        t(fnptr, args.as_ptr() as u64, args.len() as u64)
-    }))
+    crate::task::spawn(
+        tid as u32,
+        Box::new(move || {
+            let t: extern "C" fn(u64, u64, u64) -> u64 = unsafe { std::mem::transmute(tramp) };
+            t(fnptr, args.as_ptr() as u64, args.len() as u64)
+        }),
+    )
 }
 
 pub fn await_future(fut: u64) -> u64 {

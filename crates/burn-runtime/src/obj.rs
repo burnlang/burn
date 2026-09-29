@@ -267,7 +267,10 @@ pub struct FutureState {
 
 pub fn future_new(tid: u32) -> u64 {
     let p = gc::alloc(K_FUTURE, tid, HDR + 8);
-    let st = Arc::new(FutureState { value: Mutex::new(None), cv: Condvar::new() });
+    let st = Arc::new(FutureState {
+        value: Mutex::new(None),
+        cv: Condvar::new(),
+    });
     unsafe { set_word(p, HDR, Arc::into_raw(st) as u64) }
     p
 }

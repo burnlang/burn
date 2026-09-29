@@ -44,11 +44,7 @@ fn collect_assigned(stmts: &[ast::Stmt], out: &mut HashSet<String>) {
 
 fn collect_stmt(s: &ast::Stmt, out: &mut HashSet<String>) {
     match &s.kind {
-        S::Var { init, .. } => {
-            if let Some(e) = init {
-                collect_expr(e, out)
-            }
-        }
+        S::Var { init: Some(e), .. } => collect_expr(e, out),
         S::Expr(e) => collect_expr(e, out),
         S::If { cond, then, els } => {
             collect_expr(cond, out);
@@ -178,7 +174,11 @@ impl<'a> Checker<'a> {
         match &e.kind {
             A::Unary(AUn::Not, inner) => {
                 let (c, f) = self.cond(inner);
-                let c = if let ExprKind::Bool(b) = c.kind { Expr::new(ExprKind::Bool(!b), T_BOOL) } else { Expr::new(ExprKind::Unary(UnOp::Not, Box::new(c)), T_BOOL) };
+                let c = if let ExprKind::Bool(b) = c.kind {
+                    Expr::new(ExprKind::Bool(!b), T_BOOL)
+                } else {
+                    Expr::new(ExprKind::Unary(UnOp::Not, Box::new(c)), T_BOOL)
+                };
                 (c, Facts { t: f.f, f: f.t })
             }
             A::Binary(AOp::And, a, b) => {
@@ -381,7 +381,11 @@ impl<'a> Checker<'a> {
                                 let fi = self.ctx().func as usize;
                                 let fname = self.funcs[fi].name.clone();
                                 let ts = self.show(h.ty);
-                                self.error_note(e.span, format!("`{}` does not declare a return type, but returns {}", fname, ts), format!("add `: {}` after the parameter list", ts));
+                                self.error_note(
+                                    e.span,
+                                    format!("`{}` does not declare a return type, but returns {}", fname, ts),
+                                    format!("add `: {}` after the parameter list", ts),
+                                );
                             }
                             return vec![Stmt::Expr(h), Stmt::Return(None)];
                         }
@@ -402,14 +406,18 @@ impl<'a> Checker<'a> {
             }
             S::Break | S::Continue => {
                 if self.fx.last().map(|c| c.loops).unwrap_or(0) == 0 {
-                    self.error(s.span, format!("`{}` can only be used inside a loop", if matches!(s.kind, S::Break) { "break" } else { "continue" }));
+                    self.error(
+                        s.span,
+                        format!(
+                            "`{}` can only be used inside a loop",
+                            if matches!(s.kind, S::Break) { "break" } else { "continue" }
+                        ),
+                    );
                     return vec![];
                 }
                 vec![if matches!(s.kind, S::Break) { Stmt::Break } else { Stmt::Continue }]
             }
-            S::Block(b) => {
-                self.block_stmts(&b.stmts)
-            }
+            S::Block(b) => self.block_stmts(&b.stmts),
         }
     }
 
@@ -429,7 +437,11 @@ impl<'a> Checker<'a> {
                     Some(d) => d,
                     None => {
                         if vt == T_NULL {
-                            self.error_note(e.span, format!("cannot infer the type of `{}` from `null`", name.name), format!("write `{}? {} = null` or `var {}: T? = null`", "T", name.name, name.name));
+                            self.error_note(
+                                e.span,
+                                format!("cannot infer the type of `{}` from `null`", name.name),
+                                format!("write `{}? {} = null` or `var {}: T? = null`", "T", name.name, name.name),
+                            );
                             T_ERROR
                         } else {
                             vt
@@ -460,7 +472,11 @@ impl<'a> Checker<'a> {
         if is_global {
             let m = self.cur_module();
             let g = match self.mods[m].values.get(&name.name) {
-                Some(Entry { sym: ValSym::Global(g), span: gs, .. }) if *gs == name.span => Some(*g),
+                Some(Entry {
+                    sym: ValSym::Global(g),
+                    span: gs,
+                    ..
+                }) if *gs == name.span => Some(*g),
                 _ => None,
             };
             if let Some(g) = g {
@@ -474,9 +490,16 @@ impl<'a> Checker<'a> {
         }
         if let Some(prev) = self.ctx().scopes.last().unwrap().get(&name.name).cloned() {
             let (l, _) = self.sm.file(prev.span.file).line_col(prev.span.start as usize);
-            self.warn(name.span, format!("`{}` shadows a variable declared on line {} in the same block", name.name, l));
+            self.warn(
+                name.span,
+                format!("`{}` shadows a variable declared on line {} in the same block", name.name, l),
+            );
         }
-        let scope = Span { file: span.file, start: span.start, end: u32::MAX };
+        let scope = Span {
+            file: span.file,
+            start: span.start,
+            end: u32::MAX,
+        };
         let slot = self.declare_local(&name.name, t, name.span, is_const, scope);
         if self.narrowable(t, vty) {
             self.ctx().narrow.insert(slot, vty);
@@ -506,16 +529,36 @@ impl<'a> Checker<'a> {
                 let v = self.declare_local(&var.name, T_INT, var.span, false, scope);
                 self.hover(var.span, format!("var {}: int", var.name));
                 let cmp = if *inclusive { Cmp::Le } else { Cmp::Lt };
-                let cond = Expr::new(ExprKind::Binary(BinOp::ICmp(cmp), Box::new(Expr::new(ExprKind::Local(ctr), T_INT)), Box::new(Expr::new(ExprKind::Local(end), T_INT))), T_BOOL);
+                let cond = Expr::new(
+                    ExprKind::Binary(
+                        BinOp::ICmp(cmp),
+                        Box::new(Expr::new(ExprKind::Local(ctr), T_INT)),
+                        Box::new(Expr::new(ExprKind::Local(end), T_INT)),
+                    ),
+                    T_BOOL,
+                );
                 self.ctx().loops += 1;
-                let mut b = vec![Stmt::Expr(Expr::new(ExprKind::SetLocal(v, Box::new(Expr::new(ExprKind::Local(ctr), T_INT))), T_INT))];
+                let mut b = vec![Stmt::Expr(Expr::new(
+                    ExprKind::SetLocal(v, Box::new(Expr::new(ExprKind::Local(ctr), T_INT))),
+                    T_INT,
+                ))];
                 b.extend(self.block_stmts(&body.stmts));
                 self.ctx().loops -= 1;
                 let step = vec![Stmt::Expr(Expr::new(
-                    ExprKind::SetLocal(ctr, Box::new(Expr::new(ExprKind::Binary(BinOp::IAdd, Box::new(Expr::new(ExprKind::Local(ctr), T_INT)), Box::new(Expr::int(1))), T_INT))),
+                    ExprKind::SetLocal(
+                        ctr,
+                        Box::new(Expr::new(
+                            ExprKind::Binary(BinOp::IAdd, Box::new(Expr::new(ExprKind::Local(ctr), T_INT)), Box::new(Expr::int(1))),
+                            T_INT,
+                        )),
+                    ),
                     T_INT,
                 ))];
-                out.push(Stmt::Loop { cond: Some(cond), body: b, step });
+                out.push(Stmt::Loop {
+                    cond: Some(cond),
+                    body: b,
+                    step,
+                });
                 out
             }
             ForIter::Expr(e) => {
@@ -528,11 +571,19 @@ impl<'a> Checker<'a> {
                         let at = self.types.array(k);
                         let slot = self.new_local(t);
                         out.push(Stmt::Expr(Expr::new(ExprKind::SetLocal(slot, Box::new(h)), t)));
-                        (Expr::new(ExprKind::Rt(RtFn::MapKeys, vec![Expr::new(ExprKind::Local(slot), t), Self::tid(at)]), at), k, Some((slot, t, v)))
+                        (
+                            Expr::new(ExprKind::Rt(RtFn::MapKeys, vec![Expr::new(ExprKind::Local(slot), t), Self::tid(at)]), at),
+                            k,
+                            Some((slot, t, v)),
+                        )
                     }
                     Ty::Error => (h, T_ERROR, None),
                     Ty::Any => {
-                        self.error_note(e.span, "cannot iterate over a value of type any", "cast it first, e.g. `for x in value as [any]`");
+                        self.error_note(
+                            e.span,
+                            "cannot iterate over a value of type any",
+                            "cast it first, e.g. `for x in value as [any]`",
+                        );
                         (h, T_ERROR, None)
                     }
                     _ => {
@@ -548,7 +599,14 @@ impl<'a> Checker<'a> {
                 out.push(Stmt::Expr(Expr::new(ExprKind::SetLocal(ctr, Box::new(Expr::int(0))), T_INT)));
                 let arr_e = Expr::new(ExprKind::Local(arr_slot), at);
                 let ctr_e = Expr::new(ExprKind::Local(ctr), T_INT);
-                let cond = Expr::new(ExprKind::Binary(BinOp::ICmp(Cmp::Lt), Box::new(ctr_e.clone()), Box::new(Expr::new(ExprKind::ArrLen(Box::new(arr_e.clone())), T_INT))), T_BOOL);
+                let cond = Expr::new(
+                    ExprKind::Binary(
+                        BinOp::ICmp(Cmp::Lt),
+                        Box::new(ctr_e.clone()),
+                        Box::new(Expr::new(ExprKind::ArrLen(Box::new(arr_e.clone())), T_INT)),
+                    ),
+                    T_BOOL,
+                );
                 let mut b = Vec::new();
                 let l = self.loc(span);
                 let item = Expr::new(ExprKind::Index(Box::new(arr_e), Box::new(ctr_e.clone()), l), elem);
@@ -558,7 +616,13 @@ impl<'a> Checker<'a> {
                         b.push(Stmt::Expr(Expr::new(ExprKind::SetLocal(k, Box::new(item)), elem)));
                         let v = self.declare_local(&var.name, vt, var.span, false, scope);
                         let lx = self.loc_expr(span);
-                        let get = Expr::new(ExprKind::Rt(RtFn::MapGet, vec![Expr::new(ExprKind::Local(mslot), mt), Expr::new(ExprKind::Local(k), elem), lx]), vt);
+                        let get = Expr::new(
+                            ExprKind::Rt(
+                                RtFn::MapGet,
+                                vec![Expr::new(ExprKind::Local(mslot), mt), Expr::new(ExprKind::Local(k), elem), lx],
+                            ),
+                            vt,
+                        );
                         b.push(Stmt::Expr(Expr::new(ExprKind::SetLocal(v, Box::new(get)), vt)));
                         let (ks, vs) = (self.show(elem), self.show(vt));
                         self.hover(first.span, format!("var {}: {}", first.name, ks));
@@ -583,8 +647,18 @@ impl<'a> Checker<'a> {
                 self.ctx().loops += 1;
                 b.extend(self.block_stmts(&body.stmts));
                 self.ctx().loops -= 1;
-                let step = vec![Stmt::Expr(Expr::new(ExprKind::SetLocal(ctr, Box::new(Expr::new(ExprKind::Binary(BinOp::IAdd, Box::new(ctr_e), Box::new(Expr::int(1))), T_INT))), T_INT))];
-                out.push(Stmt::Loop { cond: Some(cond), body: b, step });
+                let step = vec![Stmt::Expr(Expr::new(
+                    ExprKind::SetLocal(
+                        ctr,
+                        Box::new(Expr::new(ExprKind::Binary(BinOp::IAdd, Box::new(ctr_e), Box::new(Expr::int(1))), T_INT)),
+                    ),
+                    T_INT,
+                ))];
+                out.push(Stmt::Loop {
+                    cond: Some(cond),
+                    body: b,
+                    step,
+                });
                 out
             }
         };

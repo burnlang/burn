@@ -2,13 +2,96 @@ use super::*;
 use crate::hir::{BinOp, Cmp, Conv};
 
 pub const BUILTINS: &[&str] = &[
-    "print", "println", "write", "input", "toString", "str", "toInt", "toFloat", "parseInt", "parseFloat", "isInt", "isNumber", "len",
-    "length", "size", "push", "append", "pop", "insert", "remove", "contains", "indexOf", "join", "reverse", "sort", "slice", "copy",
-    "clear", "keys", "values", "has", "get", "substring", "charAt", "split", "trim", "upper", "lower", "toUpper", "toLower",
-    "toUpperCase", "toLowerCase", "startsWith", "endsWith", "replace", "repeat", "chars", "charCode", "fromCharCode", "sqrt", "pow",
-    "abs", "floor", "ceil", "round", "min", "max", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "log", "log10", "exp",
-    "random", "randomInt", "seed", "now", "nowMs", "millis", "clock", "sleep", "typeOf", "parseJSON", "toJSON", "readFile",
-    "writeFile", "appendFile", "fileExists", "env", "args", "exit", "panic", "assert", "gc", "__localTime", "__httpRequest",
+    "print",
+    "println",
+    "write",
+    "input",
+    "toString",
+    "str",
+    "toInt",
+    "toFloat",
+    "parseInt",
+    "parseFloat",
+    "isInt",
+    "isNumber",
+    "len",
+    "length",
+    "size",
+    "push",
+    "append",
+    "pop",
+    "insert",
+    "remove",
+    "contains",
+    "indexOf",
+    "join",
+    "reverse",
+    "sort",
+    "slice",
+    "copy",
+    "clear",
+    "keys",
+    "values",
+    "has",
+    "get",
+    "substring",
+    "charAt",
+    "split",
+    "trim",
+    "upper",
+    "lower",
+    "toUpper",
+    "toLower",
+    "toUpperCase",
+    "toLowerCase",
+    "startsWith",
+    "endsWith",
+    "replace",
+    "repeat",
+    "chars",
+    "charCode",
+    "fromCharCode",
+    "sqrt",
+    "pow",
+    "abs",
+    "floor",
+    "ceil",
+    "round",
+    "min",
+    "max",
+    "sin",
+    "cos",
+    "tan",
+    "asin",
+    "acos",
+    "atan",
+    "atan2",
+    "log",
+    "log10",
+    "exp",
+    "random",
+    "randomInt",
+    "seed",
+    "now",
+    "nowMs",
+    "millis",
+    "clock",
+    "sleep",
+    "typeOf",
+    "parseJSON",
+    "toJSON",
+    "readFile",
+    "writeFile",
+    "appendFile",
+    "fileExists",
+    "env",
+    "args",
+    "exit",
+    "panic",
+    "assert",
+    "gc",
+    "__localTime",
+    "__httpRequest",
 ];
 
 pub fn is_builtin(name: &str) -> bool {
@@ -83,8 +166,18 @@ impl<'a> Checker<'a> {
 
     fn arity(&mut self, name: &str, n: usize, min: usize, max: usize, span: Span) -> bool {
         if n < min || n > max {
-            let want = if min == max { format!("{}", min) } else if max == usize::MAX { format!("at least {}", min) } else { format!("{} to {}", min, max) };
-            self.error_note(span, format!("`{}` expects {} argument{} but got {}", name, want, if max == 1 { "" } else { "s" }, n), signature(name));
+            let want = if min == max {
+                format!("{}", min)
+            } else if max == usize::MAX {
+                format!("at least {}", min)
+            } else {
+                format!("{} to {}", min, max)
+            };
+            self.error_note(
+                span,
+                format!("`{}` expects {} argument{} but got {}", name, want, if max == 1 { "" } else { "s" }, n),
+                signature(name),
+            );
             return false;
         }
         true
@@ -119,7 +212,12 @@ impl<'a> Checker<'a> {
         }
         if let Some((r, _)) = &recv {
             let generic = matches!(name, "toString" | "str" | "typeOf" | "toJSON");
-            if !generic && matches!(self.types.get(r.ty), Ty::Record(_) | Ty::Interface(_) | Ty::Enum(_) | Ty::Func(..) | Ty::Future(_)) {
+            if !generic
+                && matches!(
+                    self.types.get(r.ty),
+                    Ty::Record(_) | Ty::Interface(_) | Ty::Enum(_) | Ty::Func(..) | Ty::Future(_)
+                )
+            {
                 return None;
             }
             if name.starts_with("__") {
@@ -142,7 +240,7 @@ impl<'a> Checker<'a> {
                     if h.ty == T_VOID {
                         self.error(Self::aspan(a), "cannot print a value of type void");
                     }
-                    let s = self.to_str(h);
+                    let s = self.stringify(h);
                     acc = Some(match acc {
                         None => s,
                         Some(prev) => {
@@ -160,7 +258,7 @@ impl<'a> Checker<'a> {
                     return Some(Self::err_expr());
                 }
                 let h = self.barg(&xs[0], None);
-                let s = self.to_str(h);
+                let s = self.stringify(h);
                 Self::rt(RtFn::PrintRaw, vec![s], T_VOID)
             }
             "input" => {
@@ -169,7 +267,7 @@ impl<'a> Checker<'a> {
                 }
                 let p = if n == 1 {
                     let h = self.barg(&xs[0], None);
-                    self.to_str(h)
+                    self.stringify(h)
                 } else {
                     self.str_lit("")
                 };
@@ -183,7 +281,7 @@ impl<'a> Checker<'a> {
                 if h.ty == T_VOID {
                     self.error(Self::aspan(&xs[0]), "cannot convert void to a string");
                 }
-                self.to_str(h)
+                self.stringify(h)
             }
             "toInt" | "parseInt" => {
                 if !self.arity(name, n, 1, 1, span) {
@@ -259,7 +357,10 @@ impl<'a> Checker<'a> {
                             let v = self.barg_to(&xs[1], et);
                             self.with_temp(a, |c, t| {
                                 let _ = c;
-                                Expr::new(ExprKind::Seq(vec![Stmt::Expr(Self::rt(RtFn::ArrPush, vec![t.clone(), v], T_VOID))], Box::new(t)), at)
+                                Expr::new(
+                                    ExprKind::Seq(vec![Stmt::Expr(Self::rt(RtFn::ArrPush, vec![t.clone(), v], T_VOID))], Box::new(t)),
+                                    at,
+                                )
                             })
                         }
                     }
@@ -380,7 +481,10 @@ impl<'a> Checker<'a> {
                         self.with_temp(chars, |c, t| {
                             let empty = c.str_lit("");
                             Expr::new(
-                                ExprKind::Seq(vec![Stmt::Expr(Self::rt(RtFn::ArrReverse, vec![t.clone()], T_VOID))], Box::new(Self::rt(RtFn::ArrJoin, vec![t, empty, Self::tid(T_STR)], T_STR))),
+                                ExprKind::Seq(
+                                    vec![Stmt::Expr(Self::rt(RtFn::ArrReverse, vec![t.clone()], T_VOID))],
+                                    Box::new(Self::rt(RtFn::ArrJoin, vec![t, empty, Self::tid(T_STR)], T_STR)),
+                                ),
                                 T_STR,
                             )
                         })
@@ -661,7 +765,11 @@ impl<'a> Checker<'a> {
                 }
                 let h = self.barg(&xs[0], None);
                 let t = h.ty;
-                Self::rt(if name == "typeOf" { RtFn::TypeName } else { RtFn::JsonStringify }, vec![h, Self::tid(t)], T_STR)
+                Self::rt(
+                    if name == "typeOf" { RtFn::TypeName } else { RtFn::JsonStringify },
+                    vec![h, Self::tid(t)],
+                    T_STR,
+                )
             }
             "parseJSON" | "readFile" => {
                 if !self.arity(name, n, 1, 1, span) {
@@ -681,7 +789,7 @@ impl<'a> Checker<'a> {
                 }
                 let p = self.barg_to(&xs[0], T_STR);
                 let h = self.barg(&xs[1], None);
-                let c = self.to_str(h);
+                let c = self.stringify(h);
                 Self::rt(if name == "writeFile" { RtFn::WriteFile } else { RtFn::AppendFile }, vec![p, c], T_BOOL)
             }
             "fileExists" | "env" => {
@@ -708,7 +816,7 @@ impl<'a> Checker<'a> {
                 }
                 let m = if n == 1 {
                     let h = self.barg(&xs[0], None);
-                    self.to_str(h)
+                    self.stringify(h)
                 } else {
                     self.str_lit("explicit panic")
                 };
@@ -722,7 +830,7 @@ impl<'a> Checker<'a> {
                 let c = self.barg_to(&xs[0], T_BOOL);
                 let m = if n == 2 {
                     let h = self.barg(&xs[1], None);
-                    self.to_str(h)
+                    self.stringify(h)
                 } else {
                     let text = match &xs[0] {
                         Arg::A(e) => {

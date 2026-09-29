@@ -79,16 +79,11 @@ pub fn read_line(prompt: &str) -> String {
     let mut bytes = Vec::new();
     let stdin = std::io::stdin();
     let mut lock = stdin.lock();
-    loop {
-        match lock.read(&mut buf) {
-            Ok(1) => {
-                if buf[0] == b'\n' {
-                    break;
-                }
-                bytes.push(buf[0]);
-            }
-            _ => break,
+    while let Ok(1) = lock.read(&mut buf) {
+        if buf[0] == b'\n' {
+            break;
         }
+        bytes.push(buf[0]);
     }
     line.push_str(&String::from_utf8_lossy(&bytes));
     while line.ends_with('\r') {

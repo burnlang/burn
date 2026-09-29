@@ -112,7 +112,13 @@ impl Default for Types {
 
 impl Types {
     pub fn new() -> Types {
-        let mut t = Types { kinds: Vec::new(), map: HashMap::new(), records: Vec::new(), ifaces: Vec::new(), enums: Vec::new() };
+        let mut t = Types {
+            kinds: Vec::new(),
+            map: HashMap::new(),
+            records: Vec::new(),
+            ifaces: Vec::new(),
+            enums: Vec::new(),
+        };
         for k in [Ty::Error, Ty::Void, Ty::Null, Ty::Int, Ty::Float, Ty::Bool, Ty::Str, Ty::Any] {
             t.intern(k);
         }
@@ -291,10 +297,15 @@ impl Types {
                         implements: r.implements.iter().map(|i| self.ifaces[*i as usize].ty).collect(),
                     }
                 }
-                Ty::Interface(i) => Desc::Interface { name: self.ifaces[*i as usize].name.clone() },
+                Ty::Interface(i) => Desc::Interface {
+                    name: self.ifaces[*i as usize].name.clone(),
+                },
                 Ty::Enum(i) => {
                     let e = &self.enums[*i as usize];
-                    Desc::Enum { name: e.name.clone(), variants: e.variants.iter().map(|v| v.0.clone()).collect() }
+                    Desc::Enum {
+                        name: e.name.clone(),
+                        variants: e.variants.iter().map(|v| v.0.clone()).collect(),
+                    }
                 }
             });
         }

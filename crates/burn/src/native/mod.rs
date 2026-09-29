@@ -29,7 +29,10 @@ pub fn assembly(p: &Program) -> String {
 }
 
 fn temp_dir() -> PathBuf {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
     std::env::temp_dir().join(format!("burn-build-{}-{}", std::process::id(), nanos))
 }
 
@@ -65,7 +68,9 @@ fn link(dir: &Path, asm: &str, output: &Path, strip: bool) -> Result<(), String>
     if strip {
         cmd.arg("-s");
     }
-    let out = cmd.output().map_err(|e| format!("could not run the linker `{}`: {} (install a C toolchain or set BURN_CC)", cc, e))?;
+    let out = cmd
+        .output()
+        .map_err(|e| format!("could not run the linker `{}`: {} (install a C toolchain or set BURN_CC)", cc, e))?;
     if !out.status.success() {
         return Err(format!("linking failed:\n{}", String::from_utf8_lossy(&out.stderr)));
     }

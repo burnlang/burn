@@ -79,7 +79,11 @@ fn cmd_run(file: &Path, args: Vec<String>, native_mode: bool) -> ExitCode {
         let dir = std::env::temp_dir().join(format!("burn-run-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let exe = dir.join("program");
-        let opts = native::BuildOptions { output: exe.clone(), emit_asm: None, strip: true };
+        let opts = native::BuildOptions {
+            output: exe.clone(),
+            emit_asm: None,
+            strip: true,
+        };
         if let Err(e) = native::build(&c.program, &opts) {
             eprintln!("error: {}", e);
             return ExitCode::from(1);
@@ -155,7 +159,11 @@ fn cmd_build(args: &[String]) -> ExitCode {
         }
         "native" | "exe" | "asm" => {
             let out = output.unwrap_or_else(|| default_output(&file, false));
-            let opts = native::BuildOptions { output: out.clone(), emit_asm, strip };
+            let opts = native::BuildOptions {
+                output: out.clone(),
+                emit_asm,
+                strip,
+            };
             match native::build(&c.program, &opts) {
                 Ok(()) => {
                     println!("built {}", out.display());
@@ -221,7 +229,13 @@ fn cmd_dump(file: &Path, what: &str) -> ExitCode {
             let code = vm::exec::prepare(&c.program);
             for f in &code.funcs {
                 println!("{} (params {}, locals {}):", f.name, f.params, f.locals);
-                let end = code.funcs.iter().map(|x| x.entry).filter(|e| *e > f.entry).min().unwrap_or(code.ops.len() as u32);
+                let end = code
+                    .funcs
+                    .iter()
+                    .map(|x| x.entry)
+                    .filter(|e| *e > f.entry)
+                    .min()
+                    .unwrap_or(code.ops.len() as u32);
                 for i in f.entry..end {
                     println!("  {:5} {:?}", i, code.ops[i as usize]);
                 }
@@ -229,7 +243,13 @@ fn cmd_dump(file: &Path, what: &str) -> ExitCode {
         }
         _ => {
             for (i, f) in c.program.funcs.iter().enumerate() {
-                println!("fn #{} {} params={} locals={:?}", i, f.name, f.params, f.locals.iter().map(|t| c.program.types.display(*t)).collect::<Vec<_>>());
+                println!(
+                    "fn #{} {} params={} locals={:?}",
+                    i,
+                    f.name,
+                    f.params,
+                    f.locals.iter().map(|t| c.program.types.display(*t)).collect::<Vec<_>>()
+                );
                 for s in &f.body {
                     println!("  {:?}", s);
                 }

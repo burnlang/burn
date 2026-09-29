@@ -29,11 +29,23 @@ impl<'a> Checker<'a> {
                 if h.ty == T_VOID {
                     self.error(span, format!("expected a value of type {} but this expression returns nothing", to));
                 } else if h.ty == T_NULL {
-                    self.error_note(span, format!("`null` is not allowed for type {}", to), format!("use `{}?` to make the type nullable", to));
+                    self.error_note(
+                        span,
+                        format!("`null` is not allowed for type {}", to),
+                        format!("use `{}?` to make the type nullable", to),
+                    );
                 } else if self.types.is_nullable(h.ty) && self.types.unwrap_optional(h.ty) == target {
-                    self.error_note(span, format!("expected {} but found {}", to, from), "the value may be null: check it with `if (x != null)` first, or use `x!!`");
+                    self.error_note(
+                        span,
+                        format!("expected {} but found {}", to, from),
+                        "the value may be null: check it with `if (x != null)` first, or use `x!!`",
+                    );
                 } else if h.ty == T_ANY {
-                    self.error_note(span, format!("expected {} but found any", to), format!("narrow it with `if (x is {})` or cast it with `x as {}`", to, to));
+                    self.error_note(
+                        span,
+                        format!("expected {} but found any", to),
+                        format!("narrow it with `if (x is {})` or cast it with `x as {}`", to, to),
+                    );
                 } else if h.ty == T_FLOAT && target == T_INT {
                     self.error_note(span, "expected int but found float", "convert it explicitly with `x as int` or `round(x)`");
                 } else {
@@ -138,7 +150,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    pub fn to_str(&mut self, h: Expr) -> Expr {
+    pub fn stringify(&mut self, h: Expr) -> Expr {
         if h.ty == T_STR || h.ty == T_ERROR {
             return h;
         }
@@ -150,8 +162,8 @@ impl<'a> Checker<'a> {
     }
 
     pub fn concat(&mut self, a: Expr, b: Expr) -> Expr {
-        let a = self.to_str(a);
-        let b = self.to_str(b);
+        let a = self.stringify(a);
+        let b = self.stringify(b);
         if let (ExprKind::Str(x), ExprKind::Str(y)) = (&a.kind, &b.kind) {
             let s = format!("{}{}", self.strings[*x as usize], self.strings[*y as usize]);
             return self.str_lit(&s);
@@ -281,7 +293,7 @@ impl<'a> Checker<'a> {
                             if h.ty == T_VOID {
                                 self.error(x.span, "cannot put a value of type void into a string");
                             }
-                            self.to_str(h)
+                            self.stringify(h)
                         }
                     };
                     acc = Some(match acc {
@@ -331,7 +343,11 @@ impl<'a> Checker<'a> {
                     Ty::Error => h,
                     _ => {
                         let s = self.show(h.ty);
-                        self.error_note(e.span, format!("`await` needs a Future, but this is {}", s), "only calls to `async fun` functions produce futures");
+                        self.error_note(
+                            e.span,
+                            format!("`await` needs a Future, but this is {}", s),
+                            "only calls to `async fun` functions produce futures",
+                        );
                         h
                     }
                 }
@@ -424,7 +440,10 @@ impl<'a> Checker<'a> {
                 } else if name == "self" {
                     self.error(span, "`self` can only be used inside class methods");
                 } else if self.outer_local_exists(name) {
-                    self.error(span, format!("lambdas cannot capture the local variable `{}`; pass it as a parameter instead", name));
+                    self.error(
+                        span,
+                        format!("lambdas cannot capture the local variable `{}`; pass it as a parameter instead", name),
+                    );
                 } else if builtins::is_builtin(name) {
                     self.error(span, format!("built-in function `{}` must be called, e.g. `{}(...)`", name, name));
                 } else if self.is_private_elsewhere(m, name) {
@@ -562,7 +581,10 @@ impl<'a> Checker<'a> {
                 let s = self.show(ot);
                 self.error(span, format!("a value of type {} can never be null", s));
             }
-            return Expr::new(ExprKind::Binary(BinOp::ICmp(cmp), Box::new(other), Box::new(Expr::new(ExprKind::Null, ot))), T_BOOL);
+            return Expr::new(
+                ExprKind::Binary(BinOp::ICmp(cmp), Box::new(other), Box::new(Expr::new(ExprKind::Null, ot))),
+                T_BOOL,
+            );
         }
         let (ak, bk) = (self.types.get(at).clone(), self.types.get(bt).clone());
         if self.types.is_numeric(at) && self.types.is_numeric(bt) {
@@ -695,7 +717,11 @@ impl<'a> Checker<'a> {
                     }
                     Ty::Error => Place::Error,
                     Ty::Optional(_) => {
-                        self.error_note(obj.span, "cannot assign a field of a value that may be null", "check it with `if (x != null)` first");
+                        self.error_note(
+                            obj.span,
+                            "cannot assign a field of a value that may be null",
+                            "check it with `if (x != null)` first",
+                        );
                         Place::Error
                     }
                     _ => {
@@ -836,7 +862,16 @@ impl<'a> Checker<'a> {
         }
         let expected = params.len() - offset.min(params.len());
         if args.len() != expected {
-            self.error(span, format!("{} expects {} argument{} but got {}", what, expected, if expected == 1 { "" } else { "s" }, args.len()));
+            self.error(
+                span,
+                format!(
+                    "{} expects {} argument{} but got {}",
+                    what,
+                    expected,
+                    if expected == 1 { "" } else { "s" },
+                    args.len()
+                ),
+            );
         }
         for (i, a) in args.iter().enumerate() {
             match params.get(i + offset) {
@@ -874,8 +909,17 @@ impl<'a> Checker<'a> {
         self.def_link(name_span, fspan);
         let sig = {
             let info = &self.funcs[fid as usize];
-            let ps: Vec<String> = info.params.iter().filter(|p| p.0 != "self").map(|p| format!("{}: {}", p.0, self.types.display(p.1))).collect();
-            let r = if ret == T_VOID { String::new() } else { format!(": {}", self.types.display(ret)) };
+            let ps: Vec<String> = info
+                .params
+                .iter()
+                .filter(|p| p.0 != "self")
+                .map(|p| format!("{}: {}", p.0, self.types.display(p.1)))
+                .collect();
+            let r = if ret == T_VOID {
+                String::new()
+            } else {
+                format!(": {}", self.types.display(ret))
+            };
             format!("{}fun {}({}){}", if is_async { "async " } else { "" }, name, ps.join(", "), r)
         };
         self.hover(name_span, sig);
@@ -1022,10 +1066,22 @@ impl<'a> Checker<'a> {
             let slot = self.new_local(t);
             let alloc = Expr::new(ExprKind::SetLocal(slot, Box::new(Expr::new(ExprKind::NewStruct(t, fields), t))), t);
             let call = self.direct_call(init, Some(Expr::new(ExprKind::Local(slot), t)), args, span, name_span);
-            return Expr::new(ExprKind::Seq(vec![Stmt::Expr(alloc), Stmt::Expr(call)], Box::new(Expr::new(ExprKind::Local(slot), t))), t);
+            return Expr::new(
+                ExprKind::Seq(vec![Stmt::Expr(alloc), Stmt::Expr(call)], Box::new(Expr::new(ExprKind::Local(slot), t))),
+                t,
+            );
         }
         if args.len() > rec.fields.len() {
-            self.error(span, format!("`{}` has {} field{} but {} arguments were given", rec.name, rec.fields.len(), if rec.fields.len() == 1 { "" } else { "s" }, args.len()));
+            self.error(
+                span,
+                format!(
+                    "`{}` has {} field{} but {} arguments were given",
+                    rec.name,
+                    rec.fields.len(),
+                    if rec.fields.len() == 1 { "" } else { "s" },
+                    args.len()
+                ),
+            );
         }
         let mut vals = Vec::new();
         for (i, f) in rec.fields.iter().enumerate() {
@@ -1069,7 +1125,11 @@ impl<'a> Checker<'a> {
                     } else {
                         let cands: Vec<&str> = rec.statics.keys().chain(rec.methods.keys()).map(|s| s.as_str()).collect();
                         match suggest(&name.name, cands.into_iter()) {
-                            Some(s) => self.error_note(name.span, format!("{} has no method `{}`", rec.name, name.name), format!("did you mean `{}`?", s)),
+                            Some(s) => self.error_note(
+                                name.span,
+                                format!("{} has no method `{}`", rec.name, name.name),
+                                format!("did you mean `{}`?", s),
+                            ),
                             None => self.error(name.span, format!("{} has no method `{}`", rec.name, name.name)),
                         }
                     }
@@ -1101,7 +1161,10 @@ impl<'a> Checker<'a> {
                     }
                 }
                 if rec.statics.contains_key(&name.name) {
-                    self.error(name.span, format!("`{}` is a static method; call it as `{}.{}(...)`", name.name, rec.name, name.name));
+                    self.error(
+                        name.span,
+                        format!("`{}` is a static method; call it as `{}.{}(...)`", name.name, rec.name, name.name),
+                    );
                     return Self::err_expr();
                 }
             }
@@ -1125,7 +1188,11 @@ impl<'a> Checker<'a> {
                 return Self::err_expr();
             }
             Ty::Optional(_) => {
-                self.error_note(obj.span, format!("cannot call `{}` on a value that may be null", name.name), "check it with `if (x != null)` first, or use `x!!`");
+                self.error_note(
+                    obj.span,
+                    format!("cannot call `{}` on a value that may be null", name.name),
+                    "check it with `if (x != null)` first, or use `x!!`",
+                );
                 for a in args {
                     self.expr(a, None);
                 }
@@ -1153,7 +1220,11 @@ impl<'a> Checker<'a> {
         }
         let s = self.show(t);
         if t == T_ANY {
-            self.error_note(name.span, format!("cannot call `{}` on a value of type any", name.name), "narrow it with `is` or cast it with `as` first");
+            self.error_note(
+                name.span,
+                format!("cannot call `{}` on a value of type any", name.name),
+                "narrow it with `is` or cast it with `as` first",
+            );
         } else {
             self.error(name.span, format!("{} has no method `{}`", s, name.name));
         }
@@ -1184,7 +1255,11 @@ impl<'a> Checker<'a> {
                     }
                     let cands: Vec<&str> = en.variants.iter().map(|v| v.0.as_str()).collect();
                     match suggest(&name.name, cands.into_iter()) {
-                        Some(s) => self.error_note(name.span, format!("enum {} has no variant `{}`", en.name, name.name), format!("did you mean `{}`?", s)),
+                        Some(s) => self.error_note(
+                            name.span,
+                            format!("enum {} has no variant `{}`", en.name, name.name),
+                            format!("did you mean `{}`?", s),
+                        ),
                         None => self.error(name.span, format!("enum {} has no variant `{}`", en.name, name.name)),
                     }
                     return Self::err_expr();
@@ -1245,7 +1320,11 @@ impl<'a> Checker<'a> {
                 Expr::new(ExprKind::Rt(RtFn::AnyIndex, vec![o, key, Self::tid(T_STR), l]), T_ANY)
             }
             Ty::Optional(_) => {
-                self.error_note(obj.span, format!("cannot read `{}` from a value that may be null", n), "check it with `if (x != null)` first, or use `x!!`");
+                self.error_note(
+                    obj.span,
+                    format!("cannot read `{}` from a value that may be null", n),
+                    "check it with `if (x != null)` first, or use `x!!`",
+                );
                 Self::err_expr()
             }
             Ty::Error => Self::err_expr(),
@@ -1408,7 +1487,10 @@ impl<'a> Checker<'a> {
             match self.lookup_type_name(m, &tn.name, tn.span) {
                 Some(t) => Some(t),
                 None => {
-                    let te = TypeExpr { kind: TypeExprKind::Named(tn.name.clone(), vec![]), span: tn.span };
+                    let te = TypeExpr {
+                        kind: TypeExprKind::Named(tn.name.clone(), vec![]),
+                        span: tn.span,
+                    };
                     let t = self.resolve_type(&te);
                     Some(t)
                 }
@@ -1475,7 +1557,12 @@ impl<'a> Checker<'a> {
                 let ok = hs.iter().all(|(n, h, _)| match rec.field_index(n) {
                     Some(i) => {
                         let ft = rec.fields[i].ty;
-                        h.ty == ft || h.ty == T_ERROR || (h.ty == T_INT && ft == T_FLOAT) || (h.ty == T_NULL && self.types.is_nullable(ft)) || ft == T_ANY || self.types.unwrap_optional(ft) == h.ty
+                        h.ty == ft
+                            || h.ty == T_ERROR
+                            || (h.ty == T_INT && ft == T_FLOAT)
+                            || (h.ty == T_NULL && self.types.is_nullable(ft))
+                            || ft == T_ANY
+                            || self.types.unwrap_optional(ft) == h.ty
                     }
                     None => false,
                 });
@@ -1513,7 +1600,16 @@ impl<'a> Checker<'a> {
                 let m = self.cur_module();
                 let ri = self.types.new_record(RecordDef {
                     name: String::new(),
-                    fields: key.iter().map(|(n, t)| FieldDef { name: n.clone(), ty: *t, default: None, private: false, span }).collect(),
+                    fields: key
+                        .iter()
+                        .map(|(n, t)| FieldDef {
+                            name: n.clone(),
+                            ty: *t,
+                            default: None,
+                            private: false,
+                            span,
+                        })
+                        .collect(),
                     is_class: false,
                     anon: true,
                     implements: vec![],
@@ -1574,17 +1670,31 @@ impl<'a> Checker<'a> {
         }
         if !missing.is_empty() {
             let rn = self.show(rec.ty);
-            self.error(span, format!("missing field{} {} in {}", if missing.len() == 1 { "" } else { "s" }, missing.iter().map(|m| format!("`{}`", m)).collect::<Vec<_>>().join(", "), rn));
+            self.error(
+                span,
+                format!(
+                    "missing field{} {} in {}",
+                    if missing.len() == 1 { "" } else { "s" },
+                    missing.iter().map(|m| format!("`{}`", m)).collect::<Vec<_>>().join(", "),
+                    rn
+                ),
+            );
         }
         Expr::new(ExprKind::NewStruct(rec.ty, out), rec.ty)
     }
 
     pub fn build_map(&mut self, t: TyId, pairs: Vec<(Expr, Expr)>) -> Expr {
         let slot = self.new_local(t);
-        let mut stmts = vec![Stmt::Expr(Expr::new(ExprKind::SetLocal(slot, Box::new(Expr::new(ExprKind::Rt(RtFn::MapNew, vec![Self::tid(t)]), t))), t))];
+        let mut stmts = vec![Stmt::Expr(Expr::new(
+            ExprKind::SetLocal(slot, Box::new(Expr::new(ExprKind::Rt(RtFn::MapNew, vec![Self::tid(t)]), t))),
+            t,
+        ))];
         for (k, v) in pairs {
             let vt = v.ty;
-            stmts.push(Stmt::Expr(Expr::new(ExprKind::Rt(RtFn::MapSet, vec![Expr::new(ExprKind::Local(slot), t), k, v]), vt)));
+            stmts.push(Stmt::Expr(Expr::new(
+                ExprKind::Rt(RtFn::MapSet, vec![Expr::new(ExprKind::Local(slot), t), k, v]),
+                vt,
+            )));
         }
         Expr::new(ExprKind::Seq(stmts, Box::new(Expr::new(ExprKind::Local(slot), t))), t)
     }
@@ -1624,10 +1734,17 @@ impl<'a> Checker<'a> {
                 let s = self.show(from);
                 self.error(span, format!("a value of type {} can never be null", s));
             }
-            return Expr::new(ExprKind::Binary(BinOp::ICmp(Cmp::Eq), Box::new(h), Box::new(Expr::new(ExprKind::Null, from))), T_BOOL);
+            return Expr::new(
+                ExprKind::Binary(BinOp::ICmp(Cmp::Eq), Box::new(h), Box::new(Expr::new(ExprKind::Null, from))),
+                T_BOOL,
+            );
         }
         if from == t {
-            return if h.has_side_effects() { Expr::new(ExprKind::Seq(vec![Stmt::Expr(h)], Box::new(Expr::new(ExprKind::Bool(true), T_BOOL))), T_BOOL) } else { Expr::new(ExprKind::Bool(true), T_BOOL) };
+            return if h.has_side_effects() {
+                Expr::new(ExprKind::Seq(vec![Stmt::Expr(h)], Box::new(Expr::new(ExprKind::Bool(true), T_BOOL))), T_BOOL)
+            } else {
+                Expr::new(ExprKind::Bool(true), T_BOOL)
+            };
         }
         let ok = match self.types.get(from).clone() {
             Ty::Any => true,
@@ -1654,7 +1771,10 @@ impl<'a> Checker<'a> {
                 return None;
             }
             let m = self.cur_module();
-            if let Some(Entry { sym: ValSym::Global(g), span, .. }) = self.lookup_value_entry(m, n) {
+            if let Some(Entry {
+                sym: ValSym::Global(g), span, ..
+            }) = self.lookup_value_entry(m, n)
+            {
                 if let Some(t) = self.globals[g as usize].ty {
                     self.def_link(e.span, span);
                     return Some(Expr::new(ExprKind::Global(g), t));
@@ -1691,7 +1811,7 @@ impl<'a> Checker<'a> {
             (Ty::Float, Ty::Int) => return Expr::new(ExprKind::Conv(Conv::FloatToInt, Box::new(h)), T_INT),
             (Ty::Int, Ty::Float) => return self.coerce(h, T_FLOAT, span),
             (Ty::Bool, Ty::Int) | (Ty::Enum(_), Ty::Int) | (Ty::Int, Ty::Enum(_)) => return Self::retype(h, t),
-            (_, Ty::Str) if !matches!(fk, Ty::Any | Ty::Optional(_)) => return self.to_str(h),
+            (_, Ty::Str) if !matches!(fk, Ty::Any | Ty::Optional(_)) => return self.stringify(h),
             _ => {}
         }
         let h = match self.try_coerce(h, t) {

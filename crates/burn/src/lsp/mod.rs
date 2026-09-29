@@ -7,7 +7,7 @@ use crate::source::{FileId, SourceMap, Span};
 use crate::types::{Ty, TyId, Types, T_ARR_ANY, T_STR};
 use json::Json;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -51,7 +51,7 @@ fn read_message(r: &mut impl BufRead) -> Option<Json> {
 }
 
 fn send(msg: &Json) {
-    let body = msg.to_string();
+    let body = msg.encode();
     let out = std::io::stdout();
     let mut l = out.lock();
     let _ = write!(l, "Content-Length: {}\r\n\r\n{}", body.len(), body);
@@ -63,11 +63,19 @@ fn respond(id: &Json, result: Json) {
 }
 
 fn respond_err(id: &Json, code: i32, msg: &str) {
-    send(&Json::obj(vec![("jsonrpc", Json::str("2.0")), ("id", id.clone()), ("error", Json::obj(vec![("code", Json::num(code)), ("message", Json::str(msg))]))]));
+    send(&Json::obj(vec![
+        ("jsonrpc", Json::str("2.0")),
+        ("id", id.clone()),
+        ("error", Json::obj(vec![("code", Json::num(code)), ("message", Json::str(msg))])),
+    ]));
 }
 
 fn notify(method: &str, params: Json) {
-    send(&Json::obj(vec![("jsonrpc", Json::str("2.0")), ("method", Json::str(method)), ("params", params)]));
+    send(&Json::obj(vec![
+        ("jsonrpc", Json::str("2.0")),
+        ("method", Json::str(method)),
+        ("params", params),
+    ]));
 }
 
 fn hex(c: u8) -> Option<u8> {
@@ -125,16 +133,63 @@ fn pos_json(sm: &SourceMap, file: FileId, offset: usize) -> Json {
 fn range_json(sm: &SourceMap, span: Span) -> Json {
     let end = if span.end <= span.start { span.start + 1 } else { span.end };
     let end = (end as usize).min(sm.file(span.file).src.len());
-    Json::obj(vec![("start", pos_json(sm, span.file, span.start as usize)), ("end", pos_json(sm, span.file, end))])
+    Json::obj(vec![
+        ("start", pos_json(sm, span.file, span.start as usize)),
+        ("end", pos_json(sm, span.file, end)),
+    ])
 }
 
 const KEYWORDS: &[&str] = &[
-    "fun", "var", "const", "def", "type", "interface", "class", "enum", "static", "if", "else", "while", "for", "in", "return", "break",
-    "continue", "true", "false", "null", "import", "pub", "priv", "async", "await", "is", "as", "self",
+    "fun",
+    "var",
+    "const",
+    "def",
+    "type",
+    "interface",
+    "class",
+    "enum",
+    "static",
+    "if",
+    "else",
+    "while",
+    "for",
+    "in",
+    "return",
+    "break",
+    "continue",
+    "true",
+    "false",
+    "null",
+    "import",
+    "pub",
+    "priv",
+    "async",
+    "await",
+    "is",
+    "as",
+    "self",
 ];
 
-const STR_METHODS: &[&str] = &["length", "upper", "lower", "trim", "split", "contains", "indexOf", "replace", "startsWith", "endsWith", "repeat", "chars", "substring", "charAt", "charCode"];
-const ARR_METHODS: &[&str] = &["length", "push", "pop", "insert", "remove", "contains", "indexOf", "join", "reverse", "sort", "slice", "copy", "clear"];
+const STR_METHODS: &[&str] = &[
+    "length",
+    "upper",
+    "lower",
+    "trim",
+    "split",
+    "contains",
+    "indexOf",
+    "replace",
+    "startsWith",
+    "endsWith",
+    "repeat",
+    "chars",
+    "substring",
+    "charAt",
+    "charCode",
+];
+const ARR_METHODS: &[&str] = &[
+    "length", "push", "pop", "insert", "remove", "contains", "indexOf", "join", "reverse", "sort", "slice", "copy", "clear",
+];
 const MAP_METHODS: &[&str] = &["length", "keys", "values", "has", "get", "remove"];
 
 impl Server {
@@ -150,12 +205,23 @@ impl Server {
             Ok(r) => r,
             Err(_) => {
                 let text = self.docs.get(uri).cloned().unwrap_or_default();
-                loader.load_source(&path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(), text, path.parent().map(|p| p.to_path_buf()))
+                loader.load_source(
+                    &path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
+                    text,
+                    path.parent().map(|p| p.to_path_buf()),
+                )
             }
         };
         let loaded = loader.finish(root);
         let root_file = loaded.modules[root].file;
-        let result = check::check(&loaded, CheckOptions { skip_before: None, want_index: true, repl_echo: false });
+        let result = check::check(
+            &loaded,
+            CheckOptions {
+                skip_before: None,
+                want_index: true,
+                repl_echo: false,
+            },
+        );
         let mut diags = loaded.diags.clone();
         diags.extend(result.diags);
         let sm = loaded.sm;
@@ -176,7 +242,7 @@ impl Server {
             };
             let mut message = d.message.clone();
             for n in &d.notes {
-                message.push_str("\n");
+                message.push('\n');
                 message.push_str(n);
             }
             by_uri.entry(target).or_default().push(Json::obj(vec![
@@ -190,17 +256,32 @@ impl Server {
         let mut now = Vec::new();
         for (u, ds) in by_uri {
             now.push(u.clone());
-            notify("textDocument/publishDiagnostics", Json::obj(vec![("uri", Json::str(u)), ("diagnostics", Json::Arr(ds))]));
+            notify(
+                "textDocument/publishDiagnostics",
+                Json::obj(vec![("uri", Json::str(u)), ("diagnostics", Json::Arr(ds))]),
+            );
         }
         for u in previous {
             if !now.contains(&u) {
-                notify("textDocument/publishDiagnostics", Json::obj(vec![("uri", Json::str(u)), ("diagnostics", Json::Arr(vec![]))]));
+                notify(
+                    "textDocument/publishDiagnostics",
+                    Json::obj(vec![("uri", Json::str(u)), ("diagnostics", Json::Arr(vec![]))]),
+                );
             }
         }
         self.published.insert(uri.to_string(), now);
         self.analyses.insert(
             uri.to_string(),
-            Analysis { sm, root_file, root_module: root, index: result.index, types: result.types, globals: result.globals, funcs: result.funcs, type_names: result.type_names },
+            Analysis {
+                sm,
+                root_file,
+                root_module: root,
+                index: result.index,
+                types: result.types,
+                globals: result.globals,
+                funcs: result.funcs,
+                type_names: result.type_names,
+            },
         );
     }
 
@@ -218,22 +299,33 @@ impl Server {
         };
         let mut best: Option<&(Span, String)> = None;
         for h in &a.index.hovers {
-            if h.0.file == a.root_file && (h.0.start as usize) <= off && off <= (h.0.end as usize) {
-                if best.map(|b| (h.0.end - h.0.start) < (b.0.end - b.0.start)).unwrap_or(true) {
-                    best = Some(h);
-                }
+            if h.0.file == a.root_file
+                && (h.0.start as usize) <= off
+                && off <= (h.0.end as usize)
+                && best.map(|b| (h.0.end - h.0.start) < (b.0.end - b.0.start)).unwrap_or(true)
+            {
+                best = Some(h);
             }
         }
         match best {
             Some((span, text)) => Json::obj(vec![
-                ("contents", Json::obj(vec![("kind", Json::str("markdown")), ("value", Json::str(format!("```burn\n{}\n```", text)))])),
+                (
+                    "contents",
+                    Json::obj(vec![("kind", Json::str("markdown")), ("value", Json::str(format!("```burn\n{}\n```", text)))]),
+                ),
                 ("range", range_json(&a.sm, *span)),
             ]),
             None => {
                 let src = &a.sm.file(a.root_file).src;
                 let word = word_at(src, off);
                 if builtins::is_builtin(&word) {
-                    return Json::obj(vec![("contents", Json::obj(vec![("kind", Json::str("markdown")), ("value", Json::str(format!("```burn\n{}\n```", builtins::signature(&word))))]))]);
+                    return Json::obj(vec![(
+                        "contents",
+                        Json::obj(vec![
+                            ("kind", Json::str("markdown")),
+                            ("value", Json::str(format!("```burn\n{}\n```", builtins::signature(&word)))),
+                        ]),
+                    )]);
                 }
                 Json::Null
             }
@@ -263,7 +355,8 @@ impl Server {
 
     fn member_items(&self, a: &Analysis, t: TyId, statics: bool) -> Vec<Json> {
         let mut items = Vec::new();
-        let item = |label: &str, kind: i32, detail: String| Json::obj(vec![("label", Json::str(label)), ("kind", Json::num(kind)), ("detail", Json::str(detail))]);
+        let item =
+            |label: &str, kind: i32, detail: String| Json::obj(vec![("label", Json::str(label)), ("kind", Json::num(kind)), ("detail", Json::str(detail))]);
         match a.types.get(t) {
             Ty::Record(r) => {
                 let rec = &a.types.records[*r as usize];
@@ -307,10 +400,13 @@ impl Server {
         let mut cur: Option<(TyId, bool)> = None;
         let mut best: Option<&check::LocalInfo> = None;
         for l in &a.index.locals {
-            if l.name == *first && l.decl.file == a.root_file && (l.decl.start as usize) < off && off <= l.scope.end as usize {
-                if best.map(|b| l.decl.start > b.decl.start).unwrap_or(true) {
-                    best = Some(l);
-                }
+            if l.name == *first
+                && l.decl.file == a.root_file
+                && (l.decl.start as usize) < off
+                && off <= l.scope.end as usize
+                && best.map(|b| l.decl.start > b.decl.start).unwrap_or(true)
+            {
+                best = Some(l);
             }
         }
         if let Some(l) = best {
@@ -403,7 +499,11 @@ impl Server {
         let mut seen = std::collections::HashSet::new();
         let mut push = |label: &str, kind: i32, detail: String, items: &mut Vec<Json>| {
             if seen.insert(label.to_string()) {
-                items.push(Json::obj(vec![("label", Json::str(label)), ("kind", Json::num(kind)), ("detail", Json::str(detail))]));
+                items.push(Json::obj(vec![
+                    ("label", Json::str(label)),
+                    ("kind", Json::num(kind)),
+                    ("detail", Json::str(detail)),
+                ]));
             }
         };
         for l in a.index.locals.iter().rev() {
@@ -455,7 +555,11 @@ impl Server {
         for f in &a.funcs {
             if f.3 == a.root_module && f.2.file == a.root_file && !f.0.starts_with('<') {
                 let kind = if f.0.contains('.') { 6 } else { 12 };
-                out.push(Json::obj(vec![("name", Json::str(f.0.clone())), ("kind", Json::num(kind)), ("location", loc(f.2))]));
+                out.push(Json::obj(vec![
+                    ("name", Json::str(f.0.clone())),
+                    ("kind", Json::num(kind)),
+                    ("location", loc(f.2)),
+                ]));
             }
         }
         for t in &a.type_names {
@@ -466,7 +570,11 @@ impl Server {
                     Ty::Record(r) if a.types.records[*r as usize].is_class => 5,
                     _ => 23,
                 };
-                out.push(Json::obj(vec![("name", Json::str(t.0.clone())), ("kind", Json::num(kind)), ("location", loc(t.2))]));
+                out.push(Json::obj(vec![
+                    ("name", Json::str(t.0.clone())),
+                    ("kind", Json::num(kind)),
+                    ("location", loc(t.2)),
+                ]));
             }
         }
         Json::Arr(out)
@@ -483,7 +591,13 @@ impl Server {
         }
         let lines = text.lines().count() + 1;
         Json::Arr(vec![Json::obj(vec![
-            ("range", Json::obj(vec![("start", Json::obj(vec![("line", Json::num(0)), ("character", Json::num(0))])), ("end", Json::obj(vec![("line", Json::num(lines as f64)), ("character", Json::num(0))]))])),
+            (
+                "range",
+                Json::obj(vec![
+                    ("start", Json::obj(vec![("line", Json::num(0)), ("character", Json::num(0))])),
+                    ("end", Json::obj(vec![("line", Json::num(lines as f64)), ("character", Json::num(0))])),
+                ]),
+            ),
             ("newText", Json::str(formatted)),
         ])])
     }
@@ -530,7 +644,10 @@ pub fn run() -> ExitCode {
                                 ("completionProvider", Json::obj(vec![("triggerCharacters", Json::Arr(vec![Json::str(".")]))])),
                             ]),
                         ),
-                        ("serverInfo", Json::obj(vec![("name", Json::str("burn")), ("version", Json::str(env!("CARGO_PKG_VERSION")))])),
+                        (
+                            "serverInfo",
+                            Json::obj(vec![("name", Json::str("burn")), ("version", Json::str(env!("CARGO_PKG_VERSION")))]),
+                        ),
                     ]),
                 );
             }
@@ -558,7 +675,10 @@ pub fn run() -> ExitCode {
                 server.analyses.remove(&uri);
                 if let Some(list) = server.published.remove(&uri) {
                     for u in list {
-                        notify("textDocument/publishDiagnostics", Json::obj(vec![("uri", Json::str(u)), ("diagnostics", Json::Arr(vec![]))]));
+                        notify(
+                            "textDocument/publishDiagnostics",
+                            Json::obj(vec![("uri", Json::str(u)), ("diagnostics", Json::Arr(vec![]))]),
+                        );
                     }
                 }
             }

@@ -53,7 +53,7 @@ fn f(v: u64) -> f64 {
 }
 
 pub fn float_to_int(x: f64) -> i64 {
-    if x.is_nan() || x >= 9.223372036854775807e18 || x < -9.223372036854775808e18 {
+    if x.is_nan() || !(-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(&x) {
         i64::MIN
     } else {
         x as i64
@@ -62,7 +62,12 @@ pub fn float_to_int(x: f64) -> i64 {
 
 impl Vm {
     pub fn new(code: Arc<Code>, globals: *mut u64) -> Box<Vm> {
-        Box::new(Vm { stack: Vec::with_capacity(1 << 14), frames: Vec::with_capacity(256), code, globals })
+        Box::new(Vm {
+            stack: Vec::with_capacity(1 << 14),
+            frames: Vec::with_capacity(256),
+            code,
+            globals,
+        })
     }
 
     pub fn call(&mut self, func: u32, args: &[u64]) -> u64 {
@@ -267,7 +272,10 @@ impl Vm {
                     if self.frames.len() > MAX_FRAMES {
                         io::rt_error("stack overflow (recursion is too deep)", u64::MAX);
                     }
-                    self.frames.push(Frame { pc: pc as u32, base: base as u32 });
+                    self.frames.push(Frame {
+                        pc: pc as u32,
+                        base: base as u32,
+                    });
                     let fi = unsafe { funcs.get_unchecked(func as usize) };
                     base = self.stack.len() - fi.params as usize;
                     self.stack.resize(base + fi.locals as usize, 0);
@@ -278,7 +286,10 @@ impl Vm {
                     if self.frames.len() > MAX_FRAMES {
                         io::rt_error("stack overflow (recursion is too deep)", u64::MAX);
                     }
-                    self.frames.push(Frame { pc: pc as u32, base: base as u32 });
+                    self.frames.push(Frame {
+                        pc: pc as u32,
+                        base: base as u32,
+                    });
                     let fi = &funcs[func as usize];
                     base = self.stack.len() - fi.params as usize;
                     self.stack.resize(base + fi.locals as usize, 0);
@@ -289,12 +300,18 @@ impl Vm {
                     let tid = tid_of(recv) as usize;
                     let func = code.iface[slot as usize].get(tid).copied().unwrap_or(u32::MAX);
                     if func == u32::MAX {
-                        io::rt_error(&format!("value of type {} does not implement this interface", meta::type_name(tid as u32)), u64::MAX);
+                        io::rt_error(
+                            &format!("value of type {} does not implement this interface", meta::type_name(tid as u32)),
+                            u64::MAX,
+                        );
                     }
                     if self.frames.len() > MAX_FRAMES {
                         io::rt_error("stack overflow (recursion is too deep)", u64::MAX);
                     }
-                    self.frames.push(Frame { pc: pc as u32, base: base as u32 });
+                    self.frames.push(Frame {
+                        pc: pc as u32,
+                        base: base as u32,
+                    });
                     let fi = &funcs[func as usize];
                     base = self.stack.len() - fi.params as usize;
                     self.stack.resize(base + fi.locals as usize, 0);
@@ -404,7 +421,6 @@ pub fn prepare(p: &Program) -> Arc<Code> {
 }
 
 pub struct Runner {
-    pub code: Arc<Code>,
     pub globals: Vec<u64>,
     vm: Box<Vm>,
 }
@@ -420,7 +436,7 @@ impl Runner {
         gc::add_root_range(ptr as usize, globals.len());
         let vm = Vm::new(code.clone(), ptr);
         gc::add_vm_stack(&vm.stack as *const Vec<u64>);
-        Runner { code, globals, vm }
+        Runner { globals, vm }
     }
 
     pub fn call(&mut self, func: u32) -> u64 {

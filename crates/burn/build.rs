@@ -15,7 +15,18 @@ fn main() {
     let target = env::var("TARGET").unwrap();
     let result = Command::new(&rustc)
         .args(["--crate-name", "burn_runtime", "--crate-type", "staticlib", "--edition", "2021"])
-        .args(["-C", "opt-level=3", "-C", "panic=abort", "-C", "debuginfo=0", "-C", "codegen-units=1", "-C", "strip=debuginfo"])
+        .args([
+            "-C",
+            "opt-level=3",
+            "-C",
+            "panic=abort",
+            "-C",
+            "debuginfo=0",
+            "-C",
+            "codegen-units=1",
+            "-C",
+            "strip=debuginfo",
+        ])
         .args(["--target", &target])
         .args(["--print", "native-static-libs"])
         .arg("-o")
@@ -34,7 +45,10 @@ fn main() {
             true
         }
         Ok(o) => {
-            println!("cargo:warning=could not build the native runtime: {}", String::from_utf8_lossy(&o.stderr).lines().next().unwrap_or(""));
+            println!(
+                "cargo:warning=could not build the native runtime: {}",
+                String::from_utf8_lossy(&o.stderr).lines().next().unwrap_or("")
+            );
             false
         }
         Err(e) => {

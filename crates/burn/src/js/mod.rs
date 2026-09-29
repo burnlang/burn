@@ -60,7 +60,12 @@ fn desc(d: &Desc) -> String {
         Desc::Optional(i) => format!("[\"opt\",{}]", i),
         Desc::Func => "[\"fun\"]".into(),
         Desc::Future(i) => format!("[\"future\",{}]", i),
-        Desc::Record { name, fields, class, implements } => {
+        Desc::Record {
+            name,
+            fields,
+            class,
+            implements,
+        } => {
             let fs: Vec<String> = fields.iter().map(|(n, t)| format!("[{},{}]", js_str(n), t)).collect();
             let is: Vec<String> = implements.iter().map(|i| i.to_string()).collect();
             format!("[\"rec\",{},[{}],{},[{}]]", js_str(name), fs.join(","), class, is.join(","))
@@ -82,7 +87,13 @@ struct Gen<'p> {
 }
 
 pub fn generate(p: &Program) -> String {
-    let mut g = Gen { p, out: String::with_capacity(1 << 16), label: 0, loops: Vec::new(), indent: 0 };
+    let mut g = Gen {
+        p,
+        out: String::with_capacity(1 << 16),
+        label: 0,
+        loops: Vec::new(),
+        indent: 0,
+    };
     g.program();
     g.out
 }
@@ -115,7 +126,8 @@ impl<'p> Gen<'p> {
         let _ = writeln!(self.out, "const $T = [{}];", descs.join(","));
         let locs: Vec<String> = p.locs.iter().map(|l| js_str(l)).collect();
         let _ = writeln!(self.out, "const $LOCS = [{}];", locs.join(","));
-        self.out.push_str("function $ci(t, ...a) { const f = t[a[0][0]]; if (!f) $err(\"interface method not implemented\", -1); return f(...a); }\n");
+        self.out
+            .push_str("function $ci(t, ...a) { const f = t[a[0][0]]; if (!f) $err(\"interface method not implemented\", -1); return f(...a); }\n");
         for (i, s) in p.slots.iter().enumerate() {
             let entries: Vec<String> = s.impls.iter().map(|(t, f)| format!("{}: f{}", t, f)).collect();
             let _ = writeln!(self.out, "const $I{} = {{{}}};", i, entries.join(", "));

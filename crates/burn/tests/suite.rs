@@ -77,7 +77,13 @@ fn native_matches_vm() {
             }
             let (out, _) = output(&mut cmd);
             if out != expected {
-                failures.push(format!("{} (gc threshold {:?}):\n--- expected\n{}\n--- got\n{}", rel.display(), threshold, expected, out));
+                failures.push(format!(
+                    "{} (gc threshold {:?}):\n--- expected\n{}\n--- got\n{}",
+                    rel.display(),
+                    threshold,
+                    expected,
+                    out
+                ));
             }
         }
     }
@@ -149,8 +155,19 @@ fn eval_and_exit_codes() {
 #[test]
 fn repl_keeps_state_between_inputs() {
     use std::io::Write;
-    let mut child = burn().arg("repl").stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
-    child.stdin.as_mut().unwrap().write_all(b"var x = 20\nfun twice(n: int): int {\n    return n * 2\n}\ntwice(x) + 2\nx = x + 1\nprint(x)\nundefinedThing\nprint(\"still alive\")\n").unwrap();
+    let mut child = burn()
+        .arg("repl")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(b"var x = 20\nfun twice(n: int): int {\n    return n * 2\n}\ntwice(x) + 2\nx = x + 1\nprint(x)\nundefinedThing\nprint(\"still alive\")\n")
+        .unwrap();
     let out = child.wait_with_output().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);

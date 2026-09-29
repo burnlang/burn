@@ -53,7 +53,11 @@ pub fn check_loaded(loaded: Loaded, opts: CheckOptions) -> Result<Compiled, Fail
     all.extend(diags);
     all.sort_by_key(|d| (d.severity != Severity::Error, d.span.file, d.span.start));
     match program {
-        Some(p) if !all.iter().any(|d| d.severity == Severity::Error) => Ok(Compiled { program: p, sm: loaded.sm, warnings: all }),
+        Some(p) if !all.iter().any(|d| d.severity == Severity::Error) => Ok(Compiled {
+            program: p,
+            sm: loaded.sm,
+            warnings: all,
+        }),
         _ => Failed { sm: loaded.sm, diags: all }.into(),
     }
 }
@@ -67,7 +71,10 @@ impl From<Failed> for Result<Compiled, Failed> {
 pub fn compile_path(path: &Path) -> Result<Compiled, Failed> {
     match load_path(path) {
         Ok(l) => check_loaded(l, CheckOptions::default()),
-        Err(e) => Err(Failed { sm: SourceMap::default(), diags: vec![Diagnostic::error(Default::default(), e)] }),
+        Err(e) => Err(Failed {
+            sm: SourceMap::default(),
+            diags: vec![Diagnostic::error(Default::default(), e)],
+        }),
     }
 }
 

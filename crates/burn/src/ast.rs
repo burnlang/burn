@@ -1,5 +1,5 @@
 use crate::lexer::TplPart;
-use crate::source::{FileId, Span};
+use crate::source::Span;
 
 #[derive(Clone, Debug)]
 pub struct Ident {
@@ -16,7 +16,6 @@ pub enum Vis {
 
 #[derive(Clone, Debug)]
 pub struct Module {
-    pub file: FileId,
     pub items: Vec<Item>,
 }
 
@@ -58,7 +57,6 @@ pub struct FunSig {
     pub params: Vec<Param>,
     pub ret: Option<TypeExpr>,
     pub is_async: bool,
-    pub span: Span,
 }
 
 #[derive(Clone, Debug)]
@@ -71,26 +69,34 @@ pub struct Field {
 
 #[derive(Clone, Debug)]
 pub enum Def {
-    Type { name: Ident, fields: Vec<Field> },
-    Alias { name: Ident, ty: TypeExpr },
-    Interface { name: Ident, methods: Vec<FunSig> },
-    Class { name: Ident, implements: Vec<Ident>, fields: Vec<Field>, methods: Vec<(Vis, FunDecl)> },
-    Enum { name: Ident, variants: Vec<Ident> },
+    Type {
+        name: Ident,
+        fields: Vec<Field>,
+    },
+    Alias {
+        name: Ident,
+        ty: TypeExpr,
+    },
+    Interface {
+        name: Ident,
+        methods: Vec<FunSig>,
+    },
+    Class {
+        name: Ident,
+        implements: Vec<Ident>,
+        fields: Vec<Field>,
+        methods: Vec<(Vis, FunDecl)>,
+    },
+    Enum {
+        name: Ident,
+        variants: Vec<Ident>,
+    },
 }
 
 impl Def {
     pub fn name(&self) -> &Ident {
         match self {
             Def::Type { name, .. } | Def::Alias { name, .. } | Def::Interface { name, .. } | Def::Class { name, .. } | Def::Enum { name, .. } => name,
-        }
-    }
-
-    pub fn kind_name(&self) -> &'static str {
-        match self {
-            Def::Type { .. } | Def::Alias { .. } => "type",
-            Def::Interface { .. } => "interface",
-            Def::Class { .. } => "class",
-            Def::Enum { .. } => "enum",
         }
     }
 }
@@ -130,12 +136,34 @@ pub enum ForIter {
 
 #[derive(Clone, Debug)]
 pub enum StmtKind {
-    Var { name: Ident, ty: Option<TypeExpr>, init: Option<Expr>, is_const: bool },
+    Var {
+        name: Ident,
+        ty: Option<TypeExpr>,
+        init: Option<Expr>,
+        is_const: bool,
+    },
     Expr(Expr),
-    If { cond: Expr, then: Block, els: Option<Block> },
-    While { cond: Expr, body: Block },
-    For { init: Option<Box<Stmt>>, cond: Option<Expr>, step: Option<Expr>, body: Block },
-    ForIn { var: Ident, index: Option<Ident>, iter: ForIter, body: Block },
+    If {
+        cond: Expr,
+        then: Block,
+        els: Option<Block>,
+    },
+    While {
+        cond: Expr,
+        body: Block,
+    },
+    For {
+        init: Option<Box<Stmt>>,
+        cond: Option<Expr>,
+        step: Option<Expr>,
+        body: Block,
+    },
+    ForIn {
+        var: Ident,
+        index: Option<Ident>,
+        iter: ForIter,
+        body: Block,
+    },
     Return(Option<Expr>),
     Break,
     Continue,

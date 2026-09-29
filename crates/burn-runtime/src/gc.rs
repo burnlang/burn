@@ -10,7 +10,12 @@ const DEFAULT_THRESHOLD: usize = 32 * 1024 * 1024;
 
 fn min_threshold() -> usize {
     static T: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *T.get_or_init(|| std::env::var("BURN_GC_THRESHOLD").ok().and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_THRESHOLD))
+    *T.get_or_init(|| {
+        std::env::var("BURN_GC_THRESHOLD")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_THRESHOLD)
+    })
 }
 
 struct Heap {
@@ -111,11 +116,7 @@ pub fn alloc(kind: u8, tid: u32, size: usize) -> u64 {
     if h.threshold == 0 {
         h.threshold = min_threshold();
     }
-    if SINCE.load(Ordering::Relaxed) >= h.threshold
-        && h.stack_base != 0
-        && TASKS.load(Ordering::SeqCst) == 0
-        && IS_MAIN.with(|m| m.get())
-    {
+    if SINCE.load(Ordering::Relaxed) >= h.threshold && h.stack_base != 0 && TASKS.load(Ordering::SeqCst) == 0 && IS_MAIN.with(|m| m.get()) {
         collect(&mut h);
     }
     let layout = Layout::from_size_align(size, 16).unwrap();

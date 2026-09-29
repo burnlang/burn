@@ -79,7 +79,11 @@ pub struct Compiler {
 }
 
 pub fn compile(p: &Program, strings: Vec<u64>) -> Code {
-    let mut c = Compiler { ops: Vec::new(), loops: Vec::new(), strings };
+    let mut c = Compiler {
+        ops: Vec::new(),
+        loops: Vec::new(),
+        strings,
+    };
     let mut funcs = Vec::with_capacity(p.funcs.len());
     for f in &p.funcs {
         let entry = c.ops.len() as u32;
@@ -87,7 +91,12 @@ pub fn compile(p: &Program, strings: Vec<u64>) -> Code {
             c.stmt(s);
         }
         c.ops.push(Op::RetVoid);
-        funcs.push(FuncCode { name: f.name.clone(), entry, params: f.params, locals: f.locals.len().max(f.params as usize) as u32 });
+        funcs.push(FuncCode {
+            name: f.name.clone(),
+            entry,
+            params: f.params,
+            locals: f.locals.len().max(f.params as usize) as u32,
+        });
     }
     let ntypes = p.types.len();
     let mut iface = Vec::with_capacity(p.slots.len());
@@ -100,7 +109,13 @@ pub fn compile(p: &Program, strings: Vec<u64>) -> Code {
     }
     let mut ops = c.ops;
     peephole(&mut ops);
-    Code { ops, funcs, iface, entry: p.entry, nglobals: p.globals.len() }
+    Code {
+        ops,
+        funcs,
+        iface,
+        entry: p.entry,
+        nglobals: p.globals.len(),
+    }
 }
 
 fn peephole(ops: &mut [Op]) {
@@ -120,12 +135,16 @@ fn peephole(ops: &mut [Op]) {
                 i += 4;
                 continue;
             }
-            (Op::Load(a), Op::Const(k), Op::ICmp(c), Op::Jz(t)) if !targets[i + 1] && !targets[i + 2] && !targets[i + 3] && (k as i64) >= i32::MIN as i64 && (k as i64) <= i32::MAX as i64 => {
+            (Op::Load(a), Op::Const(k), Op::ICmp(c), Op::Jz(t))
+                if !targets[i + 1] && !targets[i + 2] && !targets[i + 3] && (k as i64) >= i32::MIN as i64 && (k as i64) <= i32::MAX as i64 =>
+            {
                 ops[i] = Op::JCmpLC(c, a, k as i64 as i32, t);
                 i += 4;
                 continue;
             }
-            (Op::Load(a), Op::Const(k), Op::IAdd, Op::Store(b)) if a == b && !targets[i + 1] && !targets[i + 2] && !targets[i + 3] && (k as i64).abs() < i32::MAX as i64 => {
+            (Op::Load(a), Op::Const(k), Op::IAdd, Op::Store(b))
+                if a == b && !targets[i + 1] && !targets[i + 2] && !targets[i + 3] && (k as i64).abs() < i32::MAX as i64 =>
+            {
                 ops[i] = Op::IncLocal(a, k as i64 as i32);
                 i += 4;
                 continue;
@@ -194,7 +213,10 @@ impl Compiler {
                     self.expr(c);
                     self.emit(Op::Jz(0))
                 });
-                self.loops.push(Loop { breaks: Vec::new(), continues: Vec::new() });
+                self.loops.push(Loop {
+                    breaks: Vec::new(),
+                    continues: Vec::new(),
+                });
                 self.stmts(body);
                 let cont = self.here();
                 self.stmts(step);

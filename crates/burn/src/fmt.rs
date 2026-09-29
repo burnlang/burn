@@ -16,7 +16,9 @@ enum T {
     Dot,
 }
 
-const KEYWORDS_SPACE: &[&str] = &["if", "while", "for", "return", "else", "import", "fun", "var", "const", "def", "pub", "priv", "async", "await", "in", "is", "as", "static"];
+const KEYWORDS_SPACE: &[&str] = &[
+    "if", "while", "for", "return", "else", "import", "fun", "var", "const", "def", "pub", "priv", "async", "await", "in", "is", "as", "static",
+];
 
 fn lex_line(line: &str) -> Vec<T> {
     let chars: Vec<char> = line.chars().collect();
@@ -70,7 +72,9 @@ fn lex_line(line: &str) -> Vec<T> {
         }
         if c.is_ascii_digit() {
             let start = i;
-            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_' || (chars[i] == '.' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit())) {
+            while i < chars.len()
+                && (chars[i].is_ascii_alphanumeric() || chars[i] == '_' || (chars[i] == '.' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit()))
+            {
                 i += 1;
             }
             out.push(T::Num(chars[start..i].iter().collect()));

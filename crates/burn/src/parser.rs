@@ -17,7 +17,7 @@ pub struct Parser {
 pub fn parse_module(toks: Vec<Token>, file: FileId) -> (Module, Vec<Diagnostic>) {
     let mut p = Parser::new(toks, file);
     let items = p.items();
-    (Module { file, items }, p.diags)
+    (Module { items }, p.diags)
 }
 
 pub fn parse_expr_tokens(toks: Vec<Token>, file: FileId) -> (Option<Expr>, Vec<Diagnostic>) {
@@ -36,8 +36,23 @@ fn is_old_def_word(s: &str) -> bool {
 
 impl Parser {
     pub fn new(toks: Vec<Token>, file: FileId) -> Parser {
-        let toks = if toks.is_empty() { vec![Token { kind: Tok::Eof, span: Span::new(file, 0, 0), nl_before: true }] } else { toks };
-        Parser { toks, pos: 0, file, diags: Vec::new(), speculative: 0, no_struct: false }
+        let toks = if toks.is_empty() {
+            vec![Token {
+                kind: Tok::Eof,
+                span: Span::new(file, 0, 0),
+                nl_before: true,
+            }]
+        } else {
+            toks
+        };
+        Parser {
+            toks,
+            pos: 0,
+            file,
+            diags: Vec::new(),
+            speculative: 0,
+            no_struct: false,
+        }
     }
 
     fn peek(&self) -> &Token {
@@ -206,9 +221,12 @@ impl Parser {
                 let w = w.clone();
                 let span = self.peek().span;
                 if self.speculative == 0 {
-                    self.diags.push(
-                        Diagnostic::error(span, format!("definitions use the `def` keyword in Burn 2")).note(format!("write `def {} {}` instead", w, self.peek_at(1).kind.ident_name())),
-                    );
+                    self.diags
+                        .push(Diagnostic::error(span, "definitions use the `def` keyword in Burn 2".to_string()).note(format!(
+                            "write `def {} {}` instead",
+                            w,
+                            self.peek_at(1).kind.ident_name()
+                        )));
                 }
                 ItemKind::Def(self.def()?)
             }
@@ -273,7 +291,15 @@ impl Parser {
         let name = self.ident("function name")?;
         let (params, ret) = self.signature()?;
         let body = self.block()?;
-        Ok(FunDecl { name, params, ret, body, is_async, is_static, span: start.to(self.prev_span()) })
+        Ok(FunDecl {
+            name,
+            params,
+            ret,
+            body,
+            is_async,
+            is_static,
+            span: start.to(self.prev_span()),
+        })
     }
 
     fn signature(&mut self) -> PResult<(Vec<Param>, Option<TypeExpr>)> {
@@ -286,7 +312,11 @@ impl Parser {
             }
         }
         self.expect(Tok::RParen, "`)` to close parameters")?;
-        let ret = if self.eat(&Tok::Colon) || self.eat(&Tok::Arrow) { Some(self.ty()?) } else { None };
+        let ret = if self.eat(&Tok::Colon) || self.eat(&Tok::Arrow) {
+            Some(self.ty()?)
+        } else {
+            None
+        };
         Ok((params, ret))
     }
 
@@ -313,7 +343,10 @@ impl Parser {
         let kw = match &self.peek().kind {
             Tok::Ident(s) => s.clone(),
             other => {
-                let msg = format!("expected `type`, `interface`, `class`, `enum` or `fun` after `def` but found {}", describe(other));
+                let msg = format!(
+                    "expected `type`, `interface`, `class`, `enum` or `fun` after `def` but found {}",
+                    describe(other)
+                );
                 let span = self.peek().span;
                 self.err(span, msg);
                 return Err(());
@@ -349,7 +382,6 @@ impl Parser {
                     if self.eat(&Tok::Comma) || self.eat(&Tok::Semi) {
                         continue;
                     }
-                    let start = self.peek().span;
                     let r: PResult<FunSig> = (|| {
                         let is_async = self.eat(&Tok::Async);
                         self.expect(Tok::Fun, "`fun` in interface body")?;
@@ -360,7 +392,12 @@ impl Parser {
                             self.err(s, "interface methods cannot have a body");
                             self.block()?;
                         }
-                        Ok(FunSig { name: mname, params, ret, is_async, span: start.to(self.prev_span()) })
+                        Ok(FunSig {
+                            name: mname,
+                            params,
+                            ret,
+                            is_async,
+                        })
                     })();
                     match r {
                         Ok(m) => methods.push(m),
@@ -394,9 +431,8 @@ impl Parser {
                     } else {
                         Vis::Default
                     };
-                    let is_method = self.at(&Tok::Fun)
-                        || self.at(&Tok::Async)
-                        || (self.at_ident("static") && matches!(self.peek_at(1).kind, Tok::Fun | Tok::Async));
+                    let is_method =
+                        self.at(&Tok::Fun) || self.at(&Tok::Async) || (self.at_ident("static") && matches!(self.peek_at(1).kind, Tok::Fun | Tok::Async));
                     if is_method {
                         match self.fun_decl(true) {
                             Ok(f) => methods.push((vis, f)),
@@ -413,7 +449,12 @@ impl Parser {
                     }
                 }
                 self.expect(Tok::RBrace, "`}`")?;
-                Ok(Def::Class { name, implements, fields, methods })
+                Ok(Def::Class {
+                    name,
+                    implements,
+                    fields,
+                    methods,
+                })
             }
             "enum" => {
                 self.expect(Tok::LBrace, "`{`")?;
@@ -428,7 +469,10 @@ impl Parser {
                 Ok(Def::Enum { name, variants })
             }
             other => {
-                self.err(kw_span, format!("unknown definition kind `{}` (expected `type`, `interface`, `class`, `enum` or `fun`)", other));
+                self.err(
+                    kw_span,
+                    format!("unknown definition kind `{}` (expected `type`, `interface`, `class`, `enum` or `fun`)", other),
+                );
                 Err(())
             }
         }
@@ -485,17 +529,26 @@ impl Parser {
                     }
                     self.expect(Tok::Gt, "`>`")?;
                 }
-                TypeExpr { kind: TypeExprKind::Named(name, args), span: start.to(self.prev_span()) }
+                TypeExpr {
+                    kind: TypeExprKind::Named(name, args),
+                    span: start.to(self.prev_span()),
+                }
             }
             Tok::Null => {
                 self.advance();
-                TypeExpr { kind: TypeExprKind::Named("null".into(), vec![]), span: start }
+                TypeExpr {
+                    kind: TypeExprKind::Named("null".into(), vec![]),
+                    span: start,
+                }
             }
             Tok::LBracket => {
                 self.advance();
                 let inner = self.ty()?;
                 self.expect(Tok::RBracket, "`]`")?;
-                TypeExpr { kind: TypeExprKind::Array(Box::new(inner)), span: start.to(self.prev_span()) }
+                TypeExpr {
+                    kind: TypeExprKind::Array(Box::new(inner)),
+                    span: start.to(self.prev_span()),
+                }
             }
             Tok::LBrace => {
                 self.advance();
@@ -503,7 +556,10 @@ impl Parser {
                 self.expect(Tok::Colon, "`:` in map type")?;
                 let v = self.ty()?;
                 self.expect(Tok::RBrace, "`}`")?;
-                TypeExpr { kind: TypeExprKind::Map(Box::new(k), Box::new(v)), span: start.to(self.prev_span()) }
+                TypeExpr {
+                    kind: TypeExprKind::Map(Box::new(k), Box::new(v)),
+                    span: start.to(self.prev_span()),
+                }
             }
             Tok::Fun => {
                 self.advance();
@@ -520,8 +576,15 @@ impl Parser {
                     }
                 }
                 self.expect(Tok::RParen, "`)`")?;
-                let ret = if self.eat(&Tok::Colon) || self.eat(&Tok::Arrow) { Some(Box::new(self.ty()?)) } else { None };
-                TypeExpr { kind: TypeExprKind::Func(ps, ret), span: start.to(self.prev_span()) }
+                let ret = if self.eat(&Tok::Colon) || self.eat(&Tok::Arrow) {
+                    Some(Box::new(self.ty()?))
+                } else {
+                    None
+                };
+                TypeExpr {
+                    kind: TypeExprKind::Func(ps, ret),
+                    span: start.to(self.prev_span()),
+                }
             }
             other => {
                 let span = self.peek().span;
@@ -531,7 +594,10 @@ impl Parser {
         };
         while self.at(&Tok::Question) && !self.peek().nl_before {
             self.advance();
-            t = TypeExpr { kind: TypeExprKind::Optional(Box::new(t)), span: start.to(self.prev_span()) };
+            t = TypeExpr {
+                kind: TypeExprKind::Optional(Box::new(t)),
+                span: start.to(self.prev_span()),
+            };
         }
         Ok(t)
     }
@@ -564,7 +630,10 @@ impl Parser {
         }
         self.no_struct = saved;
         self.expect(Tok::RBrace, "`}`")?;
-        Ok(Block { stmts, span: start.to(self.prev_span()) })
+        Ok(Block {
+            stmts,
+            span: start.to(self.prev_span()),
+        })
     }
 
     fn looks_like_typed_decl(&mut self) -> bool {
@@ -605,7 +674,11 @@ impl Parser {
             }
             Tok::Const => {
                 self.advance();
-                let s = if self.looks_like_typed_decl() { self.typed_decl(true)? } else { self.var_rest(true)? };
+                let s = if self.looks_like_typed_decl() {
+                    self.typed_decl(true)?
+                } else {
+                    self.var_rest(true)?
+                };
                 self.end_stmt();
                 s
             }
@@ -620,7 +693,11 @@ impl Parser {
             Tok::Return => {
                 self.advance();
                 let t = self.peek();
-                let value = if t.nl_before || matches!(t.kind, Tok::Semi | Tok::RBrace | Tok::Eof) { None } else { Some(self.expr()?) };
+                let value = if t.nl_before || matches!(t.kind, Tok::Semi | Tok::RBrace | Tok::Eof) {
+                    None
+                } else {
+                    Some(self.expr()?)
+                };
                 self.end_stmt();
                 StmtKind::Return(value)
             }
@@ -647,7 +724,10 @@ impl Parser {
                 }
             }
         };
-        Ok(Stmt { kind, span: start.to(self.prev_span()) })
+        Ok(Stmt {
+            kind,
+            span: start.to(self.prev_span()),
+        })
     }
 
     fn typed_decl(&mut self, is_const: bool) -> PResult<StmtKind> {
@@ -657,7 +737,12 @@ impl Parser {
         if is_const && init.is_none() {
             self.err(name.span, "constants must be initialized");
         }
-        Ok(StmtKind::Var { name, ty: Some(ty), init, is_const })
+        Ok(StmtKind::Var {
+            name,
+            ty: Some(ty),
+            init,
+            is_const,
+        })
     }
 
     fn var_rest(&mut self, is_const: bool) -> PResult<StmtKind> {
@@ -690,7 +775,10 @@ impl Parser {
                 let start = self.peek().span;
                 let k = self.if_stmt()?;
                 let span = start.to(self.prev_span());
-                Some(Block { stmts: vec![Stmt { kind: k, span }], span })
+                Some(Block {
+                    stmts: vec![Stmt { kind: k, span }],
+                    span,
+                })
             } else {
                 Some(self.block()?)
             }
@@ -765,12 +853,19 @@ impl Parser {
             } else {
                 StmtKind::Expr(self.expr()?)
             };
-            Some(Box::new(Stmt { kind: k, span: start.to(self.prev_span()) }))
+            Some(Box::new(Stmt {
+                kind: k,
+                span: start.to(self.prev_span()),
+            }))
         };
         self.expect(Tok::Semi, "`;` after for-loop initializer")?;
         let cond = if self.at(&Tok::Semi) { None } else { Some(self.expr()?) };
         self.expect(Tok::Semi, "`;` after for-loop condition")?;
-        let step = if self.at(&Tok::RParen) || self.at(&Tok::LBrace) { None } else { Some(self.expr()?) };
+        let step = if self.at(&Tok::RParen) || self.at(&Tok::LBrace) {
+            None
+        } else {
+            Some(self.expr()?)
+        };
         self.no_struct = saved;
         if paren {
             self.expect(Tok::RParen, "`)`")?;
@@ -821,12 +916,22 @@ impl Parser {
         }
         let value = self.assignment()?;
         let span = lhs.span.to(value.span);
-        Ok(Expr { kind: ExprKind::Assign { target: Box::new(lhs), op, value: Box::new(value) }, span })
+        Ok(Expr {
+            kind: ExprKind::Assign {
+                target: Box::new(lhs),
+                op,
+                value: Box::new(value),
+            },
+            span,
+        })
     }
 
     fn bin(&mut self, lhs: Expr, op: BinOp, rhs: Expr) -> Expr {
         let span = lhs.span.to(rhs.span);
-        Expr { kind: ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)), span }
+        Expr {
+            kind: ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)),
+            span,
+        }
     }
 
     fn or(&mut self) -> PResult<Expr> {
@@ -875,7 +980,10 @@ impl Parser {
                     self.advance();
                     let t = self.ty()?;
                     let span = e.span.to(t.span);
-                    e = Expr { kind: ExprKind::Is(Box::new(e), t), span };
+                    e = Expr {
+                        kind: ExprKind::Is(Box::new(e), t),
+                        span,
+                    };
                     continue;
                 }
                 Tok::Bang if self.peek_at(1).kind == Tok::Is && !self.peek().nl_before => {
@@ -883,8 +991,14 @@ impl Parser {
                     self.advance();
                     let t = self.ty()?;
                     let span = e.span.to(t.span);
-                    let is = Expr { kind: ExprKind::Is(Box::new(e), t), span };
-                    e = Expr { kind: ExprKind::Unary(UnOp::Not, Box::new(is)), span: span.to(bang) };
+                    let is = Expr {
+                        kind: ExprKind::Is(Box::new(e), t),
+                        span,
+                    };
+                    e = Expr {
+                        kind: ExprKind::Unary(UnOp::Not, Box::new(is)),
+                        span: span.to(bang),
+                    };
                     continue;
                 }
                 _ => return Ok(e),
@@ -930,7 +1044,10 @@ impl Parser {
             self.advance();
             let t = self.ty()?;
             let span = e.span.to(t.span);
-            e = Expr { kind: ExprKind::As(Box::new(e), t), span };
+            e = Expr {
+                kind: ExprKind::As(Box::new(e), t),
+                span,
+            };
         }
         Ok(e)
     }
@@ -943,24 +1060,39 @@ impl Parser {
                 let e = self.unary()?;
                 let span = start.to(e.span);
                 if let ExprKind::Int(v) = e.kind {
-                    return Ok(Expr { kind: ExprKind::Int(v.wrapping_neg()), span });
+                    return Ok(Expr {
+                        kind: ExprKind::Int(v.wrapping_neg()),
+                        span,
+                    });
                 }
                 if let ExprKind::Float(v) = e.kind {
-                    return Ok(Expr { kind: ExprKind::Float(-v), span });
+                    return Ok(Expr {
+                        kind: ExprKind::Float(-v),
+                        span,
+                    });
                 }
-                Ok(Expr { kind: ExprKind::Unary(UnOp::Neg, Box::new(e)), span })
+                Ok(Expr {
+                    kind: ExprKind::Unary(UnOp::Neg, Box::new(e)),
+                    span,
+                })
             }
             Tok::Bang => {
                 self.advance();
                 let e = self.unary()?;
                 let span = start.to(e.span);
-                Ok(Expr { kind: ExprKind::Unary(UnOp::Not, Box::new(e)), span })
+                Ok(Expr {
+                    kind: ExprKind::Unary(UnOp::Not, Box::new(e)),
+                    span,
+                })
             }
             Tok::Await => {
                 self.advance();
                 let e = self.unary()?;
                 let span = start.to(e.span);
-                Ok(Expr { kind: ExprKind::Await(Box::new(e)), span })
+                Ok(Expr {
+                    kind: ExprKind::Await(Box::new(e)),
+                    span,
+                })
             }
             _ => self.postfix(),
         }
@@ -985,7 +1117,10 @@ impl Parser {
                     self.no_struct = saved;
                     self.expect(Tok::RParen, "`)` to close arguments")?;
                     let span = e.span.to(self.prev_span());
-                    e = Expr { kind: ExprKind::Call { callee: Box::new(e), args }, span };
+                    e = Expr {
+                        kind: ExprKind::Call { callee: Box::new(e), args },
+                        span,
+                    };
                 }
                 Tok::LBracket if !t.nl_before => {
                     self.advance();
@@ -996,7 +1131,13 @@ impl Parser {
                     let index = index?;
                     self.expect(Tok::RBracket, "`]`")?;
                     let span = e.span.to(self.prev_span());
-                    e = Expr { kind: ExprKind::Index { obj: Box::new(e), index: Box::new(index) }, span };
+                    e = Expr {
+                        kind: ExprKind::Index {
+                            obj: Box::new(e),
+                            index: Box::new(index),
+                        },
+                        span,
+                    };
                 }
                 Tok::Dot => {
                     self.advance();
@@ -1008,13 +1149,19 @@ impl Parser {
                         _ => self.ident("field or method name")?,
                     };
                     let span = e.span.to(name.span);
-                    e = Expr { kind: ExprKind::Field { obj: Box::new(e), name }, span };
+                    e = Expr {
+                        kind: ExprKind::Field { obj: Box::new(e), name },
+                        span,
+                    };
                 }
                 Tok::Bang if !t.nl_before && self.peek_at(1).kind == Tok::Bang => {
                     self.advance();
                     self.advance();
                     let span = e.span.to(self.prev_span());
-                    e = Expr { kind: ExprKind::NotNull(Box::new(e)), span };
+                    e = Expr {
+                        kind: ExprKind::NotNull(Box::new(e)),
+                        span,
+                    };
                 }
                 _ => return Ok(e),
             }
@@ -1044,7 +1191,10 @@ impl Parser {
                 let tpl = template_from(parts, &mut |toks, sp| {
                     let (e, d) = parse_expr_tokens(toks, file);
                     diags.extend(d);
-                    e.unwrap_or(Expr { kind: ExprKind::Str(String::new()), span: sp })
+                    e.unwrap_or(Expr {
+                        kind: ExprKind::Str(String::new()),
+                        span: sp,
+                    })
                 });
                 if self.speculative == 0 {
                     self.diags.extend(diags);
@@ -1068,7 +1218,10 @@ impl Parser {
                 if self.at(&Tok::LBrace) && !self.no_struct && !self.peek().nl_before && self.brace_is_struct_lit() {
                     let ty = Ident { name, span };
                     let fields = self.struct_fields()?;
-                    return Ok(Expr { kind: ExprKind::StructLit { ty: Some(ty), fields }, span: span.to(self.prev_span()) });
+                    return Ok(Expr {
+                        kind: ExprKind::StructLit { ty: Some(ty), fields },
+                        span: span.to(self.prev_span()),
+                    });
                 }
                 ExprKind::Ident(name)
             }
@@ -1135,7 +1288,18 @@ impl Parser {
                 self.no_struct = saved;
                 let body = body?;
                 let span = start.to(self.prev_span());
-                let f = FunDecl { name: Ident { name: "<lambda>".into(), span: start }, params, ret, body, is_async, is_static: false, span };
+                let f = FunDecl {
+                    name: Ident {
+                        name: "<lambda>".into(),
+                        span: start,
+                    },
+                    params,
+                    ret,
+                    body,
+                    is_async,
+                    is_static: false,
+                    span,
+                };
                 ExprKind::Lambda(Box::new(f))
             }
             other => {
@@ -1144,7 +1308,10 @@ impl Parser {
                 return Err(());
             }
         };
-        Ok(Expr { kind, span: span.to(self.prev_span()) })
+        Ok(Expr {
+            kind,
+            span: span.to(self.prev_span()),
+        })
     }
 
     fn brace_is_struct_lit(&self) -> bool {
@@ -1179,7 +1346,10 @@ impl Parser {
                     }
                 }
             } else {
-                Expr { kind: ExprKind::Ident(name.name.clone()), span: name.span }
+                Expr {
+                    kind: ExprKind::Ident(name.name.clone()),
+                    span: name.span,
+                }
             };
             fields.push((name, value));
             if !self.eat(&Tok::Comma) && !self.eat(&Tok::Semi) && !self.peek().nl_before {

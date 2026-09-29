@@ -28,9 +28,19 @@ pub enum Desc {
     Optional(u32),
     Func,
     Future(u32),
-    Record { name: String, fields: Vec<(String, u32)>, class: bool, implements: Vec<u32> },
-    Interface { name: String },
-    Enum { name: String, variants: Vec<String> },
+    Record {
+        name: String,
+        fields: Vec<(String, u32)>,
+        class: bool,
+        implements: Vec<u32>,
+    },
+    Interface {
+        name: String,
+    },
+    Enum {
+        name: String,
+        variants: Vec<String>,
+    },
 }
 
 #[derive(Clone, Debug, Default)]
@@ -66,7 +76,10 @@ pub fn set_meta(m: Meta) {
 pub fn meta() -> &'static Meta {
     let p = META.load(Ordering::Acquire);
     if p.is_null() {
-        set_meta(Meta { types: builtin_descs(), locs: Vec::new() });
+        set_meta(Meta {
+            types: builtin_descs(),
+            locs: Vec::new(),
+        });
         return meta();
     }
     unsafe { &*p }
@@ -188,7 +201,12 @@ pub fn encode(m: &Meta) -> Vec<u8> {
                 w.u8(12);
                 w.u32(*t)
             }
-            Desc::Record { name, fields, class, implements } => {
+            Desc::Record {
+                name,
+                fields,
+                class,
+                implements,
+            } => {
                 w.u8(13);
                 w.s(name);
                 w.u8(*class as u8);
@@ -259,7 +277,12 @@ pub fn decode(b: &[u8]) -> Meta {
                 for _ in 0..ni {
                     implements.push(r.u32());
                 }
-                Desc::Record { name, fields, class, implements }
+                Desc::Record {
+                    name,
+                    fields,
+                    class,
+                    implements,
+                }
             }
             14 => Desc::Interface { name: r.s() },
             _ => {

@@ -1,3 +1,5 @@
+#![allow(clippy::missing_safety_doc)]
+
 pub mod api;
 pub mod fmt;
 pub mod fx;

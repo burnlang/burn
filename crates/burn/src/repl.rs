@@ -65,7 +65,11 @@ pub enum Outcome {
 
 impl Session {
     pub fn new() -> Session {
-        Session { source: String::new(), saved: HashMap::new(), inited: HashSet::new() }
+        Session {
+            source: String::new(),
+            saved: HashMap::new(),
+            inited: HashSet::new(),
+        }
     }
 
     pub fn eval(&mut self, input: &str) -> Outcome {
@@ -75,12 +79,20 @@ impl Session {
         let root = loader.load_source("repl", candidate.clone(), std::env::current_dir().ok());
         let loaded = loader.finish(root);
         let root_file = loaded.modules[root].file;
-        let opts = CheckOptions { skip_before: Some((root_file, offset as u32)), want_index: false, repl_echo: true };
+        let opts = CheckOptions {
+            skip_before: Some((root_file, offset as u32)),
+            want_index: false,
+            repl_echo: true,
+        };
         let compiled = match driver::check_loaded(loaded, opts) {
             Ok(c) => c,
             Err(f) => {
                 let mut msg = String::new();
-                for d in f.diags.iter().filter(|d| d.span.file != root_file || d.span.start as usize >= offset || d.severity == Severity::Error) {
+                for d in f
+                    .diags
+                    .iter()
+                    .filter(|d| d.span.file != root_file || d.span.start as usize >= offset || d.severity == Severity::Error)
+                {
                     if d.span.file == root_file && (d.span.start as usize) < offset {
                         continue;
                     }
@@ -91,7 +103,11 @@ impl Session {
         };
         let p = &compiled.program;
         let code = prepare(p);
-        let globals: Vec<u64> = p.globals.iter().map(|g| *self.saved.get(&(g.module.clone(), g.name.clone())).unwrap_or(&0)).collect();
+        let globals: Vec<u64> = p
+            .globals
+            .iter()
+            .map(|g| *self.saved.get(&(g.module.clone(), g.name.clone())).unwrap_or(&0))
+            .collect();
         let mut runner = Runner::new(code, globals);
         let root_key = p.inits.last().map(|x| x.0.clone()).unwrap_or_default();
         let mut result = Outcome::Ok;

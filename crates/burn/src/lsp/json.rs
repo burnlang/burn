@@ -113,7 +113,7 @@ impl Json {
         }
     }
 
-    pub fn to_string(&self) -> String {
+    pub fn encode(&self) -> String {
         let mut s = String::new();
         self.write(&mut s);
         s
@@ -253,7 +253,11 @@ impl<'a> P<'a> {
                 while self.i < self.b.len() && matches!(self.b[self.i], b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9') {
                     self.i += 1;
                 }
-                std::str::from_utf8(&self.b[st..self.i]).ok().and_then(|s| s.parse().ok()).map(Json::Num).ok_or_else(|| "bad value".to_string())
+                std::str::from_utf8(&self.b[st..self.i])
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .map(Json::Num)
+                    .ok_or_else(|| "bad value".to_string())
             }
         }
     }

@@ -17,6 +17,8 @@ impl Target {
     }
 }
 
+const ENTRY: &str = include_str!("entry_x86_64.s");
+
 const ARG_REGS: [&str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
 
 struct Gen<'p> {
@@ -30,7 +32,15 @@ struct Gen<'p> {
 }
 
 pub fn generate(p: &Program, meta: &[u8], t: &Target) -> String {
-    let mut g = Gen { p, t, out: String::with_capacity(1 << 20), cold: String::new(), label: 0, fid: 0, loops: Vec::new() };
+    let mut g = Gen {
+        p,
+        t,
+        out: String::with_capacity(1 << 20),
+        cold: String::new(),
+        label: 0,
+        fid: 0,
+        loops: Vec::new(),
+    };
     g.emit_all(meta);
     g.out
 }
@@ -58,7 +68,10 @@ fn inv(c: Cmp) -> Cmp {
 }
 
 fn is_const(e: &Expr) -> bool {
-    matches!(e.kind, ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Null | ExprKind::FuncRef(_))
+    matches!(
+        e.kind,
+        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Null | ExprKind::FuncRef(_)
+    )
 }
 
 fn writes_local(e: &Expr, slot: u32) -> bool {
@@ -76,7 +89,10 @@ fn writes_local(e: &Expr, slot: u32) -> bool {
 fn writes_global(e: &Expr) -> bool {
     let mut found = false;
     visit(e, &mut |x| {
-        if matches!(x.kind, ExprKind::SetGlobal(..) | ExprKind::Call(..) | ExprKind::CallIndirect(..) | ExprKind::CallIface(..) | ExprKind::Seq(..)) {
+        if matches!(
+            x.kind,
+            ExprKind::SetGlobal(..) | ExprKind::Call(..) | ExprKind::CallIndirect(..) | ExprKind::CallIface(..) | ExprKind::Seq(..)
+        ) {
             found = true;
         }
     });
@@ -86,7 +102,13 @@ fn writes_global(e: &Expr) -> bool {
 fn visit(e: &Expr, f: &mut dyn FnMut(&Expr)) {
     f(e);
     match &e.kind {
-        ExprKind::SetLocal(_, x) | ExprKind::SetGlobal(_, x) | ExprKind::Unary(_, x) | ExprKind::Conv(_, x) | ExprKind::GetField(x, _) | ExprKind::ArrLen(x) | ExprKind::BoxVal(x) => visit(x, f),
+        ExprKind::SetLocal(_, x)
+        | ExprKind::SetGlobal(_, x)
+        | ExprKind::Unary(_, x)
+        | ExprKind::Conv(_, x)
+        | ExprKind::GetField(x, _)
+        | ExprKind::ArrLen(x)
+        | ExprKind::BoxVal(x) => visit(x, f),
         ExprKind::Binary(_, a, b) | ExprKind::And(a, b) | ExprKind::Or(a, b) | ExprKind::Index(a, b, _) | ExprKind::SetField(a, _, b) => {
             visit(a, f);
             visit(b, f);
@@ -96,7 +118,12 @@ fn visit(e: &Expr, f: &mut dyn FnMut(&Expr)) {
             visit(b, f);
             visit(c, f);
         }
-        ExprKind::Call(_, xs) | ExprKind::CallIface(_, xs) | ExprKind::Rt(_, xs) | ExprKind::Spawn(_, xs) | ExprKind::NewStruct(_, xs) | ExprKind::NewArray(_, xs) => {
+        ExprKind::Call(_, xs)
+        | ExprKind::CallIface(_, xs)
+        | ExprKind::Rt(_, xs)
+        | ExprKind::Spawn(_, xs)
+        | ExprKind::NewStruct(_, xs)
+        | ExprKind::NewArray(_, xs) => {
             for x in xs {
                 visit(x, f);
             }
@@ -179,49 +206,11 @@ impl<'p> Gen<'p> {
 
     fn emit_all(&mut self, meta: &[u8]) {
         let p = self.p;
-        self.out.push_str(".intel_syntax noprefix\n");
-        self.out.push_str(".text\n");
-        let main = self.sym("main");
-        writeln!(self.out, ".globl {}", main).unwrap();
-        writeln!(self.out, "{}:", main).unwrap();
-        for s in ["push rbp", "mov rbp, rsp", "push rbx", "push r12", "push r13", "push r14", "push r15", "sub rsp, 8", "mov r13, rdi", "mov r14, rsi"] {
-            self.e(s);
-        }
-        let meta_sym = self.sym("burn_meta");
+        let plt = if self.t.macos { "" } else { "@PLT" };
+        self.out.push_str(&ENTRY.replace("{P}", self.t.prefix).replace("{PLT}", plt));
+        writeln!(self.out, ".set burn_entry, bf_{}", p.entry).unwrap();
+        let meta_sym = "burn_meta";
         let glob_sym = self.sym("burn_globals");
-        let tramp = self.sym("burn_call_trampoline");
-        self.e(&format!("lea rdi, [rip + {}]", meta_sym));
-        self.e(&format!("mov rsi, {}", meta.len()));
-        self.e(&format!("lea rdx, [rip + {}]", glob_sym));
-        self.e(&format!("mov rcx, {}", p.globals.len()));
-        self.e("mov r8, rbp");
-        self.e(&format!("lea r9, [rip + {}]", tramp));
-        self.call_rt_raw("burn_rt_init");
-        self.e("mov rdi, r13");
-        self.e("mov rsi, r14");
-        self.call_rt_raw("burn_rt_set_args");
-        self.e(&format!("call bf_{}", p.entry));
-        self.e("xor edi, edi");
-        self.call_rt_raw("burn_rt_exit");
-        for s in ["add rsp, 8", "pop r15", "pop r14", "pop r13", "pop r12", "pop rbx", "pop rbp", "ret"] {
-            self.e(s);
-        }
-        writeln!(self.out, ".globl {}", tramp).unwrap();
-        writeln!(self.out, "{}:", tramp).unwrap();
-        for s in ["push rbp", "mov rbp, rsp", "push rbx", "push r12", "push r13", "push r14", "push r15", "sub rsp, 8", "mov rax, rdi", "mov r12, rdx"] {
-            self.e(s);
-        }
-        self.lbl(".Ltramp_loop");
-        self.e("test r12, r12");
-        self.e("jz .Ltramp_done");
-        self.e("dec r12");
-        self.e("push qword ptr [rsi + r12*8]");
-        self.e("jmp .Ltramp_loop");
-        self.lbl(".Ltramp_done");
-        self.e("call rax");
-        for s in ["lea rsp, [rbp - 40]", "pop r15", "pop r14", "pop r13", "pop r12", "pop rbx", "pop rbp", "ret"] {
-            self.e(s);
-        }
         for (i, f) in p.funcs.iter().enumerate() {
             self.fid = i;
             self.func(f);
@@ -230,6 +219,8 @@ impl<'p> Gen<'p> {
         self.out.push_str(rodata);
         self.out.push('\n');
         self.out.push_str(".p2align 4\n");
+        writeln!(self.out, "burn_meta_len:\n    .quad {}", meta.len()).unwrap();
+        writeln!(self.out, "burn_nglobals:\n    .quad {}", p.globals.len()).unwrap();
         writeln!(self.out, "{}:", meta_sym).unwrap();
         self.bytes(meta);
         for (i, s) in p.strings.iter().enumerate() {
@@ -451,7 +442,17 @@ impl<'p> Gen<'p> {
     }
 
     fn is_simple(e: &Expr) -> bool {
-        matches!(e.kind, ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Null | ExprKind::FuncRef(_) | ExprKind::Local(_) | ExprKind::Global(_))
+        matches!(
+            e.kind,
+            ExprKind::Int(_)
+                | ExprKind::Float(_)
+                | ExprKind::Bool(_)
+                | ExprKind::Str(_)
+                | ExprKind::Null
+                | ExprKind::FuncRef(_)
+                | ExprKind::Local(_)
+                | ExprKind::Global(_)
+        )
     }
 
     fn operands(&mut self, a: &Expr, b: &Expr) {
@@ -777,6 +778,11 @@ impl<'p> Gen<'p> {
     fn index_cold(&mut self, label: &str, arr: &str, loc: u32) {
         let sym = self.sym(RtFn::ErrIndex.symbol());
         let call = if self.t.macos { format!("call {}", sym) } else { format!("call {}@PLT", sym) };
-        writeln!(self.cold, "{}:\n    mov rsi, rcx\n    mov rdx, qword ptr [{} + 16]\n    mov edi, {}\n    and rsp, -16\n    {}\n    ud2", label, arr, loc, call).unwrap();
+        writeln!(
+            self.cold,
+            "{}:\n    mov rsi, rcx\n    mov rdx, qword ptr [{} + 16]\n    mov edi, {}\n    and rsp, -16\n    {}\n    ud2",
+            label, arr, loc, call
+        )
+        .unwrap();
     }
 }

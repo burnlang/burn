@@ -108,11 +108,6 @@ pub fn keyword(s: &str) -> Option<Tok> {
     })
 }
 
-pub const KEYWORDS: &[&str] = &[
-    "fun", "var", "const", "def", "if", "else", "while", "for", "in", "return", "break", "continue", "true", "false", "null",
-    "import", "pub", "priv", "async", "await", "is", "as",
-];
-
 pub fn describe(t: &Tok) -> String {
     match t {
         Tok::Ident(s) => format!("identifier `{}`", s),
@@ -202,7 +197,16 @@ pub fn lex(src: &str, file: FileId) -> (Vec<Token>, Vec<Diagnostic>) {
 }
 
 pub fn lex_range(src: &str, file: FileId, start: usize, end: usize) -> (Vec<Token>, Vec<Diagnostic>) {
-    let mut l = Lexer { src, bytes: src.as_bytes(), pos: start, end, file, tokens: Vec::new(), diags: Vec::new(), nl: true };
+    let mut l = Lexer {
+        src,
+        bytes: src.as_bytes(),
+        pos: start,
+        end,
+        file,
+        tokens: Vec::new(),
+        diags: Vec::new(),
+        nl: true,
+    };
     l.run();
     (l.tokens, l.diags)
 }
@@ -222,7 +226,11 @@ impl<'a> Lexer<'a> {
 
     fn push(&mut self, kind: Tok, start: usize) {
         let span = self.span(start);
-        self.tokens.push(Token { kind, span, nl_before: self.nl });
+        self.tokens.push(Token {
+            kind,
+            span,
+            nl_before: self.nl,
+        });
         self.nl = false;
     }
 
@@ -241,7 +249,11 @@ impl<'a> Lexer<'a> {
             self.skip_trivia();
             if self.pos >= self.end {
                 let p = self.end;
-                self.tokens.push(Token { kind: Tok::Eof, span: Span::new(self.file, p, p), nl_before: true });
+                self.tokens.push(Token {
+                    kind: Tok::Eof,
+                    span: Span::new(self.file, p, p),
+                    nl_before: true,
+                });
                 return;
             }
             let start = self.pos;
@@ -406,9 +418,7 @@ impl<'a> Lexer<'a> {
                 self.pos += 1;
             }
         }
-        if matches!(self.peek(0), b'e' | b'E')
-            && (self.peek(1).is_ascii_digit() || (matches!(self.peek(1), b'+' | b'-') && self.peek(2).is_ascii_digit()))
-        {
+        if matches!(self.peek(0), b'e' | b'E') && (self.peek(1).is_ascii_digit() || (matches!(self.peek(1), b'+' | b'-') && self.peek(2).is_ascii_digit())) {
             float = true;
             self.pos += 2;
             while self.pos < self.end && self.bytes[self.pos].is_ascii_digit() {

@@ -131,7 +131,10 @@ pub struct Program {
 
 impl Program {
     pub fn meta(&self) -> burn_runtime::meta::Meta {
-        burn_runtime::meta::Meta { types: self.types.descs(), locs: self.locs.clone() }
+        burn_runtime::meta::Meta {
+            types: self.types.descs(),
+            locs: self.locs.clone(),
+        }
     }
 }
 
@@ -141,10 +144,23 @@ impl Expr {
     }
 
     pub fn int(v: i64) -> Expr {
-        Expr { kind: ExprKind::Int(v), ty: crate::types::T_INT }
+        Expr {
+            kind: ExprKind::Int(v),
+            ty: crate::types::T_INT,
+        }
     }
 
     pub fn has_side_effects(&self) -> bool {
-        !matches!(self.kind, ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Null | ExprKind::Local(_) | ExprKind::Global(_) | ExprKind::FuncRef(_))
+        !matches!(
+            self.kind,
+            ExprKind::Int(_)
+                | ExprKind::Float(_)
+                | ExprKind::Bool(_)
+                | ExprKind::Str(_)
+                | ExprKind::Null
+                | ExprKind::Local(_)
+                | ExprKind::Global(_)
+                | ExprKind::FuncRef(_)
+        )
     }
 }

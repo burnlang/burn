@@ -16,11 +16,21 @@ pub struct Diagnostic {
 
 impl Diagnostic {
     pub fn error(span: Span, message: impl Into<String>) -> Diagnostic {
-        Diagnostic { severity: Severity::Error, message: message.into(), span, notes: Vec::new() }
+        Diagnostic {
+            severity: Severity::Error,
+            message: message.into(),
+            span,
+            notes: Vec::new(),
+        }
     }
 
     pub fn warning(span: Span, message: impl Into<String>) -> Diagnostic {
-        Diagnostic { severity: Severity::Warning, message: message.into(), span, notes: Vec::new() }
+        Diagnostic {
+            severity: Severity::Warning,
+            message: message.into(),
+            span,
+            notes: Vec::new(),
+        }
     }
 
     pub fn note(mut self, n: impl Into<String>) -> Diagnostic {
@@ -51,9 +61,23 @@ pub fn render(sm: &SourceMap, d: &Diagnostic, color: bool) -> String {
             let text = f.line_text(line);
             out.push_str(&format!("{}{:>w$} |{}\n", blue, "", reset, w = gutter));
             out.push_str(&format!("{}{} |{} {}\n", blue, line, reset, text));
-            let width = if eline == line { (ecol.saturating_sub(col)).max(1) } else { (text.chars().count() + 1).saturating_sub(col).max(1) };
+            let width = if eline == line {
+                (ecol.saturating_sub(col)).max(1)
+            } else {
+                (text.chars().count() + 1).saturating_sub(col).max(1)
+            };
             let pad: String = text.chars().take(col - 1).map(|ch| if ch == '\t' { '\t' } else { ' ' }).collect();
-            out.push_str(&format!("{}{:>w$} |{} {}{}{}{}\n", blue, "", reset, pad, c, "^".repeat(width), reset, w = gutter));
+            out.push_str(&format!(
+                "{}{:>w$} |{} {}{}{}{}\n",
+                blue,
+                "",
+                reset,
+                pad,
+                c,
+                "^".repeat(width),
+                reset,
+                w = gutter
+            ));
         }
         for n in &d.notes {
             out.push_str(&format!("{}{:>w$} = {}note: {}\n", blue, "", reset, n, w = gutter));

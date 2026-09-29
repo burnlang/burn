@@ -11,14 +11,22 @@ pub struct Span {
 
 impl Span {
     pub fn new(file: FileId, start: usize, end: usize) -> Span {
-        Span { file, start: start as u32, end: end as u32 }
+        Span {
+            file,
+            start: start as u32,
+            end: end as u32,
+        }
     }
 
     pub fn to(self, other: Span) -> Span {
         if other.file != self.file {
             return self;
         }
-        Span { file: self.file, start: self.start.min(other.start), end: self.end.max(other.end) }
+        Span {
+            file: self.file,
+            start: self.start.min(other.start),
+            end: self.end.max(other.end),
+        }
     }
 
     pub fn contains(&self, offset: usize) -> bool {
