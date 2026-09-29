@@ -11,6 +11,8 @@
 - Finish the VSCode Burn LSP: `burn lsp` plus the extension in `editors/vscode`
 - Add private and public for imports: `pub` and `priv`
 - Add async: `async fun`, `Future<T>` and `await`
+- Toolchain installer with `burni`, `burnc`, `burnfmt` and `burn-lsp`
+- Formatter written in Burn (`tools/burnfmt`)
 
 ## Next
 
@@ -20,4 +22,5 @@
 - `when`/`match` expressions
 - Precise (non-conservative) garbage collection and generational allocation
 - Package manager
-- Self-hosting
+- Self-hosting (the formatter is the first tool written in Burn)
+- Windows installer

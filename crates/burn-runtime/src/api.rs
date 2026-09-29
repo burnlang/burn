@@ -158,6 +158,19 @@ pub fn str_chars(s: u64) -> u64 {
     array_of_strings(&parts)
 }
 
+pub fn char_class(s: u64, kind: u64) -> u64 {
+    let st = str_ref(s);
+    if st.is_empty() {
+        return 0;
+    }
+    b(st.chars().all(|c| match kind {
+        0 => c.is_alphabetic(),
+        1 => c.is_ascii_digit(),
+        2 => c.is_alphanumeric(),
+        _ => c.is_whitespace(),
+    }))
+}
+
 pub fn str_code(s: u64) -> u64 {
     match str_ref(s).chars().next() {
         Some(c) => c as u64,
@@ -215,6 +228,23 @@ pub fn print(s: u64) -> u64 {
     v.push(b'\n');
     io::write_out(&v);
     0
+}
+
+pub fn print_err(s: u64) -> u64 {
+    io::flush();
+    use std::io::Write;
+    let mut e = std::io::stderr().lock();
+    let _ = e.write_all(str_bytes(s));
+    let _ = e.write_all(b"\n");
+    0
+}
+
+pub fn read_stdin() -> u64 {
+    use std::io::Read;
+    io::flush();
+    let mut buf = Vec::new();
+    let _ = std::io::stdin().lock().read_to_end(&mut buf);
+    string(&String::from_utf8_lossy(&buf))
 }
 
 pub fn print_raw(s: u64) -> u64 {

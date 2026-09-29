@@ -259,8 +259,94 @@ fn cmd_dump(file: &Path, what: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn tool_name() -> String {
+    std::env::args_os()
+        .next()
+        .and_then(|a| Path::new(&a).file_stem().map(|s| s.to_string_lossy().to_lowercase()))
+        .unwrap_or_default()
+}
+
+fn burni_usage() {
+    println!(
+        "burni {VERSION} - the Burn interpreter
+
+Usage:
+  burni                       start the interactive REPL
+  burni <file.bn> [args...]   type-check and run a program on the bytecode VM
+  burni -e '<code>'           evaluate code from the command line
+  burni -v | --version        print the version"
+    );
+}
+
+fn burnc_usage() {
+    println!(
+        "burnc {VERSION} - the Burn compiler
+
+Usage:
+  burnc <file.bn> [options]   compile to a standalone native executable
+      -o, --output <path>     output file (default: file name without .bn)
+      --target <native|js>    native executable (default) or JavaScript
+      --emit-asm <path>       also write the generated x86-64 assembly
+      --no-strip              keep symbols in the executable
+  burnc --check <files...>    type-check without producing output
+  burnc -v | --version        print the version"
+    );
+}
+
+fn burni(args: &[String]) -> ExitCode {
+    match args.first().map(|s| s.as_str()) {
+        None => repl::run(),
+        Some("-h") | Some("--help") => {
+            burni_usage();
+            ExitCode::SUCCESS
+        }
+        Some("-v") | Some("--version") => {
+            println!("burni {}", VERSION);
+            ExitCode::SUCCESS
+        }
+        Some("-e") | Some("--eval") => match args.get(1) {
+            Some(code) => cmd_eval(code),
+            None => {
+                eprintln!("error: no code given");
+                ExitCode::from(2)
+            }
+        },
+        Some(f) if f.starts_with('-') => {
+            eprintln!("error: unknown option `{}`", f);
+            burni_usage();
+            ExitCode::from(2)
+        }
+        Some(f) => cmd_run(Path::new(f), args[1..].to_vec(), false),
+    }
+}
+
+fn burnc(args: &[String]) -> ExitCode {
+    match args.first().map(|s| s.as_str()) {
+        None | Some("-h") | Some("--help") => {
+            burnc_usage();
+            if args.is_empty() {
+                ExitCode::from(2)
+            } else {
+                ExitCode::SUCCESS
+            }
+        }
+        Some("-v") | Some("--version") => {
+            println!("burnc {}", VERSION);
+            ExitCode::SUCCESS
+        }
+        Some("--check") => cmd_check(&args[1..]),
+        _ => cmd_build(args),
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    match tool_name().as_str() {
+        "burni" => return burni(&args),
+        "burnc" => return burnc(&args),
+        "burn-lsp" => return lsp::run(),
+        _ => {}
+    }
     if args.is_empty() {
         usage();
         return ExitCode::from(1);

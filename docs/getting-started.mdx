@@ -8,17 +8,14 @@ order: 1
 
 ## Install
 
-Burn is written in Rust. You need a Rust toolchain (1.85 or newer). Building native executables also needs a C
-toolchain (`cc`), which provides the assembler and linker.
-
 ```sh
-git clone https://github.com/burnlang/burn.git
-cd burn
-cargo build --release
-./target/release/burn version
+curl -fsSL https://raw.githubusercontent.com/burnlang/burn/master/install.sh | sh
 ```
 
-Copy `target/release/burn` somewhere on your `PATH`, or run `cargo install --path crates/burn`.
+This installs the whole toolchain into `~/.burn/bin`: `burni` (interpreter), `burnc` (compiler), `burnfmt`
+(formatter), `burn-lsp` (language server) and `burn`, which combines them all. Building from source needs Rust
+1.85 or newer, and native executables need a C toolchain (`cc`). See [installation](./tooling/installation.mdx)
+for options and other platforms.
 
 ## Hello world
 
@@ -27,7 +24,7 @@ print("Hello, World!")
 ```
 
 ```sh
-burn hello.bn
+burni hello.bn
 ```
 
 Top level statements run from top to bottom. If the file defines `fun main()`, it is called after the top level code.
@@ -59,9 +56,9 @@ fun main() {
 ## Build a native executable
 
 ```sh
-burn build todo.bn          # produces ./todo
+burnc todo.bn              # produces ./todo
 ./todo
-burn build todo.bn -o bin/todo --emit-asm todo.s
+burnc todo.bn -o bin/todo --emit-asm todo.s
 ```
 
 The executable is small (a few hundred kilobytes) and does not need Burn to be installed.
@@ -69,7 +66,7 @@ The executable is small (a few hundred kilobytes) and does not need Burn to be i
 ## Try things in the REPL
 
 ```text
-$ burn repl
+$ burni
 >>> var names = ["ada", "grace"]
 >>> names.length
 2
@@ -79,3 +76,15 @@ $ burn repl
 >>> shout(names[1])
 GRACE!
 ```
+
+## Format your code
+
+```sh
+burnfmt -w todo.bn
+```
+
+## Next steps
+
+- [The toolchain](./tooling/toolchain.mdx) explains `burni`, `burnc`, `burnfmt` and `burn-lsp`
+- [Syntax tour](./language/syntax.mdx)
+- [Editor support](./tooling/editors.mdx)

@@ -1,8 +1,8 @@
-# Burnlang
-
 <p align="center">
-    <img src="https://github.com/s42yt/assets/blob/master/assets/burnlang/burn-logo.png" alt="Burn Logo">
+    <img src="assets/logo.svg" alt="Burn logo" width="160">
 </p>
+
+<h1 align="center">Burn</h1>
 
 Burn is an easy-to-use, statically typed, general-purpose programming language with smart casts.
 Burn is written in **Rust** and **x86-64 assembly**: programs run instantly on a bytecode VM
@@ -64,32 +64,38 @@ fun main() {
 
 ## Installation
 
-Requirements: Rust 1.85 or newer. Building native executables needs a C toolchain (`cc`) for assembling and
-linking; native output currently targets x86-64 Linux and macOS.
-
 ```sh
-git clone https://github.com/burnlang/burn.git
-cd burn
-cargo build --release
-./target/release/burn version
+curl -fsSL https://raw.githubusercontent.com/burnlang/burn/master/install.sh | sh
 ```
 
-## Usage
+The installer puts the whole toolchain into `~/.burn/bin` and adds it to your `PATH`. It builds from source when no
+prebuilt release is available, which needs Rust 1.85 or newer (`--install-rust` sets that up for you). Native
+executables need a C toolchain (`cc`) and currently target x86-64 Linux and macOS.
+See [docs/tooling/installation.mdx](docs/tooling/installation.mdx) for all options, updating and uninstalling.
+
+## The toolchain
+
+| Command | What it does |
+| --- | --- |
+| `burni` | the interpreter: runs programs instantly on the bytecode VM, starts the REPL without arguments |
+| `burnc` | the compiler: standalone native executables, or JavaScript with `--target js` |
+| `burnfmt` | the code formatter, written in Burn itself |
+| `burn-lsp` | the language server for editors |
+| `burn` | all of the above as subcommands |
 
 ```sh
-burn app.bn                     # run instantly (bytecode VM)
+burni app.bn                    # run instantly
+burni                           # REPL
+burni -e 'print(6 * 7)'         # run a snippet
+burnc app.bn                    # standalone executable ./app
+burnc app.bn -o bin/app --emit-asm app.s
+burnc app.bn --target js        # Node.js script app.js
+burnc --check app.bn            # type-check only
+burnfmt -w app.bn               # format in place
 burn run --native app.bn        # compile to machine code and run
-burn build app.bn               # standalone executable ./app
-burn build app.bn -o bin/app --emit-asm app.s
-burn build app.bn --target js   # Node.js script app.js
-burn check app.bn               # type-check only
-burn fmt -w app.bn              # format in place
-burn repl                       # interactive session
-burn eval 'print(6 * 7)'        # run a snippet
-burn lsp                        # language server for editors
 ```
 
-The older flags `-r`, `-e`, `-exe` and `-d` still work.
+See [the toolchain](docs/tooling/toolchain.mdx) and the [command line reference](docs/tooling/cli.mdx).
 
 ## Language at a glance
 
@@ -214,6 +220,9 @@ See [`examples/`](examples/) and the test programs in [`tests/cases/`](tests/cas
   - `js/`: JavaScript backend
   - `lsp/`, `fmt.rs`, `repl.rs`: tooling
 - `crates/burn-runtime/`: runtime shared by the VM and native executables (GC, strings, collections, JSON, HTTP, tasks)
+- `tools/burnfmt/`: the formatter, written in Burn
+- `install.sh`: the toolchain installer
+- `assets/`: the logo
 - `lib/std/`: the standard library, written in Burn
 - `editors/vscode/`: VS Code extension
 - `docs/`: documentation
@@ -222,6 +231,7 @@ See [`examples/`](examples/) and the test programs in [`tests/cases/`](tests/cas
 ## Development
 
 ```sh
+./install.sh           # build and install the toolchain from this checkout
 cargo test            # runs every example on the VM, natively and as JavaScript
 cargo clippy --all-targets
 ```

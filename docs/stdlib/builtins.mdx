@@ -14,8 +14,10 @@ Built-ins can be called as functions or, when the first argument is the receiver
 | Function | Description |
 | --- | --- |
 | `print(values...)` | prints the values separated by spaces and a newline |
+| `eprint(values...)` | the same, to standard error |
 | `write(value)` | prints without a newline |
 | `input(prompt = "")` | reads a line from standard input |
+| `readStdin()` | reads everything left on standard input |
 
 ## Conversion
 
@@ -32,7 +34,8 @@ Built-ins can be called as functions or, when the first argument is the receiver
 `len`, `upper`, `lower`, `trim`, `split(s, sep)`, `join(array, sep)`, `substring(s, start, end?)`,
 `charAt(s, i)`, `contains(s, part)`, `indexOf(s, part)`, `replace(s, from, to)`, `startsWith`, `endsWith`,
 `repeat(s, n)`, `chars(s)`, `reverse(s)`, `charCode(s)`, `fromCharCode(n)`. Indexing (`s[0]`) returns a
-one character string. Lengths and indexes count Unicode characters.
+one character string. `isLetter`, `isDigit`, `isAlphanumeric` and `isWhitespace` check that every character of
+a non-empty string belongs to the class (Unicode letters and numbers; `isDigit` accepts `0` to `9`). Lengths and indexes count Unicode characters.
 
 ## Arrays
 
