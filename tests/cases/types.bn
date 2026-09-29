@@ -1,0 +1,67 @@
+def type Person {
+    name: string,
+    age: int,
+    active: bool
+}
+
+def type Point {
+    float x
+    float y
+}
+
+def type Config {
+    string host = "localhost"
+    int port = 8080
+    [string] tags
+}
+
+def type ID = int
+
+def enum Color { Red, Green, Blue }
+
+fun createPerson(name: string, age: int): Person {
+    return {
+        name: name,
+        age: age,
+        active: true
+    }
+}
+
+fun describe(c: Color): string {
+    if (c == Color.Red) {
+        return "warm"
+    }
+    return "cool"
+}
+
+var person = createPerson("John", 30)
+print("Person name: " + person.name)
+print(person)
+
+var p = { x: 1.5, y: 2 }
+print(p, p.x + p.y)
+
+var anon = { title: "Burn", version: 2 }
+print(anon, anon.title)
+
+var c = Config { port: 9000 }
+print(c.host, c.port, len(c.tags))
+push(c.tags, "fast")
+print(c)
+
+ID id = 42
+print(id + 1)
+
+var color = Color.Blue
+print(color, describe(color), describe(Color.Red), color == Color.Blue, Color.Green as int)
+
+var a = Point(1, 2)
+var b = Point { x: 1, y: 2 }
+print(a == b, a != Point(3, 4))
+a.x = 10
+print(a, a == b)
+
+var people = [createPerson("A", 1), createPerson("B", 2)]
+people[1].age += 40
+print(people[1].age, people)
+print(typeOf(person), typeOf(p), typeOf(anon), typeOf(people), typeOf(color))

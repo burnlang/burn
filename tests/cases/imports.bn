@@ -1,0 +1,11 @@
+import (
+    "../modules/geometry.bn"
+    "std/math"
+    "strings"
+)
+
+var a = make(3, 4)
+var b = make(1, 1)
+print(length(a), add(a, b), createdCount(), helper())
+print(PI, Math.gcd(48, 18), Math.factorial(5), Math.isPrime(97), Math.clamp(15.0, 0.0, 10.0))
+print(padLeft("7", 3, "0"), capitalize("burn"), words("  many   spaces here "), isDigits("123"), countOf("banana", "a"))

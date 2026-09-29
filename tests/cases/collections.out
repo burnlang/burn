@@ -1,0 +1,22 @@
+[5, 3, 8, 1, 7, 2] 6 6
+[1, 2, 3, 5, 7, 8] 1 8
+[8, 7, 5, 3, 2, 1] true 3 false
+1 [8, 7, 5, 3, 2]
+8 [99, 7, 5, 3, 2]
+[7, 5] 99-7-5-3-2 [1, 2, 3]
+["a", "b", "c"] a+b+c
+[[1, 2], [30, 4]] 30
+{"alice": 30, "bob": 25, "carol": 41} 25 3 true false
+["alice", "bob", "carol"] [30, 25, 41] ["alice", "bob", "carol"]
+{"alice": 30, "carol": 41} -1
+alice is 30
+carol is 41
+0 x
+1 y
+h.é.l.l.o.
+{"math": [90, 80, 70]}
+{"the": 3, "cat": 1, "dog": 1, "end": 1}
+[] 0
+99 -1
+true
+{"name": "burn", "version": 2}

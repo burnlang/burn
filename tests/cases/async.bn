@@ -1,0 +1,30 @@
+async fun compute(n: int): int {
+    sleep(20)
+    return n * n
+}
+
+async fun greet(name: string): string {
+    return "hello " + name
+}
+
+async fun fire() {
+    print("fired")
+}
+
+fun main() {
+    var a = compute(3)
+    var b = compute(4)
+    var c = greet("async")
+    print(await a + await b)
+    print(await c)
+    var futures: [Future<int>] = []
+    for i in 1..=5 {
+        push(futures, compute(i))
+    }
+    var total = 0
+    for f in futures {
+        total += await f
+    }
+    print("total", total)
+    await fire()
+}

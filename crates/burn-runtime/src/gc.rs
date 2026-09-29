@@ -6,7 +6,12 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-const MIN_THRESHOLD: usize = 32 * 1024 * 1024;
+const DEFAULT_THRESHOLD: usize = 32 * 1024 * 1024;
+
+fn min_threshold() -> usize {
+    static T: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *T.get_or_init(|| std::env::var("BURN_GC_THRESHOLD").ok().and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_THRESHOLD))
+}
 
 struct Heap {
     objs: HashSet<usize, FxBuild>,
@@ -22,7 +27,7 @@ struct Heap {
 static HEAP: Mutex<Heap> = Mutex::new(Heap {
     objs: HashSet::with_hasher(FxBuild),
     live: 0,
-    threshold: MIN_THRESHOLD,
+    threshold: 0,
     stack_base: 0,
     ranges: Vec::new(),
     vm_stacks: Vec::new(),
@@ -103,6 +108,9 @@ pub fn root(v: u64) -> RootGuard {
 pub fn alloc(kind: u8, tid: u32, size: usize) -> u64 {
     let size = (size + 15) & !15;
     let mut h = heap();
+    if h.threshold == 0 {
+        h.threshold = min_threshold();
+    }
     if SINCE.load(Ordering::Relaxed) >= h.threshold
         && h.stack_base != 0
         && TASKS.load(Ordering::SeqCst) == 0
@@ -260,9 +268,12 @@ fn collect(h: &mut Heap) {
         }
     });
     h.live = live;
-    h.threshold = MIN_THRESHOLD.max(live);
+    h.threshold = min_threshold().max(live);
     h.collections += 1;
     SINCE.store(0, Ordering::Relaxed);
+    if std::env::var_os("BURN_GC_STATS").is_some() {
+        eprintln!("[gc] collection {} live objects {} live bytes {}", h.collections, h.objs.len(), live);
+    }
 }
 
 unsafe fn free_obj(p: usize) {

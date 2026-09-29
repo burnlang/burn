@@ -1,0 +1,16 @@
+var s = "Hello, World"
+print(len(s), s.length, upper(s), lower(s), s.upper())
+print(substring(s, 0, 5), substring(s, 7), charAt(s, 4), s[0], s[s.length - 1])
+print(contains(s, "World"), indexOf(s, "o"), indexOf(s, "zzz"), startsWith(s, "Hell"), endsWith(s, "d"))
+print(replace(s, "l", "L"), trim("   padded  "), repeat("ab", 3), split("a b  c", " "))
+print(chars("abc"), charCode("A"), fromCharCode(66), reverse("burn"))
+print(toInt("42") + 1, toFloat("2.5") * 2, toString(3.5) + "!", str(true), isInt("12"), isInt("1.5"), isNumber("1.5"))
+print("a" < "b", "apple" > "apple pie", "x" == "x", "x" != "y")
+var name = "Burn"
+var version = 2
+print("${name} v${version}.0 has ${len(name)} letters and ${version * 10}% more ${upper(name)}")
+print("escapes: tab[\t] quote[\"] backslash[\\] dollar[\$] unicode[\u{2764}]")
+var multi = "line1\nline2"
+print(split(multi, "\n"))
+var unicode = "héllo wörld"
+print(len(unicode), upper(unicode), unicode[1], substring(unicode, 6, 11))

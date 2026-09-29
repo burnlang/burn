@@ -1,0 +1,25 @@
+Hello 3 2.5 true 42 10 null
+sum: 45 mixed: 7.5 div: 3 fdiv: 3.5 mod: 2
+neg: -3 prec: 14 20
+template: Hello, 4 items, ratio 5.0
+concat 3 2.5 true
+big
+no parens needed
+while 0
+while 1
+while 2
+for 0
+for 1
+for 2
+range 0
+range 1
+range 2
+inclusive 1
+inclusive 2
+inclusive 3
+odd total 25
+compound 0
+float from int 2.0 3.0 3 -3 3 -2 2
+0.3333333333333333 0.30000000000000004 1e21 100.0 -0.5 1e-7 123456.789 0.0025
+-9223372036854775808 31 1000000
+false true false true

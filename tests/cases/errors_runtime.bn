@@ -1,0 +1,8 @@
+fun get(items: [int], i: int): int {
+    return items[i]
+}
+
+print("before")
+print(get([1, 2, 3], 1))
+print(get([1, 2, 3], 5))
+print("never")

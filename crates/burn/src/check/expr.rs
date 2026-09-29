@@ -338,7 +338,7 @@ impl<'a> Checker<'a> {
             }
             A::Lambda(f) => self.lambda(f),
             A::NotNull(x) => {
-                let h = self.expr(x, None);
+                let h = self.expr_raw(x);
                 match self.types.get(h.ty).clone() {
                     Ty::Optional(inner) => {
                         let l = self.loc_expr(e.span);
@@ -526,10 +526,11 @@ impl<'a> Checker<'a> {
     fn binary(&mut self, op: AOp, l: &ast::Expr, r: &ast::Expr, span: Span, expected: Option<TyId>) -> Expr {
         match op {
             AOp::Eq | AOp::Ne => {
-                let (a, b) = (self.expr(l, None), None::<Expr>);
-                let _ = b;
+                let r_null = matches!(r.kind, A::Null);
+                let l_null = matches!(l.kind, A::Null);
+                let a = if r_null { self.expr_raw(l) } else { self.expr(l, None) };
                 let rexp = if a.ty == T_NULL || a.ty == T_ERROR { None } else { Some(a.ty) };
-                let b = self.expr(r, rexp);
+                let b = if l_null { self.expr_raw(r) } else { self.expr(r, rexp) };
                 self.equality(op == AOp::Eq, a, b, span)
             }
             AOp::Lt | AOp::Gt | AOp::Le | AOp::Ge => {
@@ -980,6 +981,7 @@ impl<'a> Checker<'a> {
                     return self.construct(t, args, span, callee.span);
                 }
                 if let Some(e) = self.builtin(name, None, args, span, expected) {
+                    self.hover(callee.span, format!("(builtin) {}", builtins::signature(name)));
                     return e;
                 }
                 self.ident_expr(name, callee.span);
@@ -1625,7 +1627,6 @@ impl<'a> Checker<'a> {
             return Expr::new(ExprKind::Binary(BinOp::ICmp(Cmp::Eq), Box::new(h), Box::new(Expr::new(ExprKind::Null, from))), T_BOOL);
         }
         if from == t {
-            self.warn(span, "this check is always true");
             return if h.has_side_effects() { Expr::new(ExprKind::Seq(vec![Stmt::Expr(h)], Box::new(Expr::new(ExprKind::Bool(true), T_BOOL))), T_BOOL) } else { Expr::new(ExprKind::Bool(true), T_BOOL) };
         }
         let ok = match self.types.get(from).clone() {
@@ -1642,8 +1643,36 @@ impl<'a> Checker<'a> {
         Expr::new(ExprKind::Rt(RtFn::IsType, vec![h, Self::tid(from), Self::tid(t)]), T_BOOL)
     }
 
+    pub fn raw_var(&mut self, e: &ast::Expr) -> Option<Expr> {
+        if let A::Ident(n) = &e.kind {
+            if let Some(l) = self.lookup_local(n) {
+                self.def_link(e.span, l.span);
+                let t = self.ctx().locals[l.slot as usize];
+                return Some(Expr::new(ExprKind::Local(l.slot), t));
+            }
+            if self.self_field(n).is_some() {
+                return None;
+            }
+            let m = self.cur_module();
+            if let Some(Entry { sym: ValSym::Global(g), span, .. }) = self.lookup_value_entry(m, n) {
+                if let Some(t) = self.globals[g as usize].ty {
+                    self.def_link(e.span, span);
+                    return Some(Expr::new(ExprKind::Global(g), t));
+                }
+            }
+        }
+        None
+    }
+
+    pub fn expr_raw(&mut self, e: &ast::Expr) -> Expr {
+        match self.raw_var(e) {
+            Some(h) => h,
+            None => self.expr(e, None),
+        }
+    }
+
     fn is_expr(&mut self, x: &ast::Expr, te: &TypeExpr, span: Span) -> Expr {
-        let h = self.expr(x, None);
+        let h = self.expr_raw(x);
         let t = self.resolve_type(te);
         self.is_check(h, t, span)
     }

@@ -1,0 +1,12 @@
+Person name: John
+Person { name: "John", age: 30, active: true }
+Point { x: 1.5, y: 2.0 } 3.5
+{ title: "Burn", version: 2 } Burn
+localhost 9000 0
+Config { host: "localhost", port: 9000, tags: ["fast"] }
+43
+Blue cool warm true 1
+true true
+Point { x: 10.0, y: 2.0 } false
+42 [Person { name: "A", age: 1, active: true }, Person { name: "B", age: 42, active: true }]
+Person Point {title: string, version: int} [Person] Color

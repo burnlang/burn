@@ -1,0 +1,70 @@
+fun add(a: int, b: int): int {
+    return a + b
+}
+
+fun greet(string name, int times) {
+    for i in 0..times {
+        print("hi " + name)
+    }
+}
+
+fun square(x: float) {
+    return x * x
+}
+
+fun fact(n: int): int {
+    if (n <= 1) {
+        return 1
+    }
+    return n * fact(n - 1)
+}
+
+fun fib(n: int): int {
+    if (n < 2) {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+fun apply(f: fun(int): int, value: int): int {
+    return f(value)
+}
+
+fun double(x: int): int {
+    return x * 2
+}
+
+fun maybeName(flag: bool) {
+    if (flag) {
+        return "named"
+    }
+    return null
+}
+
+fun isEven(n: int): bool {
+    return n % 2 == 0
+}
+
+fun shout(s: string): string {
+    return upper(s) + "!"
+}
+
+print(add(2, 3))
+greet("burn", 2)
+print(square(3))
+print(fact(10), fib(20))
+print(apply(double, 21))
+var triple = fun(x: int): int {
+    return x * 3
+}
+print(apply(triple, 5), triple(2))
+var ops: [fun(int, int): int] = [add, fun(a: int, b: int): int { return a * b }]
+for op in ops {
+    print(op(6, 7))
+}
+var n = maybeName(true)
+if (n != null) {
+    print(n.length)
+}
+print(maybeName(false))
+print(10.isEven(), "burn".shout(), "abc".upper().lower())

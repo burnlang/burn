@@ -1,0 +1,7 @@
+fun ok(): int {
+    return 1
+}
+
+fun broken( {
+    return 2
+}

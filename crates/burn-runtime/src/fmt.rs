@@ -11,11 +11,10 @@ pub fn float_str(f: f64) -> String {
     if f.fract() == 0.0 && f.abs() < 1e16 {
         return format!("{:.1}", f);
     }
-    let s = format!("{}", f);
-    if s.len() > 24 {
+    if f.abs() >= 1e16 || (f != 0.0 && f.abs() < 1e-6) {
         return format!("{:e}", f);
     }
-    s
+    format!("{}", f)
 }
 
 pub fn quote(s: &str, out: &mut String) {

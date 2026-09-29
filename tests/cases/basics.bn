@@ -1,0 +1,70 @@
+String greeting = "Hello"
+int count = 3
+float ratio = 2.5
+bool ready = true
+var inferred = 42
+const LIMIT = 10
+string? nothing = null
+
+print(greeting, count, ratio, ready, inferred, LIMIT, nothing)
+print("sum:", count + inferred, "mixed:", count * ratio, "div:", 7 / 2, "fdiv:", 7 / 2.0, "mod:", 17 % 5)
+print("neg:", -count, "prec:", 2 + 3 * 4, (2 + 3) * 4)
+print("template: ${greeting}, ${count + 1} items, ratio ${ratio * 2}")
+print("concat " + count + " " + ratio + " " + ready)
+
+var x = 7
+if (x > 5) {
+    print("big")
+} else if (x == 5) {
+    print("five")
+} else {
+    print("small")
+}
+
+if x < 10 {
+    print("no parens needed")
+}
+
+var i = 0
+while (i < 3) {
+    print("while", i)
+    i += 1
+}
+
+for (var j = 0; j < 3; j = j + 1) {
+    print("for", j)
+}
+
+for k in 0..3 {
+    print("range", k)
+}
+
+for k in 1..=3 {
+    print("inclusive", k)
+}
+
+var total = 0
+for n in 0..100 {
+    if (n % 2 == 0) {
+        continue
+    }
+    if (n > 10) {
+        break
+    }
+    total += n
+}
+print("odd total", total)
+
+var z = 10
+z -= 3
+z *= 2
+z /= 4
+z %= 3
+print("compound", z)
+
+float f = 1
+f += 1
+print("float from int", f, 3 as float, 3.99 as int, -3.99 as int, round(2.5), floor(-1.5), ceil(1.2))
+print(1.0 / 3.0, 0.1 + 0.2, 1e21, 100.0, -0.5, 0.0000001, 123456.789, 2.5e-3)
+print(9223372036854775807 + 1, 0x1F, 1_000_000)
+print(true && false, true || false, !true, 1 < 2 && 2 < 3)

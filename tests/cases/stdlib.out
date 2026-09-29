@@ -1,0 +1,14 @@
+2024-02-28 2024-02-28 true false 29
+2024-03-01 2024-01-01 2
+0 Thursday true true
+2000-01-01
+true true
+01:02:03 01:02:03.045 3723045 01:02:03
+10:20:30.500 01:01:01 3630.0 90.0
+02:00:03 90.0
+burn ["fast", "typed"] 2 0.5 true null null
+6 2 typed {string: any} int
+version + 1 = 3
+{"name":"burn","tags":["fast","typed"],"version":2,"ratio":0.5,"ok":true,"none":null}
+{"city":"Berlin","zip":10115,"tags":["a"]} [1.5,2.0] "q\"uote"
+true true burn

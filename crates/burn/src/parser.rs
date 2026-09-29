@@ -291,6 +291,11 @@ impl Parser {
     }
 
     fn param(&mut self) -> PResult<Param> {
+        if self.at(&Tok::LBrace) && (self.peek_at(1).nl_before || self.peek_at(1).kind == Tok::RBrace) {
+            let span = self.peek().span;
+            self.err(span, "expected parameter name or `)` to close the parameter list");
+            return Err(());
+        }
         if let Tok::Ident(_) = self.peek().kind {
             if self.peek_at(1).kind == Tok::Colon {
                 let name = self.ident("parameter name")?;
@@ -564,8 +569,7 @@ impl Parser {
 
     fn looks_like_typed_decl(&mut self) -> bool {
         match self.peek().kind {
-            Tok::Ident(_) | Tok::LBracket | Tok::Fun => {}
-            Tok::LBrace => return false,
+            Tok::Ident(_) | Tok::LBracket | Tok::Fun | Tok::LBrace => {}
             _ => return false,
         }
         if let Tok::Ident(_) = self.peek().kind {
@@ -630,7 +634,7 @@ impl Parser {
                 self.end_stmt();
                 StmtKind::Continue
             }
-            Tok::LBrace => StmtKind::Block(self.block()?),
+            Tok::LBrace if !self.looks_like_typed_decl() => StmtKind::Block(self.block()?),
             _ => {
                 if self.looks_like_typed_decl() {
                     let s = self.typed_decl(false)?;

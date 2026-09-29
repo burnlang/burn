@@ -202,7 +202,7 @@ impl<'a> Checker<'a> {
                 (Expr::new(ExprKind::Or(Box::new(ca), Box::new(cb)), T_BOOL), Facts { t: vec![], f })
             }
             A::Is(x, te) => {
-                let h = self.expr(x, None);
+                let h = self.expr_raw(x);
                 let t = self.resolve_type(te);
                 let mut facts = Facts::default();
                 if let Some(slot) = self.local_of(x) {

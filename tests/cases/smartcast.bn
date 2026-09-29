@@ -1,0 +1,96 @@
+fun describe(value: any): string {
+    if (value is int) {
+        return "int " + (value * 2)
+    }
+    if (value is string) {
+        return "string " + value.upper()
+    }
+    if (value is [int]) {
+        return "array of " + len(value)
+    }
+    if (value == null) {
+        return "null"
+    }
+    return "something else: " + typeOf(value)
+}
+
+fun lengthOf(text: string?): int {
+    if (text == null) {
+        return -1
+    }
+    return text.length
+}
+
+fun firstChar(text: string?): string {
+    if (text != null && text.length > 0) {
+        return text[0]
+    }
+    return "?"
+}
+
+fun safe(n: int?): int {
+    if (n is int) {
+        return n + 1
+    }
+    return 0
+}
+
+def interface Animal {
+    fun sound(): string
+}
+
+def class Dog: Animal {
+    string name
+    fun sound(): string {
+        return "woof"
+    }
+    fun fetch(): string {
+        return name + " fetches"
+    }
+}
+
+def class Cat: Animal {
+    fun sound(): string {
+        return "meow"
+    }
+}
+
+fun play(a: Animal): string {
+    if (a is Dog) {
+        return a.fetch()
+    }
+    return a.sound()
+}
+
+print(describe(21), describe("burn"), describe([1, 2, 3]), describe(null), describe(1.5))
+print(lengthOf("hello"), lengthOf(null))
+print(firstChar("xyz"), firstChar(""), firstChar(null))
+print(safe(41), safe(null))
+print(play(Dog { name: "Rex" }), play(Cat {}))
+
+any value = 10
+value = "now a string"
+print(value.length)
+value = 5
+print(value + 1)
+
+var maybe: string? = null
+maybe = "set"
+print(maybe.upper())
+
+string? g = "global"
+if (g != null) {
+    print(g.length)
+}
+
+var mixed: [any] = [1, "two", 3.0, true, null]
+for m in mixed {
+    print(typeOf(m), m)
+}
+
+var num = mixed[0] as int
+print(num + 1)
+var asString = 12 as string
+print(asString + "!")
+var s: string? = "x"
+print(s!!, s!!.length)
