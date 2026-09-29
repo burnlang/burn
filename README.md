@@ -5,7 +5,7 @@
 </p>
 
 Burn is an easy-to-use, statically typed, general-purpose programming language with smart casts.
-Burn 2 is a complete rewrite in **Rust** and **x86-64 assembly**: programs run instantly on a bytecode VM
+Burn is written in **Rust** and **x86-64 assembly**: programs run instantly on a bytecode VM
 during development and compile to small **native executables** for shipping.
 
 > [!WARNING]
@@ -70,7 +70,6 @@ linking; native output currently targets x86-64 Linux and macOS.
 ```sh
 git clone https://github.com/burnlang/burn.git
 cd burn
-git checkout burnv2
 cargo build --release
 ./target/release/burn version
 ```
@@ -90,7 +89,7 @@ burn eval 'print(6 * 7)'        # run a snippet
 burn lsp                        # language server for editors
 ```
 
-The Burn 1 flags `-r`, `-e`, `-exe` and `-d` still work.
+The older flags `-r`, `-e`, `-exe` and `-d` still work.
 
 ## Language at a glance
 

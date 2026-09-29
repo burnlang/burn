@@ -222,7 +222,7 @@ impl Parser {
                 let span = self.peek().span;
                 if self.speculative == 0 {
                     self.diags
-                        .push(Diagnostic::error(span, "definitions use the `def` keyword in Burn 2".to_string()).note(format!(
+                        .push(Diagnostic::error(span, "definitions use the `def` keyword".to_string()).note(format!(
                             "write `def {} {}` instead",
                             w,
                             self.peek_at(1).kind.ident_name()

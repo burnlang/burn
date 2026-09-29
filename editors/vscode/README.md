@@ -1,6 +1,6 @@
 # Burn for Visual Studio Code
 
-Language support for [Burn](https://github.com/burnlang/burn) 2.
+Language support for [Burn](https://github.com/burnlang/burn).
 
 - Syntax highlighting for `.bn` files, including `def` definitions and string templates
 - Live diagnostics from the real Burn compiler with exact line and column

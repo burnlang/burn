@@ -1,6 +1,6 @@
 # TODO
 
-## Done in Burn 2
+## Done
 
 - Fix Date: the date library is now written in Burn and fully working
 - Fix compilation to executable: `burn build` produces real native x86-64 executables
