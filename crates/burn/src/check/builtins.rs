@@ -4,8 +4,10 @@ use crate::hir::{BinOp, Cmp, Conv};
 pub const BUILTINS: &[&str] = &[
     "print",
     "println",
+    "eprint",
     "write",
     "input",
+    "readStdin",
     "toString",
     "str",
     "toInt",
@@ -50,6 +52,10 @@ pub const BUILTINS: &[&str] = &[
     "repeat",
     "chars",
     "charCode",
+    "isLetter",
+    "isDigit",
+    "isAlphanumeric",
+    "isWhitespace",
     "fromCharCode",
     "sqrt",
     "pow",
@@ -101,6 +107,9 @@ pub fn is_builtin(name: &str) -> bool {
 pub fn signature(name: &str) -> &'static str {
     match name {
         "print" | "println" => "print(values...): prints the values separated by spaces",
+        "isLetter" | "isDigit" | "isAlphanumeric" | "isWhitespace" => "isLetter(text: string): bool, true when every character is in the class",
+        "eprint" => "eprint(values...): prints the values to standard error",
+        "readStdin" => "readStdin(): string, all remaining standard input",
         "write" => "write(value): prints without a newline",
         "input" => "input(prompt: string = \"\"): string",
         "toString" | "str" => "toString(value): string",
@@ -233,7 +242,7 @@ impl<'a> Checker<'a> {
         let n = xs.len();
         let _ = is_method;
         let e = match name {
-            "print" | "println" => {
+            "print" | "println" | "eprint" => {
                 let mut acc: Option<Expr> = None;
                 for a in &xs {
                     let h = self.barg(a, None);
@@ -251,7 +260,7 @@ impl<'a> Checker<'a> {
                     });
                 }
                 let s = acc.unwrap_or_else(|| self.str_lit(""));
-                Self::rt(RtFn::Print, vec![s], T_VOID)
+                Self::rt(if name == "eprint" { RtFn::PrintErr } else { RtFn::Print }, vec![s], T_VOID)
             }
             "write" => {
                 if !self.arity(name, n, 1, 1, span) {
@@ -595,6 +604,19 @@ impl<'a> Checker<'a> {
                     _ => Self::rt(RtFn::StrCode, vec![s], T_INT),
                 }
             }
+            "isLetter" | "isDigit" | "isAlphanumeric" | "isWhitespace" => {
+                if !self.arity(name, n, 1, 1, span) {
+                    return Some(Self::err_expr());
+                }
+                let s = self.barg_to(&xs[0], T_STR);
+                let k = match name {
+                    "isLetter" => 0,
+                    "isDigit" => 1,
+                    "isAlphanumeric" => 2,
+                    _ => 3,
+                };
+                Self::rt(RtFn::CharClass, vec![s, Expr::int(k)], T_BOOL)
+            }
             "fromCharCode" => {
                 if !self.arity(name, n, 1, 1, span) {
                     return Some(Self::err_expr());
@@ -732,7 +754,7 @@ impl<'a> Checker<'a> {
                 let a = self.barg_to(&xs[0], T_INT);
                 Self::rt(RtFn::Seed, vec![a], T_VOID)
             }
-            "now" | "nowMs" | "millis" | "clock" | "args" | "gc" | "__localTime" => {
+            "now" | "nowMs" | "millis" | "clock" | "args" | "gc" | "readStdin" | "__localTime" => {
                 if !self.arity(name, n, 0, 0, span) {
                     return Some(Self::err_expr());
                 }
@@ -742,6 +764,7 @@ impl<'a> Checker<'a> {
                     "clock" => Self::rt(RtFn::ClockNs, vec![], T_INT),
                     "args" => Self::rt(RtFn::Args, vec![], T_ARR_STR),
                     "gc" => Self::rt(RtFn::GcCollect, vec![], T_VOID),
+                    "readStdin" => Self::rt(RtFn::ReadStdin, vec![], T_STR),
                     _ => Self::rt(RtFn::LocalTime, vec![], T_ARR_INT),
                 }
             }

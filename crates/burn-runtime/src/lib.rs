@@ -75,6 +75,7 @@ runtime_fns! {
     StrRepeat => burn_str_repeat = crate::api::str_repeat [a, b];
     StrChars => burn_str_chars = crate::api::str_chars [a];
     StrCode => burn_str_code = crate::api::str_code [a];
+    CharClass => burn_char_class = crate::api::char_class [a, b];
     StrFromCode => burn_str_from_code = crate::api::str_from_code [a];
     ToStr => burn_to_str = crate::api::to_str [a, b];
     ParseInt => burn_parse_int = crate::api::parse_int [a, b];
@@ -84,6 +85,8 @@ runtime_fns! {
     Print => burn_print = crate::api::print [a];
     PrintRaw => burn_print_raw = crate::api::print_raw [a];
     Input => burn_input = crate::api::input [a];
+    PrintErr => burn_print_err = crate::api::print_err [a];
+    ReadStdin => burn_read_stdin = crate::api::read_stdin [];
     ArrNew => burn_arr_new = crate::api::arr_new [a, b];
     ArrLen => burn_arr_len = crate::api::arr_len [a];
     ArrGet => burn_arr_get = crate::api::arr_get [a, b, c];
