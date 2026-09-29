@@ -1058,11 +1058,7 @@ pub fn disassemble(m: &Module) -> String {
     }
     gap(&mut o, !m.tables.is_empty());
     for t in &m.tables {
-        let es: Vec<String> = t
-            .entries
-            .iter()
-            .map(|(tid, f)| format!("{}: {}", n.ty(m, *tid), n.funcs[*f as usize]))
-            .collect();
+        let es: Vec<String> = t.entries.iter().map(|(tid, f)| format!("{}: {}", n.ty(m, *tid), fref(&n, *f))).collect();
         if es.is_empty() {
             let _ = writeln!(o, "table {} {} {{}}", quoted(&t.name), t.argc);
         } else {
@@ -1085,7 +1081,10 @@ pub fn disassemble(m: &Module) -> String {
 
 fn func(o: &mut String, m: &Module, n: &Names, f: &Function) {
     let set: HashSet<&str> = f.names.iter().map(|s| s.as_str()).collect();
-    let named = f.names.len() == f.locals as usize && set.len() == f.names.len() && f.names.iter().all(|s| is_ident(s) && Op::simple(s).is_none());
+    let named = f.params <= f.locals
+        && f.names.len() == f.locals as usize
+        && set.len() == f.names.len()
+        && f.names.iter().all(|s| is_ident(s) && Op::simple(s).is_none());
     if named {
         let ps: Vec<&str> = f.names[..f.params as usize].iter().map(|s| s.as_str()).collect();
         let _ = writeln!(o, "func {}({})", quoted(&f.name), ps.join(", "));
