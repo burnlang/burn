@@ -1,0 +1,137 @@
+var queue = ["a", "b", ""]
+var qi = 0
+
+fun next(): string {
+    var v = queue[qi]
+    qi += 1
+    return v
+}
+
+def type Bag {
+    [int] items
+    {string: int} counts
+}
+
+def interface Op {
+    fun apply(x: int): int
+}
+
+def class Add: Op {
+    int n
+    fun apply(x: int): int {
+        return x + n
+    }
+}
+
+def class Mul: Op {
+    int n
+    fun apply(x: int): int {
+        return x * n
+    }
+}
+
+def class Worker {
+    string name
+
+    async fun work(ms: int): string {
+        sleep(ms)
+        return name + " worked"
+    }
+}
+
+fun makeAdder(): fun(int): int {
+    return fun(x: int): int {
+        return x + 100
+    }
+}
+
+var total = 0
+fun addToTotal(n: int) {
+    total += n
+}
+
+var line = ""
+while ((line = next()) != "") {
+    print("line", line)
+}
+
+var bag = Bag { items: [1, 2, 3], counts: {} }
+bag.items[1] += 40
+bag.counts["x"] = 1
+bag.counts["x"] += 5
+bag.counts["y"] = bag.counts["x"] * 2
+print(bag)
+
+var ops: {string: Op} = {"add": Add { n: 2 }, "mul": Mul { n: 10 }}
+var v = 1
+for name, op in ops {
+    v = op.apply(v)
+    print(name, v)
+}
+
+var fs = [makeAdder(), fun(x: int): int { return -x }]
+print(fs[0](1), fs[1](5), makeAdder()(0))
+
+for i in 0..3 {
+    addToTotal(i * 10)
+}
+print("total", total)
+
+var w = Worker { name: "bob" }
+var fut = w.work(10)
+print(await fut)
+
+var maybe: [int?] = [1, null, 5]
+var acc = 0
+for m in maybe {
+    if (m == null) {
+        continue
+    }
+    acc += m
+}
+print("acc", acc)
+
+var counter = 0
+var squares: [int] = []
+while (true) {
+    counter += 1
+    if (counter > 5) {
+        break
+    }
+    if (counter % 2 == 0) {
+        continue
+    }
+    squares.push(counter * counter)
+}
+print(squares)
+
+var i = 0
+var j = 10
+while (i < j && j - i > 2) {
+    i += 1
+    j -= 1
+}
+print(i, j)
+
+var text = "a"
+text += "b" + 1
+text += 2.5
+print(text)
+
+var numbers = [1, 2, 3]
+var doubled: [int] = []
+for n in numbers {
+    doubled.push(n * 2)
+}
+numbers = doubled
+print(numbers)
+
+fun sideEffect(arr: [int], idx: int): int {
+    arr[idx] = arr[idx] + 1
+    return arr[idx]
+}
+var arr = [0, 0]
+print(sideEffect(arr, 0) + sideEffect(arr, 0) + sideEffect(arr, 1), arr)
+var x = 5
+var y = (x = 7) + x
+print(x, y)

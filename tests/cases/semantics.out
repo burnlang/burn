@@ -1,0 +1,15 @@
+line a
+line b
+Bag { items: [1, 42, 3], counts: {"x": 6, "y": 12} }
+add 3
+mul 30
+101 -5 100
+total 30
+bob worked
+acc 6
+[1, 9, 25]
+4 6
+ab12.5
+[2, 4, 6]
+4 [2, 1]
+7 14
