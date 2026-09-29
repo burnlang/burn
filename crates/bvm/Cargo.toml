@@ -1,0 +1,19 @@
+[package]
+name = "bvm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "The Burn Virtual Machine: a general-purpose bytecode VM with a garbage-collected runtime"
+
+[lib]
+name = "bvm"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bvm"
+path = "src/main.rs"
+
+[dependencies]
+burn-runtime = { path = "../burn-runtime" }
