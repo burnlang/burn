@@ -32,6 +32,7 @@ fn main() -> ExitCode {
         Some("asm") => convert(&args[1..], "bvmc", |m| Ok(binary::encode(m))),
         Some("dis") => convert(&args[1..], "bvm", |m| Ok(asm::disassemble(m).into_bytes())),
         Some("check") => check(&args[1..]),
+        Some("link") => link(&args[1..]),
         Some("runtime") => {
             for f in burn_runtime::RtFn::all() {
                 if !verify::RESERVED_RT.contains(f) {
@@ -43,6 +44,58 @@ fn main() -> ExitCode {
         Some(f) if !f.starts_with('-') => run(f, args[1..].to_vec()),
         Some(f) => usage_error(&format!("unknown option {}", f)),
     }
+}
+
+fn link(args: &[String]) -> ExitCode {
+    let mut files = Vec::new();
+    let mut out: Option<PathBuf> = None;
+    let mut opts = bvm::LinkOptions::default();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-o" => {
+                i += 1;
+                match args.get(i) {
+                    Some(o) => out = Some(PathBuf::from(o)),
+                    None => return usage_error("-o needs a file name"),
+                }
+            }
+            "--lib" => opts.allow_unresolved = true,
+            f => files.push(f.to_string()),
+        }
+        i += 1;
+    }
+    if files.is_empty() {
+        return usage_error("bvm link needs modules to link");
+    }
+    let mut modules = Vec::new();
+    for f in &files {
+        match bvm::read(Path::new(f)) {
+            Ok(m) => modules.push(m),
+            Err(e) => {
+                eprintln!("error: {}", e);
+                return ExitCode::from(1);
+            }
+        }
+    }
+    let m = match bvm::link_with(&modules, &opts) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            return ExitCode::from(1);
+        }
+    };
+    let out = out.unwrap_or_else(|| Path::new(&files[0]).with_extension("linked.bvmc"));
+    let bytes = if out.extension().and_then(|e| e.to_str()) == Some("bvm") {
+        asm::disassemble(&m).into_bytes()
+    } else {
+        binary::encode(&m)
+    };
+    if let Err(e) = std::fs::write(&out, bytes) {
+        eprintln!("error: could not write {}: {}", out.display(), e);
+        return ExitCode::from(1);
+    }
+    ExitCode::SUCCESS
 }
 
 fn usage_error(msg: &str) -> ExitCode {

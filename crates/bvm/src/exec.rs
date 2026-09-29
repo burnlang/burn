@@ -38,6 +38,7 @@ pub enum LoadError {
     Verify(VerifyError),
     MissingImport(String),
     Unlinked(String),
+    Link(String),
     ImportArity { name: String, module: u32, host: u32 },
 }
 
@@ -47,6 +48,7 @@ impl fmt::Display for LoadError {
             LoadError::Verify(e) => write!(f, "{}", e),
             LoadError::MissingImport(n) => write!(f, "the module imports {}, but the host does not provide it", n),
             LoadError::Unlinked(n) => write!(f, "function {} is external; link the module that defines it", n),
+            LoadError::Link(e) => write!(f, "{}", e),
             LoadError::ImportArity { name, module, host } => {
                 write!(f, "the module imports {} with {} arguments, but the host function takes {}", name, module, host)
             }
@@ -87,7 +89,22 @@ impl Program {
     }
 }
 
+pub fn needs_link(m: &Module) -> bool {
+    m.annotations.iter().any(|a| crate::mixin::KINDS.contains(&a.name.as_str()))
+        || m.imports
+            .iter()
+            .any(|i| (0..m.funcs.len() as u32).any(|f| crate::link::export_name(m, f).as_deref() == Some(&i.name)))
+}
+
 pub fn load(m: &Module, host: &Host) -> Result<Arc<Program>, LoadError> {
+    let linked;
+    let m = if needs_link(m) {
+        analyze(m)?;
+        linked = crate::link::link(std::slice::from_ref(m)).map_err(LoadError::Link)?;
+        &linked
+    } else {
+        m
+    };
     let max = analyze(m)?;
     if let Some(f) = m.funcs.iter().find(|f| f.external) {
         return Err(LoadError::Unlinked(f.name.clone()));
