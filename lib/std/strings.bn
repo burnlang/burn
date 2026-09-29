@@ -1,0 +1,76 @@
+pub fun padLeft(text: string, width: int, fill: string): string {
+    var s = text
+    while (len(s) < width) {
+        s = fill + s
+    }
+    return s
+}
+
+pub fun padRight(text: string, width: int, fill: string): string {
+    var s = text
+    while (len(s) < width) {
+        s = s + fill
+    }
+    return s
+}
+
+pub fun isEmpty(text: string): bool {
+    return len(text) == 0
+}
+
+pub fun isBlank(text: string): bool {
+    return len(trim(text)) == 0
+}
+
+pub fun capitalize(text: string): string {
+    if (len(text) == 0) {
+        return text
+    }
+    return upper(substring(text, 0, 1)) + substring(text, 1)
+}
+
+pub fun countOf(text: string, part: string): int {
+    if (len(part) == 0) {
+        return 0
+    }
+    return len(split(text, part)) - 1
+}
+
+pub fun lines(text: string): [string] {
+    return split(replace(text, "\r\n", "\n"), "\n")
+}
+
+pub fun words(text: string): [string] {
+    var out: [string] = []
+    for w in split(text, " ") {
+        if (len(w) > 0) {
+            push(out, w)
+        }
+    }
+    return out
+}
+
+pub fun isDigits(text: string): bool {
+    if (len(text) == 0) {
+        return false
+    }
+    for c in text {
+        if (c < "0" || c > "9") {
+            return false
+        }
+    }
+    return true
+}
+
+pub fun isAlpha(text: string): bool {
+    if (len(text) == 0) {
+        return false
+    }
+    for c in text {
+        var lc = lower(c)
+        if (lc < "a" || lc > "z") {
+            return false
+        }
+    }
+    return true
+}

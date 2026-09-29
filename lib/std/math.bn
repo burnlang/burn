@@ -1,0 +1,90 @@
+pub const PI = 3.141592653589793
+pub const E = 2.718281828459045
+pub const TAU = 6.283185307179586
+
+pub def class Math {
+    static fun clamp(x: float, low: float, high: float): float {
+        return max(low, min(high, x))
+    }
+
+    static fun lerp(a: float, b: float, t: float): float {
+        return a + (b - a) * t
+    }
+
+    static fun toRadians(degrees: float): float {
+        return degrees * PI / 180.0
+    }
+
+    static fun toDegrees(radians: float): float {
+        return radians * 180.0 / PI
+    }
+
+    static fun sign(x: float): int {
+        if (x > 0.0) {
+            return 1
+        }
+        if (x < 0.0) {
+            return -1
+        }
+        return 0
+    }
+
+    static fun hypot(a: float, b: float): float {
+        return sqrt(a * a + b * b)
+    }
+
+    static fun gcd(a: int, b: int): int {
+        var x = abs(a)
+        var y = abs(b)
+        while (y != 0) {
+            var t = x % y
+            x = y
+            y = t
+        }
+        return x
+    }
+
+    static fun lcm(a: int, b: int): int {
+        if (a == 0 || b == 0) {
+            return 0
+        }
+        return abs(a / Math.gcd(a, b) * b)
+    }
+
+    static fun factorial(n: int): int {
+        var r = 1
+        for i in 2..=n {
+            r *= i
+        }
+        return r
+    }
+
+    static fun isPrime(n: int): bool {
+        if (n < 2) {
+            return false
+        }
+        var i = 2
+        while (i * i <= n) {
+            if (n % i == 0) {
+                return false
+            }
+            i += 1
+        }
+        return true
+    }
+
+    static fun sum(values: [float]): float {
+        var total = 0.0
+        for v in values {
+            total += v
+        }
+        return total
+    }
+
+    static fun average(values: [float]): float {
+        if (len(values) == 0) {
+            return 0.0
+        }
+        return Math.sum(values) / len(values)
+    }
+}
