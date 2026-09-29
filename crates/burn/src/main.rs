@@ -25,13 +25,14 @@ fn usage() {
         "Burn {VERSION}
 
 Usage:
-  burn <file.bn> [args...]            run a program instantly (bytecode VM)
+  burn <file.bn> [args...]            run a program instantly on the Burn VM (bvm)
+  burn <file.bvm|file.bvmc> [args...] run a bvm module
   burn run <file.bn> [--native] [args...]
                                       run a program; --native compiles it to machine code first
   burn build <file.bn> [options]      compile to a standalone executable
       -o, --output <path>             output file (default: file name without .bn)
-      --target <native|js>            native executable (default) or JavaScript
-      --emit-asm <path>               also write the generated x86-64 assembly
+      --target <native|js|bvm>        native executable (default), JavaScript or bvm bytecode
+      --emit-asm <path>               also write the generated assembly (x86-64, or bvm text)
       --no-strip                      keep symbols in the executable
   burn check <file.bn>                type-check without running
   burn fmt [-w] [--check] <files...>  format source files
@@ -44,11 +45,12 @@ Legacy flags: -r (repl), -e <code> (eval), -exe <file> [name] (build), -d <file>
     );
 }
 
-fn default_output(file: &Path, js: bool) -> PathBuf {
+fn default_output(file: &Path, ext: &str) -> PathBuf {
     let stem = file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "out".into());
     let mut name = stem;
-    if js {
-        name.push_str(".js");
+    if !ext.is_empty() {
+        name.push('.');
+        name.push_str(ext);
     } else if cfg!(windows) {
         name.push_str(".exe");
     }
@@ -70,7 +72,31 @@ fn compile(path: &Path) -> Option<driver::Compiled> {
     }
 }
 
+fn is_bvm_file(file: &Path) -> bool {
+    matches!(file.extension().and_then(|e| e.to_str()), Some("bvm") | Some("bvmc"))
+}
+
+fn run_bvm(file: &Path, args: Vec<String>) -> ExitCode {
+    let m = match bvm::read(file) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            return ExitCode::from(1);
+        }
+    };
+    match bvm::run(&m, &bvm::Host::new(), args) {
+        Ok(code) => ExitCode::from(code as u8),
+        Err(e) => {
+            eprintln!("error: {}: {}", file.display(), e);
+            ExitCode::from(1)
+        }
+    }
+}
+
 fn cmd_run(file: &Path, args: Vec<String>, native_mode: bool) -> ExitCode {
+    if is_bvm_file(file) && !native_mode {
+        return run_bvm(file, args);
+    }
     let c = match compile(file) {
         Some(c) => c,
         None => return ExitCode::from(1),
@@ -98,7 +124,7 @@ fn cmd_run(file: &Path, args: Vec<String>, native_mode: bool) -> ExitCode {
             }
         };
     }
-    let code = vm::exec::run_program(&c.program, args);
+    let code = vm::run_program(&c.program, args);
     ExitCode::from(code as u8)
 }
 
@@ -148,7 +174,7 @@ fn cmd_build(args: &[String]) -> ExitCode {
     };
     match target.as_str() {
         "js" | "javascript" | "node" => {
-            let out = output.unwrap_or_else(|| default_output(&file, true));
+            let out = output.unwrap_or_else(|| default_output(&file, "js"));
             let js = js::generate(&c.program);
             if let Err(e) = std::fs::write(&out, js) {
                 eprintln!("error: cannot write {}: {}", out.display(), e);
@@ -157,8 +183,28 @@ fn cmd_build(args: &[String]) -> ExitCode {
             println!("wrote {}", out.display());
             ExitCode::SUCCESS
         }
+        "bvm" | "bytecode" => {
+            let out = output.unwrap_or_else(|| default_output(&file, "bvmc"));
+            let m = vm::module(&c.program);
+            if let Err(e) = bvm::verify(&m) {
+                eprintln!("internal error: the compiler produced an invalid bvm module: {}", e);
+                return ExitCode::from(70);
+            }
+            if let Some(path) = &emit_asm {
+                if let Err(e) = std::fs::write(path, bvm::asm::disassemble(&m)) {
+                    eprintln!("error: cannot write {}: {}", path.display(), e);
+                    return ExitCode::from(1);
+                }
+            }
+            if let Err(e) = std::fs::write(&out, bvm::binary::encode(&m)) {
+                eprintln!("error: cannot write {}: {}", out.display(), e);
+                return ExitCode::from(1);
+            }
+            println!("wrote {}", out.display());
+            ExitCode::SUCCESS
+        }
         "native" | "exe" | "asm" => {
-            let out = output.unwrap_or_else(|| default_output(&file, false));
+            let out = output.unwrap_or_else(|| default_output(&file, ""));
             let opts = native::BuildOptions {
                 output: out.clone(),
                 emit_asm,
@@ -176,7 +222,7 @@ fn cmd_build(args: &[String]) -> ExitCode {
             }
         }
         other => {
-            eprintln!("error: unknown target `{}` (expected `native` or `js`)", other);
+            eprintln!("error: unknown target `{}` (expected `native`, `js` or `bvm`)", other);
             ExitCode::from(2)
         }
     }
@@ -188,7 +234,7 @@ fn cmd_eval(code: &str) -> ExitCode {
             if !c.warnings.is_empty() {
                 driver::report(&c.sm, &c.warnings);
             }
-            ExitCode::from(vm::exec::run_program(&c.program, vec![]) as u8)
+            ExitCode::from(vm::run_program(&c.program, vec![]) as u8)
         }
         Err(f) => {
             driver::report(&f.sm, &f.diags);
@@ -225,22 +271,7 @@ fn cmd_dump(file: &Path, what: &str) -> ExitCode {
     match what {
         "asm" => print!("{}", native::assembly(&c.program)),
         "js" => print!("{}", js::generate(&c.program)),
-        "bytecode" => {
-            let code = vm::exec::prepare(&c.program);
-            for f in &code.funcs {
-                println!("{} (params {}, locals {}):", f.name, f.params, f.locals);
-                let end = code
-                    .funcs
-                    .iter()
-                    .map(|x| x.entry)
-                    .filter(|e| *e > f.entry)
-                    .min()
-                    .unwrap_or(code.ops.len() as u32);
-                for i in f.entry..end {
-                    println!("  {:5} {:?}", i, code.ops[i as usize]);
-                }
-            }
-        }
+        "bytecode" | "bvm" => print!("{}", bvm::asm::disassemble(&vm::module(&c.program))),
         _ => {
             for (i, f) in c.program.funcs.iter().enumerate() {
                 println!(
@@ -272,7 +303,8 @@ fn burni_usage() {
 
 Usage:
   burni                       start the interactive REPL
-  burni <file.bn> [args...]   type-check and run a program on the bytecode VM
+  burni <file.bn> [args...]   type-check and run a program on the Burn VM (bvm)
+  burni <file.bvm|file.bvmc>  run a bvm module
   burni -e '<code>'           evaluate code from the command line
   burni -v | --version        print the version"
     );
@@ -285,8 +317,9 @@ fn burnc_usage() {
 Usage:
   burnc <file.bn> [options]   compile to a standalone native executable
       -o, --output <path>     output file (default: file name without .bn)
-      --target <native|js>    native executable (default) or JavaScript
-      --emit-asm <path>       also write the generated x86-64 assembly
+      --target <native|js|bvm>
+                              native executable (default), JavaScript or bvm bytecode
+      --emit-asm <path>       also write the generated assembly (x86-64, or bvm text)
       --no-strip              keep symbols in the executable
   burnc --check <files...>    type-check without producing output
   burnc -v | --version        print the version"

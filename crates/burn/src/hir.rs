@@ -4,15 +4,7 @@ use burn_runtime::RtFn;
 
 pub type FuncId = u32;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Cmp {
-    Eq,
-    Ne,
-    Lt,
-    Le,
-    Gt,
-    Ge,
-}
+pub use bvm::Cmp;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BinOp {
