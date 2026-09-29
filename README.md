@@ -5,8 +5,10 @@
 <h1 align="center">Burn</h1>
 
 Burn is an easy-to-use, statically typed, general-purpose programming language with smart casts.
-Burn is written in **Rust** and **x86-64 assembly**: programs run instantly on a bytecode VM
-during development and compile to small **native executables** for shipping.
+Burn is written in **Rust** and **x86-64 assembly**: programs run instantly on **bvm**, the Burn
+virtual machine, during development and compile to small **native executables** for shipping.
+
+Current version: **26.1.0-experimental-1**
 
 > [!WARNING]
 > Burn is **not** ready for production. Syntax may still change. Please report bugs as issues.
@@ -58,7 +60,8 @@ fun main() {
 - `async fun` / `await` running on real threads
 - Modules with `pub` and `priv`
 - Standard library for dates, times, HTTP, JSON, math and strings
-- Three backends sharing one type checker and runtime: bytecode VM, native x86-64, JavaScript
+- Three backends sharing one type checker and runtime: bvm bytecode, native x86-64, JavaScript
+- bvm, a general-purpose virtual machine with its own assembly language, bytecode format and verifier, which other languages can target too
 - Precise error messages with line, column and suggestions
 - Built-in REPL, formatter and language server, plus a VS Code extension
 
@@ -77,11 +80,12 @@ See [docs/tooling/installation.mdx](docs/tooling/installation.mdx) for all optio
 
 | Command | What it does |
 | --- | --- |
-| `burni` | the interpreter: runs programs instantly on the bytecode VM, starts the REPL without arguments |
-| `burnc` | the compiler: standalone native executables, or JavaScript with `--target js` |
+| `burni` | the interpreter: runs programs instantly on bvm, starts the REPL without arguments |
+| `burnc` | the compiler: standalone native executables, JavaScript with `--target js`, bvm bytecode with `--target bvm` |
 | `burnfmt` | the code formatter, written in Burn itself |
 | `burn-lsp` | the language server for editors |
-| `burn` | all of the above as subcommands |
+| `bvm` | the Burn virtual machine: runs, assembles, disassembles and verifies bytecode |
+| `burn` | all of the Burn commands as subcommands |
 
 ```sh
 burni app.bn                    # run instantly
@@ -90,6 +94,8 @@ burni -e 'print(6 * 7)'         # run a snippet
 burnc app.bn                    # standalone executable ./app
 burnc app.bn -o bin/app --emit-asm app.s
 burnc app.bn --target js        # Node.js script app.js
+burnc app.bn --target bvm       # portable bytecode app.bvmc
+bvm app.bvmc                    # run bytecode
 burnc --check app.bn            # type-check only
 burnfmt -w app.bn               # format in place
 burn run --native app.bn        # compile to machine code and run
@@ -201,25 +207,65 @@ fun main() {
 }
 ```
 
+## bvm, the Burn Virtual Machine
+
+bvm runs Burn programs, and it isn't tied to Burn. It has a readable assembly language, a compact bytecode format,
+a verifier, a garbage-collected runtime with about 100 built-in functions, host functions, threads and a Rust API
+for generating code. That's everything a new language needs for a backend.
+
+```bvm
+func main()
+    local i
+loop:
+    load i
+    const 3
+    ilt
+    jz done
+    str "hello from bvm"
+    rt print
+    pop
+    load i
+    const 1
+    iadd
+    store i
+    jmp loop
+done:
+    retv
+end
+```
+
+```sh
+bvm hello.bvm                   # assemble, verify and run
+bvm asm hello.bvm -o hello.bvmc # bytecode
+bvm dis hello.bvmc              # and back
+```
+
+[`crates/bvm/examples/ember.rs`](crates/bvm/examples/ember.rs) is a complete small language built on bvm.
+See [the bvm documentation](docs/bvm/overview.mdx).
+
 ## Documentation
 
 The full documentation is written in MDX in [`docs/`](docs/index.mdx): a syntax tour, types, smart casts,
-classes and interfaces, modules, async, the standard library, the command line and how the compiler works.
+classes and interfaces, modules, async, the standard library, the command line, how the compiler works and
+the Burn Virtual Machine.
 
 ## Examples
 
-See [`examples/`](examples/) and the test programs in [`tests/cases/`](tests/cases/).
+See [`examples/`](examples/) and the test programs in [`tests/cases/`](tests/cases/). bvm assembly and Ember
+examples are in [`examples/bvm/`](examples/bvm/).
 
 ## Project structure
 
-- `crates/burn/`: the compiler, VM and tools
+- `crates/burn/`: the compiler and tools
   - `lexer.rs`, `parser.rs`, `ast.rs`: front end
   - `check/`: type checker with smart casts, lowers to the typed IR in `hir.rs`
-  - `vm/`: bytecode compiler and virtual machine
+  - `vm/`: lowers the typed IR to bvm modules
   - `native/`: x86-64 code generator, hand-written entry assembly, linker driver
   - `js/`: JavaScript backend
   - `lsp/`, `fmt.rs`, `repl.rs`: tooling
-- `crates/burn-runtime/`: runtime shared by the VM and native executables (GC, strings, collections, JSON, HTTP, tasks)
+- `crates/bvm/`: the Burn Virtual Machine: instruction set, assembler, bytecode format, verifier, interpreter,
+  the `bvm` command and the Ember example language
+- `crates/burn-runtime/`: runtime shared by bvm and native executables (GC, strings, collections, JSON, HTTP, tasks)
 - `tools/burnfmt/`: the formatter, written in Burn
 - `install.sh`: the toolchain installer
 - `assets/`: the logo
@@ -232,7 +278,7 @@ See [`examples/`](examples/) and the test programs in [`tests/cases/`](tests/cas
 
 ```sh
 ./install.sh           # build and install the toolchain from this checkout
-cargo test            # runs every example on the VM, natively and as JavaScript
+cargo test            # runs every example on bvm, natively and as JavaScript
 cargo clippy --all-targets
 ```
 

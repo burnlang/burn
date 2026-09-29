@@ -1,13 +1,13 @@
 ---
 title: How the compiler works
-description: The pipeline from source to bytecode, machine code and JavaScript.
+description: The pipeline from source to bvm bytecode, machine code and JavaScript.
 order: 23
 ---
 
 # How the compiler works
 
 ```text
-source ──▶ lexer ──▶ parser ──▶ type checker ──▶ typed IR ─┬─▶ bytecode ──▶ VM            (burn run)
+source ──▶ lexer ──▶ parser ──▶ type checker ──▶ typed IR ─┬─▶ bvm module ──▶ bvm         (burn run)
                                     │                      ├─▶ x86-64 asm ──▶ cc + runtime (burn build)
                                     ▼                      └─▶ JavaScript               (--target js)
                           diagnostics, hover, completion
@@ -29,14 +29,18 @@ knows the static type of its arguments.
 All values are 64 bit words. Ints, floats, bools and enums are stored directly, everything else is a pointer to a
 heap object with a 16 byte header (kind, flags, type id, size). The runtime crate (Rust) implements strings,
 arrays, maps, boxing for `any`, formatting, JSON, HTTP, files and async tasks, plus a conservative mark-and-sweep
-garbage collector that scans the stack, the globals and the VM stack. The same runtime is used by the VM and linked
+garbage collector that scans the stack, the globals and the VM stack. The same runtime is used by bvm and linked
 into native executables, so both behave identically.
 
-## Bytecode VM
+## bvm
 
-`burn run` compiles the IR to a compact stack bytecode with a few fused instructions for loops and field access
-and runs it immediately. Checking and compiling a typical program takes a few milliseconds, so running a file
-feels like an interpreter.
+`burn run` compiles the IR to a [bvm](../bvm/overview.mdx) module and runs it right away. bvm is a
+general-purpose stack VM with its own assembly language, bytecode format and verifier. Burn classes become
+`class` types, interface methods become dispatch tables, `async` calls become `spawn`, and every operation that
+can fail carries its source location. When the module is loaded, the verifier computes each function's frame
+size and common sequences are fused into superinstructions for loops, comparisons and field access. Checking and
+compiling a typical program takes a few milliseconds, so running a file feels like using an interpreter.
+`burnc --target bvm` writes the same module to a `.bvmc` file.
 
 ## Native code
 

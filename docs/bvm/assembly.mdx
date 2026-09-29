@@ -1,0 +1,133 @@
+---
+title: bvm assembly
+description: The text format of bvm modules.
+order: 31
+---
+
+# bvm assembly
+
+A `.bvm` file is a module written as text. `bvm dis` produces this format and `bvm asm` reads it. The two
+convert without loss: disassembling a module and assembling the result gives back the same bytes.
+
+```bvm
+; comments start with a semicolon
+type Point = record { x: int, y: int }
+
+global origin
+
+func length2(p)
+    load p
+    getf Point.x
+    dup
+    imul
+    load p
+    getf Point.y
+    dup
+    imul
+    iadd
+    ret
+end
+
+func main()
+    local p
+    const 3
+    const 4
+    new Point
+    store p
+    load p
+    call length2
+    const 3            ; the type id of int
+    rt to_str
+    rt print
+    pop
+    retv
+end
+```
+
+## Lexical rules
+
+- One directive or instruction per line. A `{ ... }` block may span several lines.
+- `;` starts a comment that runs to the end of the line.
+- Names are made of letters, digits, `_`, `$` and `.`, and don't start with a digit. Any other name can be written
+  as a string, for example `func "<init>"()` or `call "<init>"`.
+- Numbers are decimal or hex integers (`42`, `-7`, `0xff`, `1_000`) or floats (`1.5`, `-2e10`, `inf`, `nan`).
+- Strings use double quotes with the escapes `\n`, `\t`, `\r`, `\0`, `\\`, `\"` and `\u{hex}`.
+- `@n` refers to a function, global, table or import by index, and `#n` refers to a type by id. Use them when a
+  name is missing or declared more than once.
+
+## Module directives
+
+| Directive | Meaning |
+| --- | --- |
+| `type Name = <definition>` | declare a type; the next free type id is assigned in order, starting at 12 |
+| `type #n = <definition>` | declare a type with no name; `n` must be the next free id |
+| `global name` | declare a global variable; globals start out as 0 |
+| `import name argc` | declare a host function that the embedder provides |
+| `table name argc { Type: func, ... }` | declare a dispatch table for `dispatch` |
+| `string "text"` | add a string to the pool explicitly (optional; `str` adds strings automatically) |
+| `loc "file:line:col"` | add a source location; instructions that can fail refer to it by index |
+| `entry name` | the function that runs when the module starts (default: `main`) |
+| `func name(params) ... end` | define a function |
+
+## Types
+
+Type ids 0 to 11 are built in: `error`, `void`, `null`, `int`, `float`, `bool`, `string`, `any`, `[any]`,
+`map<string, any>`, `[string]` and `[int]`. Type expressions:
+
+| Syntax | Type |
+| --- | --- |
+| `int`, `float`, `bool`, `string`, `any`, `null`, `void`, `fun` | the built-in kinds |
+| `[T]` | array of `T` |
+| `map<K, V>` | hash map |
+| `T?` | optional `T` |
+| `future<T>` | the result of `spawn` |
+| `Name` or `#n` | a declared type |
+| `record { x: T, ... }` | an anonymous record |
+
+Definitions after `=` can also be:
+
+```bvm
+type Shape  = interface
+type Circle = class { r: float } implements Shape
+type Color  = enum { Red, Green, Blue }
+type #20    = record "Point" { x: int }   ; a record named Point whose type is declared by number
+```
+
+Type names are used when values are printed and in error messages. `implements` lists the interfaces that
+`is_type` and `cast` accept for a class.
+
+## Functions
+
+```bvm
+func add(a, b)      ; named parameters
+    local sum       ; a named local
+    locals 2        ; two more unnamed locals
+    ...
+end
+
+func add(2)         ; two unnamed parameters, used as `load 0` and `load 1`
+```
+
+Parameters come first in the local slots, followed by the locals in declaration order. Locals start out as 0.
+Wherever a local is expected, you can use its name or its slot number.
+
+Labels are a name followed by `:` and can be placed before any instruction. They are local to their function.
+
+Every function returns exactly one value to its caller: `ret` returns the top of the stack and `retv` returns 0.
+The last instruction must be `ret`, `retv` or `jmp`, so execution can't run off the end.
+
+## Instructions
+
+Each instruction is a mnemonic followed by its operands:
+
+```bvm
+const 42          const -1.5       const true
+str "text"        fref helper      call helper
+load x            store 0          gload counter
+jz done           dispatch Shape.area
+new Point         newarr [int] 3   getf Point.y
+rt str_concat     host clock_hint  spawn worker future<int>
+idiv 4            index 7          ; optional source location index
+```
+
+The full list, with stack effects, is on the [instruction set](./instructions.mdx) page.

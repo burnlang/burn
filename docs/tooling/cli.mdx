@@ -12,20 +12,22 @@ This page lists every subcommand of `burn`. The shorter toolchain commands map o
 
 | Command | Description |
 | --- | --- |
-| `burn <file.bn> [args...]` | type-check and run with the bytecode VM |
+| `burn <file.bn> [args...]` | type-check and run on bvm |
+| `burn <file.bvm\|file.bvmc> [args...]` | run a bvm module |
 | `burn run <file.bn> [args...]` | the same |
 | `burn run --native <file.bn> [args...]` | compile to machine code and run it |
 | `burn build <file.bn>` | build a native executable next to the source file |
 | `burn build <file.bn> -o <path>` | choose the output path |
 | `burn build <file.bn> --target js` | write a Node.js script instead |
-| `burn build <file.bn> --emit-asm out.s` | also keep the generated assembly |
+| `burn build <file.bn> --target bvm` | write a `.bvmc` bytecode module |
+| `burn build <file.bn> --emit-asm out.s` | also keep the generated assembly (bvm assembly with `--target bvm`) |
 | `burn build <file.bn> --no-strip` | keep symbols in the executable |
 | `burn check <files...>` | report errors and warnings without running |
 | `burn fmt <files...>` | print formatted code; `-w` rewrites files, `--check` fails when files are not formatted |
 | `burn repl` | interactive session |
 | `burn eval '<code>'` | run a snippet |
 | `burn lsp` | language server over stdio |
-| `burn dump --hir/--bytecode/--asm/--js <file.bn>` | show intermediate representations |
+| `burn dump --hir/--bytecode/--asm/--js <file.bn>` | show intermediate representations (`--bytecode` prints bvm assembly) |
 | `burn version`, `burn help` | information |
 
 The older flags still work: `-r`, `-e`, `-exe <file> [name]` and `-d`.

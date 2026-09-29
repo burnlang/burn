@@ -34,15 +34,19 @@ fun describe(value: any): string {
 print(describe(Circle { radius: 2 }))
 ```
 
-## Two ways to run the same program
+## Ways to run the same program
 
 | Command | What happens | Typical use |
 | --- | --- | --- |
-| `burni app.bn` | compiled to bytecode in memory and run by the VM, starts in milliseconds | development, scripts |
+| `burni app.bn` | compiled to a bvm module in memory and run right away, starts in milliseconds | development, scripts |
 | `burnc app.bn` | compiled to x86-64 assembly and linked into a standalone executable | shipping |
 | `burnc app.bn --target js` | compiled to a Node.js script | the web and JS tooling |
+| `burnc app.bn --target bvm` | compiled to a portable `.bvmc` bytecode file, run with `bvm` | distributing without a build per platform |
 
-All three backends share the same type checker and runtime library, so a program behaves the same way everywhere.
+All backends share the same type checker and runtime library, so a program behaves the same way everywhere.
+
+The virtual machine, [bvm](./bvm/overview.mdx), is not tied to Burn: it has its own assembly language, bytecode
+format, verifier and Rust API, and other languages can compile to it.
 
 ## Where to go next
 
@@ -55,9 +59,15 @@ All three backends share the same type checker and runtime library, so a program
 - [Async](./language/async.mdx)
 - [Standard library](./stdlib/builtins.mdx)
 - [Installation](./tooling/installation.mdx)
-- [The toolchain: burn, burni, burnc, burnfmt, burn-lsp](./tooling/toolchain.mdx)
+- [The toolchain: burn, burni, burnc, burnfmt, burn-lsp, bvm](./tooling/toolchain.mdx)
 - [burnfmt](./tooling/burnfmt.mdx)
 - [Command line](./tooling/cli.mdx)
 - [How the compiler works](./tooling/compiler.mdx)
 - [Editor support](./tooling/editors.mdx)
+- [The Burn Virtual Machine (bvm)](./bvm/overview.mdx)
+  - [Assembly language](./bvm/assembly.mdx)
+  - [Instruction set](./bvm/instructions.mdx)
+  - [Values and the runtime library](./bvm/runtime.mdx)
+  - [Embedding bvm](./bvm/embedding.mdx)
+  - [Building a language on bvm](./bvm/new-language.mdx)
 - [Migrating from the Go version](./migration.mdx)

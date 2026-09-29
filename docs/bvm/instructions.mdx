@@ -1,0 +1,110 @@
+---
+title: bvm instruction set
+description: Every bvm instruction with its operands and stack effect.
+order: 32
+---
+
+# Instruction set
+
+bvm is a stack machine. Each function has its own locals and its own operand stack. In the stack effects below,
+the rightmost value is the top of the stack: `a b → c` pops `b`, then `a`, and pushes `c`.
+
+## Constants and variables
+
+| Instruction | Stack | Meaning |
+| --- | --- | --- |
+| `const v` | `→ v` | push an integer, float (as its bits), `true`, `false` or `null` |
+| `str "s"` | `→ s` | push a string from the module's string pool (never garbage collected) |
+| `fref f` | `→ f` | push a function reference for `calli` |
+| `load x` | `→ v` | push local `x` |
+| `store x` | `v →` | pop into local `x` |
+| `tee x` | `v → v` | copy the top of the stack into local `x` |
+| `gload g` | `→ v` | push global `g` |
+| `gstore g` | `v →` | pop into global `g` |
+| `gtee g` | `v → v` | copy the top of the stack into global `g` |
+| `pop` | `v →` | drop the top value |
+| `dup` | `v → v v` | duplicate the top value |
+| `swap` | `a b → b a` | swap the top two values |
+
+## Integer arithmetic
+
+All integer arithmetic wraps on overflow. Shift counts use their low 6 bits.
+
+| Instruction | Stack | Meaning |
+| --- | --- | --- |
+| `iadd`, `isub`, `imul` | `a b → c` | `a + b`, `a - b`, `a * b` |
+| `idiv [loc]`, `irem [loc]` | `a b → c` | quotient and remainder, rounded toward zero; dividing by 0 is a runtime error |
+| `ineg` | `a → -a` | negate |
+| `and`, `or`, `xor` | `a b → c` | bitwise |
+| `shl`, `shr`, `ushr` | `a b → c` | shift left, arithmetic shift right, logical shift right |
+| `ieq`, `ine`, `ilt`, `ile`, `igt`, `ige` | `a b → bool` | signed comparisons |
+| `ueq`, `une`, `ult`, `ule`, `ugt`, `uge` | `a b → bool` | unsigned comparisons |
+| `not` | `a → bool` | 1 if `a` is 0, otherwise 0 |
+
+## Float arithmetic
+
+| Instruction | Stack | Meaning |
+| --- | --- | --- |
+| `fadd`, `fsub`, `fmul`, `fdiv`, `frem` | `a b → c` | IEEE 754 double arithmetic |
+| `fneg` | `a → -a` | negate |
+| `feq`, `fne`, `flt`, `fle`, `fgt`, `fge` | `a b → bool` | comparisons (false when either side is NaN, except `fne`) |
+| `i2f` | `i → f` | int to float |
+| `f2i` | `f → i` | float to int, truncating toward zero; NaN and out-of-range values become `i64::MIN` |
+
+## Control flow
+
+| Instruction | Stack | Meaning |
+| --- | --- | --- |
+| `jmp L` | | jump to label `L` |
+| `jz L`, `jnz L` | `v →` | jump if `v` is zero or non-zero |
+| `jzk L`, `jnzk L` | `v → v` | the same, but keep `v` on the stack (used for `&&` and `\|\|`) |
+| `call f` | `args → r` | call `f` with as many arguments as it has parameters |
+| `calli n` | `args f → r` | call the function reference `f` with `n` arguments; the count must match |
+| `dispatch t` | `recv args → r` | call the function that table `t` lists for the type of `recv` (the first argument) |
+| `ret` | `v →` | return `v` |
+| `retv` | | return 0 |
+| `spawn f T` | `args → fut` | run `f` on a new thread; `T` is the future's type. Wait for it with `rt await` |
+
+When a function is called its arguments become its first locals. Every call leaves exactly one value on the
+caller's stack; functions without a meaningful result return 0.
+
+## Heap objects
+
+| Instruction | Stack | Meaning |
+| --- | --- | --- |
+| `new T` | `f0 ... fn → rec` | allocate a record of type `T`, filling its fields in order |
+| `getf i` | `rec → v` | read field `i` (a number or `Type.field`) |
+| `setf i` | `rec v → v` | write field `i`, leaving the value |
+| `newarr [T] n` | `v0 ... vn → arr` | allocate an array with `n` elements |
+| `index [loc]` | `arr i → v` | read an element, with bounds checking |
+| `setindex [loc]` | `arr i v → v` | write an element, with bounds checking |
+| `len` | `arr → n` | array length |
+| `unbox` | `box → v` | read the value inside a box (see `rt box`) |
+
+`getf`, `setf`, `index`, `setindex`, `len` and `unbox` report a runtime error on null and on objects of the
+wrong kind.
+
+## Calling out
+
+| Instruction | Stack | Meaning |
+| --- | --- | --- |
+| `rt name` | `args → r` | call a function from the runtime library (run `bvm runtime` for the list) |
+| `host name` | `args → r` | call a host function declared with `import name argc` |
+
+## Source locations
+
+`idiv`, `irem`, `index` and `setindex` take an optional location index that points into the module's `loc`
+list. Runtime functions that can fail take a location as their last argument. When something goes wrong, the
+error names the location:
+
+```text
+runtime error: index 5 out of bounds (length 2)
+  --> demo.em:3
+```
+
+## Fused instructions
+
+When a module is loaded, bvm rewrites some common sequences into single instructions, for example
+`load; load; ilt; jz` into one compare-and-branch, `load; const; iadd; store` into an increment, and `load; getf`
+into one field read. These fused instructions exist only inside the loaded program. They can't be written in
+assembly, and the verifier rejects them in modules.

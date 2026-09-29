@@ -1,0 +1,116 @@
+---
+title: Building a language on bvm
+description: A walkthrough of Ember, a small language that compiles to bvm in about 800 lines of Rust.
+order: 35
+---
+
+# Building a language on bvm
+
+[`crates/bvm/examples/ember.rs`](../../crates/bvm/examples/ember.rs) is a complete language on top of bvm:
+a lexer, a parser, a type checker and a code generator in one file. It shows the pieces every front end needs.
+
+```ember
+fn fib(n) {
+    if n < 2 { return n }
+    return fib(n - 1) + fib(n - 2)
+}
+
+fn sum(xs: arr) {
+    let total = 0
+    let i = 0
+    while i < len(xs) {
+        total = total + xs[i]
+        i = i + 1
+    }
+    return total
+}
+
+let squares = []
+let i = 0
+while i < 10 {
+    push(squares, square(i))   # square is a host function provided by the embedder
+    i = i + 1
+}
+print("squares:", squares, "sum:", sum(squares), "fib(20) =", fib(20))
+```
+
+```sh
+cargo run -p bvm --example ember -- examples/bvm/ember/demo.em
+cargo run -p bvm --example ember -- examples/bvm/ember/demo.em --emit-asm demo.bvm -o demo.bvmc
+```
+
+## 1. Decide how values map to words
+
+Ember has three types: `int` is an `i64`, `str` is a string object and `arr` is an `[int]` array (built-in type
+id 11). Since the checker knows the type of every expression, the generator can pick the right instruction:
+`iadd` for ints, `rt str_concat` for strings, `len` for arrays and `rt str_len` for strings. A dynamically typed
+language would instead box values into `any` with `rt box` and use `rt is_type`, `rt cast` and `unbox`.
+
+## 2. Declare functions before generating code
+
+Functions can call each other in any order, so Ember declares them all first. `declare` returns a `FuncId` that
+calls can use before the function has a body:
+
+```rust
+for f in &funcs {
+    let id = mb.declare(&f.name, f.params.len() as u32);
+    sigs.insert(f.name.clone(), Sig { id, params: ..., ret: f.ret });
+}
+```
+
+## 3. Variables: locals and globals
+
+Parameters are the first locals, and every `let` inside a function adds one with `f.local(name)`. Top-level `let`s
+become globals (`mb.global(name)`), so functions can read them with `gload`.
+
+## 4. Control flow with labels
+
+```rust
+Stmt::While(cond, body) => {
+    let top = self.f.here();
+    let end = self.f.label();
+    self.expect(cond, Ty::Int)?;
+    self.f.jz(end);
+    self.block(body)?;
+    self.f.jmp(top);
+    self.f.bind(end);
+}
+```
+
+`&&` and `||` use `jz_keep` and `jnz_keep`, which leave the tested value on the stack as the result when they
+jump.
+
+## 5. Keep the stack balanced
+
+The verifier checks that every path reaches a label with the same stack height. Expression statements pop their
+value, and calls to functions without a result still return 0, which must be popped. At the end of a function,
+`reachable_end()` tells you whether a final `ret_void` (or a default `const 0; ret`) is needed.
+
+## 6. Use the runtime and the host
+
+Printing is `rt to_str` with a type id followed by `rt print`. Arrays grow with `rt arr_push`. `square` is an
+import, declared with `mb.import("square", 1)` and called with `Op::Host`. The embedding program provides it:
+
+```rust
+let mut host = Host::new();
+host.register("square", 1, |a| (a[0] as i64).wrapping_mul(a[0] as i64) as u64);
+bvm::run(&module, &host, Vec::new())
+```
+
+## 7. Point errors at the source
+
+Ember registers a location for every instruction that can fail (`mb.loc("demo.em:12")` passed to `Op::Index`
+and `Op::IDiv`), so runtime errors name the Ember line:
+
+```text
+runtime error: index 5 out of bounds (length 2)
+  --> demo.em:3
+```
+
+## From here
+
+- Records: declare a `Desc::Record` type, then use `Op::NewRecord`, `Op::GetField` and `Op::SetField`.
+- Interfaces or virtual methods: add dispatch tables and call through `Op::Dispatch`.
+- First-class functions: push `Op::FuncRef` values and call them with `Op::CallInd`.
+- Concurrency: `Op::Spawn` with a `future<T>` type, then `rt await`.
+- Shipping: write `.bvmc` files with `bvm::binary::encode` and run them with the `bvm` command.
