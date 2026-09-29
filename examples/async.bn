@@ -1,0 +1,15 @@
+async fun download(name: string, ms: int): string {
+    sleep(ms)
+    return name + " done after ${ms}ms"
+}
+
+fun main() {
+    var start = nowMs()
+    var a = download("first", 200)
+    var b = download("second", 200)
+    var c = download("third", 200)
+    print(await a)
+    print(await b)
+    print(await c)
+    print("all three ran in parallel: ${nowMs() - start < 500}")
+}

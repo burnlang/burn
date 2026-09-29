@@ -1,0 +1,110 @@
+---
+title: Smart casts and null safety
+description: How Burn narrows types after checks, and how nullable types work.
+order: 4
+---
+
+# Smart casts and null safety
+
+Burn infers types wherever it can, and after you check a value it remembers what you found out. You almost never
+need an explicit cast.
+
+## Inference
+
+```burn
+var count = 3
+var ratio = count * 2.5
+var names = ["a", "b"]
+var point = { x: 1, y: 2 }
+```
+
+Integer literals adapt to the expected type, so `float f = 1` and `sqrt(2)` just work, and passing an `int`
+where a `float` is expected converts it.
+
+## `is` narrows
+
+```burn
+fun describe(value: any): string {
+    if (value is int) {
+        return "int " + (value * 2)
+    }
+    if (value is string) {
+        return "string of length " + value.length
+    }
+    return "other"
+}
+```
+
+Inside the `if`, `value` has type `int` (or `string`), so arithmetic and methods work without a cast.
+The same works for interfaces:
+
+```burn
+fun play(a: Animal): string {
+    if (a is Dog) {
+        return a.fetch()
+    }
+    return a.sound()
+}
+```
+
+## Nullable types
+
+A plain `string` can never be `null`. Add `?` to allow it:
+
+```burn
+fun find(flag: bool): string? {
+    if (flag) {
+        return "found"
+    }
+    return null
+}
+```
+
+Using a nullable value without checking it is a compile error. Any of these checks narrow it:
+
+```burn
+var r = find(true)
+if (r != null) {
+    print(r.length)
+}
+
+fun lengthOf(text: string?): int {
+    if (text == null) {
+        return -1
+    }
+    return text.length
+}
+
+fun first(text: string?): string {
+    if (text != null && text.length > 0) {
+        return text[0]
+    }
+    return "?"
+}
+```
+
+Early `return`, `break`, `continue`, `exit` and `panic` all count, so a guard at the top of a function narrows
+the rest of it. `x!!` asserts that a value is not null and fails at runtime if it is.
+
+## Narrowing by assignment
+
+```burn
+any value = 10
+value = "now a string"
+print(value.length)
+```
+
+After an assignment the variable has the type of what was assigned, until the next assignment. Narrowing is
+cleared when a loop may change the variable, and narrowing of top level variables is cleared after function calls.
+
+## Explicit casts with `as`
+
+```burn
+var n = 3.99 as int
+var f = 3 as float
+var s = 12 as string
+var i = value as int
+```
+
+`as` converts between numbers, turns anything into a string, and downcasts `any`, nullable and interface values.
+A failed downcast is a runtime error that names the actual type.

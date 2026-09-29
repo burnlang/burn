@@ -1,0 +1,48 @@
+---
+title: Modules and visibility
+description: Importing files and the standard library, and controlling what a module exports.
+order: 6
+---
+
+# Modules and visibility
+
+## Importing
+
+```burn
+import "std/date"
+import "utils.bn"
+import (
+    "json"
+    "../shared/geometry.bn"
+)
+```
+
+- A name without a path (`"date"`, `"std/date"`) refers to the standard library.
+- Paths are resolved relative to the importing file first and then to the current directory. `.bn` is optional.
+- Each module is loaded once, and its top level statements run once, before the importing module.
+
+## `pub` and `priv`
+
+Everything declared at the top level of a module is visible to modules that import it, unless it is marked
+`priv`. `pub` makes the intent explicit.
+
+```burn
+pub def type Vec2 {
+    float x
+    float y
+}
+
+pub fun length(v: Vec2): float {
+    return sqrt(square(v.x) + square(v.y))
+}
+
+priv fun square(x: float): float {
+    return x * x
+}
+
+priv var created = 0
+```
+
+Using a private name from another module is a compile error (`` `square` is private to its module ``).
+Imports are not re-exported: a module sees its own names and the public names of the modules it imports directly.
+If two imports define the same name, using it is reported as ambiguous.

@@ -1,0 +1,54 @@
+---
+title: Migrating from Burn 1
+description: What changed in Burn 2 and how to update existing code.
+order: 30
+---
+
+# Migrating from Burn 1
+
+| Burn 1 | Burn 2 |
+| --- | --- |
+| `type Person { ... }` | `def type Person { ... }` |
+| `class Human { fun create(...) ... }` | `def class Human { ... static fun create(...) ... }` |
+| interpreter written in Go | compiler written in Rust and x86-64 assembly |
+| `burn -exe file.bn` embedded the source in a Go program | `burn build file.bn` produces real machine code |
+| every number was a float | `int` and `float` are separate types |
+| `toString(x)` needed for `"a" + x` | `"a" + x` converts automatically |
+| no `break`/`continue` | both are supported |
+| errors often reported on line 1 | every error has an exact line and column |
+
+## Classes
+
+In Burn 1 classes were only namespaces for functions and the data lived in a separate `type`. In Burn 2 a class
+holds its fields and methods together:
+
+```burn
+def class Human {
+    string name
+    int age
+
+    static fun create(name: string, age: int): Human {
+        return Human { name: name, age: age }
+    }
+
+    fun greet(): string {
+        return "Hello, " + name + "!"
+    }
+}
+
+var john = Human.create("John", 30)
+print(john.greet())
+print(Human.greet(john))
+```
+
+`Human.greet(john)` still works, so most Burn 1 call sites compile unchanged once the class is updated.
+
+## Numbers
+
+Code that relied on every number being a float may need `as int`, `round(...)` or float literals such as `2.0`.
+The compiler points at every place that needs a change.
+
+## Imports
+
+`import "std/date"`, `import "date"` and `import "http"` keep working. File imports are now resolved relative to
+the importing file.

@@ -1,8 +1,6 @@
-// Define variables before using them
 var x = 3
 var counter = 0
 
-// If statements
 if (x > 5) {
     print("x is greater than 5")
 } else if (x == 5) {
@@ -11,13 +9,19 @@ if (x > 5) {
     print("x is less than 5")
 }
 
-// While loops
 while (counter < 3) {
-    print("Counter: " + toString(counter))
-    counter = counter + 1
+    print("Counter: " + counter)
+    counter += 1
 }
 
-// For loops
 for (var i = 0; i < 3; i = i + 1) {
-    print("Loop iteration: " + toString(i))
+    print("Loop iteration: " + i)
+}
+
+for i in 0..3 {
+    print("Range iteration: " + i)
+}
+
+for fruit in ["apple", "banana", "cherry"] {
+    print(fruit)
 }

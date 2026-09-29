@@ -1,24 +1,23 @@
-# TODO (sometimes i forget to update it)
+# TODO
 
-# Fix Date [IN PROGESS]
-- Build in Functions are not Registered
+## Done in Burn 2
 
-## Fix compilation to executable 
+- Fix Date: the date library is now written in Burn and fully working
+- Fix compilation to executable: `burn build` produces real native x86-64 executables
+- Add interfaces: `def interface`, checked conformance, dynamic dispatch and smart casts
+- Add better documentation using MDX: see `docs/`
+- Add compiling to JS: `burn build --target js` covers the whole language and standard library
+- Errors show up on line 1 even though the error is on another line: every diagnostic now has an exact line and column
+- Finish the VSCode Burn LSP: `burn lsp` plus the extension in `editors/vscode`
+- Add private and public for imports: `pub` and `priv`
+- Add async: `async fun`, `Future<T>` and `await`
 
-## Add Interfaces
+## Next
 
-## Add Better Documentation using MDX
-
-## Add compiling to JS or Kotlin
-- Basic implementation added
-- Need to complete all expression and statement types
-- Need to implement proper stdlib mapping
-
-## Errors Show up on line 1 even tough error is on another line
-
-## Finish VSCode Burn LSP
-
-## Add Private and Public for more complexity in import 
-
-## Add async
-
+- Native backends for Windows (PE/COFF) and ARM64
+- Closures that capture local variables
+- Generics for user-defined types and functions
+- `when`/`match` expressions
+- Precise (non-conservative) garbage collection and generational allocation
+- Package manager
+- Self-hosting

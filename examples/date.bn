@@ -1,0 +1,18 @@
+import "std/date"
+
+fun main() {
+    var today = Date.now()
+    print("Current date:")
+    print("Year: ${today.year}, Month: ${today.month}, Day: ${today.day}")
+    print("Formatted: " + Date.formatDate(today))
+
+    var birthday = Date.createDate(1990, 5, 15)
+    print("Custom date: " + birthday.format())
+
+    print("10 days from now: " + Date.addDays(today, 10).format())
+    print("10 days ago: " + Date.subtractDays(today, 10).format())
+    print("Leap year? " + Date.isLeapYear(today.year))
+    print("Days in this month: " + Date.daysInMonth(today.year, today.month))
+    print("Today is a " + Date.dayName(today))
+    print("Days since birthday: " + Date.daysBetween(birthday, today))
+}

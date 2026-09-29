@@ -1,0 +1,146 @@
+---
+title: Syntax tour
+description: Variables, functions, control flow and expressions.
+order: 2
+---
+
+# Syntax tour
+
+## Comments
+
+```burn
+print("code")
+```
+
+Line comments start with `//`, block comments use `/* ... */`.
+
+## Variables
+
+There are three ways to declare a variable. The type is inferred when you leave it out.
+
+```burn
+var count = 0
+var ratio: float = 1
+String name = "Burn"
+```
+
+The last form puts the type first, like `String string` or `[int] ids = []`. Primitive type names can be
+written in lower or upper case: `int`/`Int`, `float`/`Float`, `string`/`String`, `bool`/`Bool`, `any`/`Any`.
+
+Constants cannot be reassigned:
+
+```burn
+const LIMIT = 10
+const float RATE = 0.5
+```
+
+A variable declared without a value gets the zero value of its type (`0`, `0.0`, `false`, `""`, `[]`, `{}`
+or `null` for nullable types).
+
+## Numbers and operators
+
+`int` is a 64 bit integer and `float` a 64 bit floating point number. Mixing them promotes to `float`.
+Dividing two ints truncates.
+
+```burn
+print(7 / 2, 7 / 2.0, 17 % 5, 2 + 3 * 4)
+var x = 10
+x += 5
+x *= 2
+```
+
+Comparison operators are `== != < > <= >=`, logic uses `&& || !`.
+
+## Strings
+
+```burn
+var lang = "Burn"
+print("Hello " + lang + " " + 2)
+print("${lang} has ${len(lang)} letters")
+print("escapes: \n \t \" \\ \$ \u{2764}")
+```
+
+`+` converts the other side to a string automatically. `${...}` embeds any expression.
+
+## Functions
+
+```burn
+fun add(a: int, b: int): int {
+    return a + b
+}
+
+fun greet(string name) {
+    print("hi " + name)
+}
+
+fun square(x: float) {
+    return x * x
+}
+```
+
+Parameters can be written as `name: Type` or `Type name`. When the return type is left out, Burn infers it from
+the `return` statements (`square` returns `float`).
+
+Functions are values:
+
+```burn
+fun apply(f: fun(int): int, value: int): int {
+    return f(value)
+}
+
+var triple = fun(x: int): int {
+    return x * 3
+}
+
+print(apply(triple, 5))
+```
+
+Any function can be called with method syntax when its first parameter matches:
+
+```burn
+fun isEven(n: int): bool {
+    return n % 2 == 0
+}
+
+print(10.isEven(), "burn".upper())
+```
+
+## Control flow
+
+Parentheses around conditions are optional.
+
+```burn
+if (x > 5) {
+    print("big")
+} else if x == 5 {
+    print("five")
+} else {
+    print("small")
+}
+
+while (x > 0) {
+    x -= 1
+}
+
+for (var i = 0; i < 3; i = i + 1) {
+    print(i)
+}
+
+for i in 0..3 {
+    print(i)
+}
+
+for i in 1..=3 {
+    print(i)
+}
+
+for i, fruit in ["apple", "pear"] {
+    print(i, fruit)
+}
+
+for name, age in {"ada": 36, "alan": 41} {
+    print(name, age)
+}
+```
+
+`break` and `continue` work in every loop.

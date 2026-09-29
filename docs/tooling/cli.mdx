@@ -1,0 +1,41 @@
+---
+title: Command line
+description: Every burn command.
+order: 20
+---
+
+# Command line
+
+| Command | Description |
+| --- | --- |
+| `burn <file.bn> [args...]` | type-check and run with the bytecode VM |
+| `burn run <file.bn> [args...]` | the same |
+| `burn run --native <file.bn> [args...]` | compile to machine code and run it |
+| `burn build <file.bn>` | build a native executable next to the source file |
+| `burn build <file.bn> -o <path>` | choose the output path |
+| `burn build <file.bn> --target js` | write a Node.js script instead |
+| `burn build <file.bn> --emit-asm out.s` | also keep the generated assembly |
+| `burn build <file.bn> --no-strip` | keep symbols in the executable |
+| `burn check <files...>` | report errors and warnings without running |
+| `burn fmt <files...>` | print formatted code; `-w` rewrites files, `--check` fails when files are not formatted |
+| `burn repl` | interactive session |
+| `burn eval '<code>'` | run a snippet |
+| `burn lsp` | language server over stdio |
+| `burn dump --hir/--bytecode/--asm/--js <file.bn>` | show intermediate representations |
+| `burn version`, `burn help` | information |
+
+The Burn 1 flags still work: `-r`, `-e`, `-exe <file> [name]` and `-d`.
+
+## Environment variables
+
+| Variable | Effect |
+| --- | --- |
+| `BURN_CC` / `CC` | linker driver used by `burn build` (default `cc`) |
+| `NO_COLOR` | disable colored diagnostics |
+| `BURN_GC_THRESHOLD` | bytes allocated between garbage collections (default 32 MB) |
+| `BURN_GC_STATS` | print a line after every collection |
+
+## Exit codes
+
+A program exits with the code passed to `exit`, `1` after a runtime error, and `0` otherwise. `burn check`,
+`burn build` and `burn run` exit with `1` when the program has compile errors.

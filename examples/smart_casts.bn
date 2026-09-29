@@ -1,0 +1,36 @@
+fun describe(value: any): string {
+    if (value is int) {
+        return "an int, doubled: ${value * 2}"
+    }
+    if (value is string) {
+        return "a string of length ${value.length}"
+    }
+    if (value == null) {
+        return "nothing"
+    }
+    return "a " + typeOf(value)
+}
+
+fun greet(name: string?): string {
+    if (name == null) {
+        return "Hello, stranger"
+    }
+    return "Hello, " + name.upper()
+}
+
+fun main() {
+    print(describe(21))
+    print(describe("burn"))
+    print(describe(null))
+    print(describe(1.5))
+    print(greet(null))
+    print(greet("ada"))
+
+    any box = 5
+    box = "now I am a string"
+    print(box.length)
+
+    String explicit = "type first"
+    var inferred = 42
+    print(explicit, inferred + 1)
+}

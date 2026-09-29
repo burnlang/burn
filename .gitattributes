@@ -1,17 +1,17 @@
-# Set default behavior to automatically normalize line endings
 * text=auto
 
-# Go source files should always have LF line endings
-*.go text eol=lf
-
-# Burn language files should always have LF line endings
+*.rs text eol=lf
+*.s text eol=lf
 *.bn text eol=lf
+*.mdx text eol=lf
+*.md text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
 
-# Batch files should use CRLF
 *.bat text eol=crlf
 *.cmd text eol=crlf
 
-# Denote binary files explicitly
 *.png binary
 *.jpg binary
 *.exe binary

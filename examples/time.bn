@@ -1,0 +1,12 @@
+import "time"
+
+fun main() {
+    var start = Time.create(9, 30, 0, 0)
+    var lunch = Time.create(3, 15, 30, 250)
+    print("Start: " + start.format())
+    print("After: " + start.add(lunch).formatWithMs())
+    print("As seconds: " + start.toSeconds())
+    print("Parsed: " + Time.parse("12:05:09.5").formatWithMs())
+    print("Formatted seconds: " + formatTime(4000.0))
+    print("Now: " + currentTime())
+}

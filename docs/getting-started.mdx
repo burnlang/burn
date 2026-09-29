@@ -1,0 +1,82 @@
+---
+title: Getting started
+description: Install Burn, run your first program and build an executable.
+order: 1
+---
+
+# Getting started
+
+## Install
+
+Burn is written in Rust. You need a Rust toolchain (1.85 or newer). Building native executables also needs a C
+toolchain (`cc`), which provides the assembler and linker.
+
+```sh
+git clone https://github.com/burnlang/burn.git
+cd burn
+git checkout burnv2
+cargo build --release
+./target/release/burn version
+```
+
+Copy `target/release/burn` somewhere on your `PATH`, or run `cargo install --path crates/burn`.
+
+## Hello world
+
+```burn
+print("Hello, World!")
+```
+
+```sh
+burn hello.bn
+```
+
+Top level statements run from top to bottom. If the file defines `fun main()`, it is called after the top level code.
+
+## A slightly bigger program
+
+```burn
+def type Todo {
+    string title
+    bool done = false
+}
+
+fun summary(todos: [Todo]): string {
+    var open = 0
+    for t in todos {
+        if (!t.done) {
+            open += 1
+        }
+    }
+    return "${open} of ${len(todos)} still open"
+}
+
+fun main() {
+    var todos = [Todo { title: "write docs" }, Todo { title: "ship", done: true }]
+    print(summary(todos))
+}
+```
+
+## Build a native executable
+
+```sh
+burn build todo.bn          # produces ./todo
+./todo
+burn build todo.bn -o bin/todo --emit-asm todo.s
+```
+
+The executable is small (a few hundred kilobytes) and does not need Burn to be installed.
+
+## Try things in the REPL
+
+```text
+$ burn repl
+>>> var names = ["ada", "grace"]
+>>> names.length
+2
+>>> fun shout(s: string): string {
+...     return upper(s) + "!"
+... }
+>>> shout(names[1])
+GRACE!
+```

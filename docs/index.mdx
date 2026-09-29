@@ -1,0 +1,58 @@
+---
+title: Burn
+description: A small, statically typed language with smart casts that runs instantly and compiles to native code.
+order: 0
+---
+
+# Burn
+
+Burn is a general purpose programming language with a clean syntax, static types that you rarely have to write,
+and smart casts that follow your `if` checks. Burn 2 is a complete rewrite in Rust and x86-64 assembly.
+
+```burn
+def interface Shape {
+    fun area(): float
+}
+
+def class Circle: Shape {
+    float radius
+
+    fun area(): float {
+        return 3.14159 * radius * radius
+    }
+}
+
+fun describe(value: any): string {
+    if (value is Shape) {
+        return "a shape with area ${value.area()}"
+    }
+    return "something else"
+}
+
+print(describe(Circle { radius: 2 }))
+```
+
+## Two ways to run the same program
+
+| Command | What happens | Typical use |
+| --- | --- | --- |
+| `burn app.bn` | compiled to bytecode in memory and run by the VM, starts in milliseconds | development, scripts |
+| `burn build app.bn` | compiled to x86-64 assembly and linked into a standalone executable | shipping |
+| `burn build app.bn --target js` | compiled to a Node.js script | the web and JS tooling |
+
+All three backends share the same type checker and runtime library, so a program behaves the same way everywhere.
+
+## Where to go next
+
+- [Getting started](./getting-started.mdx)
+- [Syntax tour](./language/syntax.mdx)
+- [Types and definitions](./language/types.mdx)
+- [Smart casts and null safety](./language/smart-casts.mdx)
+- [Classes and interfaces](./language/classes-and-interfaces.mdx)
+- [Modules, `pub` and `priv`](./language/modules.mdx)
+- [Async](./language/async.mdx)
+- [Standard library](./stdlib/builtins.mdx)
+- [Command line](./tooling/cli.mdx)
+- [How the compiler works](./tooling/compiler.mdx)
+- [Editor support](./tooling/editors.mdx)
+- [Migrating from Burn 1](./migration.mdx)

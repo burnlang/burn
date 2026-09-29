@@ -1,10 +1,9 @@
-//define a type
-type Person {
+def type Person {
     name: string,
     age: int,
     active: bool
 }
-//create a person with the type
+
 fun createPerson(name: string, age: int): Person {
     return {
         name: name,
@@ -13,6 +12,10 @@ fun createPerson(name: string, age: int): Person {
     }
 }
 
-//print the created person
 var person = createPerson("John", 30)
 print("Person name: " + person.name)
+print(person)
+
+String city = "Berlin"
+int population = 3_700_000
+print("${city} has ${population} people")

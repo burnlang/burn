@@ -1,0 +1,65 @@
+{
+  "Main function": {
+    "prefix": "main",
+    "body": ["fun main() {", "\t$0", "}"],
+    "description": "Program entry point"
+  },
+  "Function": {
+    "prefix": "fun",
+    "body": ["fun ${1:name}(${2:param}: ${3:int}): ${4:int} {", "\t$0", "}"],
+    "description": "Function declaration"
+  },
+  "Async function": {
+    "prefix": "async",
+    "body": ["async fun ${1:name}(${2}): ${3:int} {", "\t$0", "}"],
+    "description": "Async function that returns a Future"
+  },
+  "Type definition": {
+    "prefix": "deftype",
+    "body": ["def type ${1:Name} {", "\t${2:string} ${3:field}", "}"],
+    "description": "Record type"
+  },
+  "Class definition": {
+    "prefix": "defclass",
+    "body": ["def class ${1:Name} {", "\t${2:string} ${3:field}", "", "\tfun ${4:method}(): ${5:string} {", "\t\t$0", "\t}", "}"],
+    "description": "Class with fields and methods"
+  },
+  "Interface definition": {
+    "prefix": "definterface",
+    "body": ["def interface ${1:Name} {", "\tfun ${2:method}(): ${3:string}", "}"],
+    "description": "Interface"
+  },
+  "Enum definition": {
+    "prefix": "defenum",
+    "body": ["def enum ${1:Name} { ${2:A}, ${3:B} }"],
+    "description": "Enum"
+  },
+  "If": {
+    "prefix": "if",
+    "body": ["if (${1:condition}) {", "\t$0", "}"]
+  },
+  "If else": {
+    "prefix": "ife",
+    "body": ["if (${1:condition}) {", "\t$2", "} else {", "\t$0", "}"]
+  },
+  "For range": {
+    "prefix": "for",
+    "body": ["for ${1:i} in ${2:0}..${3:10} {", "\t$0", "}"]
+  },
+  "For each": {
+    "prefix": "foreach",
+    "body": ["for ${1:item} in ${2:items} {", "\t$0", "}"]
+  },
+  "While": {
+    "prefix": "while",
+    "body": ["while (${1:condition}) {", "\t$0", "}"]
+  },
+  "Import": {
+    "prefix": "import",
+    "body": ["import \"${1:std/date}\""]
+  },
+  "Smart cast": {
+    "prefix": "is",
+    "body": ["if (${1:value} is ${2:string}) {", "\t$0", "}"]
+  }
+}

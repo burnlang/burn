@@ -1,0 +1,12 @@
+import (
+    "std/date"
+    "utils.bn"
+)
+
+fun main() {
+    var num = power(2, 3)
+    print("2^3 = " + num)
+    print("is 10 even? " + isEven(10))
+    print(join("Burn", "Lang", " "))
+    print("today: " + Date.today())
+}

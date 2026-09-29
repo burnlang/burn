@@ -1,261 +1,250 @@
-> [!TIP]
-> Burnlang is on hold at the moment because of personal preferences
-
 # Burnlang
 
 <p align="center">
     <img src="https://github.com/s42yt/assets/blob/master/assets/burnlang/burn-logo.png" alt="Burn Logo">
 </p>
 
-Burn is an easy-to-use general-purpose programming language designed with simplicity and expressiveness in mind.
+Burn is an easy-to-use, statically typed, general-purpose programming language with smart casts.
+Burn 2 is a complete rewrite in **Rust** and **x86-64 assembly**: programs run instantly on a bytecode VM
+during development and compile to small **native executables** for shipping.
 
 > [!WARNING]
-> Burn is **not** ready for Production! Syntax may still change and functions may not work. Please Report bugs as Issues
+> Burn is **not** ready for production. Syntax may still change. Please report bugs as issues.
 
+```burn
+def interface Shape {
+    fun area(): float
+}
+
+def class Circle: Shape {
+    float radius
+
+    fun area(): float {
+        return 3.14159 * radius * radius
+    }
+}
+
+def type Point {
+    float x
+    float y
+}
+
+fun describe(value: any): string {
+    if (value is Shape) {
+        return "a shape with area ${value.area()}"
+    }
+    if (value is string) {
+        return "a string of length ${value.length}"
+    }
+    return "something else"
+}
+
+fun main() {
+    String name = "Burn"
+    var p = Point { x: 1, y: 2 }
+    print(describe(Circle { radius: 2 }), describe(name), p)
+}
+```
 
 ## Features
 
-- Clean, readable syntax
-- Strong and static typing
-- First-class functions
-- Struct-based type system
-- Import system for code organization
-- Built-in REPL for interactive development
+- Static types with inference, so you rarely write them
+- Smart casts: `is` checks, `!= null` checks, early returns and assignments narrow types automatically
+- Null safety with `T?`
+- Type-first declarations: `String name = "Burn"`, `[int] ids = []`
+- One definition syntax for everything: `def type`, `def class`, `def interface`, `def enum`
+- Classes with fields, methods, constructors, static functions and private members; interfaces with checked conformance
+- Arrays, maps, records, enums, first-class functions and lambdas, string templates
+- `async fun` / `await` running on real threads
+- Modules with `pub` and `priv`
+- Standard library for dates, times, HTTP, JSON, math and strings
+- Three backends sharing one type checker and runtime: bytecode VM, native x86-64, JavaScript
+- Precise error messages with line, column and suggestions
+- Built-in REPL, formatter and language server, plus a VS Code extension
 
 ## Installation
 
-### Prerequisites
+Requirements: Rust 1.85 or newer. Building native executables needs a C toolchain (`cc`) for assembling and
+linking; native output currently targets x86-64 Linux and macOS.
 
-- Go 1.24 or higher
-
-### Building from Source
-
-1. Clone the repository:
 ```sh
 git clone https://github.com/burnlang/burn.git
 cd burn
-```
-
-2. Build the project:
-```sh
-go build
-```
-
-3. Run the executable:
-```sh
-# On Unix/Linux/macOS
-./burn
-
-# On Windows
-./burn.exe
+git checkout burnv2
+cargo build --release
+./target/release/burn version
 ```
 
 ## Usage
 
-Burn can be used in several ways:
-
-### Execute a Burn file
-
 ```sh
-burn path/to/file.bn
+burn app.bn                     # run instantly (bytecode VM)
+burn run --native app.bn        # compile to machine code and run
+burn build app.bn               # standalone executable ./app
+burn build app.bn -o bin/app --emit-asm app.s
+burn build app.bn --target js   # Node.js script app.js
+burn check app.bn               # type-check only
+burn fmt -w app.bn              # format in place
+burn repl                       # interactive session
+burn eval 'print(6 * 7)'        # run a snippet
+burn lsp                        # language server for editors
 ```
 
-### Start the REPL (interactive mode)
+The Burn 1 flags `-r`, `-e`, `-exe` and `-d` still work.
 
-```sh
-burn -r
-```
+## Language at a glance
 
-### Evaluate code directly
+### Variables and types
 
-```sh
-burn -e 'print("Hello, World!")'
-```
-
-### Compile to standalone executable
-
-```sh
-burn -exe path/to/file.bn
-```
-
-This compiles your Burn program into a standalone executable that can be run without the Burn interpreter. The executable will be named after your source file (e.g., `file.exe` on Windows or `file` on other platforms).
-
-You can also specify a custom output name:
-
-```sh
-burn -exe path/to/file.bn custom-name
-```
-
-The compiled executable includes the Burn runtime and all imported dependencies, so it can be distributed and run without requiring Burn to be installed.
-
-#### Example
-
-```sh
-# Compile
-burn -exe test/class.bn
-
-# Run the executable
-./class      # On Unix/Linux/macOS
-./class.exe  # On Windows
-```
-
-### Debug mode
-
-Add the `-d` flag to see tokens, AST, and execution details:
-
-```sh
-burn -d path/to/file.bn
-```
-
-## Language Syntax
-
-### Variables
-
-```bn
-var name = "John"
-var age = 30
-const PI = 3.14159
+```burn
+var count = 3
+var ratio: float = 2.5
+String name = "Burn"
+const LIMIT = 10
+string? nickname = null
+[int] numbers = [1, 2, 3]
+{string: int} ages = {"ada": 36}
 ```
 
 ### Functions
 
-```bn
+```burn
 fun add(a: int, b: int): int {
     return a + b
 }
+
+fun square(x: float) {
+    return x * x
+}
+
+var triple = fun(x: int): int {
+    return x * 3
+}
 ```
 
-### Types
+### Definitions
 
-```bn
-type Person {
+```burn
+def type Person {
     name: string,
-    age: int,
-    active: bool
+    age: int
 }
 
-var person = {
-    name: "John",
-    age: 30,
-    active: true
+def type UserId = int
+
+def enum Color { Red, Green, Blue }
+
+def interface Greeter {
+    fun greet(): string
 }
 
-print(person.name)
+def class Human: Greeter {
+    string name
+
+    fun greet(): string {
+        return "Hello, " + name
+    }
+}
 ```
 
-### Classes
+### Control flow
 
-```bn
-// Classes provide a way to organize related functions
-class Human {
-    fun create(name: string, age: int): Human {
-        return {
-            name: name,
-            age: age
-        }
-    }
-    
-    fun greet(human: Human): string {
-        return "Hello, " + human.name + "!"
-    }
-}
-
-fun main() {
-    var john = Human.create("John", 30)
-    print(Human.greet(john))
-}
-``` 
-
-### Control Flow
-
-```bn
-// Define variables before using them
-var x = 3
-var counter = 0
-
-// If statements
-if (x > 5) {
-    print("x is greater than 5")
-} else if (x == 5) {
-    print("x equals 5")
+```burn
+if (count > 2) {
+    print("many")
 } else {
-    print("x is less than 5")
+    print("few")
 }
 
-// While loops
-while (counter < 3) {
-    print("Counter: " + toString(counter))
-    counter = counter + 1
+for i in 0..3 {
+    print(i)
 }
 
-// For loops
-for (var i = 0; i < 3; i = i + 1) {
-    print("Loop iteration: " + toString(i))
+for i, n in numbers {
+    print(i, n)
+}
+
+while (count > 0) {
+    count -= 1
 }
 ```
 
 ### Imports
 
-```bn
-import "test/utils.bn"
+```burn
+import "std/date"
+import (
+    "http"
+    "utils.bn"
+)
+
+print(Date.today())
+```
+
+### Async
+
+```burn
+async fun fetch(n: int): int {
+    sleep(100)
+    return n * 2
+}
 
 fun main() {
-    var result = power(2, 3)  // Using imported function
-    print("2^3 = " + toString(result))
+    var a = fetch(1)
+    var b = fetch(2)
+    print(await a + await b)
 }
 ```
 
-### Built-in Functions
+## Documentation
 
-- `print(value)`: Display values to console
-- `toString(value)`: Convert a value to string
-- `input(prompt)`: Read user input with a prompt
+The full documentation is written in MDX in [`docs/`](docs/index.mdx): a syntax tour, types, smart casts,
+classes and interfaces, modules, async, the standard library, the command line and how the compiler works.
 
 ## Examples
 
-Check the [test](test/) directory for example programs:
+See [`examples/`](examples/) and the test programs in [`tests/cases/`](tests/cases/).
 
-- [Main example](test/main.bn)
-- [Type definitions](test/type.bn)
-- [Input handling](test/input.bn)
-- [Utility functions](test/utils.bn)
+## Project structure
 
-## Project Structure
+- `crates/burn/`: the compiler, VM and tools
+  - `lexer.rs`, `parser.rs`, `ast.rs`: front end
+  - `check/`: type checker with smart casts, lowers to the typed IR in `hir.rs`
+  - `vm/`: bytecode compiler and virtual machine
+  - `native/`: x86-64 code generator, hand-written entry assembly, linker driver
+  - `js/`: JavaScript backend
+  - `lsp/`, `fmt.rs`, `repl.rs`: tooling
+- `crates/burn-runtime/`: runtime shared by the VM and native executables (GC, strings, collections, JSON, HTTP, tasks)
+- `lib/std/`: the standard library, written in Burn
+- `editors/vscode/`: VS Code extension
+- `docs/`: documentation
+- `tests/`: end-to-end tests run against every backend
 
-- `cmd/`: Command-line interface
-- `pkg/`: Core packages
-  - `ast/`: Abstract syntax tree definitions
-  - `lexer/`: Tokenization of source code
-  - `parser/`: Parsing tokens into AST
-  - `typechecker/`: Type checking system
-  - `interpreter/`: Runtime execution
+## Development
+
+```sh
+cargo test            # runs every example on the VM, natively and as JavaScript
+cargo clippy --all-targets
+```
 
 ## Contributing
 
-Contributions are welcome! Here's how you can contribute:
+Contributions are welcome:
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+3. Commit your changes
+4. Push the branch and open a pull request
 
-Please make sure your code follows the existing style and includes appropriate tests.
+Please make sure `cargo test` passes and new language features come with a test in `tests/cases/`.
 
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## Acknowledgments
+## Plans for Burn
 
-- Thanks to all contributors who have helped shape the Burn language
-- Inspired by modern programming languages with clean syntax
-
-
-## Plans For Burn
-
-1. Until language is ready for Production only master branch will be used
-2. Post Production Language will be self hosted
-3. Documentaion of the entire language with its own website
-4. After Selfhosting Package Manager will be next and use of other packages will be possible
-5. ...
+1. Native backends for Windows and ARM64
+2. Self-hosting the compiler
+3. A documentation website built from `docs/`
+4. A package manager
