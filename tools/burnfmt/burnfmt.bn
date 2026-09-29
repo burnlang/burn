@@ -1,0 +1,416 @@
+const VERSION = "2.0.0"
+
+def enum Kind { Word, Num, Str, Comment, Op, Open, Close, Comma, Semi, Colon, Dot }
+
+def type Tok {
+    Kind kind
+    string text
+    bool tight
+}
+
+var KEYWORDS_SPACE = [
+    "if", "while", "for", "return", "else", "import", "fun", "var", "const", "def", "pub", "priv", "async", "await", "in", "is", "as", "static"
+]
+
+var TWO_CHAR_OPS = ["==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "..", "->", "!!"]
+
+var GENERIC_TYPES = ["Future", "Task", "Map", "Array"]
+
+var DECL_WORDS = ["fun", "static", "def", "async", "pub", "priv"]
+
+fun isAsciiDigit(c: string): bool {
+    return c >= "0" && c <= "9"
+}
+
+fun isAsciiAlnum(c: string): bool {
+    return isAsciiDigit(c) || (c >= "a" && c <= "z") || (c >= "A" && c <= "Z")
+}
+
+fun isWordStart(c: string): bool {
+    return c == "_" || isLetter(c)
+}
+
+fun isWordChar(c: string): bool {
+    return c == "_" || isAlphanumeric(c)
+}
+
+fun isSpace(c: string): bool {
+    return isWhitespace(c)
+}
+
+fun tok(kind: Kind, text: string): Tok {
+    return Tok { kind: kind, text: text, tight: false }
+}
+
+fun lexLine(line: string): [Tok] {
+    var cs = chars(line)
+    var n = len(cs)
+    var out: [Tok] = []
+    var i = 0
+    while (i < n) {
+        var c = cs[i]
+        if (c == " " || c == "\t") {
+            i += 1
+            continue
+        }
+        if (c == "/" && i + 1 < n && cs[i + 1] == "/") {
+            out.push(tok(Kind.Comment, join(slice(cs, i, n), "")))
+            break
+        }
+        if (c == "\"" || c == "'") {
+            var start = i
+            i += 1
+            var depth = 0
+            while (i < n) {
+                if (cs[i] == "\\") {
+                    i += 2
+                    continue
+                }
+                if (cs[i] == "$" && i + 1 < n && cs[i + 1] == "{") {
+                    depth += 1
+                    i += 2
+                    continue
+                }
+                if (depth > 0 && cs[i] == "}") {
+                    depth -= 1
+                    i += 1
+                    continue
+                }
+                if (depth == 0 && cs[i] == c) {
+                    i += 1
+                    break
+                }
+                i += 1
+            }
+            out.push(tok(Kind.Str, join(slice(cs, start, min(i, n)), "")))
+            continue
+        }
+        if (isWordStart(c)) {
+            var start = i
+            while (i < n && isWordChar(cs[i])) {
+                i += 1
+            }
+            out.push(tok(Kind.Word, join(slice(cs, start, i), "")))
+            continue
+        }
+        if (isAsciiDigit(c)) {
+            var start = i
+            var hex = false
+            while (i < n) {
+                var d = cs[i]
+                if (d == "x" || d == "X") {
+                    hex = true
+                }
+                var exponentSign = (d == "-" || d == "+") && (cs[i - 1] == "e" || cs[i - 1] == "E") && !hex
+                if (isAsciiAlnum(d) || d == "_" || (d == "." && i + 1 < n && isAsciiDigit(cs[i + 1])) || exponentSign) {
+                    i += 1
+                } else {
+                    break
+                }
+            }
+            out.push(tok(Kind.Num, join(slice(cs, start, i), "")))
+            continue
+        }
+        var two = join(slice(cs, i, min(i + 2, n)), "")
+        var three = join(slice(cs, i, min(i + 3, n)), "")
+        if (three == "..=") {
+            out.push(tok(Kind.Op, three))
+            i += 3
+            continue
+        }
+        if (contains(TWO_CHAR_OPS, two)) {
+            out.push(tok(Kind.Op, two))
+            i += 2
+            continue
+        }
+        if (c == "(" || c == "[" || c == "{") {
+            out.push(Tok { kind: Kind.Open, text: c, tight: i + 1 < n && !isSpace(cs[i + 1]) })
+        } else if (c == ")" || c == "]" || c == "}") {
+            out.push(Tok { kind: Kind.Close, text: c, tight: i > 0 && !isSpace(cs[i - 1]) })
+        } else if (c == ",") {
+            out.push(tok(Kind.Comma, c))
+        } else if (c == ";") {
+            out.push(tok(Kind.Semi, c))
+        } else if (c == ":") {
+            out.push(tok(Kind.Colon, c))
+        } else if (c == ".") {
+            out.push(tok(Kind.Dot, c))
+        } else {
+            out.push(tok(Kind.Op, c))
+        }
+        i += 1
+    }
+    return out
+}
+
+fun isOperandEnd(t: Tok): bool {
+    if (t.kind == Kind.Word) {
+        return !contains(KEYWORDS_SPACE, t.text) || t.text == "self"
+    }
+    if (t.kind == Kind.Num || t.kind == Kind.Str || t.kind == Kind.Close) {
+        return true
+    }
+    if (t.kind == Kind.Op) {
+        return t.text == "?" || t.text == "!!"
+    }
+    return false
+}
+
+fun isRange(t: Tok): bool {
+    return t.kind == Kind.Op && (t.text == ".." || t.text == "..=")
+}
+
+fun isOpen(t: Tok, c: string): bool {
+    return t.kind == Kind.Open && t.text == c
+}
+
+fun isClose(t: Tok, c: string): bool {
+    return t.kind == Kind.Close && t.text == c
+}
+
+fun isPunct(t: Tok): bool {
+    return t.kind == Kind.Comma || t.kind == Kind.Semi || t.kind == Kind.Colon
+}
+
+fun renderLine(toks: [Tok]): string {
+    var parts: [string] = []
+    var genericDepth = 0
+    for idx, t in toks {
+        var space = true
+        if (idx == 0) {
+            space = false
+        } else {
+            var p = toks[idx - 1]
+            if (t.kind == Kind.Comment) {
+                space = true
+            } else if (isOpen(p, "{")) {
+                space = !p.tight && !isClose(t, "}")
+            } else if (p.kind == Kind.Open) {
+                space = false
+            } else if (isClose(t, "}")) {
+                space = !t.tight && !isOpen(p, "{")
+            } else if (t.kind == Kind.Close) {
+                space = false
+            } else if (isPunct(t)) {
+                space = false
+            } else if (isPunct(p)) {
+                space = true
+            } else if (t.kind == Kind.Dot || p.kind == Kind.Dot) {
+                space = false
+            } else if (isRange(p) || isRange(t)) {
+                space = false
+            } else if (p.kind == Kind.Op && p.text == "!!") {
+                space = !(t.kind == Kind.Dot || isOpen(t, "(") || isOpen(t, "["))
+            } else if (t.kind == Kind.Op && (t.text == "!!" || t.text == "?")) {
+                space = false
+            } else if (p.kind == Kind.Op && p.text == "!" && isOpen(t, "(")) {
+                space = false
+            } else if (p.kind == Kind.Word && isOpen(t, "(")) {
+                space = contains(KEYWORDS_SPACE, p.text) && p.text != "fun"
+            } else if (p.kind == Kind.Word && t.kind == Kind.Op && t.text == "<" && contains(GENERIC_TYPES, p.text)) {
+                genericDepth += 1
+                space = false
+            } else if (p.kind == Kind.Op && p.text == "<" && genericDepth > 0) {
+                space = false
+            } else if (t.kind == Kind.Op && t.text == ">" && genericDepth > 0) {
+                genericDepth -= 1
+                space = false
+            } else if (isOpen(t, "{")) {
+                space = true
+            } else if (isOpen(t, "(") || isOpen(t, "[")) {
+                space = !isOperandEnd(p) || (p.kind == Kind.Word && contains(KEYWORDS_SPACE, p.text))
+            } else if (p.kind == Kind.Op && (p.text == "-" || p.text == "!")) {
+                space = idx >= 2 && isOperandEnd(toks[idx - 2]) && p.text == "-"
+            } else {
+                space = true
+            }
+        }
+        if (space && len(parts) > 0) {
+            parts.push(" ")
+        }
+        parts.push(t.text)
+    }
+    return join(parts, "")
+}
+
+fun splitSegments(toks: [Tok]): [[Tok]] {
+    var n = len(toks)
+    [bool] openMatched = []
+    [bool] closeLocal = []
+    for i in 0..n {
+        openMatched.push(false)
+        closeLocal.push(false)
+    }
+    [int] stack = []
+    for i, t in toks {
+        if (isOpen(t, "{")) {
+            stack.push(i)
+        } else if (isClose(t, "}") && len(stack) > 0) {
+            var o = pop(stack)
+            openMatched[o] = true
+            closeLocal[i] = true
+        }
+    }
+    [[Tok]] segs = []
+    [Tok] cur = []
+    for i, t in toks {
+        if (isClose(t, "}") && !closeLocal[i] && len(cur) > 0) {
+            segs.push(cur)
+            cur = []
+        }
+        cur.push(t)
+        if (isOpen(t, "{") && !openMatched[i] && i + 1 < n) {
+            segs.push(cur)
+            cur = []
+        }
+    }
+    if (len(cur) > 0) {
+        segs.push(cur)
+    }
+    [[Tok]] merged = []
+    for seg in segs {
+        if (len(seg) == 1 && seg[0].kind == Kind.Comment && len(merged) > 0) {
+            merged[len(merged) - 1].push(seg[0])
+            continue
+        }
+        merged.push(seg)
+    }
+    return merged
+}
+
+fun sourceLines(src: string): [string] {
+    var lines = split(src, "\n")
+    if (len(lines) > 0 && lines[len(lines) - 1] == "") {
+        pop(lines)
+    }
+    return lines
+}
+
+fun trimEnd(text: string): string {
+    var cs = chars(text)
+    var end = len(cs)
+    while (end > 0 && isSpace(cs[end - 1])) {
+        end -= 1
+    }
+    return join(slice(cs, 0, end), "")
+}
+
+pub fun format(src: string): string {
+    [string] out = []
+    var depth = 0
+    var blank = 0
+    var inBlockComment = false
+    var started = false
+    var lastWasClose = false
+    for raw in sourceLines(src) {
+        var line = trim(raw)
+        if (inBlockComment) {
+            out.push(trimEnd(raw) + "\n")
+            if (contains(line, "*/")) {
+                inBlockComment = false
+            }
+            continue
+        }
+        if (startsWith(line, "/*")) {
+            out.push(repeat("    ", max(depth, 0)) + line + "\n")
+            inBlockComment = !contains(line, "*/")
+            continue
+        }
+        if (line == "") {
+            blank += 1
+            continue
+        }
+        var first = started && blank > 0
+        blank = 0
+        for si, seg in splitSegments(lexLine(line)) {
+            var leadingClose = 0
+            while (leadingClose < len(seg) && seg[leadingClose].kind == Kind.Close) {
+                leadingClose += 1
+            }
+            var delta = 0
+            for t in seg {
+                if (t.kind == Kind.Open) {
+                    delta += 1
+                } else if (t.kind == Kind.Close) {
+                    delta -= 1
+                }
+            }
+            var isDecl = seg[0].kind == Kind.Word && contains(DECL_WORDS, seg[0].text)
+            if ((si == 0 && first && !(leadingClose > 0 && len(seg) == 1)) || (isDecl && lastWasClose)) {
+                out.push("\n")
+            }
+            lastWasClose = len(seg) == 1 && isClose(seg[0], "}")
+            out.push(repeat("    ", max(depth - leadingClose, 0)) + renderLine(seg) + "\n")
+            depth += delta
+        }
+        started = true
+    }
+    return join(out, "")
+}
+
+fun usage() {
+    print("burnfmt ${VERSION} - the Burn code formatter, written in Burn")
+    print("")
+    print("Usage:")
+    print("  burnfmt [options] [file...]")
+    print("")
+    print("Options:")
+    print("  -w, --write     write the result back to the files")
+    print("  -l, --check     list files that are not formatted and exit with 1")
+    print("  -h, --help      show this help")
+    print("  -v, --version   show the version")
+    print("")
+    print("Without files, burnfmt formats standard input.")
+}
+
+fun main() {
+    var writeBack = false
+    var check = false
+    [string] files = []
+    for a in args() {
+        if (a == "-w" || a == "--write") {
+            writeBack = true
+        } else if (a == "-l" || a == "--list" || a == "--check") {
+            check = true
+        } else if (a == "-h" || a == "--help") {
+            usage()
+            return
+        } else if (a == "-v" || a == "--version") {
+            print("burnfmt ${VERSION}")
+            return
+        } else if (startsWith(a, "-")) {
+            eprint("burnfmt: unknown option ${a}")
+            exit(2)
+        } else {
+            files.push(a)
+        }
+    }
+    if (len(files) == 0) {
+        write(format(readStdin()))
+        return
+    }
+    var code = 0
+    for f in files {
+        if (!fileExists(f)) {
+            eprint("burnfmt: cannot read ${f}")
+            code = 1
+            continue
+        }
+        var src = readFile(f)
+        var formatted = format(src)
+        if (check) {
+            if (formatted != src) {
+                print("${f} is not formatted")
+                code = 1
+            }
+        } else if (writeBack) {
+            if (formatted != src && !writeFile(f, formatted)) {
+                eprint("burnfmt: cannot write ${f}")
+                code = 1
+            }
+        } else {
+            write(formatted)
+        }
+    }
+    exit(code)
+}
