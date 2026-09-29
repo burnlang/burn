@@ -41,6 +41,8 @@ burnc app.bn -o bin/app               # choose the output path
 burnc app.bn --emit-asm app.s         # also write the generated assembly
 burnc app.bn --target js -o app.js    # Node.js script
 burnc app.bn --target bvm             # app.bvmc, bytecode for bvm
+burnc app.bn --target bar             # app.bar, the program and its bytecode libraries
+burnc app.bar -o app                  # a native executable that runs a bytecode archive
 burnc app.bn --no-strip               # keep symbols for debuggers and profilers
 burnc --check a.bn b.bn               # type-check only
 ```
@@ -50,7 +52,8 @@ burnc --check a.bn b.bn               # type-check only
 | `-o`, `--output <path>` | output file; defaults to the source name without `.bn` (`.js` for JavaScript) |
 | `--target native` | x86-64 machine code linked into an executable (default) |
 | `--target js` | a self-contained Node.js script |
-| `--target bvm` | a `.bvmc` bytecode module for [bvm](../bvm/overview.mdx) |
+| `--target bvm` | a `.bvmc` bytecode module for [bvm](../bvm/overview.mdx), with imported bytecode libraries linked in |
+| `--target bar` | a runnable [archive](../bvm/archives.mdx) with the program and its bytecode libraries |
 | `--emit-asm <path>` | write the generated assembly as well (bvm assembly for `--target bvm`) |
 | `--no-strip` | keep the symbol table |
 | `--check <files...>` | report errors and warnings without producing output |
@@ -85,6 +88,9 @@ bvm app.bvmc                 # run bytecode (or a .bvm assembly file)
 bvm asm app.bvm -o app.bvmc  # assemble
 bvm dis app.bvmc             # disassemble
 bvm check app.bvm            # verify without running
+bvm link a.bvm b.bvmc -o c.bvmc   # link modules
+bvm pack app.bvmc lib.bvmc -o app.bar   # bundle an archive; ./app.bar runs it
+bvm list app.bar             # show an archive's contents
 bvm runtime                  # list the runtime functions
 ```
 

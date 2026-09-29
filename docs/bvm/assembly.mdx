@@ -59,6 +59,7 @@ end
 
 | Directive | Meaning |
 | --- | --- |
+| `module name` | name the module; other modules can call its functions as `name::function` |
 | `type Name = <definition>` | declare a type; the next free type id is assigned in order, starting at 12 |
 | `type #n = <definition>` | declare a type with no name; `n` must be the next free id |
 | `global name` | declare a global variable; globals start out as 0 |
@@ -68,6 +69,8 @@ end
 | `loc "file:line:col"` | add a source location; instructions that can fail refer to it by index |
 | `entry name` | the function that runs when the module starts (default: `main`) |
 | `func name(params) ... end` | define a function |
+| `extern func name(params)` | declare a function that another module defines (see [linking](./linking.mdx)) |
+| `@Name key=value ...` | annotate the declaration on the next line (see [linking](./linking.mdx#annotations)) |
 
 ## Types
 
@@ -108,6 +111,10 @@ end
 func add(2)         ; two unnamed parameters, used as `load 0` and `load 1`
 ```
 
+Parameters and the result can have types, which makes a typed signature: `func dist(a: Point, b: Point): float`.
+Give either every parameter a type or none of them, and use `_` for an unnamed parameter (`func f(_: int): int`).
+Signatures are checked when modules are linked and let front ends import the function with its real types.
+
 Parameters come first in the local slots, followed by the locals in declaration order. Locals start out as 0.
 Wherever a local is expected, you can use its name or its slot number.
 
@@ -122,6 +129,7 @@ Each instruction is a mnemonic followed by its operands:
 
 ```bvm
 const 42          const -1.5       const true
+tconst [int]      lconst 3          ; a type id and a location index, renumbered by the linker
 str "text"        fref helper      call helper
 load x            store 0          gload counter
 jz done           dispatch Shape.area

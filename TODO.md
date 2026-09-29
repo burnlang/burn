@@ -14,6 +14,9 @@
 - Toolchain installer with `burni`, `burnc`, `burnfmt` and `burn-lsp`
 - Formatter written in Burn (`tools/burnfmt`)
 - bvm: a general-purpose virtual machine with an assembler, bytecode format, verifier, host functions and an example language (Ember)
+- bvm: linking, `.bar` archives, mixins (`@Inject`, `@Overwrite`, `@Redirect`) and a native bridge
+- Annotations: `def annotation`, `@Getter`, `@Setter`, `@Deprecated`, `@Export`, `@Native`, `annotationsOf`
+- Bytecode libraries in Burn (`import "lib.bvmc"`) on bvm, in archives and in native executables
 
 ## Next
 
@@ -25,5 +28,7 @@
 - Package manager
 - Self-hosting (the formatter is the first tool written in Burn)
 - Windows installer
-- bvm: a JIT or threaded-code dispatch, a debugger and a module linker for multi-file bytecode
+- bvm: a JIT or threaded-code dispatch and a debugger
+- Annotations on parameters and reflection for functions and fields
+- Compile a Burn program as several bytecode modules, one per source file
 - More languages on bvm (a Burn-to-bvm compiler written in Burn, a Lisp)

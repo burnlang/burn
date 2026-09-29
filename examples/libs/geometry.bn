@@ -1,0 +1,40 @@
+def type Point {
+    float x
+    float y
+}
+
+var created = 0
+
+pub fun point(x: float, y: float): Point {
+    created += 1
+    return Point { x: x, y: y }
+}
+
+pub fun dist(a: Point, b: Point): float {
+    var dx = a.x - b.x
+    var dy = a.y - b.y
+    return sqrt(dx * dx + dy * dy)
+}
+
+pub fun describe(p: Point): string {
+    return "(" + p.x.toString() + ", " + p.y.toString() + ")"
+}
+
+pub fun count(): int {
+    return created
+}
+
+pub fun names(ps: [Point]): [string] {
+    var out: [string] = []
+    for p in ps {
+        out.push(describe(p))
+    }
+    return out
+}
+
+@Native
+fun hostName(): string
+
+pub fun greeting(): string {
+    return "geometry library, hosted by " + hostName()
+}

@@ -656,6 +656,7 @@ impl<'a> Checker<'a> {
             }
         }
         self.check_conformance(loaded);
+        self.check_mixins();
         for &mi in &loaded.order {
             self.check_init(mi, &loaded.modules[mi].ast);
         }

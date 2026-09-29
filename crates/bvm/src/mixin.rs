@@ -1,5 +1,6 @@
 use crate::module::{Annotation, Module, Target, Value};
 use crate::op::{rt_by_name, Op};
+use burn_runtime::meta::Desc;
 
 pub const KINDS: [&str; 3] = ["Inject", "Overwrite", "Redirect"];
 
@@ -146,6 +147,7 @@ fn parse(m: &Module) -> Result<Vec<Mixin>, String> {
                 }
             }
         };
+        check_types(m, a, hook, target, &kind)?;
         out.push(Mixin {
             hook,
             target,
@@ -155,6 +157,57 @@ fn parse(m: &Module) -> Result<Vec<Mixin>, String> {
         });
     }
     Ok(out)
+}
+
+fn unboxed(m: &Module, t: u32) -> bool {
+    matches!(
+        m.types.get(t as usize),
+        Some(Desc::Int | Desc::Float | Desc::Bool | Desc::Enum { .. } | Desc::Func | Desc::Void)
+    )
+}
+
+fn check_types(m: &Module, a: &Annotation, hook: u32, target: u32, kind: &Kind) -> Result<(), String> {
+    let hf = &m.funcs[hook as usize];
+    let Some(hs) = &hf.sig else { return Ok(()) };
+    let (params, ret): (Vec<u32>, Option<Vec<u32>>) = match kind {
+        Kind::RedirectCall(c) => match &m.funcs[*c as usize].sig {
+            Some(cs) => (cs.params.clone(), Some(vec![cs.ret])),
+            None => return Ok(()),
+        },
+        Kind::RedirectRt(_) | Kind::RedirectHost(_) => return Ok(()),
+        _ => {
+            let Some(ts) = &m.funcs[target as usize].sig else { return Ok(()) };
+            match kind {
+                Kind::Overwrite => (ts.params.clone(), Some(vec![ts.ret])),
+                Kind::Head { cancellable: true } => {
+                    let r = if ts.ret == 1 {
+                        vec![5]
+                    } else if unboxed(m, ts.ret) {
+                        vec![ts.ret]
+                    } else {
+                        let mut v = vec![ts.ret];
+                        v.extend(m.types.iter().position(|d| *d == Desc::Optional(ts.ret)).map(|i| i as u32));
+                        v
+                    };
+                    (ts.params.clone(), Some(r))
+                }
+                Kind::Return if hf.params == ts.params.len() as u32 + 1 => {
+                    let mut ps = ts.params.clone();
+                    ps.push(ts.ret);
+                    (ps, Some(vec![ts.ret]))
+                }
+                _ => (ts.params.clone(), None),
+            }
+        }
+    };
+    let bad_ret = ret.as_ref().is_some_and(|r| !r.contains(&hs.ret));
+    if hs.params != params || bad_ret {
+        return Err(format!(
+            "@{} {}: the types of {} do not fit {}",
+            a.name, hf.name, hf.name, m.funcs[target as usize].name
+        ));
+    }
+    Ok(())
 }
 
 fn shift(op: Op, by: u32) -> Op {

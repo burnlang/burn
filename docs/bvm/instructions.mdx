@@ -14,6 +14,8 @@ the rightmost value is the top of the stack: `a b → c` pops `b`, then `a`, and
 | Instruction | Stack | Meaning |
 | --- | --- | --- |
 | `const v` | `→ v` | push an integer, float (as its bits), `true`, `false` or `null` |
+| `tconst T` | `→ id` | push the id of type `T`; the linker renumbers it when it merges type tables |
+| `lconst n` | `→ n` | push a source location index; the linker renumbers it when it merges modules |
 | `str "s"` | `→ s` | push a string from the module's string pool (never garbage collected) |
 | `fref f` | `→ f` | push a function reference for `calli` |
 | `load x` | `→ v` | push local `x` |
@@ -103,6 +105,9 @@ runtime error: index 5 out of bounds (length 2)
 ```
 
 ## Fused instructions
+
+Use `tconst` and `lconst` rather than `const` wherever a type id or a location index is passed to the runtime
+(for example to `rt to_str` or `rt parse_int`), so the value stays correct after linking.
 
 When a module is loaded, bvm rewrites some common sequences into single instructions, for example
 `load; load; ilt; jz` into one compare-and-branch, `load; const; iadd; store` into an increment, and `load; getf`

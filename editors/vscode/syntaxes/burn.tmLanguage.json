@@ -5,6 +5,7 @@
   "fileTypes": ["bn"],
   "patterns": [
     { "include": "#comments" },
+    { "include": "#annotations" },
     { "include": "#definitions" },
     { "include": "#functions" },
     { "include": "#keywords" },
@@ -21,10 +22,21 @@
         { "name": "comment.block.burn", "begin": "/\\*", "end": "\\*/" }
       ]
     },
+    "annotations": {
+      "patterns": [
+        {
+          "match": "(@)([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "punctuation.definition.annotation.burn" },
+            "2": { "name": "storage.type.annotation.burn" }
+          }
+        }
+      ]
+    },
     "definitions": {
       "patterns": [
         {
-          "match": "\\b(def)\\s+(type|struct|record|interface|trait|class|enum)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(def)\\s+(type|struct|record|interface|trait|class|enum|annotation)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": { "name": "keyword.declaration.burn" },
             "2": { "name": "storage.type.burn" },

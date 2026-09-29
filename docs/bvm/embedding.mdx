@@ -68,6 +68,17 @@ let parsed = bvm::asm::assemble(&text)?;              // from text
 let from_disk = bvm::read(std::path::Path::new("app.bvmc"))?;   // either format
 ```
 
+## Linking and archives
+
+```rust
+let program = bvm::link(&[app, library])?;              // resolve externs, apply mixins
+let archive = bvm::archive::Archive::decode(&bytes)?;    // a .bar file
+let (module, host) = bvm::load_bytes(&bytes)?;           // a module or an archive, linked, with its host
+let code = bvm::run_file(std::path::Path::new("app.bar"), vec![])?;
+```
+
+See [modules and linking](./linking.mdx), [archives](./archives.mdx) and [mixins](./mixins.mdx).
+
 ## Running with host functions
 
 ```rust
@@ -101,7 +112,8 @@ you can catch with `std::panic::catch_unwind`. Burn's REPL does this.
 `.bvmc` files are little-endian:
 
 ```text
-"BVM\0"   u16 format version (1)   u16 flags (0)
+"BVM\0"   u16 format version (2)   u16 flags (0)
+name      the module name (u32 length, UTF-8 bytes)
 types     u32 count, then one descriptor per type from id 12 on
 strings   u32 count, then (u32 length, UTF-8 bytes) each
 locs      same layout as strings
@@ -110,8 +122,13 @@ imports   u32 count, then (name, u32 argc) each
 tables    u32 count, then (name, u32 argc, u32 entries, (u32 type id, u32 function) each) each
 entry     u32 function index, or 0xffffffff for none
 runtime   u32 count, then the names of the runtime functions the code uses
-functions u32 count, then (name, u32 params, u32 locals, u32 name count, names, u32 op count, ops) each
+functions u32 count, then (name, u8 flags, [signature], u32 params, u32 locals, u32 name count, names,
+          u32 op count, ops) each; flag 1 = extern, flag 2 = has a signature (u32 count, type ids, u32 result)
+notes     u32 count, then (u8 target kind, u32 index, name, u32 argument count, (key, typed value) each) each
 ```
+
+Format 2 added the module name, extern functions, signatures and annotations (the `notes` section). bvm still
+reads format 1 files.
 
 Each instruction is a one-byte opcode followed by fixed-size operands (u32 indexes, a u64 for `const`, one byte for
 a comparison). `rt` operands index the file's runtime name list rather than the VM's internal numbering, so

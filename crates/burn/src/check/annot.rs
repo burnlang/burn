@@ -413,3 +413,93 @@ impl<'a> Checker<'a> {
         Expr::new(ExprKind::Seq(stmts, Box::new(Expr::new(ExprKind::Local(res), T_ARR_ANY))), T_ARR_ANY)
     }
 }
+
+impl<'a> Checker<'a> {
+    pub fn check_mixins(&mut self) {
+        let hooks: Vec<(FuncId, Annotation)> = self
+            .funcs
+            .iter()
+            .enumerate()
+            .flat_map(|(i, f)| {
+                f.annotations
+                    .iter()
+                    .filter(|a| matches!(a.name.as_str(), "Inject" | "Overwrite" | "Redirect"))
+                    .map(move |a| (i as FuncId, a.clone()))
+            })
+            .collect();
+        for (hook, a) in hooks {
+            let Some(target) = a.str_arg("target").map(|s| s.to_string()) else { continue };
+            let Some(tf) = self.funcs.iter().position(|f| f.name == target).map(|i| i as FuncId) else {
+                continue;
+            };
+            if tf == hook {
+                self.error(a.span, "a mixin cannot target itself");
+                continue;
+            }
+            let (want_params, want_ret, what): (Vec<TyId>, Option<TyId>, String) = match a.name.as_str() {
+                "Redirect" => {
+                    let Some(call) = a.str_arg("call").map(|s| s.to_string()) else { continue };
+                    let Some(cf) = self.funcs.iter().position(|f| f.name == call).map(|i| i as FuncId) else {
+                        continue;
+                    };
+                    let ret = self.func_ret(cf);
+                    (self.funcs[cf as usize].params.iter().map(|p| p.1).collect(), Some(ret), format!("`{}`", call))
+                }
+                _ => {
+                    let ret = self.func_ret(tf);
+                    let params: Vec<TyId> = self.funcs[tf as usize].params.iter().map(|p| p.1).collect();
+                    let at = a.str_arg("at").unwrap_or("head");
+                    let cancellable = matches!(a.arg("cancellable"), Some(Const::Bool(true)));
+                    match (a.name.as_str(), at) {
+                        ("Overwrite", _) => (params, Some(ret), format!("`{}`", target)),
+                        ("Inject", "return") => {
+                            let hp = self.funcs[hook as usize].params.len();
+                            if hp == params.len() + 1 {
+                                let mut ps = params;
+                                ps.push(ret);
+                                (ps, Some(ret), format!("`{}` plus its result", target))
+                            } else {
+                                (params, None, format!("`{}`", target))
+                            }
+                        }
+                        (_, _) if cancellable => {
+                            let r = if ret == T_VOID {
+                                T_BOOL
+                            } else if self.types.is_unboxed(ret) {
+                                ret
+                            } else {
+                                self.types.optional(ret)
+                            };
+                            (params, Some(r), format!("`{}`", target))
+                        }
+                        _ => (params, None, format!("`{}`", target)),
+                    }
+                }
+            };
+            let hp: Vec<TyId> = self.funcs[hook as usize].params.iter().map(|p| p.1).collect();
+            let hname = self.funcs[hook as usize].name.clone();
+            if hp != want_params {
+                let want: Vec<String> = want_params.iter().map(|t| self.show(*t)).collect();
+                let got: Vec<String> = hp.iter().map(|t| self.show(*t)).collect();
+                self.error_note(
+                    a.span,
+                    format!("the mixin `{}` must take the parameters of {}", hname, what),
+                    format!("expected ({}) but `{}` takes ({})", want.join(", "), hname, got.join(", ")),
+                );
+                continue;
+            }
+            if let Some(want) = want_ret {
+                let got = self.func_ret(hook);
+                let ok = got == want || (want != T_VOID && self.types.unwrap_optional(want) == got && self.types.is_nullable(want) && got != T_VOID);
+                if !ok {
+                    let (w, g) = (self.show(want), self.show(got));
+                    self.error_note(
+                        a.span,
+                        format!("the mixin `{}` must return {}", hname, w),
+                        format!("it returns {}", if got == T_VOID { "nothing".to_string() } else { g }),
+                    );
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,106 @@
+---
+title: Annotations
+description: def annotation, @Name(...) and the built-in annotations.
+order: 8
+---
+
+# Annotations
+
+Annotations attach information to definitions, functions, methods and fields. They look like Java annotations:
+an `@` followed by a name and optional arguments.
+
+```burn
+def annotation Route {
+    string path
+    string method = "GET"
+}
+
+@Route("/users", method: "POST")
+def class CreateUser {
+    string name
+}
+```
+
+## Declaring annotations
+
+`def annotation Name { fields }` declares an annotation. Its fields work like the fields of a `def type`: each
+has a type and may have a default. An annotation without fields can leave out the braces:
+`def annotation Internal`.
+
+Arguments can be given in field order, by name, or both. Named arguments come after positional ones:
+
+```burn
+@Route("/users")
+@Route(path: "/users", method: "GET")
+```
+
+Every field without a default needs a value. Values must be literals: numbers, strings, booleans or `null`
+(for optional fields). An `int` literal is accepted for a `float` field.
+
+## Where annotations go
+
+| Place | Example |
+| --- | --- |
+| type, class, interface, enum and annotation definitions | `@Route("/x") def class Handler { ... }` |
+| functions and methods | `@Deprecated fun old() { ... }` |
+| fields of types and classes | `@Getter string name` |
+
+An annotation must be on the line before, or on the same line as, the thing it annotates.
+`burn fmt` keeps them attached, with no space after the `@`.
+
+## Built-in annotations
+
+| Annotation | On | What it does |
+| --- | --- | --- |
+| `@Getter` | classes, fields | generates `getName()`, or `isName()` for `bool` fields |
+| `@Setter` | classes, fields | generates `setName(value)` |
+| `@Deprecated("message")` | functions, methods, types | every use produces a warning with the message |
+| `@Export` or `@Export("name")` | top-level functions | lets bytecode libraries call the function (see [native interop](../bvm/native-interop.mdx)) |
+| `@Native` or `@Native("name")` | top-level functions without a body | declares a function that the host program provides |
+| `@Inject(target: "f", at: "head")` | top-level functions | a [mixin](../bvm/mixins.mdx): runs this function when `f` starts |
+| `@Inject(target: "f", at: "return")` | top-level functions | a mixin that sees, and may replace, the result of `f` |
+| `@Overwrite(target: "f")` | top-level functions | a mixin that replaces the body of `f` |
+| `@Redirect(target: "f", call: "g")` | top-level functions | a mixin that replaces calls to `g` inside `f` |
+
+`@Getter` and `@Setter` on a class apply to all of its fields. On a single field they apply only to that field.
+A method you write yourself with the same name takes precedence:
+
+```burn
+@Getter
+@Setter
+def class Account {
+    string owner
+    int balance
+    bool frozen
+}
+
+var a = Account { owner: "Ada", balance: 10, frozen: false }
+a.setBalance(a.getBalance() + 5)
+print(a.getOwner(), a.isFrozen())
+```
+
+## Reading annotations at runtime
+
+`annotationsOf(value)` returns the annotations declared on the type of `value`, as an `[any]` of annotation
+values. Narrow each one with `is` to read its fields:
+
+```burn
+fun routeOf(handler: any): string {
+    for a in annotationsOf(handler) {
+        if (a is Route) {
+            return a.method + " " + a.path
+        }
+    }
+    return "no route"
+}
+```
+
+When the static type is a class or a type, the list is built at compile time. For `any` and interface values
+the runtime type is checked. The result lists your own annotations (declared with `def annotation`), not the
+built-in ones. `annotationsOf` works on every backend.
+
+## Annotations in bytecode
+
+When a program is compiled for bvm, every annotation, built-in or not, is written into the module (see
+[bvm assembly](../bvm/assembly.mdx)), so tools and other languages on bvm can read them. Mixins and `@Export`
+are applied by the bvm linker.

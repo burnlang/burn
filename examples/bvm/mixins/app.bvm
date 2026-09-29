@@ -1,0 +1,15 @@
+module app
+
+extern func greet(name: string): void
+extern func shout(s: string): string
+
+func main()
+    str "Burn"
+    call greet
+    pop
+    str "quiet"
+    call shout
+    rt print
+    pop
+    retv
+end
