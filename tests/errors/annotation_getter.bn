@@ -1,0 +1,4 @@
+@Getter
+def type Point {
+    int x
+}

@@ -1,0 +1,74 @@
+def annotation Table {
+    string name
+    int version = 1
+}
+
+def annotation Tag {
+    string value
+    float weight = 1.5
+    bool visible = true
+    string? note = null
+}
+
+def interface Named {
+    fun label(): string
+}
+
+@Table("users", version: 3)
+@Getter
+@Setter
+def class User: Named {
+    string name
+    int age
+    bool admin
+
+    fun label(): string {
+        return "user " + name
+    }
+}
+
+@Tag("gadget", weight: 2, note: "shiny")
+def class Gadget: Named {
+    @Getter
+    string model
+    int price
+
+    fun label(): string {
+        return "gadget " + model
+    }
+}
+
+def type Plain {
+    int n
+}
+
+fun show(x: any) {
+    var anns = annotationsOf(x)
+    print(typeOf(x), "has", anns.length, "annotations")
+    for a in anns {
+        if (a is Table) {
+            print("  table", a.name, "version", a.version)
+        } else if (a is Tag) {
+            print("  tag", a.value, a.weight, a.visible, a.note)
+        }
+    }
+}
+
+fun main() {
+    var u = User { name: "Ann", age: 30, admin: false }
+    u.setAge(u.getAge() + 1)
+    u.setAdmin(true)
+    print(u.getName(), u.getAge(), u.isAdmin())
+    var g = Gadget { model: "X1", price: 99 }
+    print(g.getModel())
+    show(u)
+    show(g)
+    show(Plain { n: 1 })
+    show("text")
+    var items: [Named] = [u, g]
+    for it in items {
+        print(it.label(), annotationsOf(it).length)
+    }
+    print(annotationsOf(u))
+    print(annotationsOf(g))
+}

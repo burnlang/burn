@@ -127,6 +127,7 @@ fn render_line(toks: &[T]) -> String {
         let space = match (prev, t) {
             (None, _) => false,
             (_, T::Comment(_)) => true,
+            (Some(T::Op(o)), _) if o == "@" => false,
             (Some(T::Open('{', tight)), _) => !tight && !matches!(t, T::Close('}', _)),
             (Some(T::Open(..)), _) => false,
             (_, T::Close('}', tight)) => !tight && !matches!(prev, Some(T::Open('{', _))),
@@ -264,7 +265,8 @@ pub fn format(src: &str) -> String {
                     _ => {}
                 }
             }
-            let is_decl = matches!(seg.first(), Some(T::Word(w)) if matches!(w.as_str(), "fun" | "static" | "def" | "async" | "pub" | "priv"));
+            let is_decl = matches!(seg.first(), Some(T::Word(w)) if matches!(w.as_str(), "fun" | "static" | "def" | "async" | "pub" | "priv"))
+                || matches!(seg.first(), Some(T::Op(o)) if o == "@");
             if (si == 0 && first && !(leading_close > 0 && seg.len() == 1)) || (is_decl && last_was_close) {
                 out.push('\n');
             }

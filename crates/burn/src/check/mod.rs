@@ -1,5 +1,7 @@
+pub mod annot;
 pub mod builtins;
 pub mod expr;
+pub mod libs;
 pub mod stmt;
 
 use crate::ast::{self, Def, ItemKind, TypeExpr, TypeExprKind, Vis};
@@ -9,7 +11,7 @@ use crate::loader::Loaded;
 use crate::source::{FileId, SourceMap, Span};
 use crate::types::*;
 use burn_runtime::RtFn;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 pub const GLOBAL_KEY: u32 = 1 << 31;
@@ -55,6 +57,9 @@ pub struct FuncInfo {
     pub span: Span,
     pub private: bool,
     pub is_static: bool,
+    pub annotations: Vec<hir::Annotation>,
+    pub deprecated: Option<String>,
+    pub external: Option<hir::External>,
 }
 
 pub struct GlobalInfo {
@@ -137,6 +142,10 @@ pub struct Checker<'a> {
     pub index: Index,
     pub opts: CheckOptions,
     iface_slot_base: HashMap<u32, u32>,
+    pub annotation_types: HashSet<TyId>,
+    pub type_anns: HashMap<TyId, Vec<hir::Annotation>>,
+    pub deprecated_types: HashMap<TyId, String>,
+    pub libs: Vec<hir::Library>,
 }
 
 pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
@@ -158,6 +167,10 @@ pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
         index: Index::default(),
         opts,
         iface_slot_base: HashMap::new(),
+        annotation_types: HashSet::new(),
+        type_anns: HashMap::new(),
+        deprecated_types: HashMap::new(),
+        libs: Vec::new(),
     };
     c.run(loaded);
     let has_errors = loaded.diags.iter().chain(c.diags.iter()).any(|d| d.severity == Severity::Error);
@@ -311,11 +324,11 @@ impl<'a> Checker<'a> {
 
     pub fn loc_expr(&mut self, span: Span) -> Expr {
         let l = self.loc(span);
-        Expr::int(l as i64)
+        Expr::new(ExprKind::LocId(l), T_INT)
     }
 
     pub fn tid(t: TyId) -> Expr {
-        Expr::int(t as i64)
+        Expr::new(ExprKind::TypeId(t), T_INT)
     }
 
     pub fn ctx(&mut self) -> &mut FnCtx {
@@ -403,6 +416,7 @@ impl<'a> Checker<'a> {
         match self.visible(module, name, |s| &s.types) {
             Ok(v) => v.map(|e| {
                 self.def_link(span, e.span);
+                self.warn_deprecated_type(e.sym, span);
                 e.sym
             }),
             Err(mods) => {
@@ -524,6 +538,9 @@ impl<'a> Checker<'a> {
                 span: Span::new(m.file, 0, 0),
                 private: false,
                 is_static: true,
+                annotations: Vec::new(),
+                deprecated: None,
+                external: None,
             });
             self.mods.push(ModScope {
                 file: m.file,
@@ -569,9 +586,26 @@ impl<'a> Checker<'a> {
         }
         for (mi, m) in loaded.modules.iter().enumerate() {
             for item in &m.ast.items {
+                if let ItemKind::Def(d) = &item.kind {
+                    self.def_annotations(mi, d, &item.annotations);
+                }
+            }
+        }
+        self.import_libraries(loaded);
+        for (mi, m) in loaded.modules.iter().enumerate() {
+            for item in &m.ast.items {
                 match &item.kind {
                     ItemKind::Fun(f) => {
-                        let fid = self.declare_fun(mi, f, None, item.vis == Vis::Priv);
+                        let fid = self.declare_fun(mi, f, None, item.vis == Vis::Priv, false);
+                        let info = &mut self.funcs[fid as usize];
+                        if mi == loaded.root && item.vis == Vis::Pub && !f.bodyless && !info.annotations.iter().any(|a| a.name == "Export") {
+                            info.annotations.push(hir::Annotation {
+                                name: "Export".into(),
+                                ty: None,
+                                args: Vec::new(),
+                                span: f.name.span,
+                            });
+                        }
                         self.add_value(mi, &f.name.name, ValSym::Func(fid), item.vis, f.name.span);
                     }
                     ItemKind::Def(Def::Class { name, methods, .. }) => {
@@ -582,7 +616,7 @@ impl<'a> Checker<'a> {
                             }
                             for (vis, mdecl) in methods {
                                 let self_ty = if mdecl.is_static { None } else { Some(t) };
-                                let fid = self.declare_fun(mi, mdecl, self_ty, *vis == Vis::Priv);
+                                let fid = self.declare_fun(mi, mdecl, self_ty, *vis == Vis::Priv, true);
                                 self.funcs[fid as usize].name = format!("{}.{}", name.name, mdecl.name.name);
                                 self.funcs[fid as usize].is_static = mdecl.is_static;
                                 let rec = &mut self.types.records[ri as usize];
@@ -622,6 +656,7 @@ impl<'a> Checker<'a> {
             }
         }
         self.check_conformance(loaded);
+        self.check_mixins();
         for &mi in &loaded.order {
             self.check_init(mi, &loaded.modules[mi].ast);
         }
@@ -667,7 +702,7 @@ impl<'a> Checker<'a> {
 
     fn declare_def(&mut self, mi: usize, d: &Def, vis: Vis, aliases: &mut Vec<(usize, String, TypeExpr, Span)>) {
         match d {
-            Def::Type { name, .. } | Def::Class { name, .. } => {
+            Def::Type { name, .. } | Def::Class { name, .. } | Def::Annotation { name, .. } => {
                 let is_class = matches!(d, Def::Class { .. });
                 let ri = self.types.new_record(RecordDef {
                     name: name.name.clone(),
@@ -684,6 +719,12 @@ impl<'a> Checker<'a> {
                 });
                 let t = self.types.records[ri as usize].ty;
                 self.add_type(mi, name, t, vis);
+                if matches!(d, Def::Annotation { .. }) {
+                    if annot::BUILTIN.contains(&name.name.as_str()) {
+                        self.error(name.span, format!("@{} is a built-in annotation", name.name));
+                    }
+                    self.annotation_types.insert(t);
+                }
             }
             Def::Interface { name, .. } => {
                 let ii = self.types.new_iface(IfaceDef {
@@ -727,7 +768,7 @@ impl<'a> Checker<'a> {
             _ => return,
         };
         match d {
-            Def::Type { fields, .. } | Def::Class { fields, .. } => {
+            Def::Type { fields, .. } | Def::Class { fields, .. } | Def::Annotation { fields, .. } => {
                 let ri = match self.types.get(t) {
                     Ty::Record(r) => *r,
                     _ => return,
@@ -804,7 +845,34 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn declare_fun(&mut self, mi: usize, f: &ast::FunDecl, self_ty: Option<TyId>, private: bool) -> FuncId {
+    fn def_annotations(&mut self, mi: usize, d: &Def, anns: &[ast::Annotation]) {
+        let name = d.name();
+        let t = match self.mods[mi].types.get(&name.name) {
+            Some(e) if e.span == name.span => e.sym,
+            _ => return,
+        };
+        let site = annot::Site::Type {
+            class: matches!(d, Def::Class { .. }),
+        };
+        let resolved = self.resolve_annotations(mi, anns, site);
+        if let Some(msg) = Self::deprecation_note(&resolved) {
+            self.deprecated_types.insert(t, msg);
+        }
+        if !resolved.is_empty() {
+            self.type_anns.insert(t, resolved);
+        }
+        let fields: &[ast::Field] = match d {
+            Def::Type { fields, .. } | Def::Class { fields, .. } | Def::Annotation { fields, .. } => fields,
+            _ => &[],
+        };
+        for f in fields {
+            if !f.annotations.is_empty() {
+                self.resolve_annotations(mi, &f.annotations, annot::Site::Field);
+            }
+        }
+    }
+
+    fn declare_fun(&mut self, mi: usize, f: &ast::FunDecl, self_ty: Option<TyId>, private: bool, method: bool) -> FuncId {
         let mut params = Vec::new();
         if let Some(st) = self_ty {
             params.push(("self".to_string(), st, f.name.span));
@@ -820,6 +888,25 @@ impl<'a> Checker<'a> {
             params.push((p.name.name.clone(), t, p.name.span));
         }
         let ret = f.ret.as_ref().map(|r| self.resolve_type_in(r, mi));
+        let annotations = self.resolve_annotations(mi, &f.annotations, annot::Site::Func { method, bodyless: f.bodyless });
+        let deprecated = Self::deprecation_note(&annotations);
+        let external = annotations.iter().find(|a| a.name == "Native").map(|a| hir::External::Native {
+            name: a.str_arg("name").unwrap_or(&f.name.name).to_string(),
+        });
+        if f.bodyless && external.is_none() {
+            self.error_note(
+                f.name.span,
+                format!("function `{}` has no body", f.name.name),
+                "only functions provided by the host can be declared without a body; mark them with @Native",
+            );
+        }
+        if external.is_some() && f.ret.is_none() {
+            self.error_note(
+                f.name.span,
+                format!("@Native function `{}` needs a return type", f.name.name),
+                "write `: void` if it returns nothing",
+            );
+        }
         let fid = self.funcs.len() as FuncId;
         self.funcs.push(FuncInfo {
             name: f.name.name.clone(),
@@ -834,6 +921,9 @@ impl<'a> Checker<'a> {
             span: f.name.span,
             private,
             is_static: self_ty.is_none(),
+            annotations,
+            deprecated,
+            external,
         });
         fid
     }
@@ -937,6 +1027,25 @@ impl<'a> Checker<'a> {
             Some(d) => d,
             None => return,
         };
+        if decl.bodyless {
+            let info = &mut self.funcs[fid as usize];
+            let ret = info.ret.unwrap_or(T_VOID);
+            info.ret = Some(ret);
+            info.hir = Some(hir::Func {
+                name: info.name.clone(),
+                params: info.params.len() as u32,
+                locals: info.params.iter().map(|p| p.1).collect(),
+                ret,
+                body: Vec::new(),
+                is_async: info.is_async,
+                span: info.span,
+                end_loc: 0,
+                annotations: info.annotations.clone(),
+                external: info.external.clone(),
+            });
+            info.state = FnState::Done;
+            return;
+        }
         self.funcs[fid as usize].state = FnState::InProgress;
         let module = self.funcs[fid as usize].module;
         if self.funcs[fid as usize].ret.is_none() {
@@ -970,6 +1079,8 @@ impl<'a> Checker<'a> {
             is_async: info.is_async,
             span: info.span,
             end_loc,
+            annotations: info.annotations.clone(),
+            external: info.external.clone(),
         });
         info.state = FnState::Done;
         let sig = {
@@ -1105,6 +1216,8 @@ impl<'a> Checker<'a> {
             is_async: false,
             span: info.span,
             end_loc,
+            annotations: Vec::new(),
+            external: None,
         });
     }
 
@@ -1147,6 +1260,8 @@ impl<'a> Checker<'a> {
                 is_async: f.is_async,
                 span: f.span,
                 end_loc: 0,
+                annotations: f.annotations.clone(),
+                external: f.external.clone(),
             }));
         }
         funcs.push(hir::Func {
@@ -1158,6 +1273,8 @@ impl<'a> Checker<'a> {
             is_async: false,
             span: Span::default(),
             end_loc: 0,
+            annotations: Vec::new(),
+            external: None,
         });
         let types = self.types.clone();
         let globals = self
@@ -1185,6 +1302,16 @@ impl<'a> Checker<'a> {
             slots: self.slots.clone(),
             inits,
             main,
+            type_annotations: {
+                let mut v: Vec<(TyId, Vec<hir::Annotation>)> = self.type_anns.iter().map(|(t, a)| (*t, a.clone())).collect();
+                v.sort_by_key(|x| x.0);
+                v
+            },
+            libs: self.libs.clone(),
+            name: std::path::Path::new(&self.sm.file(loaded.modules[loaded.root].file).name)
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default(),
         }
     }
 }

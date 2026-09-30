@@ -1,0 +1,16 @@
+module greetlib
+
+func greet(name: string): void
+    str "Hello, "
+    load name
+    rt str_concat
+    rt print
+    pop
+    retv
+end
+
+func shout(s: string): string
+    load s
+    rt str_upper
+    ret
+end

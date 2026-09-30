@@ -7,32 +7,55 @@ fn main() {
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let runtime_src = manifest.join("../burn-runtime/src");
+    let bvm_src = manifest.join("../bvm/src");
     println!("cargo:rerun-if-changed={}", runtime_src.display());
+    println!("cargo:rerun-if-changed={}", bvm_src.display());
     println!("cargo:rerun-if-changed=build.rs");
     let lib = out.join("libburn_runtime.a");
+    let rlib = out.join("libburn_runtime_native.rlib");
     let libs_file = out.join("native_libs.txt");
     let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".into());
     let target = env::var("TARGET").unwrap();
-    let result = Command::new(&rustc)
-        .args(["--crate-name", "burn_runtime", "--crate-type", "staticlib", "--edition", "2021"])
-        .args([
-            "-C",
-            "opt-level=3",
-            "-C",
-            "panic=abort",
-            "-C",
-            "debuginfo=0",
-            "-C",
-            "codegen-units=1",
-            "-C",
-            "strip=debuginfo",
-        ])
+    let version = env::var("CARGO_PKG_VERSION").unwrap_or_default();
+    let flags = [
+        "--edition",
+        "2021",
+        "-C",
+        "opt-level=3",
+        "-C",
+        "panic=abort",
+        "-C",
+        "debuginfo=0",
+        "-C",
+        "codegen-units=1",
+        "-C",
+        "strip=debuginfo",
+    ];
+    let runtime = Command::new(&rustc)
+        .args(["--crate-name", "burn_runtime", "--crate-type", "rlib"])
+        .args(flags)
         .args(["--target", &target])
-        .args(["--print", "native-static-libs"])
         .arg("-o")
-        .arg(&lib)
+        .arg(&rlib)
         .arg(runtime_src.join("lib.rs"))
         .output();
+    let result = match runtime {
+        Ok(o) if o.status.success() => Command::new(&rustc)
+            .args(["--crate-name", "bvm", "--crate-type", "staticlib"])
+            .args(flags)
+            .args(["--target", &target])
+            .arg("--extern")
+            .arg(format!("burn_runtime={}", rlib.display()))
+            .arg("-L")
+            .arg(&out)
+            .args(["--print", "native-static-libs"])
+            .env("CARGO_PKG_VERSION", &version)
+            .arg("-o")
+            .arg(&lib)
+            .arg(bvm_src.join("lib.rs"))
+            .output(),
+        other => other,
+    };
     let mut libs = String::new();
     let ok = match result {
         Ok(o) if o.status.success() => {

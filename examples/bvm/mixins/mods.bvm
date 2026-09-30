@@ -1,0 +1,26 @@
+module mods
+
+@Inject target="greet" at="head"
+func before_greet(name: string): void
+    str "[before greet]"
+    rt print
+    pop
+    retv
+end
+
+@Inject target="shout" at="return"
+func after_shout(s: string, result: string): string
+    load result
+    str "!!!"
+    rt str_concat
+    ret
+end
+
+@Redirect target="greet" rt="print"
+func fancy_print(s: string): int
+    str "* "
+    load s
+    rt str_concat
+    rt print
+    ret
+end

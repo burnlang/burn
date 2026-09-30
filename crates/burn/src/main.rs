@@ -73,21 +73,14 @@ fn compile(path: &Path) -> Option<driver::Compiled> {
 }
 
 fn is_bvm_file(file: &Path) -> bool {
-    matches!(file.extension().and_then(|e| e.to_str()), Some("bvm") | Some("bvmc"))
+    matches!(file.extension().and_then(|e| e.to_str()), Some("bvm") | Some("bvmc") | Some("bar"))
 }
 
 fn run_bvm(file: &Path, args: Vec<String>) -> ExitCode {
-    let m = match bvm::read(file) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("error: {}", e);
-            return ExitCode::from(1);
-        }
-    };
-    match bvm::run(&m, &bvm::Host::new(), args) {
+    match bvm::run_file(file, args) {
         Ok(code) => ExitCode::from(code as u8),
         Err(e) => {
-            eprintln!("error: {}: {}", file.display(), e);
+            eprintln!("error: {}", e);
             ExitCode::from(1)
         }
     }
@@ -168,6 +161,9 @@ fn cmd_build(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    if is_bvm_file(&file) {
+        return build_bundle(&file, output, emit_asm, strip);
+    }
     let c = match compile(&file) {
         Some(c) => c,
         None => return ExitCode::from(1),
@@ -175,6 +171,10 @@ fn cmd_build(args: &[String]) -> ExitCode {
     match target.as_str() {
         "js" | "javascript" | "node" => {
             let out = output.unwrap_or_else(|| default_output(&file, "js"));
+            if let Err(e) = js::validate(&c.program) {
+                eprintln!("error: {}", e);
+                return ExitCode::from(1);
+            }
             let js = js::generate(&c.program);
             if let Err(e) = std::fs::write(&out, js) {
                 eprintln!("error: cannot write {}: {}", out.display(), e);
@@ -185,7 +185,13 @@ fn cmd_build(args: &[String]) -> ExitCode {
         }
         "bvm" | "bytecode" => {
             let out = output.unwrap_or_else(|| default_output(&file, "bvmc"));
-            let m = vm::module(&c.program);
+            let m = match vm::linked(&c.program) {
+                Ok((m, _)) => m,
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                    return ExitCode::from(1);
+                }
+            };
             if let Err(e) = bvm::verify(&m) {
                 eprintln!("internal error: the compiler produced an invalid bvm module: {}", e);
                 return ExitCode::from(70);
@@ -199,6 +205,55 @@ fn cmd_build(args: &[String]) -> ExitCode {
             if let Err(e) = std::fs::write(&out, bvm::binary::encode(&m)) {
                 eprintln!("error: cannot write {}: {}", out.display(), e);
                 return ExitCode::from(1);
+            }
+            println!("wrote {}", out.display());
+            ExitCode::SUCCESS
+        }
+        "bar" => {
+            let out = output.unwrap_or_else(|| default_output(&file, "bar"));
+            let p = &c.program;
+            let mut a = bvm::archive::Archive::new(&p.name);
+            a.add_module(&p.name, vm::module(p));
+            for l in &p.libs {
+                let parts = match check::libs::library_modules(&l.bytes) {
+                    Ok(ms) => ms,
+                    Err(e) => {
+                        eprintln!("error: {}: {}", l.path.display(), e);
+                        return ExitCode::from(1);
+                    }
+                };
+                for (k, m) in parts.into_iter().enumerate() {
+                    let name = if !m.name.is_empty() {
+                        m.name.clone()
+                    } else if k == 0 {
+                        l.name.clone()
+                    } else {
+                        format!("{}.{}", l.name, k)
+                    };
+                    a.add_module(&name, m);
+                }
+                if let Ok(lib) = bvm::archive::Archive::decode(&l.bytes) {
+                    for (n, d) in lib.resources {
+                        a.add_resource(&n, d);
+                    }
+                }
+            }
+            if let Err(e) = a.link() {
+                eprintln!("error: {}", e);
+                return ExitCode::from(1);
+            }
+            if let Err(e) = std::fs::write(&out, a.encode(true)) {
+                eprintln!("error: cannot write {}: {}", out.display(), e);
+                return ExitCode::from(1);
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(meta) = std::fs::metadata(&out) {
+                    let mut perm = meta.permissions();
+                    perm.set_mode(perm.mode() | 0o111);
+                    let _ = std::fs::set_permissions(&out, perm);
+                }
             }
             println!("wrote {}", out.display());
             ExitCode::SUCCESS
@@ -222,8 +277,61 @@ fn cmd_build(args: &[String]) -> ExitCode {
             }
         }
         other => {
-            eprintln!("error: unknown target `{}` (expected `native`, `js` or `bvm`)", other);
+            eprintln!("error: unknown target `{}` (expected `native`, `js`, `bvm` or `bar`)", other);
             ExitCode::from(2)
+        }
+    }
+}
+
+fn build_bundle(file: &Path, output: Option<PathBuf>, emit_asm: Option<PathBuf>, strip: bool) -> ExitCode {
+    let bytes = match std::fs::read(file) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: cannot read {}: {}", file.display(), e);
+            return ExitCode::from(1);
+        }
+    };
+    let bytes = if bvm::archive::is_archive(&bytes) || bvm::binary::is_binary(&bytes) {
+        bytes
+    } else {
+        match bvm::parse(&bytes) {
+            Ok(m) => bvm::binary::encode(&m),
+            Err(e) => {
+                eprintln!("error: {}: {}", file.display(), e);
+                return ExitCode::from(1);
+            }
+        }
+    };
+    match bvm::load_bytes(&bytes) {
+        Ok((m, host)) => {
+            if m.entry.is_none() {
+                eprintln!("error: {} has no entry function", file.display());
+                return ExitCode::from(1);
+            }
+            if let Err(e) = bvm::load(&m, &host) {
+                eprintln!("error: {}: {}", file.display(), e);
+                return ExitCode::from(1);
+            }
+        }
+        Err(e) => {
+            eprintln!("error: {}: {}", file.display(), e);
+            return ExitCode::from(1);
+        }
+    }
+    let out = output.unwrap_or_else(|| default_output(file, ""));
+    let opts = native::BuildOptions {
+        output: out.clone(),
+        emit_asm,
+        strip,
+    };
+    match native::build_launcher(&bytes, &opts) {
+        Ok(()) => {
+            println!("built {}", out.display());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {}", e);
+            ExitCode::from(1)
         }
     }
 }

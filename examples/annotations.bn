@@ -1,0 +1,53 @@
+def annotation Route {
+    string path
+    string method = "GET"
+}
+
+@Getter
+@Setter
+def class Account {
+    string owner
+    int balance
+    bool frozen
+}
+
+@Route("/accounts")
+def class AccountHandler {
+    int calls
+}
+
+@Route("/health", method: "HEAD")
+def class HealthHandler {
+    int calls
+}
+
+@Deprecated("use describe instead")
+fun summary(a: Account): string {
+    return a.getOwner()
+}
+
+fun describe(a: Account): string {
+    var state = "active"
+    if (a.isFrozen()) {
+        state = "frozen"
+    }
+    return a.getOwner() + " has " + a.getBalance().toString() + " (" + state + ")"
+}
+
+fun routeOf(handler: any): string {
+    for a in annotationsOf(handler) {
+        if (a is Route) {
+            return a.method + " " + a.path
+        }
+    }
+    return "no route"
+}
+
+fun main() {
+    var acc = Account { owner: "Ada", balance: 100, frozen: false }
+    acc.setBalance(acc.getBalance() + 50)
+    print(describe(acc))
+    print(routeOf(AccountHandler { calls: 0 }))
+    print(routeOf(HealthHandler { calls: 0 }))
+    print(routeOf(acc))
+}

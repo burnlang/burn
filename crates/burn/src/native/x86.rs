@@ -1,4 +1,4 @@
-use crate::hir::{BinOp, Cmp, Conv, Expr, ExprKind, Func, Program, Stmt, UnOp};
+use crate::hir::{BinOp, Cmp, Const, Conv, Expr, ExprKind, External, Func, Program, Stmt, UnOp};
 use burn_runtime::RtFn;
 use std::fmt::Write;
 
@@ -18,6 +18,45 @@ impl Target {
 }
 
 const ENTRY: &str = include_str!("entry_x86_64.s");
+
+pub const MIXINS: [&str; 3] = ["Inject", "Overwrite", "Redirect"];
+
+fn quote(s: &str) -> String {
+    format!("\"{}\"", bvm::asm::escape(s))
+}
+
+pub fn mixin_module(p: &Program) -> String {
+    let mut s = String::new();
+    for (i, f) in p.funcs.iter().enumerate() {
+        let anns: Vec<_> = f.annotations.iter().filter(|a| MIXINS.contains(&a.name.as_str())).collect();
+        if anns.is_empty() {
+            continue;
+        }
+        let hook = format!("__mixin_hook_{}", i);
+        writeln!(s, "import {} {}", quote(&hook), f.params).unwrap();
+        for a in &anns {
+            let _ = write!(s, "@{}", a.name);
+            for (k, v) in &a.args {
+                let v = match v {
+                    Const::Int(x) => x.to_string(),
+                    Const::Float(x) => format!("{:?}", x),
+                    Const::Bool(b) => b.to_string(),
+                    Const::Str(t) => quote(t),
+                    Const::Null => continue,
+                };
+                let _ = write!(s, " {}={}", k, v);
+            }
+            s.push('\n');
+        }
+        writeln!(s, "func {}({})", quote(&format!("__mixin_{}", i)), f.params).unwrap();
+        for k in 0..f.params {
+            writeln!(s, "    load {}", k).unwrap();
+        }
+        writeln!(s, "    host {}", quote(&hook)).unwrap();
+        s.push_str("    ret\nend\n");
+    }
+    s
+}
 
 const ARG_REGS: [&str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
 
@@ -70,7 +109,14 @@ fn inv(c: Cmp) -> Cmp {
 fn is_const(e: &Expr) -> bool {
     matches!(
         e.kind,
-        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Null | ExprKind::FuncRef(_)
+        ExprKind::Int(_)
+            | ExprKind::TypeId(_)
+            | ExprKind::LocId(_)
+            | ExprKind::Float(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Str(_)
+            | ExprKind::Null
+            | ExprKind::FuncRef(_)
     )
 }
 
@@ -207,7 +253,41 @@ impl<'p> Gen<'p> {
     fn emit_all(&mut self, meta: &[u8]) {
         let p = self.p;
         let plt = if self.t.macos { "" } else { "@PLT" };
-        self.out.push_str(&ENTRY.replace("{P}", self.t.prefix).replace("{PLT}", plt));
+        let exports: Vec<(String, usize, u32)> = if p.libs.is_empty() {
+            Vec::new()
+        } else {
+            let mut v = Vec::new();
+            for (i, f) in p.funcs.iter().enumerate() {
+                if f.external.is_some() {
+                    continue;
+                }
+                if let Some(a) = f.annotations.iter().find(|a| a.name == "Export") {
+                    v.push((a.str_arg("name").unwrap_or(&f.name).to_string(), i, f.params));
+                }
+                if f.annotations.iter().any(|a| MIXINS.contains(&a.name.as_str())) {
+                    v.push((format!("__mixin_hook_{}", i), i, f.params));
+                }
+            }
+            v
+        };
+        let pre = if p.libs.is_empty() {
+            String::new()
+        } else {
+            let pl = self.t.prefix;
+            let mut s = String::new();
+            s.push_str("    lea rdi, [rip + burn_exports]\n");
+            s.push_str(&format!("    mov rsi, {}\n", exports.len()));
+            s.push_str("    mov r12, rsp\n    and rsp, -16\n");
+            s.push_str(&format!("    call {}burn_bvm_register_exports{}\n", pl, plt));
+            s.push_str("    mov rsp, r12\n");
+            s.push_str("    lea rdi, [rip + burn_mixins]\n");
+            s.push_str("    mov r12, rsp\n    and rsp, -16\n");
+            s.push_str(&format!("    call {}burn_bvm_register_mixins{}\n", pl, plt));
+            s.push_str("    mov rsp, r12\n");
+            s
+        };
+        self.out
+            .push_str(&ENTRY.replace("{P}", self.t.prefix).replace("{PLT}", plt).replace("{PRE_ENTRY}", &pre));
         writeln!(self.out, ".set burn_entry, bf_{}", p.entry).unwrap();
         let meta_sym = "burn_meta";
         let glob_sym = self.sym("burn_globals");
@@ -223,6 +303,32 @@ impl<'p> Gen<'p> {
         writeln!(self.out, "burn_nglobals:\n    .quad {}", p.globals.len()).unwrap();
         writeln!(self.out, "{}:", meta_sym).unwrap();
         self.bytes(meta);
+        for (i, l) in p.libs.iter().enumerate() {
+            self.out.push_str(".p2align 4\n");
+            writeln!(self.out, "burn_lib_{}_len:\n    .quad {}", i, l.bytes.len()).unwrap();
+            writeln!(self.out, "burn_lib_{}:", i).unwrap();
+            self.bytes(&l.bytes);
+        }
+        for (i, f) in p.funcs.iter().enumerate() {
+            if let Some(External::Lib { name, .. }) = &f.external {
+                writeln!(self.out, "burn_libfn_{}:", i).unwrap();
+                let mut b = name.as_bytes().to_vec();
+                b.push(0);
+                self.bytes(&b);
+            }
+        }
+        if !p.libs.is_empty() {
+            for (k, (name, _, _)) in exports.iter().enumerate() {
+                writeln!(self.out, "burn_export_name_{}:", k).unwrap();
+                let mut b = name.as_bytes().to_vec();
+                b.push(0);
+                self.bytes(&b);
+            }
+            self.out.push_str("burn_mixins:\n");
+            let mut b = mixin_module(p).into_bytes();
+            b.push(0);
+            self.bytes(&b);
+        }
         for (i, s) in p.strings.iter().enumerate() {
             let b = s.as_bytes();
             let flags = 1 | if s.is_ascii() { 2 } else { 0 };
@@ -239,6 +345,15 @@ impl<'p> Gen<'p> {
         let relro = if self.t.macos { ".section __DATA,__const" } else { ".section .data.rel.ro" };
         self.out.push_str(relro);
         self.out.push('\n');
+        if !p.libs.is_empty() {
+            self.out.push_str(".p2align 3\nburn_exports:\n");
+            for (k, (_, f, argc)) in exports.iter().enumerate() {
+                writeln!(self.out, "    .quad burn_export_name_{}, bf_{}, {}", k, f, argc).unwrap();
+            }
+            if exports.is_empty() {
+                self.out.push_str("    .quad 0\n");
+            }
+        }
         let ntypes = p.types.len();
         for (i, s) in p.slots.iter().enumerate() {
             let mut table = vec![String::from("0"); ntypes];
@@ -272,6 +387,22 @@ impl<'p> Gen<'p> {
     fn func(&mut self, f: &Func) {
         self.out.push_str(".p2align 4\n");
         writeln!(self.out, "bf_{}:", self.fid).unwrap();
+        if let Some(External::Lib { lib, .. }) = &f.external {
+            self.e("push rbp");
+            self.e("mov rbp, rsp");
+            self.e(&format!("lea rdi, [rip + burn_lib_{}]", lib));
+            self.e(&format!("mov rsi, qword ptr [rip + burn_lib_{}_len]", lib));
+            self.e(&format!("lea rdx, [rip + burn_libfn_{}]", self.fid));
+            self.e(&format!("mov ecx, {}", f.params));
+            self.e("lea r8, [rbp + 16]");
+            self.e("and rsp, -16");
+            let s = self.sym("burn_bvm_call");
+            let plt = if self.t.macos { "" } else { "@PLT" };
+            self.e(&format!("call {}{}", s, plt));
+            self.e("leave");
+            self.e("ret");
+            return;
+        }
         self.e("push rbp");
         self.e("mov rbp, rsp");
         let n = f.locals.len().max(f.params as usize);
@@ -419,6 +550,13 @@ impl<'p> Gen<'p> {
                     self.e(&format!("movabs {}, {}", reg, v));
                 }
             }
+            ExprKind::TypeId(v) | ExprKind::LocId(v) => {
+                if *v <= i32::MAX as u32 {
+                    self.e(&format!("mov {}, {}", reg, v));
+                } else {
+                    self.e(&format!("movabs {}, {}", reg, v));
+                }
+            }
             ExprKind::Float(f) => {
                 let b = f.to_bits();
                 if b == 0 {
@@ -445,6 +583,8 @@ impl<'p> Gen<'p> {
         matches!(
             e.kind,
             ExprKind::Int(_)
+                | ExprKind::TypeId(_)
+                | ExprKind::LocId(_)
                 | ExprKind::Float(_)
                 | ExprKind::Bool(_)
                 | ExprKind::Str(_)
@@ -503,6 +643,7 @@ impl<'p> Gen<'p> {
         for a in args {
             match &a.kind {
                 ExprKind::Int(v) if *v >= i32::MIN as i64 && *v <= i32::MAX as i64 => self.e(&format!("push {}", v)),
+                ExprKind::TypeId(v) | ExprKind::LocId(v) if *v <= i32::MAX as u32 => self.e(&format!("push {}", v)),
                 ExprKind::Local(s) => self.e(&format!("push {}", Self::local(*s))),
                 _ => {
                     self.expr(a);

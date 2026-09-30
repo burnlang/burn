@@ -84,6 +84,7 @@ pub const BUILTINS: &[&str] = &[
     "clock",
     "sleep",
     "typeOf",
+    "annotationsOf",
     "parseJSON",
     "toJSON",
     "readFile",
@@ -134,6 +135,7 @@ pub fn signature(name: &str) -> &'static str {
         "nowMs" | "millis" => "nowMs(): int milliseconds since the Unix epoch",
         "sleep" => "sleep(ms: int)",
         "typeOf" => "typeOf(value): string",
+        "annotationsOf" => "annotationsOf(value): [any], the annotations declared on the value's type",
         "parseJSON" => "parseJSON(text: string): any",
         "toJSON" => "toJSON(value): string",
         "readFile" => "readFile(path: string): string",
@@ -832,6 +834,13 @@ impl<'a> Checker<'a> {
                 }
                 let c = if n == 1 { self.barg_to(&xs[0], T_INT) } else { Expr::int(0) };
                 Self::rt(RtFn::ExitNow, vec![c], T_VOID)
+            }
+            "annotationsOf" => {
+                if !self.arity(name, n, 1, 1, span) {
+                    return Some(Self::err_expr());
+                }
+                let h = self.barg(&xs[0], None);
+                self.annotations_of(h)
             }
             "panic" => {
                 if !self.arity(name, n, 0, 1, span) {

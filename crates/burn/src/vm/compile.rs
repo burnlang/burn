@@ -1,5 +1,5 @@
-use crate::hir::{BinOp, Conv, Expr, ExprKind, Program, Stmt, UnOp};
-use bvm::{FuncBuilder, Function, Label, Module, Op, Table};
+use crate::hir::{BinOp, Const, Conv, Expr, ExprKind, External, Program, Stmt, UnOp};
+use bvm::{Annotation, FuncBuilder, Function, Import, Label, Module, Op, Sig, Table, Target, Value};
 
 struct Loop {
     brk: Label,
@@ -28,7 +28,50 @@ pub fn compile(p: &Program) -> Module {
             }
         })
         .collect();
-    m.funcs = p.funcs.iter().map(func).collect();
+    m.name = p.name.clone();
+    for (i, f) in p.funcs.iter().enumerate() {
+        let sig = Some(Sig {
+            params: f.locals.iter().take(f.params as usize).copied().collect(),
+            ret: f.ret,
+        });
+        let compiled = match &f.external {
+            Some(External::Lib { name, .. }) => Function::external(name, f.params, sig),
+            Some(External::Native { name }) => {
+                let imp = match m.imports.iter().position(|x| x.name == *name) {
+                    Some(k) => k as u32,
+                    None => {
+                        m.imports.push(Import {
+                            name: name.clone(),
+                            argc: f.params,
+                        });
+                        m.imports.len() as u32 - 1
+                    }
+                };
+                let mut b = FuncBuilder::new(f.params);
+                for k in 0..f.params {
+                    b.load(k);
+                }
+                b.emit(Op::Host(imp)).ret();
+                let mut out = b.finish(&f.name);
+                out.sig = sig;
+                out
+            }
+            None => {
+                let mut out = func(f);
+                out.sig = sig;
+                out
+            }
+        };
+        m.funcs.push(compiled);
+        for a in &f.annotations {
+            m.annotations.push(annotation(Target::Func(i as u32), a));
+        }
+    }
+    for (t, anns) in &p.type_annotations {
+        for a in anns {
+            m.annotations.push(annotation(Target::Type(*t), a));
+        }
+    }
     m.tables = p
         .slots
         .iter()
@@ -40,6 +83,27 @@ pub fn compile(p: &Program) -> Module {
         .collect();
     m.entry = Some(p.entry);
     m
+}
+
+fn annotation(target: Target, a: &crate::hir::Annotation) -> Annotation {
+    Annotation {
+        target,
+        name: a.name.clone(),
+        args: a
+            .args
+            .iter()
+            .filter_map(|(k, v)| {
+                let v = match v {
+                    Const::Int(x) => Value::Int(*x),
+                    Const::Float(x) => Value::Float(*x),
+                    Const::Bool(b) => Value::Bool(*b),
+                    Const::Str(s) => Value::Str(s.clone()),
+                    Const::Null => return None,
+                };
+                Some((k.clone(), v))
+            })
+            .collect(),
+    }
 }
 
 fn func(f: &crate::hir::Func) -> Function {
@@ -144,6 +208,8 @@ impl Compiler {
     fn expr(&mut self, e: &Expr) {
         match &e.kind {
             ExprKind::Int(v) => self.emit(Op::Const(*v as u64)),
+            ExprKind::TypeId(t) => self.emit(Op::TypeConst(*t)),
+            ExprKind::LocId(l) => self.emit(Op::LocConst(*l)),
             ExprKind::Float(f) => self.emit(Op::Const(f.to_bits())),
             ExprKind::Bool(b) => self.emit(Op::Const(*b as u64)),
             ExprKind::Str(i) => self.emit(Op::Str(*i)),

@@ -1,0 +1,102 @@
+---
+title: Burn archives (.bar)
+description: Write once, run everywhere: runnable archives of modules and resources.
+order: 37
+---
+
+# Burn archives (.bar)
+
+A `.bar` file bundles all the bytecode modules of an application, plus any resource files, into one file that
+runs on every system with `bvm`. It's the bvm equivalent of a Java `.jar`, without a class path: the archive
+contains everything, and its modules are linked when it starts.
+
+```sh
+bvm pack app.bvmc geometry.bvmc config.txt -o app.bar --version 1.0.0
+./app.bar                # the archive starts with #!/usr/bin/env bvm
+bvm app.bar              # or run it explicitly
+burn app.bar             # burn and burni run archives too
+```
+
+From Burn, `burnc` builds an archive of a program and every bytecode library it imports:
+
+```sh
+burnc app.bn --target bar -o app.bar
+```
+
+## What `pack` does
+
+`bvm pack <files>... -o app.bar` takes:
+
+- modules (`.bvm`, `.bvmc`), stored under their module name or file name
+- other archives (`.bar`), whose modules and resources are copied in
+- any other file, stored as a resource under its file name
+
+It links the archive once to catch errors before writing it, and marks the file executable.
+
+| Option | Meaning |
+| --- | --- |
+| `--name <name>` | the application name (default: the output file name) |
+| `--version <version>` | the application version |
+| `--main <module>` | the module that is linked first and whose entry function runs (default: the first module) |
+| `--entry <function>` | run this function instead of the main module's entry |
+| `--no-shebang` | leave out the `#!/usr/bin/env bvm` line |
+
+## Inspecting archives
+
+```sh
+$ bvm list app.bar
+Name: app
+Version: 1.0.0
+Main-Module: app
+Created-By: bvm 26.1.0-experimental-1
+
+module    app                      4 functions, 33 instructions, 4 external
+module    geometry                 7 functions, 64 instructions
+resource  config.txt               120 bytes
+
+$ bvm unpack app.bar -d out      # MANIFEST, one .bvmc per module, the resources
+$ bvm dis app.bar                # the linked program as assembly
+```
+
+## Resources
+
+A module in an archive can read the archive's resources through the host function `resource`, which returns
+the file's contents as a string, or `null` when there is no such file:
+
+```bvm
+import resource 1
+
+func main()
+    str "config.txt"
+    host resource
+    rt print
+    pop
+    retv
+end
+```
+
+In Burn: `@Native fun resource(name: string): string?`.
+
+## Native executables from archives
+
+`burnc` turns an archive, or a single module, into a native executable. The executable contains the bvm
+runtime and the bytecode, needs no `bvm` installed, and starts like any other program:
+
+```sh
+burnc app.bar -o app
+./app
+```
+
+## Format
+
+```text
+[#!/usr/bin/env bvm\n]              optional first line
+"BAR\0"  u16 format (1)  u16 flags
+u64 checksum                         FNV-1a over everything that follows
+manifest                             u32 length + "Key: value" lines
+u32 entry count
+entries                              name, kind (0 module, 1 resource), u32 length + bytes
+```
+
+Modules are stored in the [bytecode format](./embedding.mdx#the-bytecode-format). An archive whose checksum
+doesn't match is rejected as damaged.

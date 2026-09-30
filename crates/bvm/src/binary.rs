@@ -1,4 +1,4 @@
-use crate::module::{Function, Import, Module, Table, FIRST_USER_TYPE};
+use crate::module::{Annotation, Function, Import, Module, Sig, Table, Target, Value, FIRST_USER_TYPE};
 use crate::op::{rt_by_name, rt_name, Cmp, Op};
 use burn_runtime::meta::Desc;
 use std::collections::HashMap;
@@ -255,6 +255,8 @@ fn write_op(w: &mut W, op: &Op, rt: &mut HashMap<&'static str, u32>, rt_list: &m
         Op::SetIndex(_) => 54,
         Op::Len => 55,
         Op::Unbox => 56,
+        Op::TypeConst(_) => 57,
+        Op::LocConst(_) => 58,
         Op::IncLocal(..) | Op::JCmpLL(..) | Op::JCmpLC(..) | Op::LoadField(..) | Op::Load2(..) | Op::LoadK(..) => {
             panic!("{} is internal and is never written to a module", op.mnemonic())
         }
@@ -263,6 +265,8 @@ fn write_op(w: &mut W, op: &Op, rt: &mut HashMap<&'static str, u32>, rt_list: &m
     match *op {
         Op::Const(v) => w.u64(v),
         Op::Str(x)
+        | Op::TypeConst(x)
+        | Op::LocConst(x)
         | Op::FuncRef(x)
         | Op::Load(x)
         | Op::Store(x)
@@ -383,6 +387,8 @@ fn read_op(r: &mut Rd, rt: &[Op]) -> R<Op> {
         54 => Op::SetIndex(r.u32()?),
         55 => Op::Len,
         56 => Op::Unbox,
+        57 => Op::TypeConst(r.u32()?),
+        58 => Op::LocConst(r.u32()?),
         c => return Err(format!("unknown opcode {} at byte {}", c, r.i - 1)),
     })
 }
@@ -394,6 +400,14 @@ pub fn encode(m: &Module) -> Vec<u8> {
     code.u32(m.funcs.len() as u32);
     for f in &m.funcs {
         code.s(&f.name);
+        code.u8(f.external as u8 | (f.sig.is_some() as u8) << 1);
+        if let Some(sig) = &f.sig {
+            code.u32(sig.params.len() as u32);
+            for t in &sig.params {
+                code.u32(*t);
+            }
+            code.u32(sig.ret);
+        }
         code.u32(f.params);
         code.u32(f.locals);
         code.u32(f.names.len() as u32);
@@ -409,6 +423,7 @@ pub fn encode(m: &Module) -> Vec<u8> {
     w.b.extend_from_slice(MAGIC);
     w.u16(crate::FORMAT_VERSION);
     w.u16(0);
+    w.s(&m.name);
     let user = m.types.get(FIRST_USER_TYPE as usize..).unwrap_or(&[]);
     w.u32(user.len() as u32);
     for d in user {
@@ -441,6 +456,40 @@ pub fn encode(m: &Module) -> Vec<u8> {
         w.s(n);
     }
     w.b.extend_from_slice(&code.b);
+    w.u32(m.annotations.len() as u32);
+    for a in &m.annotations {
+        let (kind, idx) = match a.target {
+            Target::Module => (0, 0),
+            Target::Func(i) => (1, i),
+            Target::Type(i) => (2, i),
+            Target::Global(i) => (3, i),
+        };
+        w.u8(kind);
+        w.u32(idx);
+        w.s(&a.name);
+        w.u32(a.args.len() as u32);
+        for (k, v) in &a.args {
+            w.s(k);
+            match v {
+                Value::Int(i) => {
+                    w.u8(0);
+                    w.u64(*i as u64)
+                }
+                Value::Float(f) => {
+                    w.u8(1);
+                    w.u64(f.to_bits())
+                }
+                Value::Bool(b) => {
+                    w.u8(2);
+                    w.u8(*b as u8)
+                }
+                Value::Str(s) => {
+                    w.u8(3);
+                    w.s(s)
+                }
+            }
+        }
+    }
     w.b
 }
 
@@ -450,15 +499,19 @@ pub fn decode(bytes: &[u8]) -> Result<Module, String> {
         return Err("not a bvm module (the file does not start with BVM\\0)".into());
     }
     let version = r.u16()?;
-    if version != crate::FORMAT_VERSION {
+    if version == 0 || version > crate::FORMAT_VERSION {
         return Err(format!(
-            "the module uses bytecode format {}, but this bvm reads format {}",
+            "the module uses bytecode format {}, but this bvm reads formats 1 to {}",
             version,
             crate::FORMAT_VERSION
         ));
     }
+    let v2 = version >= 2;
     let _flags = r.u16()?;
     let mut m = Module::new();
+    if v2 {
+        m.name = r.s()?;
+    }
     let nt = r.count(1)?;
     for _ in 0..nt {
         m.types.push(read_desc(&mut r)?);
@@ -504,6 +557,25 @@ pub fn decode(bytes: &[u8]) -> Result<Module, String> {
     let nf = r.count(16)?;
     for _ in 0..nf {
         let name = r.s()?;
+        let (external, sig) = if v2 {
+            let flags = r.u8()?;
+            if flags > 3 {
+                return Err(format!("bad function flags {}", flags));
+            }
+            let sig = if flags & 2 != 0 {
+                let np = r.count(4)?;
+                let mut params = Vec::with_capacity(np);
+                for _ in 0..np {
+                    params.push(r.u32()?);
+                }
+                Some(Sig { params, ret: r.u32()? })
+            } else {
+                None
+            };
+            (flags & 1 != 0, sig)
+        } else {
+            (false, None)
+        };
         let params = r.u32()?;
         let locals = r.u32()?;
         let nn = r.count(4)?;
@@ -522,7 +594,38 @@ pub fn decode(bytes: &[u8]) -> Result<Module, String> {
             locals,
             names,
             code,
+            external,
+            sig,
         });
+    }
+    if v2 {
+        let na = r.count(10)?;
+        for _ in 0..na {
+            let kind = r.u8()?;
+            let idx = r.u32()?;
+            let target = match kind {
+                0 => Target::Module,
+                1 => Target::Func(idx),
+                2 => Target::Type(idx),
+                3 => Target::Global(idx),
+                k => return Err(format!("bad annotation target kind {}", k)),
+            };
+            let name = r.s()?;
+            let nargs = r.count(5)?;
+            let mut args = Vec::with_capacity(nargs);
+            for _ in 0..nargs {
+                let k = r.s()?;
+                let v = match r.u8()? {
+                    0 => Value::Int(r.u64()? as i64),
+                    1 => Value::Float(f64::from_bits(r.u64()?)),
+                    2 => Value::Bool(r.u8()? != 0),
+                    3 => Value::Str(r.s()?),
+                    t => return Err(format!("bad annotation value tag {}", t)),
+                };
+                args.push((k, v));
+            }
+            m.annotations.push(Annotation { target, name, args });
+        }
     }
     if r.i != bytes.len() {
         return Err(format!("{} unexpected bytes at the end of the module", bytes.len() - r.i));

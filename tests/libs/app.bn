@@ -1,0 +1,25 @@
+import "geometry.bvmc"
+
+@Export
+fun hostName(): string {
+    return "the app"
+}
+
+@Inject(target: "describe", at: "return")
+fun bracket(p: Point, result: string): string {
+    return "<" + result + ">"
+}
+
+fun main() {
+    var a = point(0, 0)
+    var b = Point { x: 3, y: 4 }
+    print(dist(a, b))
+    print(describe(b))
+    print(names([a, b, point(1, 1)]))
+    var total = 0.0
+    for i in 0..2000 {
+        total = total + dist(a, point(i, 0))
+    }
+    print(total, count())
+    print(greeting())
+}

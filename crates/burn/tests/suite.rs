@@ -299,3 +299,86 @@ fn bvm_modules_round_trip_and_run() {
     let _ = std::fs::remove_dir_all(&dir);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+fn temp_dir(tag: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("burn-{}-{}", tag, std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+fn stdout_of(cmd: &mut Command) -> (String, String, i32) {
+    let out = cmd.output().expect("failed to run command");
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.code().unwrap_or(-1),
+    )
+}
+
+#[test]
+fn mixins_rewrite_bytecode_and_are_rejected_for_native_code() {
+    let root = root();
+    let expected = std::fs::read_to_string(root.join("tests/mixins/mixins.out")).unwrap();
+    let (out, err, code) = stdout_of(burn().current_dir(&root).arg("tests/mixins/mixins.bn"));
+    assert_eq!(code, 0, "{}", err);
+    assert_eq!(out, expected);
+    assert!(err.contains("`oldGreet` is deprecated: use greet"), "{}", err);
+    let dir = temp_dir("mixins");
+    if native_supported() {
+        let (_, err, code) = stdout_of(burn().current_dir(&root).args(["build", "tests/mixins/mixins.bn", "-o"]).arg(dir.join("m")));
+        assert_ne!(code, 0);
+        assert!(err.contains("compiled to native code; mixins can only change bvm bytecode"), "{}", err);
+    }
+    let (_, err, code) = stdout_of(
+        burn()
+            .current_dir(&root)
+            .args(["build", "--target", "js", "tests/mixins/mixins.bn", "-o"])
+            .arg(dir.join("m.js")),
+    );
+    assert_ne!(code, 0);
+    assert!(err.contains("mixin"), "{}", err);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn bytecode_libraries_run_on_bvm_in_archives_and_in_native_executables() {
+    let root = root();
+    let expected = std::fs::read_to_string(root.join("tests/libs/app.out")).unwrap();
+    let dir = temp_dir("libs");
+    std::fs::copy(root.join("tests/libs/app.bn"), dir.join("app.bn")).unwrap();
+    let (_, err, code) = stdout_of(
+        burn()
+            .args(["build", "--target", "bvm"])
+            .arg(root.join("tests/libs/geometry.bn"))
+            .arg("-o")
+            .arg(dir.join("geometry.bvmc")),
+    );
+    assert_eq!(code, 0, "{}", err);
+    let app = dir.join("app.bn");
+    let (out, err, _) = stdout_of(burn().arg(&app));
+    assert_eq!(out, expected, "bvm: {}", err);
+    let (_, err, code) = stdout_of(burn().args(["build", "--target", "bar"]).arg(&app).arg("-o").arg(dir.join("app.bar")));
+    assert_eq!(code, 0, "{}", err);
+    let (out, err, _) = stdout_of(burn().arg(dir.join("app.bar")));
+    assert_eq!(out, expected, "bar: {}", err);
+    let (_, err, code) = stdout_of(burn().args(["build", "--target", "bvm"]).arg(&app).arg("-o").arg(dir.join("static.bvmc")));
+    assert_eq!(code, 0, "{}", err);
+    let (out, err, _) = stdout_of(burn().arg(dir.join("static.bvmc")));
+    assert_eq!(out, expected, "static bvmc: {}", err);
+    if native_supported() {
+        let (out, err, _) = stdout_of(burn().args(["run", "--native"]).arg(&app));
+        assert_eq!(out, expected, "native: {}", err);
+        let exe = dir.join("bundled");
+        let (_, err, code) = stdout_of(burn().arg("build").arg(dir.join("app.bar")).arg("-o").arg(&exe));
+        assert_eq!(code, 0, "{}", err);
+        let (out, err, _) = stdout_of(&mut Command::new(&exe));
+        assert_eq!(out, expected, "bundled bar: {}", err);
+        let (out, _, _) = stdout_of(Command::new(&exe).env("BURN_GC_THRESHOLD", "4096"));
+        assert_eq!(out, expected, "bundled bar with a small GC threshold");
+    }
+    let (_, err, code) = stdout_of(burn().args(["build", "--target", "js"]).arg(&app).arg("-o").arg(dir.join("app.js")));
+    assert_ne!(code, 0);
+    assert!(err.contains("bytecode library"), "{}", err);
+    let _ = std::fs::remove_dir_all(&dir);
+}

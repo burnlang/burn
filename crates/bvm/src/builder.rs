@@ -1,4 +1,4 @@
-use crate::module::{Function, Import, Module, Table};
+use crate::module::{Annotation, Function, Import, Module, Sig, Table, Target, Value};
 use crate::op::{Cmp, Op};
 use burn_runtime::meta::Desc;
 use burn_runtime::RtFn;
@@ -17,6 +17,7 @@ pub struct FuncBuilder {
     code: Vec<Op>,
     labels: Vec<Option<u32>>,
     fixups: Vec<(usize, Label)>,
+    sig: Option<Sig>,
 }
 
 impl FuncBuilder {
@@ -28,7 +29,12 @@ impl FuncBuilder {
             code: Vec::new(),
             labels: Vec::new(),
             fixups: Vec::new(),
+            sig: None,
         }
+    }
+
+    pub fn set_sig(&mut self, params: Vec<u32>, ret: u32) {
+        self.sig = Some(Sig { params, ret });
     }
 
     pub fn with_params(names: &[&str]) -> FuncBuilder {
@@ -182,6 +188,8 @@ impl FuncBuilder {
             locals: self.locals,
             names: self.names,
             code: self.code,
+            external: false,
+            sig: self.sig,
         }
     }
 }
@@ -248,13 +256,35 @@ impl ModuleBuilder {
             name: name.to_string(),
             params,
             locals: params,
-            names: Vec::new(),
-            code: Vec::new(),
+            ..Function::default()
         });
         self.defined.push(false);
         let id = self.m.funcs.len() as u32 - 1;
         self.names.insert(name.to_string(), id);
         FuncId(id)
+    }
+
+    pub fn external(&mut self, name: &str, params: u32, sig: Option<Sig>) -> FuncId {
+        if let Some(i) = self.names.get(name) {
+            return FuncId(*i);
+        }
+        self.m.funcs.push(Function::external(name, params, sig));
+        self.defined.push(true);
+        let id = self.m.funcs.len() as u32 - 1;
+        self.names.insert(name.to_string(), id);
+        FuncId(id)
+    }
+
+    pub fn set_name(&mut self, name: &str) {
+        self.m.name = name.to_string();
+    }
+
+    pub fn annotate(&mut self, target: Target, name: &str, args: Vec<(String, Value)>) {
+        self.m.annotations.push(Annotation {
+            target,
+            name: name.to_string(),
+            args,
+        });
     }
 
     pub fn lookup(&self, name: &str) -> Option<FuncId> {

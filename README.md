@@ -54,7 +54,8 @@ fun main() {
 - Smart casts: `is` checks, `!= null` checks, early returns and assignments narrow types automatically
 - Null safety with `T?`
 - Type-first declarations: `String name = "Burn"`, `[int] ids = []`
-- One definition syntax for everything: `def type`, `def class`, `def interface`, `def enum`
+- One definition syntax for everything: `def type`, `def class`, `def interface`, `def enum`, `def annotation`
+- Annotations like Java's: `@Getter`, `@Setter`, `@Deprecated`, your own `def annotation`s and `annotationsOf(value)`
 - Classes with fields, methods, constructors, static functions and private members; interfaces with checked conformance
 - Arrays, maps, records, enums, first-class functions and lambdas, string templates
 - `async fun` / `await` running on real threads
@@ -62,6 +63,9 @@ fun main() {
 - Standard library for dates, times, HTTP, JSON, math and strings
 - Three backends sharing one type checker and runtime: bvm bytecode, native x86-64, JavaScript
 - bvm, a general-purpose virtual machine with its own assembly language, bytecode format and verifier, which other languages can target too
+- Write once, run everywhere: `.bar` archives bundle an application's bytecode and resources and run wherever bvm runs
+- Mixins: `@Inject`, `@Overwrite` and `@Redirect` rewrite existing bytecode functions when modules are linked
+- Native interop: native executables embed bytecode libraries and call them, and the libraries call back into native code
 - Precise error messages with line, column and suggestions
 - Built-in REPL, formatter and language server, plus a VS Code extension
 
@@ -192,6 +196,31 @@ import (
 print(Date.today())
 ```
 
+### Annotations
+
+```burn
+def annotation Route {
+    string path
+    string method = "GET"
+}
+
+@Route("/accounts", method: "POST")
+@Getter
+@Setter
+def class CreateAccount {
+    string owner
+    int balance
+}
+
+var c = CreateAccount { owner: "Ada", balance: 0 }
+c.setBalance(100)
+for a in annotationsOf(c) {
+    if (a is Route) {
+        print(a.method, a.path, c.getBalance())
+    }
+}
+```
+
 ### Async
 
 ```burn
@@ -241,7 +270,37 @@ bvm dis hello.bvmc              # and back
 ```
 
 [`crates/bvm/examples/ember.rs`](crates/bvm/examples/ember.rs) is a complete small language built on bvm.
-See [the bvm documentation](docs/bvm/overview.mdx).
+
+### Libraries, archives, mixins and native code
+
+```burn
+import "geometry.bvmc"
+
+@Export
+fun hostName(): string {
+    return "the app"
+}
+
+@Inject(target: "describe", at: "return")
+fun bracket(p: Point, result: string): string {
+    return "<" + result + ">"
+}
+
+fun main() {
+    print(describe(Point { x: 3, y: 4 }), greeting())
+}
+```
+
+```sh
+burnc geometry.bn --target bvm              # a bytecode library
+burni app.bn                                # run it on bvm
+burnc app.bn --target bar -o app.bar        # one archive: ./app.bar runs anywhere bvm runs
+burnc app.bn -o app                         # a native executable with the library embedded
+```
+
+The library calls `hostName()` back in the program, and the program's mixin rewrites the library's `describe`,
+both on bvm and in the native executable. See [the bvm documentation](docs/bvm/overview.mdx),
+[archives](docs/bvm/archives.mdx), [mixins](docs/bvm/mixins.mdx) and [native interop](docs/bvm/native-interop.mdx).
 
 ## Documentation
 
@@ -263,8 +322,8 @@ examples are in [`examples/bvm/`](examples/bvm/).
   - `native/`: x86-64 code generator, hand-written entry assembly, linker driver
   - `js/`: JavaScript backend
   - `lsp/`, `fmt.rs`, `repl.rs`: tooling
-- `crates/bvm/`: the Burn Virtual Machine: instruction set, assembler, bytecode format, verifier, interpreter,
-  the `bvm` command and the Ember example language
+- `crates/bvm/`: the Burn Virtual Machine: instruction set, assembler, bytecode format, verifier, linker, mixins,
+  archives, interpreter, the native bridge, the `bvm` command and the Ember example language
 - `crates/burn-runtime/`: runtime shared by bvm and native executables (GC, strings, collections, JSON, HTTP, tasks)
 - `tools/burnfmt/`: the formatter, written in Burn
 - `install.sh`: the toolchain installer

@@ -148,6 +148,7 @@ const KEYWORDS: &[&str] = &[
     "interface",
     "class",
     "enum",
+    "annotation",
     "static",
     "if",
     "else",

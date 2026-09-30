@@ -1,0 +1,112 @@
+---
+title: Modules and linking
+description: Extern functions, typed signatures, exports and the bvm linker.
+order: 36
+---
+
+# Modules and linking
+
+A bvm program can be split into modules that are compiled separately and linked later. A module can be a library
+without an entry function, and it can use functions from other modules without knowing where they are defined.
+
+## Names
+
+`module name` gives a module a name. Other modules can refer to its functions as `name::function`, which avoids
+clashes when two modules define functions with the same name.
+
+```bvm
+module geometry
+```
+
+## Extern functions
+
+`extern func` declares a function that another module defines. Calls to it work like calls to any other function:
+
+```bvm
+module app
+extern func dist(a: Point, b: Point): float
+extern func "geometry::describe"(p: Point): string
+```
+
+A module that still has extern functions can be checked, assembled and packed, but not run until it is linked.
+
+## Typed signatures
+
+A function can declare the types of its parameters and its result. The types are used when linking (both sides
+of an extern must agree) and by front ends that import the module. Burn uses them to make a library's
+functions callable with their real types.
+
+```bvm
+func dist(a: Point, b: Point): float
+    ...
+end
+```
+
+Give either every parameter a type or none of them. `_` stands for an unnamed parameter: `func f(_: int): int`.
+
+## Annotations
+
+Any `func`, `extern func`, `type`, `global` or `module` can carry annotations: an `@Name` line with
+`key=value` arguments (strings, numbers or booleans) right before the declaration. A single value without a
+key is stored under `value`.
+
+```bvm
+@Export name="distance"
+@Deprecated "use dist2"
+func dist(a: Point, b: Point): float
+```
+
+bvm itself gives meaning to a few annotations: `@Export` (below) and the mixins `@Inject`, `@Overwrite` and
+`@Redirect` (see [mixins](./mixins.mdx)). Everything else is data for front ends and tools.
+
+## Exports and imports
+
+`@Export` marks a function that other modules may call through an `import`. When the linker finds an import
+with the same name and argument count as an exported function, it turns the `host` calls into direct calls. The
+same library therefore works in two places: inside an application that exports the function in bytecode, and
+inside a [native executable](./native-interop.mdx) that exports a machine-code function.
+
+```bvm
+module plugin
+import log 1
+
+func run(): void
+    str "plugin started"
+    host log
+    pop
+    retv
+end
+```
+
+## Linking
+
+```sh
+bvm link app.bvm geometry.bvmc -o app.bvmc     # one module, ready to run
+bvm link geometry.bvm -o lib.bvmc --lib        # keep unresolved externs (partial link)
+```
+
+The linker:
+
+1. merges the type tables and reuses one type id for types that are identical (the same record with the same
+   fields, for example), so values pass between modules unchanged
+2. merges the string pools and appends globals, locations and imports
+3. resolves every extern by name, or by `module::name`. It reports missing, ambiguous and mismatched
+   definitions (different parameter counts or types)
+4. merges dispatch tables with the same name, so an interface declared in one module can be implemented in
+   another
+5. binds imports to exported functions
+6. applies [mixins](./mixins.mdx)
+7. verifies the result
+
+The entry function of the first module that has one becomes the program's entry. Linking a module that is
+already linked changes nothing.
+
+`bvm run` and `bvm::load` link a single module automatically when it contains mixins or exports that satisfy its
+own imports. [Archives](./archives.mdx) link their modules when they start.
+
+From Rust:
+
+```rust
+let program = bvm::link(&[app, geometry])?;
+let library = bvm::link_with(&[geometry], &bvm::LinkOptions { allow_unresolved: true, ..Default::default() })?;
+```

@@ -36,8 +36,101 @@ fn temp_dir() -> PathBuf {
     std::env::temp_dir().join(format!("burn-build-{}-{}", std::process::id(), nanos))
 }
 
+pub fn validate(p: &Program) -> Result<(), String> {
+    use crate::hir::External;
+    if let Some(f) = p.funcs.iter().find(|f| matches!(f.external, Some(External::Native { .. }))) {
+        return Err(format!(
+            "`{}` is marked @Native: functions provided by a host program only exist on bvm, so build this with `--target bvm` or `--target bar`, or run it with burni",
+            f.name
+        ));
+    }
+    let mut lib_funcs: Vec<String> = Vec::new();
+    for l in &p.libs {
+        let ms = crate::check::libs::library_modules(&l.bytes).map_err(|e| format!("{}: {}", l.path.display(), e))?;
+        for m in ms {
+            for (i, f) in m.funcs.iter().enumerate() {
+                if f.external {
+                    continue;
+                }
+                lib_funcs.push(f.name.clone());
+                if let Some(e) = bvm::link::export_name(&m, i as u32) {
+                    lib_funcs.push(e);
+                }
+                if !m.name.is_empty() {
+                    lib_funcs.push(format!("{}::{}", m.name, f.name));
+                }
+            }
+        }
+    }
+    for f in &p.funcs {
+        for a in &f.annotations {
+            if !x86::MIXINS.contains(&a.name.as_str()) {
+                continue;
+            }
+            let target = a.str_arg("target").unwrap_or("");
+            if lib_funcs.iter().any(|n| n == target) {
+                continue;
+            }
+            if p.funcs.iter().any(|g| g.name == target && g.external.is_none()) {
+                return Err(format!(
+                    "@{} on `{}` targets `{}`, which is compiled to native code; mixins can only change bvm bytecode (use burni or `--target bvm`, or target a function in an imported bytecode library)",
+                    a.name, f.name, target
+                ));
+            }
+            return Err(format!(
+                "@{} on `{}` targets `{}`, but no imported bytecode library has a function with that name",
+                a.name, f.name, target
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub fn build(p: &Program, opts: &BuildOptions) -> Result<(), String> {
+    validate(p)?;
     let asm = assembly(p);
+    if let Some(path) = &opts.emit_asm {
+        std::fs::write(path, &asm).map_err(|e| format!("cannot write {}: {}", path.display(), e))?;
+    }
+    supported()?;
+    let dir = temp_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let result = link(&dir, &asm, &opts.output, opts.strip);
+    let _ = std::fs::remove_dir_all(&dir);
+    result
+}
+
+pub fn launcher_assembly(bytes: &[u8]) -> String {
+    let t = x86::Target::host();
+    let p = t.prefix;
+    let plt = if t.macos { "" } else { "@PLT" };
+    let mut s = String::new();
+    s.push_str(".intel_syntax noprefix\n.text\n");
+    s.push_str(&format!(".globl {p}main\n{p}main:\n"));
+    s.push_str("    push rbp\n    mov rbp, rsp\n");
+    s.push_str("    mov rdx, rdi\n    mov rcx, rsi\n");
+    s.push_str("    lea rdi, [rip + burn_bundle]\n");
+    s.push_str("    mov rsi, qword ptr [rip + burn_bundle_len]\n");
+    s.push_str(&format!("    call {p}burn_bvm_main{plt}\n"));
+    s.push_str("    pop rbp\n    ret\n");
+    s.push_str(if t.macos { ".section __TEXT,__const\n" } else { ".section .rodata\n" });
+    s.push_str(".p2align 4\n");
+    s.push_str(&format!("burn_bundle_len:\n    .quad {}\n", bytes.len()));
+    s.push_str("burn_bundle:\n");
+    for chunk in bytes.chunks(32) {
+        let parts: Vec<String> = chunk.iter().map(|x| x.to_string()).collect();
+        s.push_str("    .byte ");
+        s.push_str(&parts.join(","));
+        s.push('\n');
+    }
+    if !t.macos {
+        s.push_str(".section .note.GNU-stack,\"\",@progbits\n");
+    }
+    s
+}
+
+pub fn build_launcher(bytes: &[u8], opts: &BuildOptions) -> Result<(), String> {
+    let asm = launcher_assembly(bytes);
     if let Some(path) = &opts.emit_asm {
         std::fs::write(path, &asm).map_err(|e| format!("cannot write {}: {}", path.display(), e))?;
     }

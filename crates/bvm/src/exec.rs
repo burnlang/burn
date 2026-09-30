@@ -26,6 +26,12 @@ impl Host {
         self
     }
 
+    pub fn extend(&mut self, other: &Host) {
+        for (k, v) in &other.fns {
+            self.fns.insert(k.clone(), v.clone());
+        }
+    }
+
     pub fn names(&self) -> Vec<String> {
         let mut v: Vec<String> = self.fns.keys().cloned().collect();
         v.sort();
@@ -37,6 +43,8 @@ impl Host {
 pub enum LoadError {
     Verify(VerifyError),
     MissingImport(String),
+    Unlinked(String),
+    Link(String),
     ImportArity { name: String, module: u32, host: u32 },
 }
 
@@ -45,6 +53,8 @@ impl fmt::Display for LoadError {
         match self {
             LoadError::Verify(e) => write!(f, "{}", e),
             LoadError::MissingImport(n) => write!(f, "the module imports {}, but the host does not provide it", n),
+            LoadError::Unlinked(n) => write!(f, "function {} is external; link the module that defines it", n),
+            LoadError::Link(e) => write!(f, "{}", e),
             LoadError::ImportArity { name, module, host } => {
                 write!(f, "the module imports {} with {} arguments, but the host function takes {}", name, module, host)
             }
@@ -85,8 +95,30 @@ impl Program {
     }
 }
 
+pub fn needs_link(m: &Module) -> bool {
+    m.annotations.iter().any(|a| crate::mixin::KINDS.contains(&a.name.as_str()))
+        || m.imports
+            .iter()
+            .any(|i| (0..m.funcs.len() as u32).any(|f| crate::link::export_name(m, f).as_deref() == Some(&i.name)))
+}
+
 pub fn load(m: &Module, host: &Host) -> Result<Arc<Program>, LoadError> {
+    load_with(m, host, true)
+}
+
+pub fn load_with(m: &Module, host: &Host, install_meta: bool) -> Result<Arc<Program>, LoadError> {
+    let linked;
+    let m = if needs_link(m) {
+        analyze(m)?;
+        linked = crate::link::link(std::slice::from_ref(m)).map_err(LoadError::Link)?;
+        &linked
+    } else {
+        m
+    };
     let max = analyze(m)?;
+    if let Some(f) = m.funcs.iter().find(|f| f.external) {
+        return Err(LoadError::Unlinked(f.name.clone()));
+    }
     let mut hosts = Vec::with_capacity(m.imports.len());
     for imp in &m.imports {
         match host.fns.get(&imp.name) {
@@ -101,7 +133,9 @@ pub fn load(m: &Module, host: &Host) -> Result<Arc<Program>, LoadError> {
             Some((argc, f)) => hosts.push((*argc, f.clone())),
         }
     }
-    meta::set_meta(m.meta());
+    if install_meta {
+        meta::set_meta(m.meta());
+    }
     Ok(Arc::new(link(m, &max, hosts)))
 }
 
@@ -409,11 +443,26 @@ impl Vm {
                 pc = fi.entry as usize;
             }};
         }
+        macro_rules! ret {
+            ($v:expr) => {{
+                let v = $v;
+                sp = bp;
+                if self.frames.len() == stop {
+                    sync!();
+                    return v;
+                }
+                let fr = unsafe { self.frames.pop().unwrap_unchecked() };
+                push!(v);
+                pc = fr.pc as usize;
+                bp = unsafe { s0.add(fr.base as usize) };
+            }};
+        }
         loop {
             let op = unsafe { *ops.get_unchecked(pc) };
             pc += 1;
             match op {
                 Op::Const(v) => push!(v),
+                Op::TypeConst(v) | Op::LocConst(v) => push!(v as u64),
                 Op::Str(i) => push!(unsafe { *prog.strings.get_unchecked(i as usize) }),
                 Op::FuncRef(i) => push!(i as u64),
                 Op::Load(s) => push!(local!(s)),
@@ -580,18 +629,11 @@ impl Vm {
                     }
                     enter!(func)
                 }
-                Op::Ret | Op::RetVoid => {
-                    let v = if op == Op::Ret { pop!() } else { 0 };
-                    sp = bp;
-                    if self.frames.len() == stop {
-                        sync!();
-                        return v;
-                    }
-                    let fr = self.frames.pop().unwrap();
-                    push!(v);
-                    pc = fr.pc as usize;
-                    bp = unsafe { s0.add(fr.base as usize) };
+                Op::Ret => {
+                    let v = pop!();
+                    ret!(v)
                 }
+                Op::RetVoid => ret!(0),
                 Op::Rt(rf) => {
                     let n = rf.argc();
                     sync!();

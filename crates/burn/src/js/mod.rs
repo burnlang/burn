@@ -86,6 +86,30 @@ struct Gen<'p> {
     indent: usize,
 }
 
+pub fn validate(p: &Program) -> Result<(), String> {
+    if let Some(l) = p.libs.first() {
+        return Err(format!(
+            "`{}` is a bytecode library; the JavaScript backend cannot run bvm code, so use burni, `--target bvm`, `--target bar` or a native build",
+            l.path.display()
+        ));
+    }
+    for f in &p.funcs {
+        if matches!(f.external, Some(crate::hir::External::Native { .. })) {
+            return Err(format!(
+                "`{}` is marked @Native, which needs bvm; the JavaScript backend has no host functions",
+                f.name
+            ));
+        }
+        if let Some(a) = f.annotations.iter().find(|a| matches!(a.name.as_str(), "Inject" | "Overwrite" | "Redirect")) {
+            return Err(format!(
+                "@{} on `{}` is a mixin, and mixins change bvm bytecode; the JavaScript backend does not support them",
+                a.name, f.name
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub fn generate(p: &Program) -> String {
     let mut g = Gen {
         p,
@@ -230,6 +254,7 @@ impl<'p> Gen<'p> {
 
     fn expr(&mut self, e: &Expr) -> String {
         match &e.kind {
+            ExprKind::TypeId(v) | ExprKind::LocId(v) => v.to_string(),
             ExprKind::Int(v) => {
                 if *v < 0 {
                     format!("({})", v)

@@ -1,0 +1,94 @@
+---
+title: Mixins
+description: Change the bytecode of existing functions at link time with @Inject, @Overwrite and @Redirect.
+order: 38
+---
+
+# Mixins
+
+A mixin changes a function you didn't write, without editing its source: it runs extra code when the function
+starts, looks at or replaces its result, replaces its body, or reroutes a call inside it. The idea comes from
+the Mixin library for Java, but bvm applies mixins directly to bytecode when modules are linked, so there is no
+separate class-transformation step.
+
+Mixins are ordinary functions with an annotation. In Burn:
+
+```burn
+import "greeter.bvmc"
+
+@Inject(target: "greet", at: "head")
+fun logGreet(name: string) {
+    print("[log] greeting " + name)
+}
+
+@Inject(target: "greet", at: "return")
+fun excite(name: string, result: string): string {
+    return result + "!"
+}
+```
+
+In bvm assembly:
+
+```bvm
+@Inject target="greet" at="head"
+func log_greet(name: string): void
+    ...
+end
+```
+
+## Kinds
+
+| Annotation | Hook signature | Effect |
+| --- | --- | --- |
+| `@Inject(target: "f", at: "head")` | the parameters of `f` | calls the hook with `f`'s arguments before `f`'s own code |
+| `@Inject(target: "f", at: "head", cancellable: true)` | the parameters of `f` | as above, but the hook can cancel: if it returns a non-zero value, `f` returns that value immediately (see below) |
+| `@Inject(target: "f", at: "return")` | the parameters of `f`, plus its result | runs at every return; the hook's result becomes `f`'s result |
+| `@Inject(target: "f", at: "return")` | only the parameters of `f` | runs at every return, and `f`'s result is kept |
+| `@Overwrite(target: "f")` | the parameters of `f` | replaces the body of `f` with a call to the hook |
+| `@Redirect(target: "f", call: "g")` | the parameters of `g` | replaces every call to `g` inside `f` with a call to the hook |
+| `@Redirect(target: "f", rt: "print")` | the arguments of the runtime function | replaces calls to a runtime function inside `f` |
+| `@Redirect(target: "f", host: "log")` | the arguments of the import | replaces calls to a host function inside `f` |
+
+What a cancellable hook returns depends on `f`'s result:
+
+| `f` returns | The hook returns | It cancels with |
+| --- | --- | --- |
+| nothing | `bool` | `true` |
+| `int`, `float`, `bool` or an enum | the same type | any value other than zero |
+| anything else | the same type or its optional (`string?`) | any non-null value |
+
+The Burn checker enforces these types. The linker checks them as well whenever both functions have typed
+signatures.
+
+`target` is a function name, or `module::name`. Mixins on the same function are applied in declaration order.
+Head injections run in the order they are declared, and each return injection sees the result of the one
+before. `priority: n` (default 1000) runs lower numbers first.
+
+## When mixins are applied
+
+The linker applies every mixin in the modules it links (see [linking](./linking.mdx)). That covers
+`bvm link`, running an archive, `burn run`/`burni` on a Burn program, and embedded libraries in native
+executables. A target that doesn't exist, or a hook whose signature doesn't fit, is a link error.
+
+After linking, the changed function carries an `@Mixed by="hook" kind="..."` annotation and the hook an
+`@Applied target="..."` annotation. `bvm dis` shows both, which makes it easy to see what changed:
+
+```bvm
+@Mixed by="log_greet" kind="Inject at head"
+func greet(name: string): string
+    load name
+    call log_greet
+    pop
+    ...
+```
+
+## What mixins cannot change
+
+Mixins rewrite bytecode, so they can't change native code:
+
+- A mixin whose target is a host function (an `import`) or an unresolved `extern` is rejected.
+- In a native executable, the program's own functions are machine code. A mixin in a native Burn program may
+  target functions in the bytecode libraries it imports (the hook itself runs as native code, see
+  [native interop](./native-interop.mdx)), but not the program's own functions. `burnc` reports that at
+  compile time.
+- The JavaScript backend has no bytecode and rejects mixins.

@@ -70,6 +70,8 @@ pub const NO_LOC: u32 = u32::MAX;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Op {
     Const(u64),
+    TypeConst(u32),
+    LocConst(u32),
     Str(u32),
     FuncRef(u32),
     Load(u32),
@@ -138,6 +140,8 @@ impl Op {
     pub fn mnemonic(&self) -> &'static str {
         match self {
             Op::Const(_) => "const",
+            Op::TypeConst(_) => "tconst",
+            Op::LocConst(_) => "lconst",
             Op::Str(_) => "str",
             Op::FuncRef(_) => "fref",
             Op::Load(_) => "load",

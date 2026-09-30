@@ -1,4 +1,4 @@
-use crate::module::{Function, Import, Module, Table, FIRST_USER_TYPE};
+use crate::module::{Annotation, Function, Import, Module, Sig, Table, Target, Value, FIRST_USER_TYPE};
 use crate::op::{rt_by_name, rt_name, Cmp, Op, NO_LOC};
 use burn_runtime::meta::Desc;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -27,6 +27,7 @@ enum Tok {
     Str(String),
     Hash(u32),
     At(u32),
+    Annot(String),
     P(char),
 }
 
@@ -39,6 +40,7 @@ impl fmt::Display for Tok {
             Tok::Str(s) => write!(f, "\"{}\"", escape(s)),
             Tok::Hash(n) => write!(f, "#{}", n),
             Tok::At(n) => write!(f, "@{}", n),
+            Tok::Annot(n) => write!(f, "@{}", n),
             Tok::P(c) => write!(f, "{}", c),
         }
     }
@@ -136,6 +138,13 @@ fn lex(line: &str) -> R<Vec<Tok>> {
                 }
             }
             out.push(Tok::Str(s));
+        } else if c == '@' && cs.get(i + 1).is_some_and(|d| ident_start(*d)) {
+            let start = i + 1;
+            i = start;
+            while i < cs.len() && ident_char(cs[i]) {
+                i += 1;
+            }
+            out.push(Tok::Annot(cs[start..i].iter().collect()));
         } else if c == '#' || c == '@' {
             let start = i + 1;
             let mut j = start;
@@ -536,15 +545,31 @@ pub fn assemble(src: &str) -> Result<Module, AsmError> {
     };
     let e = |line: usize| move |msg: String| AsmError { line, msg };
     let mut bodies: Vec<(usize, usize, usize)> = Vec::new();
+    let mut headers: Vec<(usize, u32)> = Vec::new();
+    let mut pending: Vec<(String, Vec<(String, Value)>)> = Vec::new();
     let mut i = 0;
     while i < lines.len() {
         let l = &lines[i];
         let mut c = Cur::new(&l.toks);
         let word = match c.next().map_err(e(l.no))? {
             Tok::Ident(w) => w.clone(),
+            Tok::Annot(name) => {
+                let args = annotation_args(&mut c).map_err(e(l.no))?;
+                pending.push((name.clone(), args));
+                i += 1;
+                continue;
+            }
             t => return Err(e(l.no)(format!("expected a directive but found {}", t))),
         };
+        if !pending.is_empty() && !matches!(word.as_str(), "func" | "extern" | "type" | "global" | "module") {
+            return Err(e(l.no)("an annotation must come right before func, extern, type, global or module".into()));
+        }
         match word.as_str() {
+            "module" => {
+                a.m.name = c.name().map_err(e(l.no))?;
+                c.done().map_err(e(l.no))?;
+                attach(&mut a.m, &mut pending, Target::Module);
+            }
             "type" => {
                 let tid = a.m.types.len() as u32;
                 match c.next().map_err(e(l.no))? {
@@ -558,30 +583,13 @@ pub fn assemble(src: &str) -> Result<Module, AsmError> {
                     t => return Err(e(l.no)(format!("expected a type name but found {}", t))),
                 }
                 a.m.types.push(Desc::Error);
+                attach(&mut a.m, &mut pending, Target::Type(tid));
             }
-            "func" => {
-                let name = c.name().map_err(e(l.no))?;
-                c.expect('(').map_err(e(l.no))?;
-                let mut names = Vec::new();
-                let params;
-                if let Some(Tok::Int(n)) = c.peek() {
-                    params = *n as u32;
-                    c.i += 1;
-                    c.expect(')').map_err(e(l.no))?;
-                } else {
-                    while !c.eat(')') {
-                        match c.next().map_err(e(l.no))? {
-                            Tok::Ident(n) => names.push(n.clone()),
-                            t => return Err(e(l.no)(format!("expected a parameter name but found {}", t))),
-                        }
-                        if !c.eat(',') {
-                            c.expect(')').map_err(e(l.no))?;
-                            break;
-                        }
-                    }
-                    params = names.len() as u32;
+            "func" | "extern" => {
+                if word == "extern" && !c.eat_word("func") {
+                    return Err(e(l.no)("write extern func name(params)".into()));
                 }
-                c.done().map_err(e(l.no))?;
+                let (name, params, names, _) = header(&mut a, &mut c, false).map_err(e(l.no))?;
                 let id = a.m.funcs.len() as u32;
                 a.func_names.entry(name.clone()).or_default().push(id);
                 a.m.funcs.push(Function {
@@ -589,8 +597,15 @@ pub fn assemble(src: &str) -> Result<Module, AsmError> {
                     params,
                     locals: params,
                     names,
-                    code: Vec::new(),
+                    external: word == "extern",
+                    ..Function::default()
                 });
+                headers.push((i, id));
+                attach(&mut a.m, &mut pending, Target::Func(id));
+                if word == "extern" {
+                    i += 1;
+                    continue;
+                }
                 let start = i + 1;
                 let mut j = start;
                 while j < lines.len() && !matches!(lines[j].toks.as_slice(), [Tok::Ident(w)] if w == "end") {
@@ -608,8 +623,10 @@ pub fn assemble(src: &str) -> Result<Module, AsmError> {
             "global" => {
                 let name = c.name().map_err(e(l.no))?;
                 c.done().map_err(e(l.no))?;
-                a.global_names.entry(name.clone()).or_default().push(a.m.globals.len() as u32);
+                let g = a.m.globals.len() as u32;
+                a.global_names.entry(name.clone()).or_default().push(g);
                 a.m.globals.push(name);
+                attach(&mut a.m, &mut pending, Target::Global(g));
             }
             "import" => {
                 let name = c.name().map_err(e(l.no))?;
@@ -694,6 +711,22 @@ pub fn assemble(src: &str) -> Result<Module, AsmError> {
             _ => {}
         }
     }
+    if !pending.is_empty() {
+        return Err(e(lines.last().map(|l| l.no).unwrap_or(0))(
+            "an annotation at the end of the file has nothing to attach to".into(),
+        ));
+    }
+    for (li, id) in headers {
+        let l = &lines[li];
+        let mut c = Cur::new(&l.toks);
+        c.i = if matches!(l.toks.first(), Some(Tok::Ident(w)) if w == "extern") {
+            2
+        } else {
+            1
+        };
+        let (_, _, _, sig) = header(&mut a, &mut c, true).map_err(e(l.no))?;
+        a.m.funcs[id as usize].sig = sig;
+    }
     for (id, start, end) in bodies {
         body(&mut a, id, &lines[start..end])?;
     }
@@ -701,6 +734,133 @@ pub fn assemble(src: &str) -> Result<Module, AsmError> {
         a.m.entry = a.func_names.get("main").and_then(|v| v.first().copied());
     }
     Ok(a.m)
+}
+
+fn attach(m: &mut Module, pending: &mut Vec<(String, Vec<(String, Value)>)>, target: Target) {
+    for (name, args) in pending.drain(..) {
+        m.annotations.push(Annotation { target, name, args });
+    }
+}
+
+fn annotation_value(c: &mut Cur) -> R<Value> {
+    let neg = c.eat('-');
+    Ok(match c.next()? {
+        Tok::Str(s) if !neg => Value::Str(s.clone()),
+        Tok::Int(v) => {
+            let v = if neg { -*v } else { *v };
+            Value::Int(i64::try_from(v).map_err(|_| format!("{} does not fit in 64 bits", v))?)
+        }
+        Tok::Float(f) => Value::Float(if neg { -*f } else { *f }),
+        Tok::Ident(w) if w == "true" && !neg => Value::Bool(true),
+        Tok::Ident(w) if w == "false" && !neg => Value::Bool(false),
+        t => return Err(format!("expected a string, number or bool but found {}", t)),
+    })
+}
+
+fn annotation_args(c: &mut Cur) -> R<Vec<(String, Value)>> {
+    let mut out = Vec::new();
+    while c.peek().is_some() {
+        if matches!(c.t.get(c.i + 1), Some(Tok::P('='))) {
+            let key = c.name()?;
+            c.expect('=')?;
+            out.push((key, annotation_value(c)?));
+        } else {
+            if !out.is_empty() {
+                return Err("write the remaining annotation arguments as key=value".into());
+            }
+            out.push(("value".to_string(), annotation_value(c)?));
+        }
+    }
+    Ok(out)
+}
+
+fn skip_type(c: &mut Cur, stop_at_close: bool) -> R<()> {
+    let mut depth = 0i32;
+    let start = c.i;
+    while let Some(t) = c.peek() {
+        match t {
+            Tok::P('(') | Tok::P('[') | Tok::P('{') | Tok::P('<') => depth += 1,
+            Tok::P(')') if depth == 0 && stop_at_close => break,
+            Tok::P(',') if depth == 0 && stop_at_close => break,
+            Tok::P(')') | Tok::P(']') | Tok::P('}') | Tok::P('>') => depth -= 1,
+            _ => {}
+        }
+        c.i += 1;
+    }
+    if c.i == start {
+        return Err("expected a type".into());
+    }
+    Ok(())
+}
+
+type Header = (String, u32, Vec<String>, Option<Sig>);
+
+fn header(a: &mut Asm, c: &mut Cur, resolve: bool) -> R<Header> {
+    let name = c.name()?;
+    c.expect('(')?;
+    let mut names = Vec::new();
+    let mut types: Vec<Option<u32>> = Vec::new();
+    if let Some(Tok::Int(n)) = c.peek() {
+        let n = u32::try_from(*n).map_err(|_| "bad parameter count".to_string())?;
+        c.i += 1;
+        c.expect(')')?;
+        types = vec![None; n as usize];
+    } else {
+        while !c.eat(')') {
+            match c.next()? {
+                Tok::Ident(n) => names.push(n.clone()),
+                t => return Err(format!("expected a parameter name but found {}", t)),
+            }
+            if c.eat(':') {
+                if resolve {
+                    types.push(Some(a.ty(c)?));
+                } else {
+                    skip_type(c, true)?;
+                    types.push(Some(0));
+                }
+            } else {
+                types.push(None);
+            }
+            if !c.eat(',') {
+                c.expect(')')?;
+                break;
+            }
+        }
+    }
+    let ret = if c.eat(':') {
+        if resolve {
+            Some(a.ty(c)?)
+        } else {
+            skip_type(c, false)?;
+            Some(0)
+        }
+    } else {
+        None
+    };
+    c.done()?;
+    let params = types.len() as u32;
+    if names.iter().all(|n| n == "_") {
+        names.clear();
+    } else {
+        for (i, n) in names.iter_mut().enumerate() {
+            if n == "_" {
+                *n = format!("v{}", i);
+            }
+        }
+    }
+    let typed = types.iter().any(|t| t.is_some()) || ret.is_some();
+    let sig = if typed {
+        if types.iter().any(|t| t.is_none()) {
+            return Err("give every parameter a type, or none of them".into());
+        }
+        Some(Sig {
+            params: types.into_iter().map(|t| t.unwrap()).collect(),
+            ret: ret.unwrap_or(1),
+        })
+    } else {
+        None
+    };
+    Ok((name, params, names, sig))
 }
 
 fn body(a: &mut Asm, id: usize, lines: &[Line]) -> Result<(), AsmError> {
@@ -791,6 +951,8 @@ fn instr(a: &mut Asm, m: &str, c: &mut Cur, names: &[String], labels: &HashMap<S
     }
     Ok(match m {
         "const" => Op::Const(const_operand(c)?),
+        "tconst" => Op::TypeConst(a.ty(c)?),
+        "lconst" => Op::LocConst(c.uint()?),
         "str" => match c.next()? {
             Tok::Str(s) => Op::Str(a.m.intern_string(s)),
             Tok::At(n) => Op::Str(*n),
@@ -1025,6 +1187,11 @@ pub fn disassemble(m: &Module) -> String {
     let mut o = String::new();
     let _ = writeln!(o, "; bvm module, format {}", crate::FORMAT_VERSION);
     let mut sections = 0;
+    if !m.name.is_empty() || m.annotations_of(Target::Module).next().is_some() {
+        annotations(&mut o, m, Target::Module, "");
+        let _ = writeln!(o, "module {}", quoted(&m.name));
+        sections = 1;
+    }
     let mut gap = |o: &mut String, had: bool| {
         if had && sections > 0 {
             o.push('\n');
@@ -1038,6 +1205,7 @@ pub fn disassemble(m: &Module) -> String {
     for (i, d) in m.types.iter().enumerate().skip(FIRST_USER_TYPE as usize) {
         let decl = n.types.get(&(i as u32)).cloned();
         let label = decl.clone().unwrap_or_else(|| format!("#{}", i));
+        annotations(&mut o, m, Target::Type(i as u32), "");
         let _ = writeln!(o, "type {} = {}", label, n.desc(m, d, decl.as_deref().unwrap_or("")));
     }
     gap(&mut o, !m.strings.is_empty());
@@ -1049,7 +1217,8 @@ pub fn disassemble(m: &Module) -> String {
         let _ = writeln!(o, "loc \"{}\"", escape(s));
     }
     gap(&mut o, !m.globals.is_empty());
-    for g in &m.globals {
+    for (i, g) in m.globals.iter().enumerate() {
+        annotations(&mut o, m, Target::Global(i as u32), "");
         let _ = writeln!(o, "global {}", quoted(g));
     }
     gap(&mut o, !m.imports.is_empty());
@@ -1069,30 +1238,85 @@ pub fn disassemble(m: &Module) -> String {
     if let Some(e) = m.entry {
         let _ = writeln!(o, "entry {}", n.funcs.get(e as usize).cloned().unwrap_or_else(|| format!("@{}", e)));
     }
-    for f in &m.funcs {
+    let externs: Vec<usize> = (0..m.funcs.len()).filter(|i| m.funcs[*i].external).collect();
+    gap(&mut o, !externs.is_empty());
+    for i in externs {
+        annotations(&mut o, m, Target::Func(i as u32), "");
+        let _ = writeln!(o, "extern func {}", head(m, &n, &m.funcs[i], false));
+    }
+    for (i, f) in m.funcs.iter().enumerate() {
+        if f.external {
+            continue;
+        }
         if sections > 0 {
             o.push('\n');
         }
         sections += 1;
+        annotations(&mut o, m, Target::Func(i as u32), "");
         func(&mut o, m, &n, f);
     }
     o
 }
 
-fn func(o: &mut String, m: &Module, n: &Names, f: &Function) {
+fn value_text(v: &Value) -> String {
+    match v {
+        Value::Int(i) => i.to_string(),
+        Value::Float(f) => format!("{:?}", f),
+        Value::Bool(b) => b.to_string(),
+        Value::Str(s) => format!("\"{}\"", escape(s)),
+    }
+}
+
+fn annotations(o: &mut String, m: &Module, target: Target, indent: &str) {
+    for a in m.annotations_of(target) {
+        let _ = write!(o, "{}@{}", indent, a.name);
+        if let [(k, v)] = a.args.as_slice() {
+            if k == "value" {
+                let _ = writeln!(o, " {}", value_text(v));
+                continue;
+            }
+        }
+        for (k, v) in &a.args {
+            let _ = write!(o, " {}={}", quoted(k), value_text(v));
+        }
+        o.push('\n');
+    }
+}
+
+fn names_usable(f: &Function) -> bool {
     let set: HashSet<&str> = f.names.iter().map(|s| s.as_str()).collect();
-    let named = f.params <= f.locals
+    f.params <= f.locals
         && f.names.len() == f.locals as usize
         && set.len() == f.names.len()
-        && f.names.iter().all(|s| is_ident(s) && Op::simple(s).is_none());
+        && f.names.iter().all(|s| is_ident(s) && Op::simple(s).is_none() && s != "_")
+}
+
+fn head(m: &Module, n: &Names, f: &Function, named: bool) -> String {
+    let named = named || (f.external && names_usable(f));
+    let pname = |i: usize| if named { f.names[i].clone() } else { "_".to_string() };
+    match &f.sig {
+        Some(sig) => {
+            let ps: Vec<String> = (0..f.params as usize)
+                .map(|i| format!("{}: {}", pname(i), sig.params.get(i).map(|t| n.ty(m, *t)).unwrap_or_else(|| "any".into())))
+                .collect();
+            format!("{}({}): {}", quoted(&f.name), ps.join(", "), n.ty(m, sig.ret))
+        }
+        None if named => {
+            let ps: Vec<String> = (0..f.params as usize).map(pname).collect();
+            format!("{}({})", quoted(&f.name), ps.join(", "))
+        }
+        None => format!("{}({})", quoted(&f.name), f.params),
+    }
+}
+
+fn func(o: &mut String, m: &Module, n: &Names, f: &Function) {
+    let named = names_usable(f);
+    let _ = writeln!(o, "func {}", head(m, n, f, named));
     if named {
-        let ps: Vec<&str> = f.names[..f.params as usize].iter().map(|s| s.as_str()).collect();
-        let _ = writeln!(o, "func {}({})", quoted(&f.name), ps.join(", "));
         for l in &f.names[f.params as usize..] {
             let _ = writeln!(o, "    local {}", l);
         }
     } else {
-        let _ = writeln!(o, "func {}({})", quoted(&f.name), f.params);
         if f.locals > f.params {
             let _ = writeln!(o, "    locals {}", f.locals - f.params);
         }
@@ -1125,6 +1349,8 @@ fn func(o: &mut String, m: &Module, n: &Names, f: &Function) {
         let mn = op.mnemonic();
         let arg = match *op {
             Op::Const(v) => format!(" {}", const_text(v)),
+            Op::TypeConst(t) => format!(" {}", n.ty(m, t)),
+            Op::LocConst(l) => format!(" {}", l),
             Op::Str(s) => match m.strings.get(s as usize) {
                 Some(text) if first_str.get(text.as_str()) == Some(&(s as usize)) => format!(" \"{}\"", escape(text)),
                 _ => format!(" @{}", s),

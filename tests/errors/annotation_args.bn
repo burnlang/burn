@@ -1,0 +1,8 @@
+def annotation Route {
+    string path
+    int weight = 1
+}
+
+@Route(path: "/x", weight: "heavy")
+fun handler() {
+}
