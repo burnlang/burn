@@ -170,6 +170,12 @@ fn get_lib(blob: u64, len: u64) -> Arc<Lib> {
 }
 
 #[no_mangle]
+pub extern "C" fn burn_bvm_init_lib(blob: u64, len: u64) -> u64 {
+    get_lib(blob, len);
+    0
+}
+
+#[no_mangle]
 pub extern "C" fn burn_bvm_call(blob: u64, len: u64, name: u64, argc: u64, argv_rev: u64) -> u64 {
     let lib = get_lib(blob, len);
     let name = cstr(name);

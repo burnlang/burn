@@ -284,6 +284,13 @@ impl<'p> Gen<'p> {
             s.push_str("    mov r12, rsp\n    and rsp, -16\n");
             s.push_str(&format!("    call {}burn_bvm_register_mixins{}\n", pl, plt));
             s.push_str("    mov rsp, r12\n");
+            for i in 0..p.libs.len() {
+                s.push_str(&format!("    lea rdi, [rip + burn_lib_{}]\n", i));
+                s.push_str(&format!("    mov rsi, qword ptr [rip + burn_lib_{}_len]\n", i));
+                s.push_str("    mov r12, rsp\n    and rsp, -16\n");
+                s.push_str(&format!("    call {}burn_bvm_init_lib{}\n", pl, plt));
+                s.push_str("    mov rsp, r12\n");
+            }
             s
         };
         self.out

@@ -130,6 +130,25 @@ The package name loads the package's `main` file; a longer path loads another fi
 packages through `burn.lock`, so imports never touch the network. A project can import its own files by its name
 too, which is how a library's tests use it: `import "github.com/you/colors"`.
 
+## Apps as packages, and mixins
+
+Apps can be packages too. Importing an app's name loads its `main` file like a library; the importing program's own
+`main` is the one that runs. To change an app without touching its source, import it as bytecode and use
+[mixins](../bvm/mixins.mdx):
+
+```burn
+import "github.com/you/game.bvmc"
+
+@Inject(target: "score", at: "return")
+fun doubled(points: int, result: int): int {
+    return result * 2
+}
+```
+
+`.bvmc` after a package name compiles the package to a bytecode library (into its `build/` folder, again only when
+its sources change) and links it in. Its top-level code and `main` run first, so running this program runs the game
+with the change applied, on bvm, in `.bar` archives and in native executables alike.
+
 ## Scripts and commands
 
 ```sh

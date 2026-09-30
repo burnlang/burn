@@ -93,6 +93,64 @@ pub fn is_library_path(p: &str) -> bool {
     p.ends_with(".bvmc") || p.ends_with(".bar") || p.ends_with(".bvm")
 }
 
+thread_local! {
+    static BUILDING: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn newest_source(dir: &Path, newest: &mut std::time::SystemTime) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let path = e.path();
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') || name == "build" || name == "target" {
+            continue;
+        }
+        if path.is_dir() {
+            newest_source(&path, newest);
+        } else if name.ends_with(".bn") || name == "burn.toml" || name.ends_with(".bvmc") {
+            if let Ok(t) = e.metadata().and_then(|m| m.modified()) {
+                if t > *newest {
+                    *newest = t;
+                }
+            }
+        }
+    }
+}
+
+fn stale(dir: &Path, out: &Path) -> bool {
+    let Ok(built) = std::fs::metadata(out).and_then(|m| m.modified()) else {
+        return true;
+    };
+    let mut newest = std::time::SystemTime::UNIX_EPOCH;
+    newest_source(dir, &mut newest);
+    newest > built
+}
+
+fn build_package(name: &str, dir: &Path, project: crate::project::Project, out: &Path) -> Result<(), String> {
+    let main = crate::project::package_main(dir)?;
+    let mut loader = Loader::new();
+    loader.project = Some(Ok(project));
+    let root = loader.load_file(&main)?;
+    let loaded = loader.finish(root);
+    let compiled = crate::driver::check_loaded(loaded, crate::check::CheckOptions::default()).map_err(|f| {
+        let first = f
+            .diags
+            .iter()
+            .find(|d| d.severity == crate::diag::Severity::Error)
+            .map(|d| d.message.clone())
+            .unwrap_or_default();
+        format!("the package `{}` does not compile, so it has no bytecode: {}", name, first)
+    })?;
+    let (module, _) = crate::vm::linked(&compiled.program)?;
+    bvm::verify(&module).map_err(|e| format!("the bytecode of `{}` is invalid: {}", name, e))?;
+    if let Some(parent) = out.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("cannot create {}: {}", parent.display(), e))?;
+    }
+    std::fs::write(out, bvm::binary::encode(&module)).map_err(|e| format!("cannot write {}: {}", out.display(), e))
+}
+
 fn canonical(p: &Path) -> PathBuf {
     std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
 }
@@ -161,18 +219,52 @@ impl Loader {
         self.load_file(&file)
     }
 
+    fn package_bytecode(&mut self, name: &str, base: Option<&Path>) -> Result<PathBuf, String> {
+        let (dir, own, project) = {
+            let p = self.project(base)?;
+            (p.resolve(name)?, p.manifest.name == name, p.clone())
+        };
+        if own {
+            return Err(format!(
+                "a project cannot import its own bytecode; import its source with `import \"{}\"`",
+                name
+            ));
+        }
+        let out = dir.join("build").join(format!("{}.bvmc", crate::project::short_name(name)));
+        if !stale(&dir, &out) {
+            return Ok(out);
+        }
+        if BUILDING.with(|b| b.borrow().iter().any(|n| n == name)) {
+            return Err(format!("the bytecode of `{}` imports itself through its packages", name));
+        }
+        BUILDING.with(|b| b.borrow_mut().push(name.to_string()));
+        let built = build_package(name, &dir, project, &out);
+        BUILDING.with(|b| {
+            b.borrow_mut().pop();
+        });
+        built.map(|_| out)
+    }
+
     fn load_library(&mut self, p: &str, base: Option<&Path>) -> Result<usize, String> {
-        let mut candidates = Vec::new();
-        if let Some(b) = base {
-            candidates.push(b.join(p));
-        }
-        if let Ok(cwd) = std::env::current_dir() {
-            candidates.push(cwd.join(p));
-        }
-        let path = candidates
-            .into_iter()
-            .find(|c| c.is_file())
-            .ok_or_else(|| format!("cannot find bytecode library `{}`", p))?;
+        let package = p
+            .strip_suffix(".bvmc")
+            .and_then(crate::project::split_package_path)
+            .filter(|(_, sub)| sub.is_empty());
+        let path = if let Some((name, _)) = package {
+            self.package_bytecode(&name, base)?
+        } else {
+            let mut candidates = Vec::new();
+            if let Some(b) = base {
+                candidates.push(b.join(p));
+            }
+            if let Ok(cwd) = std::env::current_dir() {
+                candidates.push(cwd.join(p));
+            }
+            candidates
+                .into_iter()
+                .find(|c| c.is_file())
+                .ok_or_else(|| format!("cannot find bytecode library `{}`", p))?
+        };
         let c = canonical(&path);
         if let Some(i) = self.libs.iter().position(|l| l.path == c) {
             return Ok(i);
