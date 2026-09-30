@@ -15,7 +15,7 @@ impl Site {
         match self {
             Site::Func { method: true, .. } => "a method",
             Site::Func { .. } => "a function",
-            Site::Type { class: true } => "a class",
+            Site::Type { class: true } => "a struct",
             Site::Type { .. } => "a type",
             Site::Field => "a field",
         }
@@ -105,7 +105,7 @@ impl<'a> Checker<'a> {
                     if bad_site(matches!(site, Site::Type { class: true } | Site::Field)) {
                         self.error(
                             a.span,
-                            format!("@{} can only be used on classes and their fields, not on {}", name, site.describe()),
+                            format!("@{} can only be used on structs and their fields, not on {}", name, site.describe()),
                         );
                     }
                     self.builtin_args(a, &[], None)

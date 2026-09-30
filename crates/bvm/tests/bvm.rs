@@ -15,7 +15,7 @@ const SAMPLE: &str = r#"
 ; every section and most instructions
 type Shape = interface
 type Point = record { x: int, y: int }
-type Circle = class { center: Point, r: float } implements Shape
+type Circle = struct { center: Point, r: float } implements Shape
 type Color = enum { Red, Green, "Light Blue" }
 type #16 = record "odd name" { "a b": [Point], m: map<string, int?> }
 type Pending = future<[int]>
