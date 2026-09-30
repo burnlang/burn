@@ -1,0 +1,8 @@
+fun pick(flag: bool) {
+    if (flag) {
+        return 1
+    }
+    return "one"
+}
+
+print(pick(true))

@@ -175,6 +175,9 @@ fn effect(m: &Module, op: &Op) -> (u32, u32) {
         | Op::ISub
         | Op::IMul
         | Op::IDiv(_)
+        | Op::IAddOv(_)
+        | Op::ISubOv(_)
+        | Op::IMulOv(_)
         | Op::IRem(_)
         | Op::And
         | Op::Or
@@ -190,7 +193,7 @@ fn effect(m: &Module, op: &Op) -> (u32, u32) {
         | Op::ICmp(_)
         | Op::UCmp(_)
         | Op::FCmp(_) => (2, 1),
-        Op::INeg | Op::FNeg | Op::Not | Op::I2F | Op::F2I | Op::Len | Op::Unbox | Op::GetField(_) => (1, 1),
+        Op::INeg | Op::INegOv(_) | Op::FNeg | Op::Not | Op::I2F | Op::F2I | Op::Len | Op::Unbox | Op::GetField(_) => (1, 1),
         Op::Jmp(_) => (0, 0),
         Op::Jz(_) | Op::Jnz(_) => (1, 0),
         Op::JzKeep(_) | Op::JnzKeep(_) => (1, 1),
@@ -206,7 +209,7 @@ fn effect(m: &Module, op: &Op) -> (u32, u32) {
         Op::SetField(_) | Op::Index(_) => (2, 1),
         Op::SetIndex(_) => (3, 1),
         Op::IncLocal(..) | Op::JCmpLL(..) | Op::JCmpLC(..) | Op::LoadField(..) | Op::Load2(..) | Op::LoadK(..) | Op::CallSelf => (0, 0),
-        Op::LoopJmp(_) => (0, 0),
+        Op::LoopJmp(_) | Op::IncLocalOv(..) => (0, 0),
     }
 }
 

@@ -38,7 +38,7 @@ impl<'a> Checker<'a> {
                     let fixed = self.wrap_suffix(span, "!!");
                     self.emit(
                         Diagnostic::error(span, format!("expected {} but found {}", to, from))
-                            .help("the value may be null: check it with `if (x != null)` first")
+                            .help("the value may be null: check it with `if (x != null)` first, or give a fallback with `x ?? value`")
                             .maybe_fix("or assert that it is not null (fails at runtime if it is)", span, fixed),
                     );
                 } else if h.ty == T_ANY {
@@ -335,7 +335,19 @@ impl<'a> Checker<'a> {
             A::Unary(AUn::Neg, x) => {
                 let h = self.expr(x, expected.filter(|t| self.types.is_numeric(*t)));
                 match self.types.get(h.ty) {
-                    Ty::Int => Expr::new(ExprKind::Unary(UnOp::INeg, Box::new(h)), T_INT),
+                    Ty::Int => {
+                        if let ExprKind::Int(v) = h.kind {
+                            match v.checked_neg() {
+                                Some(n) => return Expr::int(n),
+                                None => {
+                                    self.error(e.span, "this negation overflows `int`");
+                                    return Self::err_expr();
+                                }
+                            }
+                        }
+                        let l = self.loc(e.span);
+                        Expr::new(ExprKind::Unary(UnOp::INeg(l), Box::new(h)), T_INT)
+                    }
                     Ty::Float => Expr::new(ExprKind::Unary(UnOp::FNeg, Box::new(h)), T_FLOAT),
                     Ty::Error => h,
                     _ => {
@@ -552,21 +564,30 @@ impl<'a> Checker<'a> {
             if let (ExprKind::Int(a), ExprKind::Int(b)) = (&l.kind, &r.kind) {
                 let (a, b) = (*a, *b);
                 let v = match op {
-                    AOp::Add => Some(a.wrapping_add(b)),
-                    AOp::Sub => Some(a.wrapping_sub(b)),
-                    AOp::Mul => Some(a.wrapping_mul(b)),
-                    AOp::Div if b != 0 => Some(a.wrapping_div(b)),
-                    AOp::Mod if b != 0 => Some(a.wrapping_rem(b)),
+                    AOp::Add => Some(a.checked_add(b)),
+                    AOp::Sub => Some(a.checked_sub(b)),
+                    AOp::Mul => Some(a.checked_mul(b)),
+                    AOp::Div if b != 0 => Some(a.checked_div(b)),
+                    AOp::Mod if b != 0 => Some(Some(a.wrapping_rem(b))),
                     _ => None,
                 };
-                if let Some(v) = v {
-                    return Expr::int(v);
+                match v {
+                    Some(Some(v)) => return Expr::int(v),
+                    Some(None) => {
+                        self.emit(
+                            Diagnostic::error(span, format!("`{} {} {}` overflows `int`", a, op.symbol(), b))
+                                .help("`int` holds values from -9223372036854775808 to 9223372036854775807; use `float` for larger numbers"),
+                        );
+                        return Self::err_expr();
+                    }
+                    None => {}
                 }
             }
+            let l_loc = self.loc(span);
             let bop = match op {
-                AOp::Add => BinOp::IAdd,
-                AOp::Sub => BinOp::ISub,
-                AOp::Mul => BinOp::IMul,
+                AOp::Add => BinOp::IAdd(l_loc),
+                AOp::Sub => BinOp::ISub(l_loc),
+                AOp::Mul => BinOp::IMul(l_loc),
                 AOp::Div => BinOp::IDiv(self.loc(span)),
                 _ => BinOp::IMod(self.loc(span)),
             };

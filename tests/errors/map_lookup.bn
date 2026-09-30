@@ -1,0 +1,3 @@
+var ages = {"ada": 36, "linus": 54}
+var age: int = ages["ada"]
+print(age)

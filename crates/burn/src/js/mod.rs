@@ -273,16 +273,21 @@ impl<'p> Gen<'p> {
             ExprKind::Unary(op, x) => {
                 let x = self.expr(x);
                 match op {
-                    UnOp::INeg | UnOp::FNeg => format!("(-{})", x),
+                    UnOp::INeg(l) => format!("$ov(-{}, {})", x, l),
+                    UnOp::FNeg => format!("(-{})", x),
                     UnOp::Not => format!("(!{})", x),
                 }
             }
             ExprKind::Binary(op, a, b) => {
                 let (a, b) = (self.expr(a), self.expr(b));
                 match op {
-                    BinOp::IAdd | BinOp::FAdd => format!("({} + {})", a, b),
-                    BinOp::ISub | BinOp::FSub => format!("({} - {})", a, b),
-                    BinOp::IMul | BinOp::FMul => format!("({} * {})", a, b),
+                    BinOp::IAdd(u32::MAX) => format!("({} + {})", a, b),
+                    BinOp::IAdd(l) => format!("$ov({} + {}, {})", a, b, l),
+                    BinOp::ISub(l) => format!("$ov({} - {}, {})", a, b, l),
+                    BinOp::IMul(l) => format!("$ov({} * {}, {})", a, b, l),
+                    BinOp::FAdd => format!("({} + {})", a, b),
+                    BinOp::FSub => format!("({} - {})", a, b),
+                    BinOp::FMul => format!("({} * {})", a, b),
                     BinOp::FDiv => format!("({} / {})", a, b),
                     BinOp::IDiv(l) => format!("$idiv({}, {}, {})", a, b, l),
                     BinOp::IMod(l) => format!("$imod({}, {}, {})", a, b, l),

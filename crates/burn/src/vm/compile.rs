@@ -227,7 +227,7 @@ impl Compiler {
             ExprKind::Unary(op, x) => {
                 self.expr(x);
                 self.emit(match op {
-                    UnOp::INeg => Op::INeg,
+                    UnOp::INeg(l) => Op::INegOv(*l),
                     UnOp::FNeg => Op::FNeg,
                     UnOp::Not => Op::Not,
                 });
@@ -236,9 +236,10 @@ impl Compiler {
                 self.expr(a);
                 self.expr(b);
                 self.emit(match op {
-                    BinOp::IAdd => Op::IAdd,
-                    BinOp::ISub => Op::ISub,
-                    BinOp::IMul => Op::IMul,
+                    BinOp::IAdd(u32::MAX) => Op::IAdd,
+                    BinOp::IAdd(l) => Op::IAddOv(*l),
+                    BinOp::ISub(l) => Op::ISubOv(*l),
+                    BinOp::IMul(l) => Op::IMulOv(*l),
                     BinOp::IDiv(l) => Op::IDiv(*l),
                     BinOp::IMod(l) => Op::IRem(*l),
                     BinOp::FAdd => Op::FAdd,

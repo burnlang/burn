@@ -1,0 +1,7 @@
+fun describe(): string {
+    return "total: " + count
+}
+
+var message = describe()
+var count = 3
+print(message)

@@ -137,6 +137,7 @@
     },
     "operators": {
       "patterns": [
+        { "name": "keyword.operator.null-safe.burn", "match": "\\?\\.|\\?\\?|!!" },
         { "name": "keyword.operator.range.burn", "match": "\\.\\.=?" },
         { "name": "keyword.operator.comparison.burn", "match": "==|!=|<=|>=|<|>" },
         { "name": "keyword.operator.logical.burn", "match": "&&|\\|\\||!" },

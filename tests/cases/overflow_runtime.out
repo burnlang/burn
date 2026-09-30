@@ -1,0 +1,8 @@
+true 0
+39
+runtime error: integer overflow
+  --> tests/cases/overflow_runtime.bn:10:7
+   |
+10 | print(n * 3)
+   |       ^
+   = help: the result does not fit in `int` (-9223372036854775808 to 9223372036854775807); use `float` for larger numbers

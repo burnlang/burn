@@ -30,13 +30,17 @@ the rightmost value is the top of the stack: `a b → c` pops `b`, then `a`, and
 
 ## Integer arithmetic
 
-All integer arithmetic wraps on overflow. Shift counts use their low 6 bits.
+`iadd`, `isub`, `imul` and `ineg` wrap on overflow. Their `.ovf` forms stop with a runtime error instead,
+which is what Burn emits for `int` math. `idiv` also stops on `-9223372036854775808 / -1`. Shift counts use
+their low 6 bits.
 
 | Instruction | Stack | Meaning |
 | --- | --- | --- |
 | `iadd`, `isub`, `imul` | `a b → c` | `a + b`, `a - b`, `a * b` |
 | `idiv [loc]`, `irem [loc]` | `a b → c` | quotient and remainder, rounded toward zero; dividing by 0 is a runtime error |
 | `ineg` | `a → -a` | negate |
+| `iadd.ovf loc`, `isub.ovf loc`, `imul.ovf loc` | `a b → c` | like `iadd`, `isub`, `imul`, but a result outside the `i64` range is a runtime error at `loc` |
+| `ineg.ovf loc` | `a → -a` | like `ineg`, but negating the smallest `i64` is a runtime error at `loc` |
 | `and`, `or`, `xor` | `a b → c` | bitwise |
 | `shl`, `shr`, `ushr` | `a b → c` | shift left, arithmetic shift right, logical shift right |
 | `ieq`, `ine`, `ilt`, `ile`, `igt`, `ige` | `a b → bool` | signed comparisons |

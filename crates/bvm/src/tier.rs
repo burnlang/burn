@@ -29,6 +29,9 @@ fn effect(p: &Program, op: &Op) -> Option<(u32, u32)> {
         | Op::ISub
         | Op::IMul
         | Op::IDiv(_)
+        | Op::IAddOv(_)
+        | Op::ISubOv(_)
+        | Op::IMulOv(_)
         | Op::IRem(_)
         | Op::And
         | Op::Or
@@ -44,7 +47,7 @@ fn effect(p: &Program, op: &Op) -> Option<(u32, u32)> {
         | Op::ICmp(_)
         | Op::UCmp(_)
         | Op::FCmp(_) => (2, 1),
-        Op::INeg | Op::FNeg | Op::Not | Op::I2F | Op::F2I | Op::Len | Op::Unbox | Op::GetField(_) => (1, 1),
+        Op::INeg | Op::INegOv(_) | Op::FNeg | Op::Not | Op::I2F | Op::F2I | Op::Len | Op::Unbox | Op::GetField(_) => (1, 1),
         Op::Jmp(_) => (0, 0),
         Op::Jz(_) | Op::Jnz(_) => (1, 0),
         Op::JzKeep(_) | Op::JnzKeep(_) => (1, 1),
@@ -136,7 +139,10 @@ fn fold_bin(op: &Op, a: u64, b: u64) -> Option<u64> {
         Op::IAdd => (a as i64).wrapping_add(b as i64) as u64,
         Op::ISub => (a as i64).wrapping_sub(b as i64) as u64,
         Op::IMul => (a as i64).wrapping_mul(b as i64) as u64,
-        Op::IDiv(_) if b != 0 => (a as i64).wrapping_div(b as i64) as u64,
+        Op::IDiv(_) if b != 0 => (a as i64).checked_div(b as i64)? as u64,
+        Op::IAddOv(_) => (a as i64).checked_add(b as i64)? as u64,
+        Op::ISubOv(_) => (a as i64).checked_sub(b as i64)? as u64,
+        Op::IMulOv(_) => (a as i64).checked_mul(b as i64)? as u64,
         Op::IRem(_) if b != 0 => (a as i64).wrapping_rem(b as i64) as u64,
         Op::And => a & b,
         Op::Or => a | b,
@@ -158,6 +164,7 @@ fn fold_bin(op: &Op, a: u64, b: u64) -> Option<u64> {
 fn fold_un(op: &Op, a: u64) -> Option<u64> {
     Some(match op {
         Op::INeg => (a as i64).wrapping_neg() as u64,
+        Op::INegOv(_) => (a as i64).checked_neg()? as u64,
         Op::FNeg => (-f64::from_bits(a)).to_bits(),
         Op::Not => (a == 0) as u64,
         Op::I2F => ((a as i64) as f64).to_bits(),

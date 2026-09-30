@@ -87,6 +87,10 @@ pub enum Op {
     ISub,
     IMul,
     IDiv(u32),
+    IAddOv(u32),
+    ISubOv(u32),
+    IMulOv(u32),
+    INegOv(u32),
     IRem(u32),
     INeg,
     And,
@@ -136,6 +140,7 @@ pub enum Op {
     LoadK(u32, i32),
     CallSelf,
     LoopJmp(u32),
+    IncLocalOv(u32, i32, u32),
 }
 
 impl Op {
@@ -159,6 +164,11 @@ impl Op {
             Op::ISub => "isub",
             Op::IMul => "imul",
             Op::IDiv(_) => "idiv",
+            Op::IAddOv(_) => "iadd.ovf",
+            Op::ISubOv(_) => "isub.ovf",
+            Op::IMulOv(_) => "imul.ovf",
+            Op::INegOv(_) => "ineg.ovf",
+            Op::IncLocalOv(..) => "inc.local.ovf",
             Op::IRem(_) => "irem",
             Op::INeg => "ineg",
             Op::And => "and",
@@ -235,7 +245,15 @@ impl Op {
     pub fn is_fused(&self) -> bool {
         matches!(
             self,
-            Op::IncLocal(..) | Op::JCmpLL(..) | Op::JCmpLC(..) | Op::LoadField(..) | Op::Load2(..) | Op::LoadK(..) | Op::CallSelf | Op::LoopJmp(_)
+            Op::IncLocal(..)
+                | Op::JCmpLL(..)
+                | Op::JCmpLC(..)
+                | Op::LoadField(..)
+                | Op::Load2(..)
+                | Op::LoadK(..)
+                | Op::CallSelf
+                | Op::LoopJmp(_)
+                | Op::IncLocalOv(..)
         )
     }
 

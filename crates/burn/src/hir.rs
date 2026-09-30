@@ -8,9 +8,9 @@ pub use bvm::Cmp;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BinOp {
-    IAdd,
-    ISub,
-    IMul,
+    IAdd(u32),
+    ISub(u32),
+    IMul(u32),
     IDiv(u32),
     IMod(u32),
     FAdd,
@@ -23,7 +23,7 @@ pub enum BinOp {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnOp {
-    INeg,
+    INeg(u32),
     FNeg,
     Not,
 }

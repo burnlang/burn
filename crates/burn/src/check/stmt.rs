@@ -571,7 +571,7 @@ impl<'a> Checker<'a> {
                     ExprKind::SetLocal(
                         ctr,
                         Box::new(Expr::new(
-                            ExprKind::Binary(BinOp::IAdd, Box::new(Expr::new(ExprKind::Local(ctr), T_INT)), Box::new(Expr::int(1))),
+                            ExprKind::Binary(BinOp::IAdd(u32::MAX), Box::new(Expr::new(ExprKind::Local(ctr), T_INT)), Box::new(Expr::int(1))),
                             T_INT,
                         )),
                     ),
@@ -673,7 +673,10 @@ impl<'a> Checker<'a> {
                 let step = vec![Stmt::Expr(Expr::new(
                     ExprKind::SetLocal(
                         ctr,
-                        Box::new(Expr::new(ExprKind::Binary(BinOp::IAdd, Box::new(ctr_e), Box::new(Expr::int(1))), T_INT)),
+                        Box::new(Expr::new(
+                            ExprKind::Binary(BinOp::IAdd(u32::MAX), Box::new(ctr_e), Box::new(Expr::int(1))),
+                            T_INT,
+                        )),
                     ),
                     T_INT,
                 ))];

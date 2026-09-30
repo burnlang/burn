@@ -1,13 +1,13 @@
 ---
-title: Smart casts and null safety
-description: How Burn narrows types after checks, and how nullable types work.
+title: Type and null safety
+description: How Burn narrows types after checks, how nullable types work, and what the compiler guarantees.
 order: 4
 ---
 
-# Smart casts and null safety
+# Type and null safety
 
 Burn infers types wherever it can, and after you check a value it remembers what you found out. You almost never
-need an explicit cast.
+need an explicit cast, and a program that type-checks cannot read `null` where a value is expected.
 
 ## Inference
 
@@ -86,6 +86,42 @@ fun first(text: string?): string {
 Early `return`, `break`, `continue`, `exit` and `panic` all count, so a guard at the top of a function narrows
 the rest of it. `x!!` asserts that a value is not null and fails at runtime if it is.
 
+## Safe calls with `?.`
+
+`a?.b` reads a field or calls a method only when `a` is not null, and is `null` otherwise. Chains stop at the
+first `null`:
+
+```burn
+var city = find(users, "ada")?.address?.city
+var label = user?.address?.label()
+```
+
+The result is always nullable, so `city` above is a `string?`.
+
+## Fallbacks with `??`
+
+`a ?? b` is `a` when it is not null and `b` otherwise. `b` only runs when it is needed:
+
+```burn
+var city = user?.address?.city ?? "nowhere"
+var age = ages["bob"] ?? 0
+```
+
+The result is not nullable when the fallback is not, so `city` and `age` above are a plain `string` and `int`.
+
+## Safe casts with `as?`
+
+`x as? T` is `x` as a `T` when it is one, and `null` otherwise. It never fails:
+
+```burn
+fun count(value: any): int {
+    return value as? int ?? 0
+}
+```
+
+The compiler warns when one of these is not needed, for example `?.` on a value that is never null, and
+`burn fix` rewrites it to the plain form.
+
 ## Narrowing by assignment
 
 ```burn
@@ -108,3 +144,35 @@ var i = value as int
 
 `as` converts between numbers, turns anything into a string, and downcasts `any`, nullable and interface values.
 A failed downcast is a runtime error that names the actual type.
+
+## What the compiler guarantees
+
+Beyond nullable types, a few more mistakes are caught before a program runs:
+
+- **No accidental `any`.** An empty array needs a type (`var items: [int] = []`), and an array, map or function
+  whose values mix types, like `[1, "two"]`, is an error. Write `[any]` or `: any` when a mix is intended.
+- **No use before initialization.** A top level variable cannot be read before its line has run, including
+  through a function called from an earlier line:
+
+  ```burn
+  fun describe(): string {
+      return "total: " + count
+  }
+
+  var message = describe()
+  var count = 3
+  ```
+
+  ```
+  error: `count` is used before it is initialized
+   --> app.bn:5:1
+    |
+  5 | var message = describe()
+    | ^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: this runs `describe`, which reads `count`
+    = help: `count` is initialized on line 6; move this statement below it, or move `count` above this statement
+  ```
+
+- **No silent overflow.** `int` math that does not fit in 64 bits stops with a runtime error instead of
+  wrapping around. The same goes for `abs` and `pow`.
+- **Missing map keys are visible.** `map[key]` is nullable, so the type tells you to handle a missing key.

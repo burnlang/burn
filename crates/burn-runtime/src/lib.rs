@@ -158,6 +158,7 @@ runtime_fns! {
     Assert => burn_assert = crate::api::assert [a, b, c];
     ErrIndex => burn_err_index = crate::api::err_index [a, b, c];
     ErrDivZero => burn_err_divzero = crate::api::err_divzero [a];
+    ErrOverflow => burn_err_overflow = crate::api::err_overflow [a];
     ErrNull => burn_err_null = crate::api::err_null [a];
     ErrReturn => burn_err_return = crate::api::err_return [a];
     Spawn => burn_spawn = crate::api::spawn_native [a, b, c, d];

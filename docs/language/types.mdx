@@ -116,4 +116,6 @@ print(ages["ada"], has(ages, "bob"), keys(ages))
 {string: [int]} scores = {}
 ```
 
-Reading a missing key with `map[key]` is a runtime error; use `get(map, key, default)` for a fallback.
+Reading `map[key]` gives a nullable value, `int?` for the map above, because the key may be missing. Give it a
+fallback with `ages["bob"] ?? 0`, check it with `!= null`, or assert with `ages["ada"]!!`.
+`get(map, key, default)` still works as well.
