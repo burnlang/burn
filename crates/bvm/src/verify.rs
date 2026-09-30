@@ -205,7 +205,8 @@ fn effect(m: &Module, op: &Op) -> (u32, u32) {
         Op::NewRecord(_, n) | Op::NewArray(_, n) => (*n, 1),
         Op::SetField(_) | Op::Index(_) => (2, 1),
         Op::SetIndex(_) => (3, 1),
-        Op::IncLocal(..) | Op::JCmpLL(..) | Op::JCmpLC(..) | Op::LoadField(..) | Op::Load2(..) | Op::LoadK(..) => (0, 0),
+        Op::IncLocal(..) | Op::JCmpLL(..) | Op::JCmpLC(..) | Op::LoadField(..) | Op::Load2(..) | Op::LoadK(..) | Op::CallSelf => (0, 0),
+        Op::LoopJmp(_) => (0, 0),
     }
 }
 

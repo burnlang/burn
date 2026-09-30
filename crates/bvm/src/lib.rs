@@ -8,6 +8,7 @@ pub mod mixin;
 pub mod module;
 pub mod native;
 pub mod op;
+pub mod tier;
 pub mod verify;
 
 pub use builder::{FuncBuilder, FuncId, Label, ModuleBuilder};

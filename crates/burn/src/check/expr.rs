@@ -1144,11 +1144,13 @@ impl<'a> Checker<'a> {
                     return self.construct(t, args, span, callee.span);
                 }
                 if let Some(e) = self.builtin(name, None, args, span, expected) {
-                    let text = match crate::doc::builtins::find(name) {
-                        Some(b) => format!("{}\u{1}{}", b.sig, crate::doc::comment::to_markdown(&b.doc)),
-                        None => format!("(builtin) {}", builtins::signature(name)),
-                    };
-                    self.hover(callee.span, text);
+                    if self.opts.want_index {
+                        let text = match crate::doc::builtins::find(name) {
+                            Some(b) => format!("{}\u{1}{}", b.sig, crate::doc::comment::to_markdown(&b.doc)),
+                            None => format!("(builtin) {}", builtins::signature(name)),
+                        };
+                        self.hover(callee.span, text);
+                    }
                     return e;
                 }
                 self.ident_expr(name, callee.span);
