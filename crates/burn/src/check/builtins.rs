@@ -581,7 +581,7 @@ impl<'a> Checker<'a> {
                 let s = self.barg_to(&xs[0], T_STR);
                 let i = self.barg_to(&xs[1], T_INT);
                 self.with_temp(i, |_, t| {
-                    let end = Expr::new(ExprKind::Binary(BinOp::IAdd, Box::new(t.clone()), Box::new(Expr::int(1))), T_INT);
+                    let end = Expr::new(ExprKind::Binary(BinOp::IAdd(u32::MAX), Box::new(t.clone()), Box::new(Expr::int(1))), T_INT);
                     Self::rt(RtFn::StrSub, vec![s, t, end], T_STR)
                 })
             }

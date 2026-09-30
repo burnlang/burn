@@ -659,6 +659,17 @@ impl<'p> Gen<'p> {
         }
     }
 
+    fn overflow(&mut self, loc: u32) {
+        if loc == u32::MAX {
+            return;
+        }
+        let ov = self.l();
+        self.e(&format!("jo {}", ov));
+        let sym = self.sym(RtFn::ErrOverflow.symbol());
+        let call = if self.t.macos { format!("call {}", sym) } else { format!("call {}@PLT", sym) };
+        writeln!(self.cold, "{}:\n    mov edi, {}\n    and rsp, -16\n    {}\n    ud2", ov, loc, call).unwrap();
+    }
+
     fn div(&mut self, is_mod: bool, loc: u32) {
         let dz = self.l();
         let normal = self.l();
@@ -671,6 +682,7 @@ impl<'p> Gen<'p> {
             self.e("xor eax, eax");
         } else {
             self.e("neg rax");
+            self.overflow(loc);
         }
         self.e(&format!("jmp {}", done));
         self.lbl(&normal);
@@ -702,7 +714,10 @@ impl<'p> Gen<'p> {
             ExprKind::Unary(op, x) => {
                 self.expr(x);
                 match op {
-                    UnOp::INeg => self.e("neg rax"),
+                    UnOp::INeg(l) => {
+                        self.e("neg rax");
+                        self.overflow(*l);
+                    }
                     UnOp::FNeg => self.e("btc rax, 63"),
                     UnOp::Not => {
                         self.e("test rax, rax");
@@ -714,9 +729,18 @@ impl<'p> Gen<'p> {
             ExprKind::Binary(op, a, b) => {
                 self.operands(a, b);
                 match op {
-                    BinOp::IAdd => self.e("add rax, rcx"),
-                    BinOp::ISub => self.e("sub rax, rcx"),
-                    BinOp::IMul => self.e("imul rax, rcx"),
+                    BinOp::IAdd(l) => {
+                        self.e("add rax, rcx");
+                        self.overflow(*l);
+                    }
+                    BinOp::ISub(l) => {
+                        self.e("sub rax, rcx");
+                        self.overflow(*l);
+                    }
+                    BinOp::IMul(l) => {
+                        self.e("imul rax, rcx");
+                        self.overflow(*l);
+                    }
                     BinOp::IDiv(l) => self.div(false, *l),
                     BinOp::IMod(l) => self.div(true, *l),
                     BinOp::FAdd | BinOp::FSub | BinOp::FMul | BinOp::FDiv => {

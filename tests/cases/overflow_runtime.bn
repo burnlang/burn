@@ -1,0 +1,11 @@
+var largest = 9223372036854775807
+print(largest > 0, largest - largest)
+var steps = 0
+var n = 1
+while (n < largest / 3) {
+    n = n * 3
+    steps += 1
+}
+print(steps)
+print(n * 3)
+print("never")

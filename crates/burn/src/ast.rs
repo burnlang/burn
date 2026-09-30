@@ -297,6 +297,9 @@ pub enum ExprKind {
     Lambda(Box<FunDecl>),
     NotNull(Box<Expr>),
     New { ty: Ident, args: Vec<Expr> },
+    SafeGet { obj: Box<Expr>, name: Ident, args: Option<Vec<Expr>> },
+    Coalesce(Box<Expr>, Box<Expr>),
+    SafeAs(Box<Expr>, TypeExpr),
 }
 
 #[derive(Clone, Debug)]

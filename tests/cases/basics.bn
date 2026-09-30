@@ -66,5 +66,5 @@ float f = 1
 f += 1
 print("float from int", f, 3 as float, 3.99 as int, -3.99 as int, round(2.5), floor(-1.5), ceil(1.2))
 print(1.0 / 3.0, 0.1 + 0.2, 1e21, 100.0, -0.5, 0.0000001, 123456.789, 2.5e-3)
-print(9223372036854775807 + 1, 0x1F, 1_000_000)
+print(-9223372036854775807 - 1, 0x1F, 1_000_000)
 print(true && false, true || false, !true, 1 < 2 && 2 < 3)

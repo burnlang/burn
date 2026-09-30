@@ -833,7 +833,9 @@ fun get(map: {K: V}, key: K, fallback: V = none): V
 /**
  * Returns the absolute value of a number.
  *
- * An `int` argument gives an `int`, a `float` argument a `float`.
+ * An `int` argument gives an `int`, a `float` argument a `float`. The
+ * smallest `int` has no positive counterpart, so `abs` of it is a runtime
+ * error.
  *
  * @param x the number
  * @return `x` without its sign
@@ -885,8 +887,8 @@ fun max(a: float, b: float): float
  * Raises a number to a power.
  *
  * When both arguments are `int` the result is an `int`: a negative exponent
- * gives `0` and results that do not fit wrap around. Otherwise both are
- * converted to `float`.
+ * gives `0` and a result that does not fit in an `int` is a runtime error.
+ * Otherwise both are converted to `float`.
  *
  * @param base the number to raise
  * @param exponent the power

@@ -966,6 +966,10 @@ fn instr(a: &mut Asm, m: &str, c: &mut Cur, names: &[String], labels: &HashMap<S
         "gstore" => Op::GStore(a.global_ref(c)?),
         "gtee" => Op::GTee(a.global_ref(c)?),
         "idiv" => Op::IDiv(loc_operand(c)?),
+        "iadd.ovf" => Op::IAddOv(loc_operand(c)?),
+        "isub.ovf" => Op::ISubOv(loc_operand(c)?),
+        "imul.ovf" => Op::IMulOv(loc_operand(c)?),
+        "ineg.ovf" => Op::INegOv(loc_operand(c)?),
         "irem" => Op::IRem(loc_operand(c)?),
         "index" => Op::Index(loc_operand(c)?),
         "setindex" => Op::SetIndex(loc_operand(c)?),
@@ -1360,7 +1364,7 @@ fn func(o: &mut String, m: &Module, n: &Names, f: &Function) {
             Op::GLoad(g) | Op::GStore(g) | Op::GTee(g) => {
                 format!(" {}", n.globals.get(g as usize).cloned().unwrap_or_else(|| format!("@{}", g)))
             }
-            Op::IDiv(l) | Op::IRem(l) | Op::Index(l) | Op::SetIndex(l) => loc(l),
+            Op::IDiv(l) | Op::IRem(l) | Op::Index(l) | Op::SetIndex(l) | Op::IAddOv(l) | Op::ISubOv(l) | Op::IMulOv(l) | Op::INegOv(l) => loc(l),
             Op::Jmp(t) | Op::Jz(t) | Op::Jnz(t) | Op::JzKeep(t) | Op::JnzKeep(t) => format!(" {}", targets[&t]),
             Op::CallInd(k) => format!(" {}", k),
             Op::Dispatch(t, _) => format!(" {}", n.tables.get(t as usize).cloned().unwrap_or_else(|| format!("@{}", t))),

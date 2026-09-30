@@ -40,7 +40,7 @@ def enum Level { Low, Mid, High }
 
 print(many(1, 2, 3, 4, 5, 6, 7, 0.5))
 print(minmax([4, -2, 9, 0]))
-print(-9223372036854775807 - 1, (-9223372036854775807 - 1) / -1, 5 % -3, -5 % 3, -7 / 2)
+print(-9223372036854775807 - 1, (-9223372036854775807 - 1) / 2, 5 % -3, -5 % 3, -7 / 2)
 print(2147483647 * 2)
 int? maybe = 5
 if (maybe != null) {
@@ -90,7 +90,7 @@ var x = 1
 print("outer", x)
 var fns: {string: fun(int): int} = {}
 fns["inc"] = fun(n: int): int { return n + 1 }
-print(fns["inc"](41))
+print(fns["inc"]!!(41))
 print(Level.High > Level.Low, Level.Low)
 var arr = [3, 1, 2]
 var sorted = copy(arr)

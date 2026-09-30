@@ -214,6 +214,10 @@ fn write_op(w: &mut W, op: &Op, rt: &mut HashMap<&'static str, u32>, rt_list: &m
         Op::ISub => 13,
         Op::IMul => 14,
         Op::IDiv(_) => 15,
+        Op::IAddOv(_) => 59,
+        Op::ISubOv(_) => 60,
+        Op::IMulOv(_) => 61,
+        Op::INegOv(_) => 62,
         Op::IRem(_) => 16,
         Op::INeg => 17,
         Op::And => 18,
@@ -257,7 +261,15 @@ fn write_op(w: &mut W, op: &Op, rt: &mut HashMap<&'static str, u32>, rt_list: &m
         Op::Unbox => 56,
         Op::TypeConst(_) => 57,
         Op::LocConst(_) => 58,
-        Op::IncLocal(..) | Op::JCmpLL(..) | Op::JCmpLC(..) | Op::LoadField(..) | Op::Load2(..) | Op::LoadK(..) | Op::CallSelf | Op::LoopJmp(_) => {
+        Op::IncLocal(..)
+        | Op::JCmpLL(..)
+        | Op::JCmpLC(..)
+        | Op::LoadField(..)
+        | Op::Load2(..)
+        | Op::LoadK(..)
+        | Op::CallSelf
+        | Op::LoopJmp(_)
+        | Op::IncLocalOv(..) => {
             panic!("{} is internal and is never written to a module", op.mnemonic())
         }
     };
@@ -275,6 +287,10 @@ fn write_op(w: &mut W, op: &Op, rt: &mut HashMap<&'static str, u32>, rt_list: &m
         | Op::GStore(x)
         | Op::GTee(x)
         | Op::IDiv(x)
+        | Op::IAddOv(x)
+        | Op::ISubOv(x)
+        | Op::IMulOv(x)
+        | Op::INegOv(x)
         | Op::IRem(x)
         | Op::Jmp(x)
         | Op::Jz(x)
@@ -389,6 +405,10 @@ fn read_op(r: &mut Rd, rt: &[Op]) -> R<Op> {
         56 => Op::Unbox,
         57 => Op::TypeConst(r.u32()?),
         58 => Op::LocConst(r.u32()?),
+        59 => Op::IAddOv(r.u32()?),
+        60 => Op::ISubOv(r.u32()?),
+        61 => Op::IMulOv(r.u32()?),
+        62 => Op::INegOv(r.u32()?),
         c => return Err(format!("unknown opcode {} at byte {}", c, r.i - 1)),
     })
 }

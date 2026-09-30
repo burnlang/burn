@@ -440,6 +440,16 @@ pub fn map_get_or(m: u64, k: u64, dflt: u64) -> u64 {
     }
 }
 
+pub fn map_find(m: u64, k: u64, vt: u64) -> u64 {
+    let key = map_key(m, k);
+    let d = map_data(m);
+    match d.index.get(&key) {
+        Some(i) if meta::is_unboxed(vt as u32) => box_value(d.vals[*i], vt),
+        Some(i) => d.vals[*i],
+        None => 0,
+    }
+}
+
 pub fn map_has(m: u64, k: u64) -> u64 {
     let key = map_key(m, k);
     b(map_data(m).index.contains_key(&key))
@@ -763,12 +773,15 @@ pub fn ipow(a: u64, e: u64) -> u64 {
         return 0;
     }
     let mut r: i64 = 1;
+    let over = || -> ! { rt_error("integer overflow", u64::MAX) };
     while exp > 0 {
         if exp & 1 == 1 {
-            r = r.wrapping_mul(base);
+            r = r.checked_mul(base).unwrap_or_else(|| over());
         }
-        base = base.wrapping_mul(base);
         exp >>= 1;
+        if exp > 0 {
+            base = base.checked_mul(base).unwrap_or_else(|| over());
+        }
     }
     r as u64
 }
@@ -913,6 +926,10 @@ pub fn err_index(loc: u64, idx: u64, len: u64) -> u64 {
     rt_error(&format!("index {} out of bounds (length {})", idx as i64, len), loc)
 }
 
+pub fn err_overflow(loc: u64) -> u64 {
+    rt_error("integer overflow", loc)
+}
+
 pub fn err_divzero(loc: u64) -> u64 {
     rt_error("division by zero", loc)
 }
@@ -986,7 +1003,10 @@ pub fn gc_collect() -> u64 {
 }
 
 pub fn iabs(a: u64) -> u64 {
-    (a as i64).wrapping_abs() as u64
+    match (a as i64).checked_abs() {
+        Some(v) => v as u64,
+        None => rt_error("integer overflow", u64::MAX),
+    }
 }
 
 pub fn imin(a: u64, c: u64) -> u64 {

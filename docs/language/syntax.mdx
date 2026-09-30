@@ -51,6 +51,11 @@ x *= 2
 
 Comparison operators are `== != < > <= >=`, logic uses `&& || !`.
 
+Integer math never wraps around silently. A result that does not fit in an `int` is a runtime error that points at
+the expression, and when both sides are constants the compiler reports it before the program runs.
+
+For nullable values there are `?.`, `??` and `as?`, see [null safety](./smart-casts.mdx#safe-calls-with-).
+
 ## Strings
 
 ```burn

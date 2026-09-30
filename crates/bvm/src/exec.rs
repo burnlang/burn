@@ -353,6 +353,11 @@ pub fn fuse(ops: &mut [Op]) {
                 i += 4;
                 continue;
             }
+            (Op::Load(a), Op::Const(k), Op::IAddOv(l), Op::Store(b)) if a == b && free(i, 4) && small(k) => {
+                ops[i] = Op::IncLocalOv(a, k as i64 as i32, l);
+                i += 4;
+                continue;
+            }
             _ => {}
         }
         if free(i, 2) {
@@ -666,6 +671,7 @@ impl Vm {
                 ops = unsafe { (*self.code).ops.as_ptr() };
             }};
         }
+        let ov: u32;
         loop {
             let op = unsafe { *ops.add(pc) };
             pc += 1;
@@ -708,7 +714,66 @@ impl Vm {
                         api::err_divzero(l as u64);
                     }
                     let t = top!();
-                    *t = (*t as i64).wrapping_div(b) as u64
+                    match (*t as i64).checked_div(b) {
+                        Some(v) => *t = v as u64,
+                        None => {
+                            ov = l;
+                            break;
+                        }
+                    }
+                }
+                Op::IAddOv(l) => {
+                    let b = pop!() as i64;
+                    let t = top!();
+                    match (*t as i64).checked_add(b) {
+                        Some(v) => *t = v as u64,
+                        None => {
+                            ov = l;
+                            break;
+                        }
+                    }
+                }
+                Op::ISubOv(l) => {
+                    let b = pop!() as i64;
+                    let t = top!();
+                    match (*t as i64).checked_sub(b) {
+                        Some(v) => *t = v as u64,
+                        None => {
+                            ov = l;
+                            break;
+                        }
+                    }
+                }
+                Op::IMulOv(l) => {
+                    let b = pop!() as i64;
+                    let t = top!();
+                    match (*t as i64).checked_mul(b) {
+                        Some(v) => *t = v as u64,
+                        None => {
+                            ov = l;
+                            break;
+                        }
+                    }
+                }
+                Op::INegOv(l) => {
+                    let t = top!();
+                    match (*t as i64).checked_neg() {
+                        Some(v) => *t = v as u64,
+                        None => {
+                            ov = l;
+                            break;
+                        }
+                    }
+                }
+                Op::IncLocalOv(a, k, l) => {
+                    match (local!(a) as i64).checked_add(k as i64) {
+                        Some(v) => set_local!(a, v as u64),
+                        None => {
+                            ov = l;
+                            break;
+                        }
+                    }
+                    pc += 3
                 }
                 Op::IRem(l) => {
                     let b = pop!() as i64;
@@ -969,6 +1034,8 @@ impl Vm {
                 }
             }
         }
+        sync!();
+        api::err_overflow(ov as u64)
     }
 }
 

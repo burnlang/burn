@@ -18,6 +18,7 @@ function $errHelp(msg) {
     const n = Number(m[1]);
     return n === 0 ? "it is empty, so there is nothing to read; check `len(...) > 0` first" : "valid indexes go from 0 to " + (n - 1) + "; check the index against `len(...)` first";
   }
+  if (msg === "integer overflow") return "the result does not fit in `int` (-9223372036854775808 to 9223372036854775807); use `float` for larger numbers";
   if (msg === "division by zero") return "check that the divisor is not 0 before dividing";
   if (msg === "unexpected null value") return "the value was null; check it with `if (x != null)` instead of using `!!`";
   if (msg === "cannot index null") return "the value was null; check it with `if (x != null)` before indexing";
@@ -166,7 +167,8 @@ function $payload(v, from, to) {
   return v;
 }
 function $f2i(x) { if (Number.isNaN(x) || !Number.isFinite(x)) return -9223372036854775808; return Math.trunc(x); }
-function $idiv(a, b, l) { if (b === 0) $err("division by zero", l); return Math.trunc(a / b); }
+function $ov(r, l) { if (r > 9223372036854775807 || r < -9223372036854775808) $err("integer overflow", l); return r; }
+function $idiv(a, b, l) { if (b === 0) $err("division by zero", l); return $ov(Math.trunc(a / b), l); }
 function $imod(a, b, l) { if (b === 0) $err("division by zero", l); return a % b; }
 function $idx(a, i, l) { if (i < 0 || i >= a.length || !Number.isInteger(i)) $err("index " + i + " out of bounds (length " + a.length + ")", l); return a[i]; }
 function $sidx(a, i, v, l) { if (i < 0 || i >= a.length || !Number.isInteger(i)) $err("index " + i + " out of bounds (length " + a.length + ")", l); a[i] = v; return v; }
@@ -275,6 +277,7 @@ const $R = {
   MapSet: (m, k, v) => { m.m.set($mk(m, k), [k, v]); return v; },
   MapGet: (m, k, l) => { const e = m.m.get($mk(m, k)); if (!e) $err("key " + $fmt(k, $d(m.t)[1], true, 0) + " not found in map", l); return e[1]; },
   MapGetOr: (m, k, d) => { const e = m.m.get($mk(m, k)); return e ? e[1] : d; },
+  MapFind: (m, k, t) => { const e = m.m.get($mk(m, k)); return e ? ($unboxed(t) ? $box(e[1], t) : e[1]) : null; },
   MapHas: (m, k) => m.m.has($mk(m, k)),
   MapRemove: (m, k) => m.m.delete($mk(m, k)),
   MapKeys: (m) => Array.from(m.m.values()).map(e => e[0]),
@@ -310,8 +313,8 @@ const $R = {
   FPow: (a, b) => Math.pow(a, b),
   FAtan2: (a, b) => Math.atan2(a, b),
   FMod: (a, b) => a % b,
-  IPow: (a, b) => (b < 0 ? 0 : Math.pow(a, b)),
-  IAbs: a => Math.abs(a),
+  IPow: (a, b) => (b < 0 ? 0 : $ov(Math.pow(a, b), -1)),
+  IAbs: a => $ov(Math.abs(a), -1),
   IMin: (a, b) => Math.min(a, b),
   IMax: (a, b) => Math.max(a, b),
   FMin: (a, b) => Math.min(a, b),
@@ -346,6 +349,7 @@ const $R = {
   Assert: (c, m, l) => { if (!c) $err("assertion failed: " + m, l); return 0; },
   ErrIndex: (l, i, n) => $err("index " + i + " out of bounds (length " + n + ")", l),
   ErrDivZero: l => $err("division by zero", l),
+  ErrOverflow: l => $err("integer overflow", l),
   ErrNull: l => $err("unexpected null value", l),
   ErrReturn: l => $err("function ended without returning a value", l),
   Await: f => f.v,

@@ -38,7 +38,7 @@ impl<'a> Checker<'a> {
                     let fixed = self.wrap_suffix(span, "!!");
                     self.emit(
                         Diagnostic::error(span, format!("expected {} but found {}", to, from))
-                            .help("the value may be null: check it with `if (x != null)` first")
+                            .help("the value may be null: check it with `if (x != null)` first, or give a fallback with `x ?? value`")
                             .maybe_fix("or assert that it is not null (fails at runtime if it is)", span, fixed),
                     );
                 } else if h.ty == T_ANY {
@@ -335,7 +335,19 @@ impl<'a> Checker<'a> {
             A::Unary(AUn::Neg, x) => {
                 let h = self.expr(x, expected.filter(|t| self.types.is_numeric(*t)));
                 match self.types.get(h.ty) {
-                    Ty::Int => Expr::new(ExprKind::Unary(UnOp::INeg, Box::new(h)), T_INT),
+                    Ty::Int => {
+                        if let ExprKind::Int(v) = h.kind {
+                            match v.checked_neg() {
+                                Some(n) => return Expr::int(n),
+                                None => {
+                                    self.error(e.span, "this negation overflows `int`");
+                                    return Self::err_expr();
+                                }
+                            }
+                        }
+                        let l = self.loc(e.span);
+                        Expr::new(ExprKind::Unary(UnOp::INeg(l), Box::new(h)), T_INT)
+                    }
                     Ty::Float => Expr::new(ExprKind::Unary(UnOp::FNeg, Box::new(h)), T_FLOAT),
                     Ty::Error => h,
                     _ => {
@@ -374,6 +386,9 @@ impl<'a> Checker<'a> {
             }
             A::Lambda(f) => self.lambda(f),
             A::New { ty, args } => self.new_expr(ty, args, e.span),
+            A::SafeGet { obj, name, args } => self.safe_get(obj, name, args.as_deref(), e.span),
+            A::Coalesce(a, b) => self.coalesce(a, b, e.span, expected),
+            A::SafeAs(x, te) => self.safe_as(x, te, e.span),
             A::NotNull(x) => {
                 let h = self.expr_raw(x);
                 match self.types.get(h.ty).clone() {
@@ -549,21 +564,30 @@ impl<'a> Checker<'a> {
             if let (ExprKind::Int(a), ExprKind::Int(b)) = (&l.kind, &r.kind) {
                 let (a, b) = (*a, *b);
                 let v = match op {
-                    AOp::Add => Some(a.wrapping_add(b)),
-                    AOp::Sub => Some(a.wrapping_sub(b)),
-                    AOp::Mul => Some(a.wrapping_mul(b)),
-                    AOp::Div if b != 0 => Some(a.wrapping_div(b)),
-                    AOp::Mod if b != 0 => Some(a.wrapping_rem(b)),
+                    AOp::Add => Some(a.checked_add(b)),
+                    AOp::Sub => Some(a.checked_sub(b)),
+                    AOp::Mul => Some(a.checked_mul(b)),
+                    AOp::Div if b != 0 => Some(a.checked_div(b)),
+                    AOp::Mod if b != 0 => Some(Some(a.wrapping_rem(b))),
                     _ => None,
                 };
-                if let Some(v) = v {
-                    return Expr::int(v);
+                match v {
+                    Some(Some(v)) => return Expr::int(v),
+                    Some(None) => {
+                        self.emit(
+                            Diagnostic::error(span, format!("`{} {} {}` overflows `int`", a, op.symbol(), b))
+                                .help("`int` holds values from -9223372036854775808 to 9223372036854775807; use `float` for larger numbers"),
+                        );
+                        return Self::err_expr();
+                    }
+                    None => {}
                 }
             }
+            let l_loc = self.loc(span);
             let bop = match op {
-                AOp::Add => BinOp::IAdd,
-                AOp::Sub => BinOp::ISub,
-                AOp::Mul => BinOp::IMul,
+                AOp::Add => BinOp::IAdd(l_loc),
+                AOp::Sub => BinOp::ISub(l_loc),
+                AOp::Mul => BinOp::IMul(l_loc),
                 AOp::Div => BinOp::IDiv(self.loc(span)),
                 _ => BinOp::IMod(self.loc(span)),
             };
@@ -1255,7 +1279,7 @@ impl<'a> Checker<'a> {
         h
     }
 
-    fn method_call(&mut self, obj: &ast::Expr, name: &ast::Ident, args: &[ast::Expr], span: Span, expected: Option<TyId>) -> Expr {
+    pub fn method_call(&mut self, obj: &ast::Expr, name: &ast::Ident, args: &[ast::Expr], span: Span, expected: Option<TyId>) -> Expr {
         if let Some(t) = self.type_ident(obj) {
             match self.types.get(t).clone() {
                 Ty::Record(ri) => {
@@ -1427,7 +1451,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn field(&mut self, obj: &ast::Expr, name: &ast::Ident, span: Span) -> Expr {
+    pub fn field(&mut self, obj: &ast::Expr, name: &ast::Ident, span: Span) -> Expr {
         if let Some(t) = self.type_ident(obj) {
             match self.types.get(t).clone() {
                 Ty::Enum(ei) => {
@@ -1548,8 +1572,8 @@ impl<'a> Checker<'a> {
             }
             Ty::Map(k, v) => {
                 let key = self.expr_to(index, k);
-                let l = self.loc_expr(span);
-                Expr::new(ExprKind::Rt(RtFn::MapGet, vec![o, key, l]), v)
+                let rt = self.types.optional(v);
+                Expr::new(ExprKind::Rt(RtFn::MapFind, vec![o, key, Self::tid(v)]), rt)
             }
             Ty::Any => {
                 let i = self.expr(index, None);
@@ -1576,6 +1600,32 @@ impl<'a> Checker<'a> {
                 Self::err_expr()
             }
         }
+    }
+
+    pub fn try_join(&mut self, ts: &[TyId]) -> Option<TyId> {
+        let t = self.join_types(ts);
+        (t != T_ANY || ts.contains(&T_ANY)).then_some(t)
+    }
+
+    fn conflict(&self, ts: &[TyId]) -> Option<(usize, TyId, TyId)> {
+        let first = ts.iter().copied().find(|t| *t != T_NULL && *t != T_ERROR)?;
+        let mut cur = first;
+        for (i, t) in ts.iter().enumerate() {
+            if *t == T_NULL || *t == T_ERROR {
+                continue;
+            }
+            let ok = *t == cur
+                || (self.types.is_numeric(cur) && self.types.is_numeric(*t))
+                || self.common_ancestor(cur, *t).is_some()
+                || self.common_iface(cur, *t).is_some()
+                || self.types.unwrap_optional(cur) == *t
+                || self.types.unwrap_optional(*t) == cur;
+            if !ok {
+                return Some((i, cur, *t));
+            }
+            cur = *t;
+        }
+        None
     }
 
     pub fn join_types(&mut self, ts: &[TyId]) -> TyId {
@@ -1618,6 +1668,30 @@ impl<'a> Checker<'a> {
         }
     }
 
+    fn mixed_error(&mut self, tys: &[TyId], spans: Vec<Span>, what: &str, any_form: &str) {
+        match self.conflict(tys) {
+            Some((i, a, b)) => {
+                let (x, y) = (self.show(a), self.show(b));
+                self.emit(
+                    Diagnostic::error(spans[i], format!("{} {} and {}", what, x, y))
+                        .help(format!("use values of one type; if the mix is intended, declare the type as `{}`", any_form)),
+                );
+            }
+            None => {
+                self.emit(
+                    Diagnostic::error(
+                        spans[0],
+                        format!(
+                            "cannot tell the type of {}: it only holds `null`",
+                            what.rsplit_once(' ').map(|x| x.0).unwrap_or(what)
+                        ),
+                    )
+                    .help("declare the type, for example `var items: [string?] = [null]`"),
+                );
+            }
+        }
+    }
+
     fn common_ancestor(&self, a: TyId, b: TyId) -> Option<TyId> {
         let (ra, rb) = match (self.types.get(a), self.types.get(b)) {
             (Ty::Record(x), Ty::Record(y)) => (*x, *y),
@@ -1628,6 +1702,10 @@ impl<'a> Checker<'a> {
         let mut xb = vec![rb];
         xb.extend(self.types.ancestors(rb));
         xa.into_iter().find(|r| xb.contains(r)).map(|r| self.types.records[r as usize].ty)
+    }
+
+    pub fn common_type(&self, a: TyId, b: TyId) -> Option<TyId> {
+        self.common_ancestor(a, b).or_else(|| self.common_iface(a, b))
     }
 
     fn common_iface(&self, a: TyId, b: TyId) -> Option<TyId> {
@@ -1645,7 +1723,7 @@ impl<'a> Checker<'a> {
         None
     }
 
-    fn array_lit(&mut self, items: &[ast::Expr], expected: Option<TyId>, _span: Span) -> Expr {
+    fn array_lit(&mut self, items: &[ast::Expr], expected: Option<TyId>, span: Span) -> Expr {
         let et = match expected.map(|t| self.types.get(t).clone()) {
             Some(Ty::Array(e)) => Some(e),
             Some(Ty::Optional(o)) => match self.types.get(o).clone() {
@@ -1661,7 +1739,21 @@ impl<'a> Checker<'a> {
         }
         let hs: Vec<Expr> = items.iter().map(|i| self.expr(i, None)).collect();
         let tys: Vec<TyId> = hs.iter().map(|h| h.ty).collect();
-        let et = if hs.is_empty() { T_ANY } else { self.join_types(&tys) };
+        if hs.is_empty() {
+            self.emit(
+                Diagnostic::error(span, "cannot tell what this empty array will hold")
+                    .help("give it a type, for example `var items: [int] = []` or `[string] names = []`"),
+            );
+            let at = self.types.array(T_ERROR);
+            return Expr::new(ExprKind::NewArray(at, vec![]), at);
+        }
+        let et = match self.try_join(&tys) {
+            Some(t) => t,
+            None => {
+                self.mixed_error(&tys, items.iter().map(|i| i.span).collect(), "this array mixes", "[any]");
+                T_ERROR
+            }
+        };
         if et == T_VOID {
             self.error(items[0].span, "arrays cannot contain void values");
         }
@@ -1813,7 +1905,15 @@ impl<'a> Checker<'a> {
         let mut key: Vec<(String, TyId)> = Vec::new();
         let mut vals = Vec::new();
         for (n, h, sp) in hs {
-            let t = if h.ty == T_NULL { T_ANY } else { h.ty };
+            let t = if h.ty == T_NULL {
+                self.emit(
+                    Diagnostic::error(sp, format!("cannot tell the type of `{}` from `null`", n))
+                        .help("declare a type with this field, for example `def type Name { string? field }`"),
+                );
+                T_ERROR
+            } else {
+                h.ty
+            };
             if t == T_VOID {
                 self.error(sp, "a field cannot hold a void value");
             }
@@ -1936,8 +2036,20 @@ impl<'a> Checker<'a> {
                 let hs: Vec<(Expr, Expr)> = pairs.iter().map(|(a, b)| (self.expr(a, None), self.expr(b, None))).collect();
                 let kts: Vec<TyId> = hs.iter().map(|p| p.0.ty).collect();
                 let vts: Vec<TyId> = hs.iter().map(|p| p.1.ty).collect();
-                let k = self.join_types(&kts);
-                let v = self.join_types(&vts);
+                let k = match self.try_join(&kts) {
+                    Some(t) => t,
+                    None => {
+                        self.mixed_error(&kts, pairs.iter().map(|p| p.0.span).collect(), "the keys of this map mix", "{any: any}");
+                        T_ERROR
+                    }
+                };
+                let v = match self.try_join(&vts) {
+                    Some(t) => t,
+                    None => {
+                        self.mixed_error(&vts, pairs.iter().map(|p| p.1.span).collect(), "the values of this map mix", "{string: any}");
+                        T_ERROR
+                    }
+                };
                 self.check_map_key(k, span);
                 let mut out = Vec::new();
                 for ((a, b), (ea, eb)) in hs.into_iter().zip(pairs.iter()) {

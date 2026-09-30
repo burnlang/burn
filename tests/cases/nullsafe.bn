@@ -1,0 +1,46 @@
+def struct Address(city: string) {
+    fun label(): string {
+        return "in " + city
+    }
+}
+
+def struct User(name: string, address: Address?) {
+}
+
+fun find(users: [User], name: string): User? {
+    for (u in users) {
+        if (u.name == name) {
+            return u
+        }
+    }
+    return null
+}
+
+var users = [new User("ada", new Address("london")), new User("linus", null)]
+
+print(find(users, "ada")?.name)
+print(find(users, "bob")?.name)
+print(find(users, "ada")?.address?.city ?? "nowhere")
+print(find(users, "linus")?.address?.city ?? "nowhere")
+print(find(users, "ada")?.address?.label() ?? "no label")
+print(find(users, "linus")?.address?.label() ?? "no label")
+
+var ages = {"ada": 36, "linus": 54}
+print(ages["ada"] ?? 0, ages["grace"] ?? 0)
+var found = ages["linus"]
+if (found != null) {
+    print(found + 1)
+}
+
+fun describe(x: any): string {
+    var n = x as? int
+    var s = x as? string
+    return "" + (n ?? -1) + " " + (s ?? "-")
+}
+print(describe(7))
+print(describe("seven"))
+print(describe(7.5))
+
+var a: int? = null
+var b: int? = null
+print(a ?? b ?? 3)
