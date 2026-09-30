@@ -3,7 +3,7 @@ def type Point {
     float y
 }
 
-var created = 0
+var created = 1000
 
 pub fun point(x: float, y: float): Point {
     created += 1

@@ -349,7 +349,30 @@ pub fn link_with(modules: &[Module], opts: &LinkOptions) -> Result<Module, Strin
         }
     }
 
-    out.entry = modules.iter().enumerate().find_map(|(mi, m)| m.entry.map(|e| fmaps[mi][e as usize]));
+    let entries: Vec<u32> = modules
+        .iter()
+        .enumerate()
+        .filter_map(|(mi, m)| m.entry.map(|e| fmaps[mi][e as usize]))
+        .filter(|e| *e != u32::MAX)
+        .collect();
+    out.entry = match entries.as_slice() {
+        [] => None,
+        [one] => Some(*one),
+        [main, rest @ ..] => {
+            let mut code = Vec::with_capacity(2 * entries.len() + 1);
+            for e in rest.iter().rev().chain(std::iter::once(main)) {
+                code.push(Op::Call(*e));
+                code.push(Op::Pop);
+            }
+            code.push(Op::RetVoid);
+            out.funcs.push(Function {
+                name: "<start>".into(),
+                code,
+                ..Function::default()
+            });
+            Some(out.funcs.len() as u32 - 1)
+        }
+    };
 
     bind_exports(&mut out);
     if !opts.skip_mixins {
