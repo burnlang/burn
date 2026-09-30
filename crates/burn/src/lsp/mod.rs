@@ -27,6 +27,16 @@ struct Server {
     docs: HashMap<String, String>,
     analyses: HashMap<String, Analysis>,
     published: HashMap<String, Vec<String>>,
+    fixes: HashMap<String, Vec<QuickFix>>,
+}
+
+struct QuickFix {
+    start: usize,
+    end: usize,
+    title: String,
+    preferred: bool,
+    diagnostic: Json,
+    edits: Vec<Json>,
 }
 
 fn read_message(r: &mut impl BufRead) -> Option<Json> {
@@ -139,6 +149,13 @@ fn range_json(sm: &SourceMap, span: Span) -> Json {
     ])
 }
 
+fn edit_range_json(sm: &SourceMap, span: Span) -> Json {
+    Json::obj(vec![
+        ("start", pos_json(sm, span.file, span.start as usize)),
+        ("end", pos_json(sm, span.file, span.end as usize)),
+    ])
+}
+
 const KEYWORDS: &[&str] = &[
     "fun",
     "var",
@@ -230,6 +247,7 @@ impl Server {
         diags.extend(result.diags);
         let sm = loaded.sm;
         let mut by_uri: HashMap<String, Vec<Json>> = HashMap::new();
+        let mut fixes = Vec::new();
         by_uri.insert(uri.to_string(), Vec::new());
         for d in &diags {
             if (d.span.file as usize) >= sm.files.len() {
@@ -245,16 +263,36 @@ impl Server {
                 }
             };
             let mut message = d.message.clone();
-            for n in &d.notes {
+            for n in d.notes.iter().chain(d.helps.iter()) {
                 message.push('\n');
                 message.push_str(n);
             }
-            by_uri.entry(target).or_default().push(Json::obj(vec![
+            let dj = Json::obj(vec![
                 ("range", range_json(&sm, d.span)),
                 ("severity", Json::num(if d.severity == Severity::Error { 1 } else { 2 })),
                 ("source", Json::str("burn")),
                 ("message", Json::str(message)),
-            ]));
+            ]);
+            if d.span.file == root_file {
+                for s in &d.suggestions {
+                    if s.edits.iter().any(|(sp, _)| sp.file != root_file) {
+                        continue;
+                    }
+                    fixes.push(QuickFix {
+                        start: d.span.start as usize,
+                        end: d.span.end as usize,
+                        title: s.message.clone(),
+                        preferred: s.applicable,
+                        diagnostic: dj.clone(),
+                        edits: s
+                            .edits
+                            .iter()
+                            .map(|(sp, t)| Json::obj(vec![("range", edit_range_json(&sm, *sp)), ("newText", Json::str(t.clone()))]))
+                            .collect(),
+                    });
+                }
+            }
+            by_uri.entry(target).or_default().push(dj);
         }
         let previous = self.published.remove(uri).unwrap_or_default();
         let mut now = Vec::new();
@@ -274,6 +312,7 @@ impl Server {
             }
         }
         self.published.insert(uri.to_string(), now);
+        self.fixes.insert(uri.to_string(), fixes);
         self.analyses.insert(
             uri.to_string(),
             Analysis {
@@ -287,6 +326,32 @@ impl Server {
                 type_names: result.type_names,
             },
         );
+    }
+
+    fn code_actions(&self, uri: &str, params: &Json) -> Json {
+        let (Some(a), Some(fixes)) = (self.analyses.get(uri), self.fixes.get(uri)) else {
+            return Json::Arr(vec![]);
+        };
+        let f = a.sm.file(a.root_file);
+        let pos = |k: &str| {
+            let line = params.at(&["range", k, "line"]).as_f64().unwrap_or(0.0) as usize;
+            let ch = params.at(&["range", k, "character"]).as_f64().unwrap_or(0.0) as usize;
+            f.offset_of_utf16(line, ch)
+        };
+        let (start, end) = (pos("start"), pos("end"));
+        let mut out = Vec::new();
+        for q in fixes {
+            if q.start <= end && start <= q.end {
+                out.push(Json::obj(vec![
+                    ("title", Json::str(q.title.clone())),
+                    ("kind", Json::str("quickfix")),
+                    ("isPreferred", Json::Bool(q.preferred)),
+                    ("diagnostics", Json::Arr(vec![q.diagnostic.clone()])),
+                    ("edit", Json::obj(vec![("changes", Json::obj(vec![(uri, Json::Arr(q.edits.clone()))]))])),
+                ]));
+            }
+        }
+        Json::Arr(out)
     }
 
     fn offset(&self, uri: &str, params: &Json) -> Option<(usize, &Analysis)> {
@@ -645,6 +710,7 @@ pub fn run() -> ExitCode {
                                 ("definitionProvider", Json::Bool(true)),
                                 ("documentSymbolProvider", Json::Bool(true)),
                                 ("documentFormattingProvider", Json::Bool(true)),
+                                ("codeActionProvider", Json::Bool(true)),
                                 ("completionProvider", Json::obj(vec![("triggerCharacters", Json::Arr(vec![Json::str(".")]))])),
                             ]),
                         ),
@@ -691,6 +757,7 @@ pub fn run() -> ExitCode {
             "textDocument/completion" => respond(&id, server.completion(&uri, &params)),
             "textDocument/documentSymbol" => respond(&id, server.symbols(&uri)),
             "textDocument/formatting" => respond(&id, server.formatting(&uri)),
+            "textDocument/codeAction" => respond(&id, server.code_actions(&uri, &params)),
             _ => {
                 if !id.is_null() {
                     respond_err(&id, -32601, &format!("method not found: {}", method));

@@ -35,19 +35,26 @@ impl<'a> Checker<'a> {
                         format!("use `{}?` to make the type nullable", to),
                     );
                 } else if self.types.is_nullable(h.ty) && self.types.unwrap_optional(h.ty) == target {
-                    self.error_note(
-                        span,
-                        format!("expected {} but found {}", to, from),
-                        "the value may be null: check it with `if (x != null)` first, or use `x!!`",
+                    let fixed = self.wrap_suffix(span, "!!");
+                    self.emit(
+                        Diagnostic::error(span, format!("expected {} but found {}", to, from))
+                            .help("the value may be null: check it with `if (x != null)` first")
+                            .maybe_fix("or assert that it is not null (fails at runtime if it is)", span, fixed),
                     );
                 } else if h.ty == T_ANY {
-                    self.error_note(
-                        span,
-                        format!("expected {} but found any", to),
-                        format!("narrow it with `if (x is {})` or cast it with `x as {}`", to, to),
+                    let fixed = self.wrap_suffix(span, &format!(" as {}", to));
+                    self.emit(
+                        Diagnostic::error(span, format!("expected {} but found any", to))
+                            .help(format!("narrow it with `if (x is {})` first", to))
+                            .maybe_fix(format!("or cast it to {}", to), span, fixed),
                     );
                 } else if h.ty == T_FLOAT && target == T_INT {
-                    self.error_note(span, "expected int but found float", "convert it explicitly with `x as int` or `round(x)`");
+                    let fixed = self.wrap_suffix(span, " as int");
+                    self.emit(
+                        Diagnostic::error(span, "expected int but found float")
+                            .help("use `round(x)`, `floor(x)` or `ceil(x)` to choose how to round")
+                            .maybe_fix("or drop the fraction with `as int`", span, fixed),
+                    );
                 } else {
                     self.error(span, format!("expected {} but found {}", to, from));
                 }
@@ -356,7 +363,7 @@ impl<'a> Checker<'a> {
                     Ty::Error => h,
                     _ => {
                         let s = self.show(h.ty);
-                        self.error_note(
+                        self.error_detail(
                             e.span,
                             format!("`await` needs a Future, but this is {}", s),
                             "only calls to `async fun` functions produce futures",
@@ -382,7 +389,10 @@ impl<'a> Checker<'a> {
                     Ty::Error => h,
                     _ => {
                         let s = self.show(h.ty);
-                        self.warn(e.span, format!("unnecessary `!!`: a value of type {} is never null", s));
+                        let inner = self.src_text(x.span);
+                        self.emit(
+                            Diagnostic::warning(e.span, format!("unnecessary `!!`: a value of type {} is never null", s)).fix("remove the `!!`", e.span, inner),
+                        );
                         h
                     }
                 }
@@ -488,7 +498,7 @@ impl<'a> Checker<'a> {
                     }
                     cands.extend(builtins::BUILTINS.iter().map(|s| s.to_string()));
                     match suggest(name, cands.iter().map(|s| s.as_str())) {
-                        Some(s) => self.error_note(span, format!("cannot find `{}` in this scope", name), format!("did you mean `{}`?", s)),
+                        Some(s) => self.error_fix(span, format!("cannot find `{}` in this scope", name), &s),
                         None => self.error(span, format!("cannot find `{}` in this scope", name)),
                     }
                 }
@@ -689,7 +699,11 @@ impl<'a> Checker<'a> {
             A::Ident(name) => {
                 if let Some(l) = self.lookup_local(name) {
                     if l.is_const {
-                        self.error(target.span, format!("cannot assign to constant `{}`", name));
+                        let mut d = Diagnostic::error(target.span, format!("cannot assign to constant `{}`", name));
+                        if let Some(k) = self.keyword_before(l.span, "const") {
+                            d = d.maybe_fix(format!("make `{}` a variable", name), k, "var");
+                        }
+                        self.emit(d);
                     }
                     self.def_link(target.span, l.span);
                     let t = self.ctx().locals[l.slot as usize];
@@ -917,6 +931,10 @@ impl<'a> Checker<'a> {
     }
 
     pub fn check_args(&mut self, params: &[TyId], args: &[ast::Expr], recv: Option<Expr>, span: Span, what: &str) -> Vec<Expr> {
+        self.check_args_sig(params, args, recv, span, what, None)
+    }
+
+    pub fn check_args_sig(&mut self, params: &[TyId], args: &[ast::Expr], recv: Option<Expr>, span: Span, what: &str, sig: Option<&str>) -> Vec<Expr> {
         let mut out = Vec::new();
         let offset = if recv.is_some() { 1 } else { 0 };
         if let Some(r) = recv {
@@ -926,7 +944,7 @@ impl<'a> Checker<'a> {
         }
         let expected = params.len() - offset.min(params.len());
         if args.len() != expected {
-            self.error(
+            let mut d = Diagnostic::error(
                 span,
                 format!(
                     "{} expects {} argument{} but got {}",
@@ -936,6 +954,10 @@ impl<'a> Checker<'a> {
                     args.len()
                 ),
             );
+            if let Some(s) = sig {
+                d = d.note(format!("it is declared as `{}`", s));
+            }
+            self.emit(d);
         }
         for (i, a) in args.iter().enumerate() {
             match params.get(i + offset) {
@@ -987,12 +1009,12 @@ impl<'a> Checker<'a> {
             };
             format!("{}fun {}({}){}", if is_async { "async " } else { "" }, name, ps.join(", "), r)
         };
-        self.hover(name_span, sig);
+        self.hover(name_span, sig.clone());
         let recv = match recv {
             Some(r) if self.has_destroy && self.types.record_of(r.ty).map(|x| x.is_class).unwrap_or(false) => Some(self.alive_wrap(r, name_span)),
             r => r,
         };
-        let hargs = self.check_args(&params, args, recv, span, &format!("`{}`", name));
+        let hargs = self.check_args_sig(&params, args, recv, span, &format!("`{}`", name), Some(&sig));
         self.invalidate_globals();
         if is_async {
             let ft = self.types.future(ret);
@@ -1153,10 +1175,13 @@ impl<'a> Checker<'a> {
                 format!("use its members directly, e.g. `{}.name`", rec.name),
             );
         } else {
-            self.error_note(
-                name_span,
-                format!("`{}` is a struct, so its objects are created with `new`", rec.name),
-                format!("write `new {}(...)`", rec.name),
+            let at = Span::new(name_span.file, name_span.start as usize, name_span.start as usize);
+            self.emit(
+                Diagnostic::error(name_span, format!("`{}` is a struct, so its objects are created with `new`", rec.name)).fix(
+                    "create the object with `new`",
+                    at,
+                    "new ",
+                ),
             );
         }
         for a in args {
@@ -1231,11 +1256,7 @@ impl<'a> Checker<'a> {
                     } else {
                         let cands: Vec<&str> = rec.statics.keys().chain(rec.methods.keys()).map(|s| s.as_str()).collect();
                         match suggest(&name.name, cands.into_iter()) {
-                            Some(s) => self.error_note(
-                                name.span,
-                                format!("{} has no method `{}`", rec.name, name.name),
-                                format!("did you mean `{}`?", s),
-                            ),
+                            Some(s) => self.error_fix(name.span, format!("{} has no method `{}`", rec.name, name.name), &s),
                             None => self.error(name.span, format!("{} has no method `{}`", rec.name, name.name)),
                         }
                     }
@@ -1257,15 +1278,15 @@ impl<'a> Checker<'a> {
             Ty::Record(ri) => {
                 let rec = self.types.records[ri as usize].clone();
                 if rec.is_class && name.name == "destroy" && (rec.methods.contains_key("destroy") || self.vslots.contains_key(&(ri, name.name.clone()))) {
-                    let what = match &obj.kind {
-                        A::Ident(n) => n.clone(),
-                        _ => "x".into(),
-                    };
-                    self.error_note(
-                        name.span,
-                        "a destructor cannot be called directly",
-                        format!("write `destroy {}()` to run it and destroy the object", what),
-                    );
+                    let mut d = Diagnostic::error(name.span, "a destructor cannot be called directly");
+                    match &obj.kind {
+                        A::Ident(n) => {
+                            let rest = self.src_text(Span::new(span.file, name.span.end as usize, span.end as usize));
+                            d = d.fix("destroy the object instead, which runs the destructor", span, format!("destroy {}{}", n, rest));
+                        }
+                        _ => d = d.help("store the object in a variable `x` and write `destroy x(...)`"),
+                    }
+                    self.emit(d);
                     for a in args {
                         self.expr(a, None);
                     }
@@ -1333,10 +1354,11 @@ impl<'a> Checker<'a> {
                 return Self::err_expr();
             }
             Ty::Optional(_) => {
-                self.error_note(
-                    obj.span,
-                    format!("cannot call `{}` on a value that may be null", name.name),
-                    "check it with `if (x != null)` first, or use `x!!`",
+                let fixed = self.wrap_suffix(obj.span, "!!");
+                self.emit(
+                    Diagnostic::error(obj.span, format!("cannot call `{}` on a value that may be null", name.name))
+                        .help("check it with `if (x != null)` first")
+                        .maybe_fix("or assert that it is not null (fails at runtime if it is)", obj.span, fixed),
                 );
                 for a in args {
                     self.expr(a, None);
@@ -1400,11 +1422,7 @@ impl<'a> Checker<'a> {
                     }
                     let cands: Vec<&str> = en.variants.iter().map(|v| v.0.as_str()).collect();
                     match suggest(&name.name, cands.into_iter()) {
-                        Some(s) => self.error_note(
-                            name.span,
-                            format!("enum {} has no variant `{}`", en.name, name.name),
-                            format!("did you mean `{}`?", s),
-                        ),
+                        Some(s) => self.error_fix(name.span, format!("enum {} has no variant `{}`", en.name, name.name), &s),
                         None => self.error(name.span, format!("enum {} has no variant `{}`", en.name, name.name)),
                     }
                     return Self::err_expr();
@@ -1423,11 +1441,7 @@ impl<'a> Checker<'a> {
                     }
                     let cands: Vec<&str> = rec.static_vals.keys().chain(rec.statics.keys()).map(|s| s.as_str()).collect();
                     match suggest(&name.name, cands.into_iter()) {
-                        Some(s) => self.error_note(
-                            name.span,
-                            format!("{} has no static member `{}`", rec.name, name.name),
-                            format!("did you mean `{}`?", s),
-                        ),
+                        Some(s) => self.error_fix(name.span, format!("{} has no static member `{}`", rec.name, name.name), &s),
                         None => self.error(name.span, format!("{} has no static member `{}`", rec.name, name.name)),
                     }
                     return Self::err_expr();
@@ -1464,7 +1478,7 @@ impl<'a> Checker<'a> {
                 }
                 let cands: Vec<&str> = rec.fields.iter().map(|f| f.name.as_str()).collect();
                 match suggest(n, cands.into_iter()) {
-                    Some(s) => self.error_note(name.span, format!("{} has no field `{}`", self.show(t), n), format!("did you mean `{}`?", s)),
+                    Some(s) => self.error_fix(name.span, format!("{} has no field `{}`", self.show(t), n), &s),
                     None => self.error(name.span, format!("{} has no field `{}`", self.show(t), n)),
                 }
                 Self::err_expr()
@@ -1484,10 +1498,11 @@ impl<'a> Checker<'a> {
                 Expr::new(ExprKind::Rt(RtFn::AnyIndex, vec![o, key, Self::tid(T_STR), l]), T_ANY)
             }
             Ty::Optional(_) => {
-                self.error_note(
-                    obj.span,
-                    format!("cannot read `{}` from a value that may be null", n),
-                    "check it with `if (x != null)` first, or use `x!!`",
+                let fixed = self.wrap_suffix(obj.span, "!!");
+                self.emit(
+                    Diagnostic::error(obj.span, format!("cannot read `{}` from a value that may be null", n))
+                        .help("check it with `if (x != null)` first")
+                        .maybe_fix("or assert that it is not null (fails at runtime if it is)", obj.span, fixed),
                 );
                 Self::err_expr()
             }
@@ -1529,7 +1544,12 @@ impl<'a> Checker<'a> {
                 Self::err_expr()
             }
             Ty::Optional(_) => {
-                self.error_note(obj.span, "cannot index a value that may be null", "check it with `if (x != null)` first");
+                let fixed = self.wrap_suffix(obj.span, "!!");
+                self.emit(
+                    Diagnostic::error(obj.span, "cannot index a value that may be null")
+                        .help("check it with `if (x != null)` first")
+                        .maybe_fix("or assert that it is not null (fails at runtime if it is)", obj.span, fixed),
+                );
                 Self::err_expr()
             }
             _ => {
@@ -1830,7 +1850,7 @@ impl<'a> Checker<'a> {
                     let cands: Vec<&str> = rec.fields.iter().map(|f| f.name.as_str()).collect();
                     let rn = self.show(rec.ty);
                     match suggest(&n.name, cands.into_iter()) {
-                        Some(s) => self.error_note(n.span, format!("{} has no field `{}`", rn, n.name), format!("did you mean `{}`?", s)),
+                        Some(s) => self.error_fix(n.span, format!("{} has no field `{}`", rn, n.name), &s),
                         None => self.error(n.span, format!("{} has no field `{}`", rn, n.name)),
                     }
                     self.expr(e, None);

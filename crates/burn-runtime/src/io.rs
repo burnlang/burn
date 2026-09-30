@@ -102,11 +102,92 @@ pub fn read_line(prompt: &str) -> String {
     line
 }
 
+fn number_after(msg: &str, key: &str) -> Option<i64> {
+    let i = msg.find(key)? + key.len();
+    msg[i..].split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
+}
+
+pub fn error_help(msg: &str) -> Option<String> {
+    let h = if msg.starts_with("index ") || msg.starts_with("string index ") {
+        match number_after(msg, "(length ") {
+            Some(0) => "it is empty, so there is nothing to read; check `len(...) > 0` first".to_string(),
+            Some(n) => format!("valid indexes go from 0 to {}; check the index against `len(...)` first", n - 1),
+            None => return None,
+        }
+    } else if msg == "division by zero" {
+        "check that the divisor is not 0 before dividing".into()
+    } else if msg == "unexpected null value" {
+        "the value was null; check it with `if (x != null)` instead of using `!!`".into()
+    } else if msg == "cannot index null" {
+        "the value was null; check it with `if (x != null)` before indexing".into()
+    } else if msg.starts_with("key ") && msg.ends_with(" not found in map") {
+        "check the key with `has(map, key)` first, or pass a default: `get(map, key, fallback)`".into()
+    } else if msg == "pop from empty array" {
+        "check `len(items) > 0` before calling `pop`".into()
+    } else if msg.starts_with("cannot convert ") {
+        "the text is not a number; check it first or handle the bad input".into()
+    } else if msg.starts_with("cannot cast value") {
+        "check the type with `is` before casting with `as`".into()
+    } else if msg == "this object was destroyed and can no longer be used" {
+        "another variable or function destroyed this object; do not use it after `destroy`".into()
+    } else if msg == "this object was already destroyed" {
+        "each object can be destroyed only once".into()
+    } else if msg == "function ended without returning a value" {
+        "make sure every path through the function ends with `return`".into()
+    } else if msg.starts_with("stack overflow") {
+        "a function probably calls itself without ever stopping; check its base case".into()
+    } else {
+        return None;
+    };
+    Some(h)
+}
+
+fn source_line(loc: &str) -> Option<(usize, usize, String)> {
+    let mut parts = loc.rsplitn(3, ':');
+    let col: usize = parts.next()?.parse().ok()?;
+    let line: usize = parts.next()?.parse().ok()?;
+    let file = parts.next()?;
+    let text = std::fs::read_to_string(file).ok()?;
+    let l = text.lines().nth(line.checked_sub(1)?)?.trim_end_matches('\r').to_string();
+    Some((line, col, l))
+}
+
 pub fn format_error(msg: &str, loc: u64) -> String {
-    match meta::loc(loc) {
-        Some(l) => format!("runtime error: {}\n  --> {}", msg, l),
-        None => format!("runtime error: {}", msg),
+    let mut out = format!("runtime error: {}", msg);
+    let help = error_help(msg);
+    let Some(l) = meta::loc(loc) else {
+        if let Some(h) = help {
+            out.push_str(&format!("\n  = help: {}", h));
+        }
+        return out;
+    };
+    match source_line(l) {
+        Some((line, col, text)) => {
+            let w = line.to_string().len();
+            let pad: String = text.chars().take(col.saturating_sub(1)).map(|c| if c == '\t' { '\t' } else { ' ' }).collect();
+            out.push_str(&format!(
+                "\n{:>w$}--> {}\n{:>w$} |\n{} | {}\n{:>w$} | {}^",
+                "",
+                l,
+                "",
+                line,
+                text,
+                "",
+                pad,
+                w = w
+            ));
+            if let Some(h) = help {
+                out.push_str(&format!("\n{:>w$} = help: {}", "", h, w = w));
+            }
+        }
+        None => {
+            out.push_str(&format!("\n --> {}", l));
+            if let Some(h) = help {
+                out.push_str(&format!("\n  = help: {}", h));
+            }
+        }
     }
+    out
 }
 
 pub fn rt_error(msg: &str, loc: u64) -> ! {

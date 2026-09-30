@@ -1,0 +1,84 @@
+---
+title: Errors, help and burn fix
+description: How the compiler and the runtime explain problems, suggest fixes and apply them for you.
+order: 23
+---
+
+# Errors, help and `burn fix`
+
+Burn tries to tell you what went wrong, where, and what to do about it. Every message points at the exact
+place in your code, and when the fix is clear, the compiler shows the corrected line.
+
+## Reading an error
+
+```text
+error: `Point` is a struct, so its objects are created with `new`
+  --> main.bn:15:13
+   |
+15 |     var p = Point(1, 2)
+   |             ^^^^^
+help: create the object with `new`
+   |
+15 |     var p = new Point(1, 2)
+   |             ++++
+```
+
+- The first line says what is wrong.
+- `-->` gives the file, line and column. The `^` marks the code the error is about.
+- `= note:` lines add facts, like the signature of the function you called.
+- `= help:` lines give advice.
+- A `help:` block with a code line is a suggested fix. `+` marks inserted text and `~` marks replaced text.
+
+Some typical suggestions:
+
+| Problem | Suggested fix |
+| --- | --- |
+| a misspelled name, field, method, type or annotation | the closest existing name |
+| `Point(1, 2)` for a struct | `new Point(1, 2)` |
+| `: Shape` for an interface or abstract struct | `:: Shape` |
+| `: Base(x), Shape` | `: Base(x) :: Shape` |
+| `type Pair { ... }` | `def type Pair { ... }` |
+| `x == 1` on its own line | `x = 1` |
+| `a & b`, `a \| b` | `a && b`, `a \|\| b` |
+| an unnecessary `!!` | remove it |
+| returning a value from a function without a return type | add `: T` after the parameter list |
+| `q.destroy("x")` | `destroy q("x")` |
+| assigning to a `const` | make it a `var` |
+| using a nullable value where a value is needed | `x!!` |
+| using a float where an int is needed | `x as int` |
+
+## `burn fix`
+
+`burn fix` applies the suggestions for you and then shows what is left:
+
+```sh
+burn fix main.bn              # rewrite main.bn and the local files it imports
+burn fix --dry-run main.bn    # only report how many problems can be fixed
+```
+
+It only applies fixes that are certain, such as a misspelled name, a missing `new` or `:` written instead of
+`::`. Fixes that change what a program does are shown but never applied automatically. Examples are `x!!`,
+which fails at runtime when `x` is null, `as int`, which drops the fraction, and turning a `const` into a `var`.
+The standard library and files outside your project are never changed.
+
+## In the editor
+
+The language server offers the same suggestions as quick fixes (the light bulb in VS Code). Preferred fixes are
+the ones `burn fix` would apply.
+
+## Runtime errors
+
+When a program fails while running, the error shows the line that failed and, for common problems, what to check:
+
+```text
+runtime error: index 5 out of bounds (length 3)
+ --> main.bn:2:12
+  |
+2 |     return items[i]
+  |            ^
+  = help: valid indexes go from 0 to 2; check the index against `len(...)` first
+```
+
+The bvm, native executables and JavaScript all print the same message. The source line is shown when the file
+is next to where the program runs. A native executable copied somewhere else still prints the location and
+the help.

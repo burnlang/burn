@@ -277,8 +277,15 @@ impl<'a> Checker<'a> {
             S::Expr(e) => {
                 let h = self.expr(e, None);
                 if let ExprKind::Binary(BinOp::ICmp(Cmp::Eq), ..) | ExprKind::Rt(RtFn::StrEq | RtFn::Eq, _) = h.kind {
-                    if let A::Binary(AOp::Eq, ..) = e.kind {
-                        self.warn(e.span, "comparison result is unused (did you mean `=`?)");
+                    if let A::Binary(AOp::Eq, l, r) = &e.kind {
+                        let between = Span::new(e.span.file, l.span.end as usize, r.span.start as usize);
+                        let text = self.src_text(between);
+                        let mut d = Diagnostic::warning(e.span, "comparison result is unused");
+                        if let Some(i) = text.find("==") {
+                            let op = Span::new(e.span.file, between.start as usize + i, between.start as usize + i + 2);
+                            d = d.fix("to assign a value, use `=`", op, "=");
+                        }
+                        self.emit(d);
                     }
                 }
                 vec![Stmt::Expr(h)]
@@ -383,11 +390,13 @@ impl<'a> Checker<'a> {
                                 let fi = self.ctx().func as usize;
                                 let fname = self.funcs[fi].name.clone();
                                 let ts = self.show(h.ty);
-                                self.error_note(
-                                    e.span,
-                                    format!("`{}` does not declare a return type, but returns {}", fname, ts),
-                                    format!("add `: {}` after the parameter list", ts),
-                                );
+                                let fspan = self.funcs[fi].span;
+                                let mut d = Diagnostic::error(e.span, format!("`{}` does not declare a return type, but returns {}", fname, ts));
+                                match self.params_close(fspan) {
+                                    Some(at) => d = d.fix(format!("declare that `{}` returns {}", fname, ts), at, format!(": {}", ts)),
+                                    None => d = d.help(format!("add `: {}` after the parameter list", ts)),
+                                }
+                                self.emit(d);
                             }
                             return vec![Stmt::Expr(h), Stmt::Return(None)];
                         }

@@ -10,7 +10,47 @@ let $out = [];
 let $outLen = 0;
 function $flush() { if ($out.length) { $fs.writeSync(1, $out.join("")); $out = []; $outLen = 0; } }
 function $write(s) { $out.push(s); $outLen += s.length; if ($outLen > 65536) $flush(); }
-function $err(msg, loc) { $flush(); const l = $LOCS[loc]; throw new BurnError(l === undefined ? "runtime error: " + msg : "runtime error: " + msg + "\n  --> " + l); }
+function $errHelp(msg) {
+  let m;
+  if (msg.startsWith("index ") || msg.startsWith("string index ")) {
+    m = /\(length (\d+)/.exec(msg);
+    if (!m) return null;
+    const n = Number(m[1]);
+    return n === 0 ? "it is empty, so there is nothing to read; check `len(...) > 0` first" : "valid indexes go from 0 to " + (n - 1) + "; check the index against `len(...)` first";
+  }
+  if (msg === "division by zero") return "check that the divisor is not 0 before dividing";
+  if (msg === "unexpected null value") return "the value was null; check it with `if (x != null)` instead of using `!!`";
+  if (msg === "cannot index null") return "the value was null; check it with `if (x != null)` before indexing";
+  if (msg.startsWith("key ") && msg.endsWith(" not found in map")) return "check the key with `has(map, key)` first, or pass a default: `get(map, key, fallback)`";
+  if (msg === "pop from empty array") return "check `len(items) > 0` before calling `pop`";
+  if (msg.startsWith("cannot convert ")) return "the text is not a number; check it first or handle the bad input";
+  if (msg.startsWith("cannot cast value")) return "check the type with `is` before casting with `as`";
+  if (msg === "this object was destroyed and can no longer be used") return "another variable or function destroyed this object; do not use it after `destroy`";
+  if (msg === "this object was already destroyed") return "each object can be destroyed only once";
+  if (msg === "function ended without returning a value") return "make sure every path through the function ends with `return`";
+  if (msg.startsWith("stack overflow")) return "a function probably calls itself without ever stopping; check its base case";
+  return null;
+}
+function $srcLine(l) {
+  const m = /^(.*):(\d+):(\d+)$/.exec(l);
+  if (!m || typeof require !== "function") return null;
+  try {
+    const text = require("fs").readFileSync(m[1], "utf8").split("\n")[Number(m[2]) - 1];
+    return text === undefined ? null : [Number(m[2]), Number(m[3]), text.replace(/\r$/, "")];
+  } catch (e) { return null; }
+}
+function $errText(msg, loc) {
+  let out = "runtime error: " + msg;
+  const h = $errHelp(msg), l = $LOCS[loc];
+  if (l === undefined) return h === null ? out : out + "\n  = help: " + h;
+  const s = $srcLine(l);
+  if (s === null) return out + "\n --> " + l + (h === null ? "" : "\n  = help: " + h);
+  const g = " ".repeat(String(s[0]).length);
+  const pad = Array.from(s[2]).slice(0, s[1] - 1).map(c => c === "\t" ? "\t" : " ").join("");
+  out += "\n" + g + "--> " + l + "\n" + g + " |\n" + s[0] + " | " + s[2] + "\n" + g + " | " + pad + "^";
+  return h === null ? out : out + "\n" + g + " = help: " + h;
+}
+function $err(msg, loc) { $flush(); throw new BurnError($errText(msg, loc)); }
 function $d(t) { return $T[t] || ["err"]; }
 function $unboxed(t) { const k = $d(t)[0]; return k === "int" || k === "float" || k === "bool" || k === "enum" || k === "fun" || k === "void"; }
 function $tidOf(v) { if (v instanceof $Box) return v.b; if (v instanceof $Map) return v.t; if (Array.isArray(v) && v.$rec) return v[0]; return K.ERR; }

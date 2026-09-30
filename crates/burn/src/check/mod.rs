@@ -264,16 +264,19 @@ pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
 pub fn edit_distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
-    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut rows: Vec<Vec<usize>> = vec![(0..=b.len()).collect()];
     for i in 1..=a.len() {
         let mut cur = vec![i; b.len() + 1];
         for j in 1..=b.len() {
             let cost = if a[i - 1].eq_ignore_ascii_case(&b[j - 1]) { 0 } else { 1 };
-            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
+            cur[j] = (rows[i - 1][j] + 1).min(cur[j - 1] + 1).min(rows[i - 1][j - 1] + cost);
+            if i > 1 && j > 1 && a[i - 1].eq_ignore_ascii_case(&b[j - 2]) && a[i - 2].eq_ignore_ascii_case(&b[j - 1]) {
+                cur[j] = cur[j].min(rows[i - 2][j - 2] + 1);
+            }
         }
-        prev = cur;
+        rows.push(cur);
     }
-    prev[b.len()]
+    rows[a.len()][b.len()]
 }
 
 pub fn suggest<'b>(name: &str, candidates: impl Iterator<Item = &'b str>) -> Option<String> {
@@ -304,8 +307,75 @@ impl<'a> Checker<'a> {
 
     pub fn error_note(&mut self, span: Span, msg: impl Into<String>, note: impl Into<String>) {
         if !self.is_dry() {
+            self.diags.push(Diagnostic::error(span, msg).help(note));
+        }
+    }
+
+    pub fn error_detail(&mut self, span: Span, msg: impl Into<String>, note: impl Into<String>) {
+        if !self.is_dry() {
             self.diags.push(Diagnostic::error(span, msg).note(note));
         }
+    }
+
+    pub fn wrap_suffix(&self, span: Span, suffix: &str) -> String {
+        let text = self.src_text(span);
+        if text
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '(' | ')' | '[' | ']' | '"'))
+        {
+            format!("{}{}", text, suffix)
+        } else {
+            format!("({}){}", text, suffix)
+        }
+    }
+
+    pub fn params_close(&self, name: Span) -> Option<Span> {
+        if (name.file as usize) >= self.sm.files.len() {
+            return None;
+        }
+        let src = self.sm.file(name.file).src.as_bytes();
+        let mut i = name.end as usize;
+        while i < src.len() && src[i] == b' ' {
+            i += 1;
+        }
+        if src.get(i) != Some(&b'(') {
+            return None;
+        }
+        let mut depth = 0;
+        while i < src.len() {
+            match src[i] {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(Span::new(name.file, i + 1, i + 1));
+                    }
+                }
+                b'\n' | b'{' => return None,
+                _ => {}
+            }
+            i += 1;
+        }
+        None
+    }
+
+    pub fn keyword_before(&self, decl: Span, word: &str) -> Option<Span> {
+        if (decl.file as usize) >= self.sm.files.len() {
+            return None;
+        }
+        let f = self.sm.file(decl.file);
+        let (line, _) = f.line_col(decl.start as usize);
+        let start = f.line_start(line);
+        let before = &f.src[start..decl.start as usize];
+        let i = before.rfind(word)?;
+        let ok_left = i == 0 || !before.as_bytes()[i - 1].is_ascii_alphanumeric();
+        let ok_right = before.as_bytes().get(i + word.len()).map(|c| !c.is_ascii_alphanumeric()).unwrap_or(true);
+        (ok_left && ok_right).then(|| Span::new(decl.file, start + i, start + i + word.len()))
+    }
+
+    pub fn error_fix(&mut self, span: Span, msg: impl Into<String>, replacement: &str) {
+        let d = Diagnostic::error(span, msg).fix(format!("did you mean `{}`?", replacement), span, replacement);
+        self.emit(d);
     }
 
     pub fn emit(&mut self, d: Diagnostic) {
@@ -532,7 +602,7 @@ impl<'a> Checker<'a> {
                     .chain(["int", "float", "string", "bool", "void", "any"].iter().map(|s| s.to_string()))
                     .collect();
                 match suggest(name, cands.iter().map(|s| s.as_str())) {
-                    Some(s) => self.error_note(te.span, format!("unknown type `{}`", name), format!("did you mean `{}`?", s)),
+                    Some(s) => self.error_fix(te.span, format!("unknown type `{}`", name), &s),
                     None => {
                         if self.is_private_elsewhere(module, name) {
                             self.error(te.span, format!("type `{}` is private to its module", name))
@@ -965,11 +1035,12 @@ impl<'a> Checker<'a> {
             );
         }
         if external.is_some() && f.ret.is_none() {
-            self.error_note(
-                f.name.span,
-                format!("@Native function `{}` needs a return type", f.name.name),
-                "write `: void` if it returns nothing",
-            );
+            let mut d = Diagnostic::error(f.name.span, format!("@Native function `{}` needs a return type", f.name.name));
+            match self.params_close(f.name.span) {
+                Some(at) => d = d.maybe_fix("if it returns nothing, say so", at, ": void"),
+                None => d = d.help("write `: void` if it returns nothing"),
+            }
+            self.emit(d);
         }
         let fid = self.funcs.len() as FuncId;
         self.funcs.push(FuncInfo {
@@ -1012,7 +1083,7 @@ impl<'a> Checker<'a> {
                             if ps != m.params || ret != m.ret || is_async != m.is_async {
                                 let want = self.method_sig_str(&m.params, m.ret, m.is_async);
                                 let got = self.method_sig_str(&ps, ret, is_async);
-                                self.error_note(
+                                self.error_detail(
                                     fspan,
                                     format!("method `{}` does not match interface `{}`", m.name, iface.name),
                                     format!("expected `{}` but found `{}`", want, got),

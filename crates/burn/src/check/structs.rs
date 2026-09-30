@@ -509,7 +509,7 @@ impl<'a> Checker<'a> {
                     let want = self.method_sig_str(&pp, pr, pa);
                     let got = self.method_sig_str(&ps, ret, is_async);
                     let pname = self.types.records[p as usize].name.clone();
-                    self.error_note(
+                    self.error_detail(
                         fspan,
                         format!("`{}.{}` does not match `{}.{}`", rec.name, n, pname, n),
                         format!("expected `{}` but found `{}`", want, got),

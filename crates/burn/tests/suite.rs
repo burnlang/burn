@@ -382,3 +382,19 @@ fn bytecode_libraries_run_on_bvm_in_archives_and_in_native_executables() {
     assert!(err.contains("bytecode library"), "{}", err);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn fix_applies_the_compiler_suggestions() {
+    let root = root();
+    let tmp = std::env::temp_dir().join(format!("burn-fix-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let file = tmp.join("input.bn");
+    std::fs::copy(root.join("tests/fix/input.bn"), &file).unwrap();
+    let (out, code) = output(burn().arg("fix").arg(&file));
+    assert_eq!(code, 0, "{}", out);
+    assert!(out.contains("fixed 7 problems"), "{}", out);
+    let got = std::fs::read_to_string(&file).unwrap();
+    let want = std::fs::read_to_string(root.join("tests/fix/expected.bn")).unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert_eq!(got, want);
+}

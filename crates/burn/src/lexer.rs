@@ -321,12 +321,16 @@ impl<'a> Lexer<'a> {
                     _ => {
                         let ch = self.src[self.pos..].chars().next().unwrap_or('?');
                         self.pos += ch.len_utf8();
-                        let msg = match ch {
-                            '&' => "unexpected character `&` (did you mean `&&`?)".to_string(),
-                            '|' => "unexpected character `|` (did you mean `||`?)".to_string(),
-                            _ => format!("unexpected character `{}`", ch),
-                        };
-                        self.error(start, msg);
+                        let span = Span::new(self.file, start, self.pos);
+                        let mut d = Diagnostic::error(span, format!("unexpected character `{}`", ch));
+                        if ch == '&' || ch == '|' {
+                            let op = format!("{}{}", ch, ch);
+                            d = d.fix(format!("use `{}` for logical {}", op, if ch == '&' { "and" } else { "or" }), span, op);
+                            self.diags.push(d);
+                            self.push(if ch == '&' { Tok::AndAnd } else { Tok::OrOr }, start);
+                            continue;
+                        }
+                        self.diags.push(d);
                         continue;
                     }
                 },

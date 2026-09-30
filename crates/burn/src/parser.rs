@@ -111,7 +111,19 @@ impl Parser {
         } else {
             let tok = self.peek().clone();
             let span = if tok.nl_before && self.pos > 0 { self.prev_span() } else { tok.span };
-            self.err(span, format!("expected {} but found {}", what, describe(&tok.kind)));
+            let mut d = Diagnostic::error(span, format!("expected {} but found {}", what, describe(&tok.kind)));
+            let closer = match t {
+                Tok::RParen => Some(")"),
+                Tok::RBracket => Some("]"),
+                _ => None,
+            };
+            if let (Some(c), true) = (closer, tok.nl_before && self.pos > 0) {
+                let end = self.prev_span().end as usize;
+                d = d.maybe_fix(format!("add the missing `{}`", c), Span::new(span.file, end, end), c);
+            }
+            if self.speculative == 0 {
+                self.diags.push(d);
+            }
             Err(())
         }
     }
@@ -259,12 +271,12 @@ impl Parser {
                 let w = w.clone();
                 let span = self.peek().span;
                 if self.speculative == 0 {
-                    self.diags
-                        .push(Diagnostic::error(span, "definitions use the `def` keyword".to_string()).note(format!(
-                            "write `def {} {}` instead",
-                            w,
-                            self.peek_at(1).kind.ident_name()
-                        )));
+                    let at = Span::new(span.file, span.start as usize, span.start as usize);
+                    self.diags.push(Diagnostic::error(span, "definitions use the `def` keyword").fix(
+                        format!("write `def {} {}`", w, self.peek_at(1).kind.ident_name()),
+                        at,
+                        "def ",
+                    ));
                 }
                 ItemKind::Def(self.def()?)
             }
@@ -577,7 +589,11 @@ impl Parser {
                 if kw == "class" {
                     let note = format!("write `def struct {}(...)` and create objects with `new {}(...)`", name.name, name.name);
                     if self.speculative == 0 {
-                        self.diags.push(Diagnostic::error(kw_span, "classes are now structs").note(note));
+                        self.diags.push(Diagnostic::error(kw_span, "classes are now structs").help(note).maybe_fix(
+                            "declare it as a struct",
+                            kw_span,
+                            "struct",
+                        ));
                     }
                 }
                 self.struct_def(name, kind)
