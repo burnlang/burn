@@ -5,7 +5,7 @@ members = ["crates/burn", "crates/burn-runtime", "crates/bvm"]
 [workspace.package]
 version = "26.1.0-experimental-1"
 edition = "2021"
-license = "MIT"
+license = "GPL-3.0-only"
 rust-version = "1.85"
 repository = "https://github.com/burnlang/burn"
 
