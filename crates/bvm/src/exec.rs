@@ -443,6 +443,20 @@ impl Vm {
                 pc = fi.entry as usize;
             }};
         }
+        macro_rules! ret {
+            ($v:expr) => {{
+                let v = $v;
+                sp = bp;
+                if self.frames.len() == stop {
+                    sync!();
+                    return v;
+                }
+                let fr = unsafe { self.frames.pop().unwrap_unchecked() };
+                push!(v);
+                pc = fr.pc as usize;
+                bp = unsafe { s0.add(fr.base as usize) };
+            }};
+        }
         loop {
             let op = unsafe { *ops.get_unchecked(pc) };
             pc += 1;
@@ -615,18 +629,11 @@ impl Vm {
                     }
                     enter!(func)
                 }
-                Op::Ret | Op::RetVoid => {
-                    let v = if op == Op::Ret { pop!() } else { 0 };
-                    sp = bp;
-                    if self.frames.len() == stop {
-                        sync!();
-                        return v;
-                    }
-                    let fr = self.frames.pop().unwrap();
-                    push!(v);
-                    pc = fr.pc as usize;
-                    bp = unsafe { s0.add(fr.base as usize) };
+                Op::Ret => {
+                    let v = pop!();
+                    ret!(v)
                 }
+                Op::RetVoid => ret!(0),
                 Op::Rt(rf) => {
                     let n = rf.argc();
                     sync!();
