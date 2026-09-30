@@ -21,12 +21,12 @@ jobs:
       - run: cargo test --release
       - name: Ember, the example language built on bvm
         run: cargo run --release -p bvm --example ember -- examples/bvm/ember/demo.em
-      - name: Installer smoke test
+      - name: Toolchain smoke test
         run: |
-          ./install.sh --from-source --no-modify-path --prefix "$RUNNER_TEMP/burn"
+          sh scripts/package.sh --prefix "$RUNNER_TEMP/burn"
           "$RUNNER_TEMP/burn/bin/burnfmt" --check examples/*.bn lib/std/*.bn tools/burnfmt/burnfmt.bn
           "$RUNNER_TEMP/burn/bin/burni" examples/fib.bn
           "$RUNNER_TEMP/burn/bin/bvm" examples/bvm/fib.bvm
           "$RUNNER_TEMP/burn/bin/bvm" pack examples/bvm/mixins/app.bvm examples/bvm/mixins/greetlib.bvm examples/bvm/mixins/mods.bvm -o "$RUNNER_TEMP/mixins.bar"
           PATH="$RUNNER_TEMP/burn/bin:$PATH" "$RUNNER_TEMP/mixins.bar"
-          sh "$RUNNER_TEMP/burn/share/burn/install.sh" --uninstall --prefix "$RUNNER_TEMP/burn"
+          cd "$RUNNER_TEMP" && PATH="$RUNNER_TEMP/burn/bin:$PATH" burn init github.com/ci/hello --no-git && cd hello && PATH="$RUNNER_TEMP/burn/bin:$PATH" burn build && ./build/hello

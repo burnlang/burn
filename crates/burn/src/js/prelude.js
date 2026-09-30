@@ -344,6 +344,29 @@ const $R = {
   FileExists: p => $fs.existsSync(p),
   Env: n => process.env[n] || "",
   Args: () => $args.slice(),
+  Exec: (p, a, c) => {
+    if (!c) $flush();
+    const r = $cp.spawnSync(p, a, { stdio: c ? ["inherit", "pipe", "pipe"] : "inherit", maxBuffer: 1 << 28 });
+    if (r.error) return ["-1", "", String(r.error.message)];
+    const code = String(r.status === null ? 1 : r.status);
+    return c ? [code, r.stdout.toString("utf8"), r.stderr.toString("utf8")] : [code, "", ""];
+  },
+  FsOp: (op, a, b) => {
+    try {
+      switch (op) {
+        case "mkdir": $fs.mkdirSync(a, { recursive: true }); return true;
+        case "remove": $fs.rmSync(a, { recursive: true, force: true }); return true;
+        case "rename": $fs.renameSync(a, b); return true;
+        case "copy": $fs.copyFileSync(a, b); return true;
+        case "isDir": return $fs.statSync(a).isDirectory();
+        case "isFile": return $fs.statSync(a).isFile();
+        case "chdir": process.chdir(a); return true;
+        default: return false;
+      }
+    } catch (e) { return false; }
+  },
+  ListDir: p => { try { return $fs.readdirSync(p).sort(); } catch (e) { return []; } },
+  Cwd: () => process.cwd(),
   ExitNow: c => { $flush(); throw new BurnExit(c); },
   Panic: (m, l) => $err(m, l),
   Assert: (c, m, l) => { if (!c) $err("assertion failed: " + m, l); return 0; },

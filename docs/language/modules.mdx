@@ -18,6 +18,8 @@ import (
 ```
 
 - A name without a path (`"date"`, `"std/date"`) refers to the standard library.
+- A package name (`"github.com/owner/project"`) loads an installed package, see
+  [projects and packages](../tooling/packages.mdx).
 - Paths are resolved relative to the importing file first and then to the current directory. `.bn` is optional.
 - Each module is loaded once, and its top level statements run once, before the importing module.
 

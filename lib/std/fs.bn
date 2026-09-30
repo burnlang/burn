@@ -1,0 +1,141 @@
+/**
+ * Works with files and directories.
+ *
+ * Reading and writing file contents uses the built-in `readFile`,
+ * `writeFile`, `appendFile` and `fileExists`; `Files` adds what is needed to
+ * manage whole directories. No function stops the program: failures are
+ * reported by the return value.
+ *
+ * @since 26.1
+ * @example
+ *     Files.makeDir("build/cache")
+ *     for (name in Files.list("src")) {
+ *         print(name)
+ *     }
+ */
+pub def static struct Files {
+    /**
+     * Creates a directory together with any missing parents.
+     *
+     * @param path the directory to create
+     * @return `true` when the directory exists afterwards
+     * @since 26.1
+     * @example
+     *     Files.makeDir("build/cache")
+     */
+    static fun makeDir(path: string): bool {
+        return __fsOp("mkdir", path, "")
+    }
+
+    /**
+     * Removes a file, or a directory with everything in it.
+     *
+     * @param path the file or directory
+     * @return `true` when nothing is left at `path`
+     * @since 26.1
+     * @example
+     *     Files.remove("build")
+     */
+    static fun remove(path: string): bool {
+        return __fsOp("remove", path, "")
+    }
+
+    /**
+     * Moves or renames a file or directory.
+     *
+     * @param from the current path
+     * @param to the new path
+     * @return `true` on success
+     * @since 26.1
+     * @example
+     *     Files.rename("draft.txt", "final.txt")
+     */
+    static fun rename(from: string, to: string): bool {
+        return __fsOp("rename", from, to)
+    }
+
+    /**
+     * Copies a file.
+     *
+     * @param from the file to copy
+     * @param to the path of the copy, replaced if it exists
+     * @return `true` on success
+     * @since 26.1
+     * @example
+     *     Files.copy("burn.toml", "burn.toml.bak")
+     */
+    static fun copy(from: string, to: string): bool {
+        return __fsOp("copy", from, to)
+    }
+
+    /**
+     * Lists the names in a directory, sorted.
+     *
+     * @param path the directory
+     * @return the entry names without the directory, or `[]` if it cannot be read
+     * @since 26.1
+     * @example
+     *     Files.list(".")  // for example ["burn.toml", "src"]
+     */
+    static fun list(path: string): [string] {
+        return __listDir(path)
+    }
+
+    /**
+     * Checks whether a path is a directory.
+     *
+     * @param path the path to check
+     * @return `true` for an existing directory
+     * @see Files.isFile
+     * @since 26.1
+     * @example
+     *     Files.isDir("src")  // true
+     */
+    static fun isDir(path: string): bool {
+        return __fsOp("isDir", path, "")
+    }
+
+    /**
+     * Checks whether a path is a regular file.
+     *
+     * @param path the path to check
+     * @return `true` for an existing file
+     * @see Files.isDir
+     * @since 26.1
+     * @example
+     *     Files.isFile("burn.toml")  // true
+     */
+    static fun isFile(path: string): bool {
+        return __fsOp("isFile", path, "")
+    }
+
+    /**
+     * Joins path parts with `/`.
+     *
+     * Empty parts are skipped and doubled slashes between parts are avoided.
+     *
+     * @param parts the parts to join
+     * @return the joined path
+     * @since 26.1
+     * @example
+     *     Files.join(["build", "out", "app.js"])  // "build/out/app.js"
+     */
+    static fun join(parts: [string]): string {
+        var out = ""
+        for (p in parts) {
+            if (p == "") {
+                continue
+            }
+            if (out == "") {
+                out = p
+            } else if (endsWith(out, "/") && startsWith(p, "/")) {
+                out = out + substring(p, 1)
+            } else if (endsWith(out, "/") || startsWith(p, "/")) {
+                out = out + p
+            } else {
+                out = out + "/" + p
+            }
+        }
+        return out
+    }
+}

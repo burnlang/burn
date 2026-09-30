@@ -1,0 +1,120 @@
+/**
+ * The result of a program run with {@link Process.output}.
+ *
+ * @param code the exit code, `0` on success, or `-1` if the program could not be started
+ * @param out everything the program wrote to standard output
+ * @param err everything the program wrote to standard error, or why it could not be started
+ * @see Process.output
+ * @since 26.1
+ */
+pub def type ProcessOutput {
+    int code
+    string out
+    string err
+}
+
+/**
+ * Runs other programs and works with the current directory.
+ *
+ * Programs are found through `PATH`. {@link Process.run} shares the terminal
+ * with the program, {@link Process.output} collects what it prints. The
+ * `shell` variants hand a whole command line to `sh`, so pipes and `&&` work.
+ *
+ * @see ProcessOutput
+ * @since 26.1
+ * @example
+ *     var code = Process.run("git", ["status"])
+ *     var branch = Process.output("git", ["branch", "--show-current"]).out
+ */
+pub def static struct Process {
+    /**
+     * Runs a program in the terminal and waits for it.
+     *
+     * @param program the program to run
+     * @param args its arguments
+     * @return the exit code, or `-1` if the program could not be started
+     * @see Process.output
+     * @since 26.1
+     * @example
+     *     Process.run("git", ["init"])
+     */
+    static fun run(program: string, args: [string]): int {
+        return toInt(__exec(program, args, false)[0])
+    }
+
+    /**
+     * Runs a program and collects its output.
+     *
+     * @param program the program to run
+     * @param args its arguments
+     * @return the exit code and both outputs
+     * @see Process.run
+     * @since 26.1
+     * @example
+     *     var r = Process.output("git", ["rev-parse", "HEAD"])
+     *     if (r.code == 0) {
+     *         print(trim(r.out))
+     *     }
+     */
+    static fun output(program: string, args: [string]): ProcessOutput {
+        var raw = __exec(program, args, true)
+        return ProcessOutput { code: toInt(raw[0]), out: raw[1], err: raw[2] }
+    }
+
+    /**
+     * Runs a command line with `sh` in the terminal and waits for it.
+     *
+     * @param command the command line, for example `"burnc src/main.bn -o build/app"`
+     * @return the exit code
+     * @see Process.shellOutput
+     * @since 26.1
+     * @example
+     *     Process.shell("ls src | wc -l")
+     */
+    static fun shell(command: string): int {
+        return Process.run("sh", ["-c", command])
+    }
+
+    /**
+     * Runs a command line with `sh` and collects its output.
+     *
+     * @param command the command line
+     * @return the exit code and both outputs
+     * @see Process.shell
+     * @since 26.1
+     * @example
+     *     print(Process.shellOutput("echo $HOME").out)
+     */
+    static fun shellOutput(command: string): ProcessOutput {
+        return Process.output("sh", ["-c", command])
+    }
+
+    /**
+     * Returns the current working directory.
+     *
+     * @return its absolute path
+     * @see Process.setCwd
+     * @since 26.1
+     * @example
+     *     print(Process.cwd())
+     */
+    static fun cwd(): string {
+        return __cwd()
+    }
+
+    /**
+     * Changes the current working directory.
+     *
+     * Relative paths and programs started afterwards use the new directory.
+     *
+     * @param path the new working directory
+     * @return `true` when the directory exists and was entered
+     * @see Process.cwd
+     * @since 26.1
+     * @example
+     *     Process.setCwd("build")
+     */
+    static fun setCwd(path: string): bool {
+        return __fsOp("chdir", path, "")
+    }
+}

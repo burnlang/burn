@@ -1,0 +1,20 @@
+import "fs"
+import "process"
+
+var made = Process.output("mktemp", ["-d"])
+var dir = trim(made.out)
+print(made.code, Files.isDir(dir))
+var nested = Files.join([dir, "a", "b"])
+print(Files.makeDir(nested), Files.isDir(nested), Files.isFile(nested))
+print(writeFile(Files.join([dir, "a", "note.txt"]), "hello"), Files.list(Files.join([dir, "a"])))
+print(Files.copy(dir + "/a/note.txt", dir + "/copy.txt"), readFile(dir + "/copy.txt"))
+print(Files.rename(dir + "/copy.txt", dir + "/moved.txt"), fileExists(dir + "/copy.txt"), fileExists(dir + "/moved.txt"))
+var echo = Process.output("echo", ["one", "two"])
+print(echo.code, trim(echo.out), echo.err == "")
+print(Process.shell("exit 3"), Process.shellOutput("printf hi").out)
+print(Process.output("definitely-not-a-burn-program", []).code)
+var home = Process.cwd()
+print(Process.setCwd(dir), Process.cwd() != home, Process.setCwd(dir + "/missing"))
+Process.setCwd(home)
+print(Files.remove(dir), fileExists(dir), Files.list(dir))
+print(Files.join(["a/", "/b", "", "c"]))

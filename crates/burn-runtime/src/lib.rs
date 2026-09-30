@@ -153,6 +153,10 @@ runtime_fns! {
     FileExists => burn_file_exists = crate::api::file_exists [a];
     Env => burn_env = crate::api::env_var [a];
     Args => burn_args = crate::api::args [];
+    Exec => burn_exec = crate::api::exec [a, b, c];
+    FsOp => burn_fs_op = crate::api::fs_op [a, b, c];
+    ListDir => burn_list_dir = crate::api::list_dir [a];
+    Cwd => burn_cwd = crate::api::cwd [];
     ExitNow => burn_exit_now = crate::api::exit_now [a];
     Panic => burn_panic = crate::api::panic [a, b];
     Assert => burn_assert = crate::api::assert [a, b, c];

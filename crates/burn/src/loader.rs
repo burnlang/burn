@@ -36,6 +36,14 @@ pub const STDLIB: &[Stdlib] = &[
         name: "json",
         src: include_str!("../../../lib/std/json.bn"),
     },
+    Stdlib {
+        name: "process",
+        src: include_str!("../../../lib/std/process.bn"),
+    },
+    Stdlib {
+        name: "fs",
+        src: include_str!("../../../lib/std/fs.bn"),
+    },
 ];
 
 pub fn stdlib_name(path: &str) -> Option<&'static Stdlib> {
@@ -78,6 +86,7 @@ pub struct Loader {
     pub diags: Vec<Diagnostic>,
     by_key: HashMap<String, usize>,
     pub overrides: HashMap<PathBuf, String>,
+    project: Option<Result<crate::project::Project, String>>,
 }
 
 pub fn is_library_path(p: &str) -> bool {
@@ -106,7 +115,50 @@ impl Loader {
             diags: Vec::new(),
             by_key: HashMap::new(),
             overrides: HashMap::new(),
+            project: None,
         }
+    }
+
+    fn project(&mut self, near: Option<&Path>) -> Result<&crate::project::Project, String> {
+        if self.project.is_none() {
+            let start = near.map(|p| p.to_path_buf()).or_else(|| std::env::current_dir().ok()).unwrap_or_default();
+            self.project = Some(match crate::project::find_root(&start) {
+                Some(root) => crate::project::load(&root),
+                None => Err("package imports need a project; create one with `burn init <name>`, which writes burn.toml".into()),
+            });
+        }
+        self.project.as_ref().unwrap().as_ref().map_err(|e| e.clone())
+    }
+
+    fn resolve_package(&mut self, name: &str, sub: &str, base: Option<&Path>) -> Result<usize, String> {
+        let (dir, is_self) = {
+            let project = self.project(base)?;
+            (project.resolve(name)?, project.manifest.name == name)
+        };
+        let file = if sub.is_empty() {
+            if is_self {
+                let p = self.project(base)?;
+                p.main_path()
+            } else {
+                crate::project::package_main(&dir)?
+            }
+        } else {
+            let direct = dir.join(sub);
+            if direct.is_file() {
+                direct
+            } else {
+                dir.join(format!("{}.bn", sub))
+            }
+        };
+        if !file.is_file() && !self.overrides.contains_key(&canonical(&file)) {
+            return Err(format!(
+                "cannot find `{}` in the package `{}` ({})",
+                if sub.is_empty() { "its main file" } else { sub },
+                name,
+                file.display()
+            ));
+        }
+        self.load_file(&file)
     }
 
     fn load_library(&mut self, p: &str, base: Option<&Path>) -> Result<usize, String> {
@@ -141,6 +193,11 @@ impl Loader {
 
     pub fn load_file(&mut self, path: &Path) -> Result<usize, String> {
         let c = canonical(path);
+        if self.modules.is_empty() && self.project.is_none() {
+            if let Some(root) = crate::project::find_root(&c) {
+                self.project = Some(crate::project::load(&root));
+            }
+        }
         let key = c.display().to_string();
         if let Some(i) = self.by_key.get(&key) {
             return Ok(*i);
@@ -215,6 +272,10 @@ impl Loader {
     }
 
     fn resolve_import(&mut self, p: &str, base: Option<&Path>, from_std: bool) -> Result<usize, String> {
+        if let Some((name, sub)) = crate::project::split_package_path(p.trim_end_matches(".bn")) {
+            let sub = if p.ends_with(".bn") && !sub.is_empty() { format!("{}.bn", sub) } else { sub };
+            return self.resolve_package(&name, &sub, base);
+        }
         let mut candidates = Vec::new();
         if let Some(b) = base {
             candidates.push(b.join(p));

@@ -902,6 +902,63 @@ pub fn env_var(name: u64) -> u64 {
     string(&std::env::var(str_ref(name)).unwrap_or_default())
 }
 
+pub fn exec(program: u64, args: u64, capture: u64) -> u64 {
+    let argv: Vec<String> = array_slice(args).iter().map(|a| str_ref(*a).to_string()).collect();
+    let mut cmd = std::process::Command::new(str_ref(program));
+    cmd.args(&argv);
+    let fail = |e: std::io::Error| array_of_strings(&["-1".to_string(), String::new(), e.to_string()]);
+    if capture == 0 {
+        io::flush();
+        return match cmd.status() {
+            Ok(s) => array_of_strings(&[s.code().unwrap_or(1).to_string(), String::new(), String::new()]),
+            Err(e) => fail(e),
+        };
+    }
+    match cmd.output() {
+        Ok(o) => array_of_strings(&[
+            o.status.code().unwrap_or(1).to_string(),
+            String::from_utf8_lossy(&o.stdout).into_owned(),
+            String::from_utf8_lossy(&o.stderr).into_owned(),
+        ]),
+        Err(e) => fail(e),
+    }
+}
+
+pub fn fs_op(op: u64, a: u64, c: u64) -> u64 {
+    use std::path::Path;
+    let (a, c) = (Path::new(str_ref(a)), Path::new(str_ref(c)));
+    b(match str_ref(op) {
+        "mkdir" => std::fs::create_dir_all(a).is_ok(),
+        "remove" => {
+            let r = if a.is_dir() && !a.is_symlink() {
+                std::fs::remove_dir_all(a)
+            } else {
+                std::fs::remove_file(a)
+            };
+            r.is_ok() || std::fs::symlink_metadata(a).is_err()
+        }
+        "rename" => std::fs::rename(a, c).is_ok(),
+        "copy" => std::fs::copy(a, c).is_ok(),
+        "isDir" => a.is_dir(),
+        "isFile" => a.is_file(),
+        "chdir" => std::env::set_current_dir(a).is_ok(),
+        _ => false,
+    })
+}
+
+pub fn list_dir(path: u64) -> u64 {
+    let mut names: Vec<String> = match std::fs::read_dir(str_ref(path)) {
+        Ok(rd) => rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect(),
+        Err(_) => Vec::new(),
+    };
+    names.sort();
+    array_of_strings(&names)
+}
+
+pub fn cwd() -> u64 {
+    string(&std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default())
+}
+
 pub fn args() -> u64 {
     array_of_strings(&io::args())
 }

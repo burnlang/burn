@@ -1,5 +1,5 @@
 ---
-title: std/math, std/strings and std/json
+title: std/math, std/strings, std/json, std/process and std/fs
 description: Smaller standard library modules.
 order: 14
 ---
@@ -25,3 +25,49 @@ print("7".padLeft(3, "0"), "burn".capitalize())
 
 The `JSON` static struct wraps the built-ins: `JSON.parse`, `JSON.stringify`, `JSON.get(value, key)`,
 `JSON.at(value, index)`, `JSON.isObject`, `JSON.isArray`.
+
+# `std/process`
+
+Runs other programs. `Process.run(program, args)` shares the terminal and returns the exit code,
+`Process.output(program, args)` collects what the program prints into a `ProcessOutput` (`code`, `out`, `err`).
+`Process.shell(command)` and `Process.shellOutput(command)` hand a whole command line to `sh`, so pipes work.
+`Process.cwd()` and `Process.setCwd(path)` read and change the working directory. A program that cannot be
+started gives the exit code `-1`.
+
+```burn
+import "process"
+
+var status = Process.output("git", ["status", "--short"])
+if (status.code == 0 && trim(status.out) == "") {
+    print("clean")
+}
+Process.shell("ls src | wc -l")
+```
+
+# `std/fs`
+
+`Files` manages files and folders; reading and writing contents stays with the built-in `readFile`,
+`writeFile`, `appendFile` and `fileExists`. `Files.makeDir` creates parents too, `Files.remove` deletes files and
+whole folders, and `Files.list` returns sorted names. Nothing stops the program: every function reports failure
+with its return value.
+
+```burn
+import "fs"
+
+Files.makeDir("build/cache")
+for (name in Files.list("src")) {
+    if (Files.isFile(Files.join(["src", name]))) {
+        print(name)
+    }
+}
+Files.remove("build")
+```
+
+| Function | Result |
+| --- | --- |
+| `Files.makeDir(path)` | `true` when the folder exists afterwards |
+| `Files.remove(path)` | `true` when nothing is left at `path` |
+| `Files.rename(from, to)`, `Files.copy(from, to)` | `true` on success |
+| `Files.list(path)` | the sorted names in a folder, `[]` if it cannot be read |
+| `Files.isDir(path)`, `Files.isFile(path)` | what is at `path` |
+| `Files.join(parts)` | the parts joined with single `/` |

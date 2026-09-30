@@ -1,0 +1,157 @@
+---
+title: Projects and packages
+description: burn init, burn.toml, burn.lock, package imports and the ash package manager.
+order: 20
+---
+
+# Projects and packages
+
+A Burn project is a folder with a `burn.toml`. Projects share code as packages: any git repository with a
+`burn.toml` at the top is one, named after where it lives.
+
+```text
+github.com/owner/project
+└──┬─────┘ └─┬─┘ └──┬──┘
+ domain    owner  project
+```
+
+There is nothing to register. Push the code, tag a version, and everyone can install it with
+[ash](https://github.com/burnlang/ash), the package manager, which comes with the toolchain.
+
+## Creating a project
+
+```sh
+burn init github.com/you/hello                 # a native app
+burn init github.com/you/hello --target js     # an app that builds to a Node.js script
+burn init github.com/you/hello --target bvm    # an app that builds to bvm bytecode
+burn init github.com/you/colors --lib          # a library
+```
+
+`ash init` does the same. An app gets `src/main.bn`, a library gets `src/lib.bn` and a test in `tests/main.bn`.
+Both get a `burn.toml`, a `.gitignore`, a `README.md` and a git repository (skip it with `--no-git`). Pass a
+directory after the name to create the project somewhere else, or `.` for the current folder.
+
+Inside a project, `burn` commands work without a file name:
+
+| Command | What it does |
+| --- | --- |
+| `burn run [args]` | run `main` on bvm; `--native` compiles it first |
+| `burn build` | build `main` for the project's target into `build/`; `--target` overrides it |
+| `burn check` | type-check the project |
+
+## burn.toml
+
+```toml
+[package]
+name = "github.com/you/hello"
+version = "0.1.0"
+kind = "app"
+target = "native"
+main = "src/main.bn"
+description = "Says hello"
+
+[dependencies]
+"github.com/you/colors" = "^1.2"
+"github.com/you/local" = { path = "../local" }
+"example.org/team/tool" = { version = "^0.3", git = "https://example.org/team/tool.git" }
+
+[scripts]
+dev = "burni src/main.bn"
+release = "burnc src/main.bn -o build/hello"
+start = "./build/hello"
+```
+
+| Key | Meaning |
+| --- | --- |
+| `name` | where the code lives: `<domain>.<tld>/<owner>/<project>` |
+| `version` | the version, tagged in git as `v<version>` when it is published |
+| `kind` | `"app"` (a program) or `"lib"` (a library that others import) |
+| `target` | what `burn build` makes: `"native"`, `"js"` or `"bvm"` |
+| `main` | the entry file (default `src/main.bn`, or `src/lib.bn` for a library) |
+| `output` | where `burn build` writes, relative to the project (default `build/<project>`) |
+| `[dependencies]` | packages, with a version, or a table with `version`, `git` and `path` |
+| `[scripts]` | shell commands for `ash run <name>`, or just `ash <name>` |
+
+## Installing packages
+
+```sh
+ash install github.com/you/colors          # newest version, saved as "^x.y.z"
+ash install github.com/you/colors@1.2      # a version range
+ash install github.com/you/colors@main     # a branch
+ash install ../local                       # a folder on this machine
+ash install                                # everything in burn.toml, as burn.lock pins it
+ash update                                 # newest versions burn.toml allows
+ash remove github.com/you/colors
+ash list                                   # the installed packages as a tree
+```
+
+Versions are git tags such as `v1.2.0`:
+
+| Written | Allows |
+| --- | --- |
+| `"^1.2"` | `1.2.0` up to, not including, `2.0.0` |
+| `"~1.2"` | `1.2.x` |
+| `"=1.2.3"` | exactly `1.2.3` |
+| `">=1.2"` | `1.2.0` and anything newer |
+| `"*"` | the newest version, or the newest commit when there are no tags |
+| `"main"` | the newest commit on a branch |
+| `"#1a2b3c"` | one exact commit |
+
+## burn.lock
+
+`burn.lock` is the index of what is installed: the exact commit of every package, including the packages your
+packages need. ash writes it; commit it so everyone builds the same code.
+
+```toml
+version = 1
+
+[[package]]
+name = "github.com/you/colors"
+version = "v1.2.0"
+rev = "4f1c2b0e9a7d3c5b8e6f1a2d3c4b5a6f7e8d9c0b"
+source = "git+https://github.com/you/colors"
+dependencies = []
+```
+
+Downloads are kept in `~/.burn/packages/<name>@<commit>`, so each version is fetched once and shared by every
+project. Local packages (`source = "path+../local"`) are used where they are.
+
+## Importing a package
+
+```burn
+import "github.com/you/colors"
+import "github.com/you/colors/src/extra"
+
+print(paint("hello"))
+```
+
+The package name loads the package's `main` file; a longer path loads another file from it. The compiler finds
+packages through `burn.lock`, so imports never touch the network. A project can import its own files by its name
+too, which is how a library's tests use it: `import "github.com/you/colors"`.
+
+## Scripts and commands
+
+```sh
+ash run release      # run a script from burn.toml
+ash release          # the same, when no ash command has that name
+ash build            # the build script, or burn build
+ash start            # the start script, or burn run
+ash test             # the test script, or every file in tests/
+ash install -g github.com/you/tool    # build an app and install it as a command in ~/.burn/bin
+```
+
+## Publishing
+
+```sh
+ash publish --tag
+```
+
+checks that the project type-checks, that git's `origin` matches the package name and that nothing is
+uncommitted, then tags `v<version>` and pushes the tag. From then on `ash install <name>` works for everyone.
+To be found by `ash search`, add an entry to the [ash index](https://github.com/burnlang/ash-index).
+
+## The standard library for tools
+
+`std/process` and `std/fs` give Burn programs what tools like ash need: running programs (`Process.run`,
+`Process.output`, `Process.shell`), the working directory, and managing files and folders (`Files.makeDir`,
+`Files.list`, `Files.remove`, ...). See [the standard library](../stdlib/more.mdx#stdprocess).
