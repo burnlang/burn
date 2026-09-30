@@ -148,7 +148,10 @@ ash publish --tag
 
 checks that the project type-checks, that git's `origin` matches the package name and that nothing is
 uncommitted, then tags `v<version>` and pushes the tag. From then on `ash install <name>` works for everyone.
-To be found by `ash search`, add an entry to the [ash index](https://github.com/burnlang/ash-index).
+To be found by `ash search`, open an
+[Add a package issue](https://github.com/burnlang/ash-index/issues/new?template=add-package.yml) on the ash index
+with the git URL. A check clones the repository, confirms that it is a Burn project named after where it is
+hosted, and the burnt bot adds it and closes the issue; if something is missing, the bot says what in the issue.
 
 ## The standard library for tools
 
