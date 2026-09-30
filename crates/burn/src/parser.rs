@@ -687,10 +687,35 @@ impl Parser {
             }
             self.expect(Tok::RParen, "`)` to close the constructor parameters")?;
         }
+        let mut extends = None;
         let mut supers = Vec::new();
         if self.eat(&Tok::Colon) {
+            let s = self.ident("the name of the struct to extend")?;
+            let args = if self.at(&Tok::LParen) && !self.peek().nl_before {
+                Some(self.call_args()?)
+            } else {
+                None
+            };
+            extends = Some((s, args));
+            if self.eat(&Tok::Comma) {
+                while matches!(self.peek().kind, Tok::Ident(_)) {
+                    let s = self.ident("a name")?;
+                    let args = if self.at(&Tok::LParen) && !self.peek().nl_before {
+                        Some(self.call_args()?)
+                    } else {
+                        None
+                    };
+                    supers.push((s, args));
+                    if !self.eat(&Tok::Comma) {
+                        break;
+                    }
+                }
+            }
+        }
+        let colon_extra = supers.len();
+        if self.eat(&Tok::ColonColon) {
             loop {
-                let s = self.ident("a struct or interface name")?;
+                let s = self.ident("an interface or abstract struct name")?;
                 let args = if self.at(&Tok::LParen) && !self.peek().nl_before {
                     Some(self.call_args()?)
                 } else {
@@ -786,7 +811,9 @@ impl Parser {
             kind,
             params,
             param_anns,
+            extends,
             supers,
+            colon_extra,
             fields,
             methods,
             statics,
@@ -996,8 +1023,11 @@ impl Parser {
             Tok::Ident(_) | Tok::LBracket | Tok::Fun | Tok::LBrace => {}
             _ => return false,
         }
-        if let Tok::Ident(_) = self.peek().kind {
+        if let Tok::Ident(first) = &self.peek().kind {
             if let Tok::Ident(_) = self.peek_at(1).kind {
+                if first == "new" && self.peek_at(2).kind == Tok::LParen {
+                    return false;
+                }
                 return !self.peek_at(1).nl_before;
             }
             if !matches!(self.peek_at(1).kind, Tok::Question | Tok::Lt) {

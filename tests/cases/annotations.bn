@@ -17,14 +17,14 @@ def interface Named {
 @Table("users", version: 3)
 @Getter
 @Setter
-def struct User(name: string, age: int, admin: bool): Named {
+def struct User(name: string, age: int, admin: bool) :: Named {
     fun label(): string {
         return "user " + name
     }
 }
 
 @Tag("gadget", weight: 2, note: "shiny")
-def struct Gadget(@Getter model: string, price: int): Named {
+def struct Gadget(@Getter model: string, price: int) :: Named {
     fun label(): string {
         return "gadget " + model
     }

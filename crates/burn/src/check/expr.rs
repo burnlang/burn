@@ -415,7 +415,9 @@ impl<'a> Checker<'a> {
             return h;
         }
         if let Some((st, i, ft)) = self.self_field(name) {
-            let sp = self.types.record_of(st).unwrap().fields[i].span;
+            let rec = self.types.record_of(st).unwrap().clone();
+            self.check_field_access(&rec, i, span);
+            let sp = rec.fields[i].span;
             self.def_link(span, sp);
             let t = self.show(ft);
             self.hover(span, format!("(field) {}: {}", name, t));
@@ -694,6 +696,8 @@ impl<'a> Checker<'a> {
                     return Place::Local(l.slot, t);
                 }
                 if let Some((st, i, ft)) = self.self_field(name) {
+                    let rec = self.types.record_of(st).unwrap().clone();
+                    self.check_field_access(&rec, i, target.span);
                     return Place::Field(Expr::new(ExprKind::Local(0), st), i as u32, ft);
                 }
                 if let Some(owner) = self.static_owner_rec() {
@@ -1062,11 +1066,7 @@ impl<'a> Checker<'a> {
                             _ => 0,
                         };
                         let method = rec.methods.get(name).copied();
-                        let vslot = if rec.is_abstract {
-                            self.vslots.get(&(ri, name.clone())).copied()
-                        } else {
-                            None
-                        };
+                        let vslot = self.vslots.get(&(ri, name.clone())).copied();
                         let stat = rec.statics.get(name).copied();
                         let m = self.cur_module();
                         let has_outer = builtins::is_builtin(name) || self.lookup_value_entry(m, name).is_some();

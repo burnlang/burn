@@ -16,13 +16,13 @@ def interface Op {
     fun apply(x: int): int
 }
 
-def struct Add(n: int): Op {
+def struct Add(n: int) :: Op {
     fun apply(x: int): int {
         return x + n
     }
 }
 
-def struct Mul(n: int): Op {
+def struct Mul(n: int) :: Op {
     fun apply(x: int): int {
         return x * n
     }

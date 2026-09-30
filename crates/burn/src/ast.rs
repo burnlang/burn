@@ -80,6 +80,8 @@ pub struct Field {
     pub annotations: Vec<Annotation>,
 }
 
+pub type SuperRef = (Ident, Option<Vec<Expr>>);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StructKind {
     Normal,
@@ -115,7 +117,9 @@ pub enum Def {
         kind: StructKind,
         params: Vec<Param>,
         param_anns: Vec<Vec<Annotation>>,
+        extends: Option<(Ident, Option<Vec<Expr>>)>,
         supers: Vec<(Ident, Option<Vec<Expr>>)>,
+        colon_extra: usize,
         fields: Vec<Field>,
         methods: Vec<(Vis, FunDecl)>,
         statics: Vec<StaticVal>,

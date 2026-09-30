@@ -26,3 +26,12 @@ bye Tweety
 closing data.txt because done
 <destroyed File>
 true next.txt
+init Animal Bit
+Bit says yip on 4 legs mixed
+yip
+init Animal Nib
+puppy Nib
+puppy aged 1
+hi from base 1
+hi from derived 2 3
+Derived { x: 4, y: 5 }

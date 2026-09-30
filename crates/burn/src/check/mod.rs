@@ -308,6 +308,20 @@ impl<'a> Checker<'a> {
         }
     }
 
+    pub fn emit(&mut self, d: Diagnostic) {
+        if !self.is_dry() {
+            self.diags.push(d);
+        }
+    }
+
+    pub fn src_text(&self, span: Span) -> String {
+        if (span.file as usize) < self.sm.files.len() {
+            self.sm.file(span.file).text(span).to_string()
+        } else {
+            String::new()
+        }
+    }
+
     pub fn warn(&mut self, span: Span, msg: impl Into<String>) {
         if !self.is_dry() {
             self.diags.push(Diagnostic::warning(span, msg));
@@ -843,12 +857,14 @@ impl<'a> Checker<'a> {
                     name,
                     kind,
                     params,
+                    extends,
                     supers,
+                    colon_extra,
                     statics,
                     ..
                 } = d
                 {
-                    self.fill_struct(mi, ri, name, *kind, params, supers, statics, pdecl);
+                    self.fill_struct(mi, ri, name, *kind, params, (extends, supers, *colon_extra), statics, pdecl);
                 }
             }
             Def::Interface { methods, .. } => {

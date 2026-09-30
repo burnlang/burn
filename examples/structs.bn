@@ -18,13 +18,13 @@ def abstract struct Pet(name: string) {
     }
 }
 
-def struct Dog(name: string, breed: string): Pet(name) {
+def struct Dog(name: string, breed: string) :: Pet(name) {
     fun sound(): string {
         return "Woof!"
     }
 }
 
-def struct Cat(name: string): Pet(name) {
+def struct Cat(name: string) :: Pet(name) {
     fun init() {
         walks = 1
     }

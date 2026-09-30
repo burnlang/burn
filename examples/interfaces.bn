@@ -3,7 +3,7 @@ def interface Shape {
     fun name(): string
 }
 
-def struct Circle(radius: float): Shape {
+def struct Circle(radius: float) :: Shape {
     fun area(): float {
         return 3.14159 * radius * radius
     }
@@ -13,7 +13,7 @@ def struct Circle(radius: float): Shape {
     }
 }
 
-def struct Square(side: float): Shape {
+def struct Square(side: float) :: Shape {
     fun area(): float {
         return side * side
     }

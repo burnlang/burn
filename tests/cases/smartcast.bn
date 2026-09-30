@@ -39,7 +39,7 @@ def interface Animal {
     fun sound(): string
 }
 
-def struct Dog(name: string): Animal {
+def struct Dog(name: string) :: Animal {
     fun sound(): string {
         return "woof"
     }
@@ -49,7 +49,7 @@ def struct Dog(name: string): Animal {
     }
 }
 
-def struct Cat: Animal {
+def struct Cat :: Animal {
     fun sound(): string {
         return "meow"
     }

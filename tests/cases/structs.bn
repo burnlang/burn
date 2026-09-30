@@ -7,7 +7,7 @@ def interface Named {
     fun name(): string
 }
 
-def struct Circle(radius: float): Shape, Named {
+def struct Circle(radius: float) :: Shape, Named {
     fun area(): float {
         return 3.14159 * radius * radius
     }
@@ -17,7 +17,7 @@ def struct Circle(radius: float): Shape, Named {
     }
 }
 
-def struct Rect(w: float, h: float): Shape {
+def struct Rect(w: float, h: float) :: Shape {
     fun area(): float {
         return w * h
     }
@@ -83,13 +83,13 @@ def abstract struct Animal(name: string) {
     }
 }
 
-def struct Dog(name: string, breed: string): Animal(name) {
+def struct Dog(name: string, breed: string) :: Animal(name) {
     fun sound(): string {
         return "woof"
     }
 }
 
-def struct Bird(name: string): Animal(name) {
+def struct Bird(name: string) :: Animal(name) {
     fun init() {
         legs = 2
         print("init Bird", name)
@@ -192,3 +192,51 @@ destroy f("done")
 print(g)
 f = new File("next.txt")
 print(f.open, f.path)
+
+def interface Tagged {
+    fun tagLine(): string
+}
+
+def struct Puppy(name: string) : Dog(name, "mixed") :: Tagged {
+    int age = 1
+
+    fun sound(): string {
+        return "yip"
+    }
+
+    fun tagLine(): string {
+        return "puppy " + name
+    }
+}
+
+def struct Base(x: int) {
+    fun hi(): string {
+        return "hi from " + who()
+    }
+
+    fun who(): string {
+        return "base ${x}"
+    }
+}
+
+def struct Derived(x: int, y: int) : Base(x) {
+    fun who(): string {
+        return "derived ${x} ${y}"
+    }
+}
+
+Dog bit = new Puppy("Bit")
+print(bit.describe(), bit.breed)
+Animal an = bit
+print(an.sound())
+Tagged tagged = new Puppy("Nib")
+print(tagged.tagLine())
+if (bit is Puppy) {
+    print("puppy aged", bit.age)
+}
+var bases: [Base] = [new Base(1), new Derived(2, 3)]
+for b in bases {
+    print(b.hi())
+}
+new Base(9)
+print(new Derived(4, 5))

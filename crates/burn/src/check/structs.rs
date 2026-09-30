@@ -1,5 +1,6 @@
 use super::*;
 use crate::ast::ExprKind as A;
+use crate::diag::Diagnostic;
 
 fn literal_type(e: &ast::Expr) -> Option<TyId> {
     match &e.kind {
@@ -14,6 +15,54 @@ fn literal_type(e: &ast::Expr) -> Option<TyId> {
 
 impl<'a> Checker<'a> {
     #[allow(clippy::too_many_arguments)]
+    fn operator_span(&self, name: Span) -> Option<Span> {
+        let f = self.sm.file(name.file);
+        let bytes = f.src.as_bytes();
+        let mut i = name.start as usize;
+        while i > 0 && (bytes[i - 1] == b' ' || bytes[i - 1] == b'\t') {
+            i -= 1;
+        }
+        if i >= 2 && bytes[i - 1] == b':' && bytes[i - 2] == b':' {
+            return Some(Span::new(name.file, i - 2, i));
+        }
+        if i >= 1 && bytes[i - 1] == b':' {
+            return Some(Span::new(name.file, i - 1, i));
+        }
+        None
+    }
+
+    fn comma_before(&self, name: Span) -> Option<Span> {
+        let f = self.sm.file(name.file);
+        let bytes = f.src.as_bytes();
+        let mut i = name.start as usize;
+        while i > 0 && (bytes[i - 1] == b' ' || bytes[i - 1] == b'\t') {
+            i -= 1;
+        }
+        (i >= 1 && bytes[i - 1] == b',').then(|| Span::new(name.file, i - 1, i))
+    }
+
+    fn struct_or_error(&mut self, mi: usize, s: &ast::Ident) -> bool {
+        let saved = self.diags.len();
+        let r = match self.lookup_type_name(mi, &s.name, s.span) {
+            Some(t) => match self.types.get(t) {
+                Ty::Record(r) => !self.types.records[*r as usize].is_abstract,
+                _ => false,
+            },
+            None => true,
+        };
+        self.diags.truncate(saved);
+        r
+    }
+
+    fn wrong_operator(&mut self, s: &ast::Ident, msg: String, want: &str) {
+        let mut d = Diagnostic::error(s.span, msg);
+        if let Some(op) = self.operator_span(s.span) {
+            d = d.fix(format!("write `{} {}`", want, s.name), op, want);
+        }
+        self.emit(d);
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn fill_struct(
         &mut self,
         mi: usize,
@@ -21,55 +70,113 @@ impl<'a> Checker<'a> {
         name: &ast::Ident,
         kind: ast::StructKind,
         params: &[ast::Param],
-        supers: &[(ast::Ident, Option<Vec<ast::Expr>>)],
+        heads: (&Option<ast::SuperRef>, &[ast::SuperRef], usize),
         statics: &[ast::StaticVal],
         pdecl: Vec<(String, TyId, Span)>,
     ) {
         let mut impls = Vec::new();
-        let mut parent = None;
+        let mut parent: Option<u32> = None;
         let mut super_args = None;
         let mut super_span = name.span;
-        for (s, args) in supers {
-            match self.lookup_type_name(mi, &s.name, s.span) {
-                Some(it) => match self.types.get(it).clone() {
-                    Ty::Interface(ii) => {
-                        if args.is_some() {
-                            self.error_note(
-                                s.span,
-                                format!("interface `{}` has no constructor", s.name),
-                                format!("write `: {}` without arguments", s.name),
-                            );
-                        }
-                        impls.push(ii);
+        let (extends, supers, colon_extra) = heads;
+        let mut extends_struct = false;
+        let all = extends
+            .iter()
+            .map(|e| (e, true, false))
+            .chain(supers.iter().enumerate().map(|(i, e)| (e, false, i < colon_extra)));
+        for ((s, args), single, listed) in all {
+            if listed {
+                if extends_struct && !self.struct_or_error(mi, s) {
+                    let mut d = Diagnostic::error(s.span, "a struct can extend only one struct").help("interfaces and abstract structs are listed after `::`");
+                    if let Some(comma) = self.comma_before(s.span).filter(|_| supers.first().map(|x| x.0.span) == Some(s.span)) {
+                        d = d.fix("list them after `::`", comma, " ::");
                     }
-                    Ty::Record(pri) => {
-                        let prec = &self.types.records[pri as usize];
-                        let (is_class, is_abstract) = (prec.is_class, prec.is_abstract);
-                        if !is_class {
-                            self.error(s.span, format!("`{}` is a type, not a struct, so it cannot be extended", s.name));
-                        } else if !is_abstract {
-                            self.error_note(
-                                s.span,
-                                format!("`{}` is not abstract, so no struct can extend it", s.name),
-                                format!("declare it as `def abstract struct {}`", s.name),
-                            );
-                        } else if kind == ast::StructKind::Static {
-                            self.error(s.span, "static structs cannot extend other structs");
-                        } else if parent.is_some() {
-                            self.error(s.span, "a struct can extend only one abstract struct");
+                    self.emit(d);
+                    extends_struct = false;
+                } else if !extends_struct {
+                    let _ = self.lookup_type_name(mi, &s.name, s.span).map(|it| {
+                        if let Ty::Interface(ii) = self.types.get(it).clone() {
+                            impls.push(ii);
+                        }
+                    });
+                    continue;
+                }
+            }
+            let Some(it) = self.lookup_type_name(mi, &s.name, s.span) else {
+                let cands: Vec<String> = self.mods[mi].types.keys().cloned().collect();
+                let mut d = Diagnostic::error(s.span, format!("unknown struct or interface `{}`", s.name));
+                if let Some(c) = suggest(&s.name, cands.iter().map(|x| x.as_str())) {
+                    d = d.fix(format!("a type with a similar name exists: `{}`", c), s.span, c);
+                }
+                self.emit(d);
+                continue;
+            };
+            match self.types.get(it).clone() {
+                Ty::Interface(ii) => {
+                    if single {
+                        self.wrong_operator(s, format!("`{}` is an interface, so it is used with `::`", s.name), "::");
+                    }
+                    if args.is_some() {
+                        self.emit(
+                            Diagnostic::error(s.span, format!("interface `{}` has no constructor", s.name))
+                                .help(format!("write `:: {}` without arguments", s.name)),
+                        );
+                    }
+                    impls.push(ii);
+                }
+                Ty::Record(pri) => {
+                    let prec = &self.types.records[pri as usize];
+                    let (is_class, is_abstract, is_static) = (prec.is_class, prec.is_abstract, prec.is_static);
+                    if !is_class {
+                        self.emit(
+                            Diagnostic::error(s.span, format!("`{}` is a type, not a struct, so it cannot be extended", s.name))
+                                .help(format!("declare it with `def struct {}(...)` to make it extendable", s.name)),
+                        );
+                        continue;
+                    }
+                    if is_static {
+                        self.error(s.span, format!("`{}` is a static struct and has no objects, so it cannot be extended", s.name));
+                        continue;
+                    }
+                    if kind == ast::StructKind::Static {
+                        self.error(s.span, "static structs cannot extend other structs");
+                        continue;
+                    }
+                    if single && !is_abstract {
+                        extends_struct = true;
+                    }
+                    if single && is_abstract {
+                        self.wrong_operator(s, format!("`{}` is an abstract struct, so it is used with `::`", s.name), "::");
+                    } else if !single && !is_abstract {
+                        if extends.is_none() && supers.first().map(|x| x.0.span) == Some(s.span) {
+                            self.wrong_operator(s, format!("`{}` is a struct, so it is extended with `:`", s.name), ":");
                         } else {
-                            parent = Some(pri);
-                            super_args = args.clone();
-                            super_span = s.span;
+                            self.emit(
+                                Diagnostic::error(s.span, format!("`{}` is a struct, so it is extended with `:`", s.name))
+                                    .help("write the struct to extend first: `def struct Name : Parent :: Interface`"),
+                            );
                         }
                     }
-                    Ty::Error => {}
-                    _ => {
-                        let t = self.show(it);
-                        self.error(s.span, format!("`{}` is not a struct or an interface", t));
+                    if let Some(p) = parent {
+                        let pn = self.types.records[p as usize].name.clone();
+                        self.emit(
+                            Diagnostic::error(
+                                s.span,
+                                format!("a struct extends at most one struct, and `{}` already extends `{}`", name.name, pn),
+                            )
+                            .help("share code through interfaces, or extend one struct from the other"),
+                        );
+                        continue;
                     }
-                },
-                None => self.error(s.span, format!("unknown struct or interface `{}`", s.name)),
+                    parent = Some(pri);
+                    super_args = args.clone();
+                    super_span = s.span;
+                }
+                Ty::Error => {}
+                _ => {
+                    let t = self.show(it);
+                    self.error(s.span, format!("`{}` is not a struct or an interface", t));
+                }
             }
         }
         if kind == ast::StructKind::Static {
@@ -340,8 +447,9 @@ impl<'a> Checker<'a> {
                 self.types.records[ri as usize].static_vals.entry(n.clone()).or_insert(*g);
             }
         }
+        let parents: HashSet<u32> = order.iter().filter_map(|r| self.types.records[*r as usize].parent).collect();
         for &ri in &order {
-            if !self.types.records[ri as usize].is_abstract {
+            if !self.types.records[ri as usize].is_abstract && !parents.contains(&ri) {
                 continue;
             }
             let rec = self.types.records[ri as usize].clone();
@@ -369,8 +477,21 @@ impl<'a> Checker<'a> {
             }
         }
         for &ri in &order {
-            let Some(p) = self.types.records[ri as usize].parent else { continue };
             let rec = self.types.records[ri as usize].clone();
+            if !rec.is_abstract && !rec.is_static {
+                let mut chain = vec![ri];
+                chain.extend(self.types.ancestors(ri));
+                for a in chain {
+                    let mut names: Vec<(String, u32)> = self.vslots.iter().filter(|((r, _), _)| *r == a).map(|((_, n), s)| (n.clone(), *s)).collect();
+                    names.sort();
+                    for (n, slot) in names {
+                        if let Some(fid) = rec.methods.get(&n) {
+                            self.slots[slot as usize].impls.push((rec.ty, *fid));
+                        }
+                    }
+                }
+            }
+            let Some(p) = rec.parent else { continue };
             let mut own: Vec<(String, FuncId)> = rec
                 .methods
                 .iter()
@@ -420,14 +541,6 @@ impl<'a> Checker<'a> {
                     format!("struct `{}` does not implement abstract method `{}.{}`", rec.name, owner, n),
                     format!("add `{}` with a body", want.replacen("fun(", &format!("fun {}(", n), 1)),
                 );
-            }
-            for a in self.types.ancestors(ri) {
-                let names: Vec<(String, u32)> = self.vslots.iter().filter(|((r, _), _)| *r == a).map(|((_, n), s)| (n.clone(), *s)).collect();
-                for (n, slot) in names {
-                    if let Some(fid) = rec.methods.get(&n) {
-                        self.slots[slot as usize].impls.push((rec.ty, *fid));
-                    }
-                }
             }
         }
     }
@@ -736,10 +849,8 @@ impl<'a> Checker<'a> {
 
     pub fn struct_method(&mut self, ri: u32, name: &ast::Ident, recv: Expr, args: &[ast::Expr], span: Span) -> Option<Expr> {
         let rec = &self.types.records[ri as usize];
-        if rec.is_abstract {
-            if let Some(slot) = self.vslots.get(&(ri, name.name.clone())).copied() {
-                return Some(self.virtual_call(ri, slot, name, recv, args, span));
-            }
+        if let Some(slot) = self.vslots.get(&(ri, name.name.clone())).copied() {
+            return Some(self.virtual_call(ri, slot, name, recv, args, span));
         }
         let fid = rec.methods.get(&name.name).copied()?;
         Some(self.direct_call(fid, Some(recv), args, span, name.span))
