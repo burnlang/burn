@@ -17,6 +17,7 @@
 - bvm: linking, `.bar` archives, mixins (`@Inject`, `@Overwrite`, `@Redirect`) and a native bridge
 - Annotations: `def annotation`, `@Getter`, `@Setter`, `@Deprecated`, `@Export`, `@Native`, `annotationsOf`
 - Bytecode libraries in Burn (`import "lib.bvmc"`) on bvm, in archives and in native executables
+- Package manager: ash, `burn init`, `burn.toml`, `burn.lock` and package imports; burnup installs the toolchain
 
 ## Next
 
@@ -25,7 +26,6 @@
 - Generics for user-defined types and functions
 - `when`/`match` expressions
 - Precise (non-conservative) garbage collection and generational allocation
-- Package manager
 - Self-hosting (the formatter is the first tool written in Burn)
 - Windows installer
 - bvm: a JIT or threaded-code dispatch and a debugger

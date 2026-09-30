@@ -1,39 +1,39 @@
 ---
 title: Installation
-description: Install the Burn toolchain with the installer script, from a release, or by hand.
+description: Install, update and uninstall the Burn toolchain with burnup.
 order: 19
 ---
 
 # Installation
 
-The Burn toolchain is six commands:
+The Burn toolchain is installed and updated by [burnup](https://github.com/burnlang/burnup):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/burnlang/burnup/master/install.sh | sh
+```
+
+It installs these commands into `~/.burn/bin`:
 
 | Command | What it is |
 | --- | --- |
-| `burn` | the all-in-one driver: run, build, check, fmt, repl, lsp |
+| `burn` | the all-in-one driver: run, build, check, fmt, init, repl, lsp |
 | `burni` | the interpreter: runs programs on bvm and starts the REPL |
 | `burnc` | the compiler: native executables, JavaScript and bvm bytecode |
 | `burnfmt` | the code formatter, written in Burn itself |
 | `burn-lsp` | the language server for editors |
 | `bvm` | the Burn virtual machine: runs, assembles and inspects bytecode |
+| `ash` | the [package manager](./packages.mdx), written in Burn itself |
+| `burnup` | updates and uninstalls all of the above |
 
 See [the toolchain](./toolchain.mdx) for what each command does.
 
-## Quick install
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/burnlang/burn/master/install.sh | sh
-```
-
-The installer:
+burnup:
 
 1. downloads a prebuilt release for your platform if one exists, otherwise downloads the sources and builds them
    with `cargo` (the first build takes about a minute)
-2. installs `burn` and `bvm` into `~/.burn/bin` and links `burni`, `burnc` and `burn-lsp` to `burn`
-3. compiles `burnfmt` from its Burn source with `burnc`; where native compilation is not available it installs a
-   small launcher that runs `burnfmt` on the interpreter instead
-4. adds `~/.burn/bin` to your `PATH` in `~/.profile`, `~/.bashrc`, `~/.zshrc` (whichever exist) and fish
-5. checks that `burni` runs a program, `burnfmt` formats one and `bvm` runs compiled bytecode
+2. builds `ash` from its Burn source
+3. adds `~/.burn/bin` to your `PATH` in `~/.profile`, `~/.bashrc`, `~/.zshrc` (whichever exist) and fish
+4. checks that `burni` runs a program, `burnfmt` formats one, `bvm` runs bytecode and `ash` starts
 
 Open a new terminal (or run `. ~/.burn/env`) and check the installation:
 
@@ -45,41 +45,40 @@ burni -e 'print("hello")'
 ## Requirements
 
 - Linux or macOS (Windows: see [manual installation](#manual-installation))
-- `git` and a Rust toolchain (1.85 or newer) when building from source. Pass `--install-rust` to let the installer
-  install Rust with rustup if `cargo` is missing.
+- `git`, which ash uses to download packages
+- A Rust toolchain (1.85 or newer) when building from source. Pass `--install-rust` to let burnup install Rust
+  with rustup if `cargo` is missing.
 - A C toolchain (`cc`) to build native executables with `burnc`. Everything else works without it.
+
+## Updating and uninstalling
+
+```sh
+burnup update       # newest Burn, ash and burnup
+burnup show         # installed versions
+burnup uninstall    # remove everything, including downloaded packages
+```
 
 ## Options
 
 | Option | Description |
 | --- | --- |
 | `--prefix <dir>` | install into `<dir>` instead of `~/.burn` |
-| `--ref <ref>` | build a specific branch, tag or commit |
+| `--ref <ref>` | build a specific branch, tag or commit of Burn |
+| `--ash-ref <ref>` | build a specific branch, tag or commit of ash |
 | `--from-source` | always build from source, even if a release exists |
 | `--install-rust` | install Rust with rustup when `cargo` is missing |
+| `--no-ash` | do not install ash |
 | `--no-modify-path` | do not touch your shell profile |
-| `--uninstall` | remove an installation |
 | `-q`, `--quiet` | only print errors |
-| `-h`, `--help` | show the help |
 
-Pass options to a piped installer with `sh -s --`:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/burnlang/burn/master/install.sh | sh -s -- --prefix /opt/burn --no-modify-path
-```
-
-The same settings can be given as environment variables: `BURN_HOME` (prefix), `BURN_REF` (ref) and `BURN_REPO`
-(the git repository to build from).
-
-## Installing from a checkout
-
-Running the script from a clone of the repository builds and installs that exact source tree:
+Pass options to the piped installer with `sh -s --`:
 
 ```sh
-git clone https://github.com/burnlang/burn.git
-cd burn
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/burnlang/burnup/master/install.sh | sh -s -- --prefix /opt/burn --no-modify-path
 ```
+
+The same settings can be given as environment variables: `BURN_HOME` (prefix), `BURN_REF` and `BURN_REPO`,
+`ASH_REF` and `ASH_REPO`. The old address, `burnlang/burn/master/install.sh`, still works and runs burnup.
 
 ## What gets installed
 
@@ -91,36 +90,35 @@ cd burn
 │   ├── burnc -> burn
 │   ├── burn-lsp -> burn
 │   ├── burnfmt       native executable compiled from Burn source
-│   └── bvm           the Burn virtual machine
+│   ├── bvm           the Burn virtual machine
+│   ├── ash           the package manager
+│   └── burnup        the installer
 ├── share/burn/
 │   ├── tools/burnfmt/burnfmt.bn
-│   ├── examples/     including examples/bvm/ (assembly and Ember)
-│   └── install.sh    used for updates and uninstalling
+│   ├── ash/          the ash sources
+│   └── examples/     including examples/bvm/ (assembly and Ember)
+├── packages/         packages downloaded by ash, one folder per version
+├── tools/            the sources of commands installed with `ash install -g`
 └── env               adds bin/ to PATH
 ```
 
 `burni`, `burnc` and `burn-lsp` are links to the same binary: `burn` looks at the name it was started with and
 behaves like that command. The standard library is built into the binary, so nothing else is needed at runtime.
 
-## Updating
+## Installing from a checkout
 
-Run the installer again. It replaces the binaries and rebuilds `burnfmt`, and leaves your shell profile alone if
-it was already set up.
-
-## Uninstalling
+`scripts/package.sh` builds a checkout and lays it out the same way. Release archives are made with it:
 
 ```sh
-sh ~/.burn/share/burn/install.sh --uninstall
+git clone https://github.com/burnlang/burn.git
+cd burn
+sh scripts/package.sh --prefix ~/.burn
 ```
-
-This removes the installation directory and the lines the installer added to your shell profiles. Use
-`--prefix` if you installed somewhere else.
 
 ## Prebuilt releases
 
 Tagged versions (`v*`) are built by the release workflow for `linux-x86_64`, `macos-x86_64` and `macos-aarch64`.
-Each archive contains the same layout as above. The installer picks the right one automatically; to install one by
-hand:
+burnup picks the right one automatically; to install one by hand:
 
 ```sh
 tar -xzf burn-linux-x86_64.tar.gz
@@ -136,9 +134,10 @@ cargo build --release
 ```
 
 Copy `target/release/burn` and `target/release/bvm` (`burn.exe` and `bvm.exe` on Windows) somewhere on your
-`PATH`, then create `burni`, `burnc` and `burn-lsp` as links or copies of `burn`. On Windows copy the file to `burni.exe`, `burnc.exe` and `burn-lsp.exe`.
-Native executables currently need x86-64 Linux or macOS; on other platforms `burni`, `bvm`,
-`burnc --target js`, `burnc --target bvm`, `burn fmt` and `burn lsp` all work. To get `burnfmt` without native compilation, run it on the interpreter:
+`PATH`, then create `burni`, `burnc` and `burn-lsp` as links or copies of `burn`. On Windows copy the file to
+`burni.exe`, `burnc.exe` and `burn-lsp.exe`. Native executables currently need x86-64 Linux or macOS; on other
+platforms `burni`, `bvm`, `burnc --target js`, `burnc --target bvm`, `burn fmt` and `burn lsp` all work. To get
+`burnfmt` without native compilation, run it on the interpreter:
 
 ```sh
 burni tools/burnfmt/burnfmt.bn -w file.bn

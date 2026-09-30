@@ -15,6 +15,8 @@ This page lists every subcommand of `burn`. The shorter toolchain commands map o
 | `burn <file.bn> [args...]` | type-check and run on bvm |
 | `burn <file.bvm\|file.bvmc\|file.bar> [args...]` | run a bvm module or archive |
 | `burn run <file.bn> [args...]` | the same |
+| `burn init <name> [--lib] [--target native\|js\|bvm]` | create a project ([details](./packages.mdx)) |
+| `burn run`, `burn build`, `burn check` | without a file, work on the project in the current folder |
 | `burn run --native <file.bn> [args...]` | compile to machine code and run it |
 | `burn build <file.bn>` | build a native executable next to the source file |
 | `burn build <file.bn> -o <path>` | choose the output path |
@@ -42,6 +44,7 @@ The older flags still work: `-r`, `-e`, `-exe <file> [name]` and `-d`.
 | --- | --- |
 | `BURN_CC` / `CC` | linker driver used by `burn build` (default `cc`) |
 | `NO_COLOR` | disable colored diagnostics |
+| `BURN_HOME` | where packages are found (default `~/.burn`, packages in `packages/`) |
 | `BURN_GC_THRESHOLD` | bytes allocated between garbage collections (default 32 MB) |
 | `BURN_GC_STATS` | print a line after every collection |
 

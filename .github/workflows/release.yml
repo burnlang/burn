@@ -23,10 +23,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Build the toolchain
-        run: ./install.sh --from-source --no-modify-path --prefix "$PWD/dist/burn"
+        run: sh scripts/package.sh --prefix "$PWD/dist/burn"
       - name: Package
         run: |
-          rm -f dist/burn/env
           tar -czf ${{ matrix.asset }} -C dist burn
       - uses: softprops/action-gh-release@v2
         with:

@@ -6,12 +6,14 @@ mod driver;
 mod fix;
 mod fmt;
 mod hir;
+mod init;
 mod js;
 mod lexer;
 mod loader;
 mod lsp;
 mod native;
 mod parser;
+mod project;
 mod repl;
 mod source;
 mod types;
@@ -29,14 +31,16 @@ fn usage() {
 Usage:
   burn <file.bn> [args...]            run a program instantly on the Burn VM (bvm)
   burn <file.bvm|file.bvmc> [args...] run a bvm module
-  burn run <file.bn> [--native] [args...]
-                                      run a program; --native compiles it to machine code first
-  burn build <file.bn> [options]      compile to a standalone executable
+  burn init <name> [--lib] [--target <native|js|bvm>]
+                                      create a project, named like github.com/you/app
+  burn run [file.bn] [--native] [args...]
+                                      run a program, or the project's main file; --native compiles it first
+  burn build [file.bn] [options]      compile to a standalone executable, or build the project
       -o, --output <path>             output file (default: file name without .bn)
       --target <native|js|bvm>        native executable (default), JavaScript or bvm bytecode
       --emit-asm <path>               also write the generated assembly (x86-64, or bvm text)
       --no-strip                      keep symbols in the executable
-  burn check <file.bn>                type-check without running
+  burn check [files...]               type-check without running (default: the project)
   burn fix [--dry-run] <files...>     apply the compiler's suggested fixes
   burn doc [files...] [-o dir]        generate HTML documentation from Burndoc comments
   burn fmt [-w] [--check] <files...>  format source files
@@ -125,10 +129,32 @@ fn cmd_run(file: &Path, args: Vec<String>, native_mode: bool) -> ExitCode {
     ExitCode::from(code as u8)
 }
 
+fn current_project() -> Result<project::Project, String> {
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    match project::find_root(&cwd) {
+        Some(root) => project::load(&root),
+        None => Err("no source file given, and there is no burn.toml here or above\n  = help: pass a file like `burn build app.bn`, or create a project with `burn init github.com/you/app`".into()),
+    }
+}
+
+fn project_main() -> Result<(project::Project, PathBuf), ExitCode> {
+    match current_project() {
+        Ok(p) => {
+            let main = p.main_path();
+            Ok((p, main))
+        }
+        Err(e) => {
+            eprintln!("error: {}", e);
+            Err(ExitCode::from(2))
+        }
+    }
+}
+
 fn cmd_build(args: &[String]) -> ExitCode {
     let mut file: Option<PathBuf> = None;
     let mut output: Option<PathBuf> = None;
     let mut target = "native".to_string();
+    let mut explicit_target = false;
     let mut emit_asm: Option<PathBuf> = None;
     let mut strip = true;
     let mut i = 0;
@@ -142,13 +168,17 @@ fn cmd_build(args: &[String]) -> ExitCode {
             "--target" | "-t" => {
                 i += 1;
                 target = args.get(i).cloned().unwrap_or_default();
+                explicit_target = true;
             }
             "--emit-asm" | "-S" => {
                 i += 1;
                 emit_asm = args.get(i).map(PathBuf::from);
             }
             "--no-strip" => strip = false,
-            _ if a.starts_with("--target=") => target = a["--target=".len()..].to_string(),
+            _ if a.starts_with("--target=") => {
+                target = a["--target=".len()..].to_string();
+                explicit_target = true;
+            }
             _ if file.is_none() => file = Some(PathBuf::from(a)),
             _ if output.is_none() => output = Some(PathBuf::from(a)),
             _ => {
@@ -161,8 +191,42 @@ fn cmd_build(args: &[String]) -> ExitCode {
     let file = match file {
         Some(f) => f,
         None => {
-            eprintln!("error: no source file given");
-            return ExitCode::from(2);
+            let (p, main) = match project_main() {
+                Ok(x) => x,
+                Err(c) => return c,
+            };
+            if p.manifest.kind == project::Kind::Lib && !explicit_target {
+                return match compile(&main) {
+                    Some(_) => {
+                        println!("checked {} (a library is used through imports, so there is nothing to build)", p.manifest.name);
+                        ExitCode::SUCCESS
+                    }
+                    None => ExitCode::from(1),
+                };
+            }
+            if !explicit_target {
+                target = p.manifest.target.clone();
+            }
+            println!("building {} {} ({})", p.manifest.name, p.manifest.version, target);
+            if output.is_none() {
+                let short = project::short_name(&p.manifest.name);
+                let rel = p.manifest.output.clone().unwrap_or_else(|| match target.as_str() {
+                    "js" | "javascript" | "node" => format!("build/{}.js", short),
+                    "bvm" | "bytecode" => format!("build/{}.bvmc", short),
+                    "bar" => format!("build/{}.bar", short),
+                    _ => format!("build/{}", short),
+                });
+                let out = p.root.join(rel);
+                let out = std::env::current_dir()
+                    .ok()
+                    .and_then(|c| out.strip_prefix(&c).ok().map(|r| r.to_path_buf()))
+                    .unwrap_or(out);
+                if let Some(parent) = out.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                output = Some(out);
+            }
+            main
         }
     };
     if is_bvm_file(&file) {
@@ -519,10 +583,13 @@ fn main() -> ExitCode {
         "fmt" => fmt::cmd(rest),
         "fix" => fix::cmd(rest),
         "doc" => doc::cmd(rest),
+        "init" | "new" => init::cmd(rest),
         "check" => {
             if rest.is_empty() {
-                eprintln!("error: no source file given");
-                return ExitCode::from(2);
+                return match project_main() {
+                    Ok((_, main)) => cmd_check(&[main.display().to_string()]),
+                    Err(c) => c,
+                };
             }
             cmd_check(rest)
         }
@@ -552,11 +619,22 @@ fn main() -> ExitCode {
                 }
             }
             match file {
+                Some(f) if f == "--" => match project_main() {
+                    Ok((_, main)) => cmd_run(&main, prog_args, native_mode),
+                    Err(c) => c,
+                },
                 Some(f) => cmd_run(Path::new(&f), prog_args, native_mode),
-                None => {
-                    eprintln!("error: no source file given");
-                    ExitCode::from(2)
-                }
+                None => match project_main() {
+                    Ok((p, main)) => {
+                        if p.manifest.kind == project::Kind::Lib {
+                            eprintln!("error: {} is a library, so it has no program to run", p.manifest.name);
+                            eprintln!("  = help: run its tests with `ash test`, or run a file with `burn run <file.bn>`");
+                            return ExitCode::from(2);
+                        }
+                        cmd_run(&main, prog_args, native_mode)
+                    }
+                    Err(c) => c,
+                },
             }
         }
         _ => {

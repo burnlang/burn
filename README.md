@@ -58,7 +58,8 @@ fun main() {
 - Arrays, maps, records, enums, first-class functions and lambdas, string templates
 - `async fun` / `await` running on real threads
 - Modules with `pub` and `priv`
-- Standard library for dates, times, HTTP, JSON, math and strings
+- Standard library for dates, times, HTTP, JSON, math, strings, processes and files
+- Projects and packages: `burn init github.com/you/app`, `burn.toml`, `burn.lock` and ash, the package manager
 - Three backends sharing one type checker and runtime: bvm bytecode, native x86-64, JavaScript
 - bvm, a general-purpose virtual machine with its own assembly language, bytecode format and verifier, which other languages can target too
 - Write once, run everywhere: `.bar` archives bundle an application's bytecode and resources and run wherever bvm runs
@@ -70,10 +71,11 @@ fun main() {
 ## Installation
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/burnlang/burn/master/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/burnlang/burnup/master/install.sh | sh
 ```
 
-The installer puts the whole toolchain into `~/.burn/bin` and adds it to your `PATH`. It builds from source when no
+[burnup](https://github.com/burnlang/burnup) puts the whole toolchain, including ash, into `~/.burn/bin` and adds it
+to your `PATH`; `burnup update` keeps it current. It builds from source when no
 prebuilt release is available, which needs Rust 1.85 or newer (`--install-rust` sets that up for you). Native
 executables need a C toolchain (`cc`) and currently target x86-64 Linux and macOS.
 See [docs/tooling/installation.mdx](docs/tooling/installation.mdx) for all options, updating and uninstalling.
@@ -87,6 +89,7 @@ See [docs/tooling/installation.mdx](docs/tooling/installation.mdx) for all optio
 | `burnfmt` | the code formatter, written in Burn itself |
 | `burn-lsp` | the language server for editors |
 | `bvm` | the Burn virtual machine: runs, assembles, disassembles and verifies bytecode |
+| `ash` | the package manager, written in Burn itself ([burnlang/ash](https://github.com/burnlang/ash)) |
 | `burn` | all of the Burn commands as subcommands |
 
 ```sh
@@ -101,6 +104,8 @@ bvm app.bvmc                    # run bytecode
 burnc --check app.bn            # type-check only
 burnfmt -w app.bn               # format in place
 burn run --native app.bn        # compile to machine code and run
+burn init github.com/you/app    # start a project with burn.toml
+ash install github.com/you/lib  # add a package
 ```
 
 See [the toolchain](docs/tooling/toolchain.mdx) and the [command line reference](docs/tooling/cli.mdx).
@@ -321,7 +326,8 @@ examples are in [`examples/bvm/`](examples/bvm/).
   archives, interpreter, the native bridge, the `bvm` command and the Ember example language
 - `crates/burn-runtime/`: runtime shared by bvm and native executables (GC, strings, collections, JSON, HTTP, tasks)
 - `tools/burnfmt/`: the formatter, written in Burn
-- `install.sh`: the toolchain installer
+- `scripts/package.sh`: builds the toolchain into the layout burnup installs and releases ship
+- `install.sh`: forwards to [burnup](https://github.com/burnlang/burnup), the installer
 - `assets/`: the logo
 - `lib/std/`: the standard library, written in Burn
 - `editors/vscode/`: VS Code extension
@@ -331,7 +337,7 @@ examples are in [`examples/bvm/`](examples/bvm/).
 ## Development
 
 ```sh
-./install.sh           # build and install the toolchain from this checkout
+sh scripts/package.sh --prefix ~/.burn   # build and install the toolchain from this checkout
 cargo test            # runs every example on bvm, natively and as JavaScript
 cargo clippy --all-targets
 ```
@@ -349,11 +355,10 @@ Please make sure `cargo test` passes and new language features come with a test 
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
 
 ## Plans for Burn
 
 1. Native backends for Windows and ARM64
 2. Self-hosting the compiler
 3. A documentation website built from `docs/`
-4. A package manager

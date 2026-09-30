@@ -5,7 +5,7 @@
   "version": "26.1.0",
   "publisher": "burn",
   "icon": "images/icon.png",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "repository": {
     "type": "git",
     "url": "https://github.com/burnlang/burn"

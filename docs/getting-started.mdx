@@ -9,11 +9,11 @@ order: 1
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/burnlang/burn/master/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/burnlang/burnup/master/install.sh | sh
 ```
 
 This installs the whole toolchain into `~/.burn/bin`: `burni` (interpreter), `burnc` (compiler), `burnfmt`
-(formatter), `burn-lsp` (language server) and `burn`, which combines them all. Building from source needs Rust
+(formatter), `burn-lsp` (language server), `ash` (package manager) and `burn`, which combines them all. Building from source needs Rust
 1.85 or newer, and native executables need a C toolchain (`cc`). See [installation](./tooling/installation.mdx)
 for options and other platforms.
 
@@ -82,6 +82,19 @@ GRACE!
 ```sh
 burnfmt -w todo.bn
 ```
+
+## Start a project
+
+Once a program grows past one file, make it a project. The name says where the code will live:
+
+```sh
+burn init github.com/you/todo
+cd todo
+burn run
+ash install github.com/you/colors    # add a package
+```
+
+See [projects and packages](./tooling/packages.mdx).
 
 ## Next steps
 

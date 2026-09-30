@@ -99,6 +99,10 @@ pub const BUILTINS: &[&str] = &[
     "gc",
     "__localTime",
     "__httpRequest",
+    "__exec",
+    "__fsOp",
+    "__listDir",
+    "__cwd",
 ];
 
 pub fn is_builtin(name: &str) -> bool {
@@ -875,6 +879,34 @@ impl<'a> Checker<'a> {
                 };
                 let l = self.loc_expr(span);
                 Self::rt(RtFn::Assert, vec![c, m, l], T_VOID)
+            }
+            "__exec" | "__fsOp" => {
+                if !self.arity(name, n, 3, 3, span) {
+                    return Some(Self::err_expr());
+                }
+                let a = self.barg_to(&xs[0], T_STR);
+                if name == "__exec" {
+                    let v = self.barg_to(&xs[1], T_ARR_STR);
+                    let c = self.barg_to(&xs[2], T_BOOL);
+                    Self::rt(RtFn::Exec, vec![a, v, c], T_ARR_STR)
+                } else {
+                    let x = self.barg_to(&xs[1], T_STR);
+                    let y = self.barg_to(&xs[2], T_STR);
+                    Self::rt(RtFn::FsOp, vec![a, x, y], T_BOOL)
+                }
+            }
+            "__listDir" => {
+                if !self.arity(name, n, 1, 1, span) {
+                    return Some(Self::err_expr());
+                }
+                let p = self.barg_to(&xs[0], T_STR);
+                Self::rt(RtFn::ListDir, vec![p], T_ARR_STR)
+            }
+            "__cwd" => {
+                if !self.arity(name, n, 0, 0, span) {
+                    return Some(Self::err_expr());
+                }
+                Self::rt(RtFn::Cwd, vec![], T_STR)
             }
             "__httpRequest" => {
                 if !self.arity(name, n, 4, 4, span) {

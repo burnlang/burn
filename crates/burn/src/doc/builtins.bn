@@ -1517,3 +1517,73 @@ fun assert(condition: bool, message: string = "")
  *     gc()
  */
 fun gc()
+
+/**
+ * Runs a program and waits for it to finish.
+ *
+ * The result has three strings: the exit code, the standard output and the
+ * standard error. When `capture` is `false` the program shares the terminal
+ * and both outputs are empty. When the program cannot be started, the exit
+ * code is `"-1"` and the error message is the third string. This is an
+ * internal function used by `std/process`; use `Process` from that module
+ * instead. It cannot be called as a method.
+ *
+ * @param program the program to run, found through `PATH` when it has no slash
+ * @param args the arguments passed to the program
+ * @param capture whether to collect the output instead of showing it
+ * @return `[exitCode, stdout, stderr]`
+ * @group Process
+ * @since 26.1
+ * @example
+ *     var raw = __exec("echo", ["hi"], true)
+ *     raw[1]  // "hi\n"
+ */
+fun __exec(program: string, args: [string], capture: bool): [string]
+
+/**
+ * Performs a file system operation.
+ *
+ * The operations are `"mkdir"` (with parents), `"remove"` (files and whole
+ * directories), `"rename"`, `"copy"` (files), `"isDir"`, `"isFile"` and
+ * `"chdir"`. This is an internal function used by `std/fs`; use `Files` from
+ * that module instead. It cannot be called as a method.
+ *
+ * @param op the operation
+ * @param path the path to work on
+ * @param target the second path for `"rename"` and `"copy"`, otherwise `""`
+ * @return `true` when the operation succeeded, or the answer for `"isDir"` and `"isFile"`
+ * @group Files
+ * @since 26.1
+ * @example
+ *     __fsOp("mkdir", "out/logs", "")  // true
+ */
+fun __fsOp(op: string, path: string, target: string): bool
+
+/**
+ * Lists the names in a directory, sorted.
+ *
+ * This is an internal function used by `std/fs`; use `Files.list` instead.
+ * It cannot be called as a method.
+ *
+ * @param path the directory
+ * @return the names of the entries, without the directory, or `[]` if it cannot be read
+ * @group Files
+ * @since 26.1
+ * @example
+ *     __listDir(".")  // for example ["README.md", "src"]
+ */
+fun __listDir(path: string): [string]
+
+/**
+ * Returns the current working directory.
+ *
+ * This is an internal function used by `std/process`; use `Process.cwd`
+ * instead. It cannot be called as a method.
+ *
+ * @return the absolute path of the working directory
+ * @group Process
+ * @since 26.1
+ * @example
+ *     __cwd()  // for example "/home/ada/project"
+ */
+fun __cwd(): string

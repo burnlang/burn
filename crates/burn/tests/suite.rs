@@ -455,3 +455,68 @@ fn hot_code_is_optimized_while_running() {
     assert!(inlined >= 2, "{}", out);
     assert!(out.contains("1 loops switched to optimized code"), "{}", out);
 }
+
+#[test]
+fn init_creates_projects_that_build_and_import_packages() {
+    let dir = temp_dir("projects");
+    let home = dir.join("home");
+    let run = |cwd: &Path, args: &[&str]| output(burn().current_dir(cwd).env("BURN_HOME", &home).args(args));
+
+    let (out, code) = run(&dir, &["init", "hello"]);
+    assert_eq!(code, 2, "{}", out);
+    assert!(out.contains("github.com/you/hello"), "{}", out);
+
+    let (out, code) = run(&dir, &["init", "example.com/ada/greet", "--lib", "--no-git"]);
+    assert_eq!(code, 0, "{}", out);
+    let (out, code) = run(&dir.join("greet"), &["run", "tests/main.bn"]);
+    assert_eq!((out.as_str(), code), ("all tests passed\n", 0));
+    let (out, code) = run(&dir.join("greet"), &["run"]);
+    assert_eq!(code, 2, "{}", out);
+    assert!(out.contains("is a library"), "{}", out);
+
+    let (out, code) = run(&dir, &["init", "example.com/ada/app", "--target", "js", "--no-git"]);
+    assert_eq!(code, 0, "{}", out);
+    let app = dir.join("app");
+    let toml = std::fs::read_to_string(app.join("burn.toml")).unwrap();
+    assert!(toml.contains("target = \"js\"") && toml.contains("[scripts]"), "{}", toml);
+    let (out, code) = run(&app, &["run"]);
+    assert_eq!((out.as_str(), code), ("Hello from app!\n", 0));
+
+    std::fs::write(app.join("src/main.bn"), "import \"example.com/ada/greet\"\nimport \"example.com/ada/cached\"\nimport \"example.com/ada/cached/src/more\"\n\nfun main() {\n    print(greet(\"packages\"), twice(21), more())\n}\n").unwrap();
+    let (out, code) = run(&app, &["check"]);
+    assert_eq!(code, 1);
+    assert!(out.contains("not a dependency; add it with `ash install example.com/ada/greet`"), "{}", out);
+
+    std::fs::write(
+        app.join("burn.toml"),
+        toml.replace(
+            "[dependencies]\n",
+            "[dependencies]\n\"example.com/ada/greet\" = { path = \"../greet\" }\n\"example.com/ada/cached\" = \"^1.0\"\n",
+        ),
+    )
+    .unwrap();
+    let (out, code) = run(&app, &["check"]);
+    assert_eq!(code, 1);
+    assert!(out.contains("`example.com/ada/cached` is not installed yet; run `ash install`"), "{}", out);
+
+    let cached = home.join("packages/example.com/ada/cached@0123456789ab");
+    std::fs::create_dir_all(cached.join("src")).unwrap();
+    std::fs::write(cached.join("burn.toml"), "[package]\nname = \"example.com/ada/cached\"\nkind = \"lib\"\n").unwrap();
+    std::fs::write(cached.join("src/lib.bn"), "pub fun twice(x: int): int {\n    return x * 2\n}\n").unwrap();
+    std::fs::write(cached.join("src/more.bn"), "pub fun more(): string {\n    return \"more\"\n}\n").unwrap();
+    std::fs::write(
+        app.join("burn.lock"),
+        "version = 1\n\n[[package]]\nname = \"example.com/ada/cached\"\nversion = \"v1.0.0\"\nrev = \"0123456789abcdef\"\nsource = \"git+https://example.com/ada/cached\"\ndependencies = []\n",
+    )
+    .unwrap();
+    let (out, code) = run(&app, &["run"]);
+    assert_eq!((out.as_str(), code), ("Hello, packages! 42 more\n", 0));
+    let (out, code) = run(&app, &["build"]);
+    assert_eq!(code, 0, "{}", out);
+    assert!(out.contains("building example.com/ada/app 0.1.0 (js)"), "{}", out);
+    if has_node() {
+        let (out, _) = output(Command::new("node").arg(app.join("build/app.js")));
+        assert_eq!(out, "Hello, packages! 42 more\n");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
