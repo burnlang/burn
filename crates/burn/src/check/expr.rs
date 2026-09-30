@@ -430,7 +430,8 @@ impl<'a> Checker<'a> {
             let sp = rec.fields[i].span;
             self.def_link(span, sp);
             let t = self.show(ft);
-            self.hover(span, format!("(field) {}: {}", name, t));
+            let text = self.with_doc(format!("(field) {}: {}", name, t), sp);
+            self.hover(span, text);
             let s = Expr::new(ExprKind::Local(0), st);
             return Expr::new(ExprKind::GetField(Box::new(s), i as u32), ft);
         }
@@ -453,7 +454,8 @@ impl<'a> Checker<'a> {
                         self.check_alive(GLOBAL_KEY + g, name, span);
                         self.def_link(span, gspan);
                         let ts = self.show(t);
-                        self.hover(span, format!("{} {}: {}", if gconst { "const" } else { "var" }, name, ts));
+                        let text = self.with_doc(format!("{} {}: {}", if gconst { "const" } else { "var" }, name, ts), gspan);
+                        self.hover(span, text);
                         self.read_global(g, t)
                     }
                     None => {
@@ -1009,7 +1011,9 @@ impl<'a> Checker<'a> {
             };
             format!("{}fun {}({}){}", if is_async { "async " } else { "" }, name, ps.join(", "), r)
         };
-        self.hover(name_span, sig.clone());
+        let dep = self.funcs[fid as usize].deprecated.clone();
+        let text = self.with_doc_dep(sig.clone(), fspan, dep.as_deref());
+        self.hover(name_span, text);
         let recv = match recv {
             Some(r) if self.has_destroy && self.types.record_of(r.ty).map(|x| x.is_class).unwrap_or(false) => Some(self.alive_wrap(r, name_span)),
             r => r,
@@ -1140,7 +1144,11 @@ impl<'a> Checker<'a> {
                     return self.construct(t, args, span, callee.span);
                 }
                 if let Some(e) = self.builtin(name, None, args, span, expected) {
-                    self.hover(callee.span, format!("(builtin) {}", builtins::signature(name)));
+                    let text = match crate::doc::builtins::find(name) {
+                        Some(b) => format!("{}\u{1}{}", b.sig, crate::doc::comment::to_markdown(&b.doc)),
+                        None => format!("(builtin) {}", builtins::signature(name)),
+                    };
+                    self.hover(callee.span, text);
                     return e;
                 }
                 self.ident_expr(name, callee.span);
@@ -1201,7 +1209,13 @@ impl<'a> Checker<'a> {
             }
         };
         let rec = self.types.records[ri as usize].clone();
-        self.hover(name_span, format!("{} {}", if rec.is_class { "struct" } else { "type" }, rec.name));
+        let dep = self.deprecated_types.get(&t).cloned();
+        let text = self.with_doc_dep(
+            format!("{} {}", if rec.is_class { "struct" } else { "type" }, rec.name),
+            rec.span,
+            dep.as_deref(),
+        );
+        self.hover(name_span, text);
         if args.len() > rec.fields.len() {
             self.error(
                 span,
@@ -1343,7 +1357,8 @@ impl<'a> Checker<'a> {
                     ps.extend(m.params.iter().copied());
                     self.def_link(name.span, m.span);
                     let sig = self.method_sig_str(&m.params, m.ret, m.is_async);
-                    self.hover(name.span, format!("{}.{}: {}", iface.name, m.name, sig));
+                    let text = self.with_doc(format!("{}.{}: {}", iface.name, m.name, sig), m.span);
+                    self.hover(name.span, text);
                     let o = self.alive_wrap(o, name.span);
                     let hargs = self.check_args(&ps, args, Some(o), span, &format!("`{}`", m.name));
                     self.invalidate_globals();
@@ -1464,7 +1479,8 @@ impl<'a> Checker<'a> {
                     self.check_field_access(&rec, i, name.span);
                     self.def_link(name.span, rec.fields[i].span);
                     let ts = self.show(rec.fields[i].ty);
-                    self.hover(name.span, format!("(field) {}.{}: {}", rec.name, n, ts));
+                    let text = self.with_doc(format!("(field) {}.{}: {}", rec.name, n, ts), rec.fields[i].span);
+                    self.hover(name.span, text);
                     let o = if rec.is_class { self.alive_wrap(o, name.span) } else { o };
                     return Expr::new(ExprKind::GetField(Box::new(o), i as u32), rec.fields[i].ty);
                 }

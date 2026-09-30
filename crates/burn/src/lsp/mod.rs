@@ -149,6 +149,13 @@ fn range_json(sm: &SourceMap, span: Span) -> Json {
     ])
 }
 
+fn hover_markdown(text: &str) -> String {
+    match text.split_once('\u{1}') {
+        Some((code, doc)) => format!("```burn\n{}\n```\n---\n{}", code, doc),
+        None => format!("```burn\n{}\n```", text),
+    }
+}
+
 fn edit_range_json(sm: &SourceMap, span: Span) -> Json {
     Json::obj(vec![
         ("start", pos_json(sm, span.file, span.start as usize)),
@@ -380,7 +387,7 @@ impl Server {
             Some((span, text)) => Json::obj(vec![
                 (
                     "contents",
-                    Json::obj(vec![("kind", Json::str("markdown")), ("value", Json::str(format!("```burn\n{}\n```", text)))]),
+                    Json::obj(vec![("kind", Json::str("markdown")), ("value", Json::str(hover_markdown(text)))]),
                 ),
                 ("range", range_json(&a.sm, *span)),
             ]),
@@ -392,7 +399,13 @@ impl Server {
                         "contents",
                         Json::obj(vec![
                             ("kind", Json::str("markdown")),
-                            ("value", Json::str(format!("```burn\n{}\n```", builtins::signature(&word)))),
+                            (
+                                "value",
+                                Json::str(match crate::doc::builtins::find(&word) {
+                                    Some(b) => hover_markdown(&format!("{}\u{1}{}", b.sig, crate::doc::comment::to_markdown(&b.doc))),
+                                    None => format!("```burn\n{}\n```", builtins::signature(&word)),
+                                }),
+                            ),
                         ]),
                     )]);
                 }

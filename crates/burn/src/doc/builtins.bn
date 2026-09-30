@@ -1,0 +1,1517 @@
+/**
+ * Prints its arguments to standard output, separated by spaces, followed by a newline.
+ *
+ * Values are formatted the same way as in string templates. Without arguments,
+ * prints an empty line.
+ *
+ * @param values the values to print, any number of them
+ * @see eprint
+ * @see write
+ * @group Output
+ * @alias println
+ * @since 26.1
+ * @example
+ *     print("total:", 3 * 4)      // total: 12
+ *     print([1, 2], {"a": true})  // [1, 2] {"a": true}
+ */
+fun print(values: any...)
+
+/**
+ * Prints its arguments to standard error, separated by spaces, followed by a newline.
+ *
+ * Values are formatted like `print` does. Standard output is flushed first, so
+ * messages appear in the order the program wrote them.
+ *
+ * @param values the values to print, any number of them
+ * @see print
+ * @group Output
+ * @since 26.1
+ * @example
+ *     eprint("warning:", 3, "files skipped")  // warning: 3 files skipped (on standard error)
+ */
+fun eprint(values: any...)
+
+/**
+ * Prints one value to standard output without a newline.
+ *
+ * The value is formatted like `print` does. Use it to build a line from several
+ * pieces or to show a prompt.
+ *
+ * @param value the value to print
+ * @see print
+ * @group Output
+ * @since 26.1
+ * @example
+ *     write("3 + 4 = ")
+ *     print(3 + 4)  // 3 + 4 = 7
+ */
+fun write(value: any)
+
+/**
+ * Prints a prompt and reads one line from standard input.
+ *
+ * The line is returned without its line break (`\n` or `\r\n`). At the end of
+ * the input, returns an empty string.
+ *
+ * @param prompt the text to print before reading, without a newline
+ * @return the line that was read
+ * @see readStdin
+ * @group Input
+ * @since 26.1
+ * @example
+ *     var name = input("Name: ")
+ *     print("Hello, " + name + "!")  // Hello, Ada! (when the user types Ada)
+ */
+fun input(prompt: string = ""): string
+
+/**
+ * Reads all remaining standard input until it ends.
+ *
+ * Bytes that are not valid UTF-8 are replaced with `U+FFFD`. Returns an empty
+ * string when nothing is left.
+ *
+ * @return everything left on standard input
+ * @see input
+ * @group Input
+ * @since 26.1
+ * @example
+ *     var lines = split(trim(readStdin()), "\n")
+ *     print(len(lines))  // the number of lines piped into the program
+ */
+fun readStdin(): string
+
+/**
+ * Converts a value to a string.
+ *
+ * The result is the same text that `print` and string templates produce:
+ * strings are returned unchanged and `null` becomes `"null"`. Works as a method
+ * on every value, including structs: `point.toString()`.
+ *
+ * @param value the value to convert, anything except `void`
+ * @return the value as text
+ * @see toInt
+ * @see toFloat
+ * @group Conversion
+ * @alias str
+ * @since 26.1
+ * @example
+ *     toString(42)      // "42"
+ *     toString(3.0)     // "3.0"
+ *     toString([1, 2])  // "[1, 2]"
+ */
+fun toString(value: any): string
+
+/**
+ * Converts a string, float, bool or enum value to an `int`.
+ *
+ * Strings may have surrounding whitespace; a string with a decimal point or an
+ * exponent is read as a float and truncated. Floats are truncated toward zero,
+ * `true` becomes `1`, and enum values become their position in the enum. An
+ * `any` value must already hold an `int`; narrow it with `is` to convert other
+ * types.
+ *
+ * @param value a string, float, int, bool or enum value
+ * @return the value as an `int`
+ * @throws when a string is not a number, or an `any` value does not hold an `int`
+ * @see isInt
+ * @see toFloat
+ * @group Conversion
+ * @alias parseInt
+ * @since 26.1
+ * @example
+ *     toInt("42")   // 42
+ *     toInt(" 7 ")  // 7
+ *     toInt("3.7")  // 3
+ *     toInt(-3.9)   // -3
+ *     toInt(true)   // 1
+ */
+fun toInt(value: any): int
+
+/**
+ * Converts a string or an `int` to a `float`.
+ *
+ * Strings may have surrounding whitespace and use exponents such as `"1e3"`.
+ *
+ * @param value a string, int or float
+ * @return the value as a `float`
+ * @throws when a string is not a number
+ * @see isNumber
+ * @see toInt
+ * @group Conversion
+ * @alias parseFloat
+ * @since 26.1
+ * @example
+ *     toFloat("2.5")  // 2.5
+ *     toFloat(3)      // 3.0
+ *     toFloat("1e3")  // 1000.0
+ */
+fun toFloat(value: any): float
+
+/**
+ * Tells whether a string holds a whole number.
+ *
+ * Surrounding whitespace and a leading sign are allowed. Use it to check input
+ * before calling `toInt`.
+ *
+ * @param text the string to test
+ * @return `true` if the text is an integer such as `"42"` or `"-7"`
+ * @see isNumber
+ * @see toInt
+ * @group Conversion
+ * @since 26.1
+ * @example
+ *     isInt("42")    // true
+ *     isInt(" -7 ")  // true
+ *     isInt("1.5")   // false
+ */
+fun isInt(text: string): bool
+
+/**
+ * Tells whether a string holds a number that `toFloat` accepts.
+ *
+ * Surrounding whitespace, a sign, a decimal point and an exponent are allowed.
+ *
+ * @param text the string to test
+ * @return `true` if `toFloat(text)` succeeds
+ * @see isInt
+ * @see toFloat
+ * @group Conversion
+ * @since 26.1
+ * @example
+ *     isNumber("1.5")  // true
+ *     isNumber("1e3")  // true
+ *     isNumber("abc")  // false
+ */
+fun isNumber(text: string): bool
+
+/**
+ * Returns the part of a string between two character indexes.
+ *
+ * The result starts at `start` and ends before `end`. Indexes count Unicode
+ * characters and are clamped to the string, so this never fails; when `start`
+ * is not before `end` the result is empty.
+ *
+ * @param text the string
+ * @param start the index of the first character to include
+ * @param end the index after the last character to include
+ * @return the characters from `start` up to, but not including, `end`
+ * @see slice
+ * @see charAt
+ * @group Strings
+ * @since 26.1
+ * @example
+ *     substring("hello", 1, 3)   // "el"
+ *     substring("hello", 2)      // "llo"
+ *     substring("hello", 3, 10)  // "lo"
+ */
+fun substring(text: string, start: int, end: int = len(text)): string
+
+/**
+ * Returns the character at an index as a one-character string.
+ *
+ * Indexes count Unicode characters. Unlike `text[index]`, an index outside the
+ * string gives an empty string instead of an error.
+ *
+ * @param text the string
+ * @param index the position of the character, starting at `0`
+ * @return the character, or `""` when the index is out of range
+ * @see substring
+ * @see chars
+ * @group Strings
+ * @since 26.1
+ * @example
+ *     charAt("hello", 1)  // "e"
+ *     charAt("hello", 9)  // ""
+ */
+fun charAt(text: string, index: int): string
+
+/**
+ * Splits a string at every occurrence of a separator.
+ *
+ * Empty parts are kept, so two separators in a row produce `""`. The default
+ * separator is a single space. An empty separator splits the string into its
+ * characters.
+ *
+ * @param text the string to split
+ * @param separator the text between the parts
+ * @return the parts, in order
+ * @see join
+ * @see chars
+ * @group Strings
+ * @since 26.1
+ * @example
+ *     split("a,b,,c", ",")  // ["a", "b", "", "c"]
+ *     split("one two")      // ["one", "two"]
+ *     "x-y".split("-")      // ["x", "y"]
+ */
+fun split(text: string, separator: string = " "): [string]
+
+/**
+ * Removes whitespace from both ends of a string.
+ *
+ * Spaces, tabs, line breaks and other Unicode whitespace are removed. Usually
+ * called as a method: `line.trim()`.
+ *
+ * @param text the string
+ * @return the string without leading and trailing whitespace
+ * @group Strings
+ * @since 26.1
+ * @example
+ *     trim("  hi \n")  // "hi"
+ */
+fun trim(text: string): string
+
+/**
+ * Converts a string to upper case.
+ *
+ * Uses the Unicode case rules, so the result can be longer than the input.
+ * Usually called as a method: `text.upper()`.
+ *
+ * @param text the string
+ * @return the string in upper case
+ * @see lower
+ * @group Strings
+ * @alias toUpper
+ * @alias toUpperCase
+ * @since 26.1
+ * @example
+ *     upper("Hello")    // "HELLO"
+ *     "straße".upper()  // "STRASSE"
+ */
+fun upper(text: string): string
+
+/**
+ * Converts a string to lower case.
+ *
+ * Uses the Unicode case rules. Usually called as a method: `text.lower()`.
+ *
+ * @param text the string
+ * @return the string in lower case
+ * @see upper
+ * @group Strings
+ * @alias toLower
+ * @alias toLowerCase
+ * @since 26.1
+ * @example
+ *     lower("Hello")  // "hello"
+ *     "ÄBC".lower()   // "äbc"
+ */
+fun lower(text: string): string
+
+/**
+ * Tells whether a string begins with a prefix.
+ *
+ * Every string starts with the empty string. Usually called as a method:
+ * `path.startsWith("/")`.
+ *
+ * @param text the string to test
+ * @param prefix the text to look for at the start
+ * @return `true` if `text` begins with `prefix`
+ * @see endsWith
+ * @group Strings
+ * @since 26.1
+ * @example
+ *     startsWith("hello", "he")  // true
+ *     "hello".startsWith("lo")   // false
+ */
+fun startsWith(text: string, prefix: string): bool
+
+/**
+ * Tells whether a string ends with a suffix.
+ *
+ * Every string ends with the empty string. Usually called as a method:
+ * `name.endsWith(".bn")`.
+ *
+ * @param text the string to test
+ * @param suffix the text to look for at the end
+ * @return `true` if `text` ends with `suffix`
+ * @see startsWith
+ * @group Strings
+ * @since 26.1
+ * @example
+ *     endsWith("main.bn", ".bn")  // true
+ *     "hello".endsWith("he")      // false
+ */
+fun endsWith(text: string, suffix: string): bool
+
+/**
+ * Replaces every occurrence of a text in a string.
+ *
+ * When `target` is empty the string is returned unchanged. Usually called as a
+ * method: `text.replace("-", " ")`.
+ *
+ * @param text the string to search
+ * @param target the text to replace
+ * @param replacement the text to put in its place
+ * @return a new string with all occurrences replaced
+ * @group Strings
+ * @since 26.1
+ * @example
+ *     replace("a-b-c", "-", "+")  // "a+b+c"
+ */
+fun replace(text: string, target: string, replacement: string): string
+
+/**
+ * Repeats a string a number of times.
+ *
+ * A count of zero or less gives an empty string.
+ *
+ * @param text the string to repeat
+ * @param count how many copies to join
+ * @return `count` copies of `text`, one after another
+ * @group Strings
+ * @since 26.1
+ * @example
+ *     repeat("ab", 3)  // "ababab"
+ *     "-".repeat(5)    // "-----"
+ */
+fun repeat(text: string, count: int): string
+
+/**
+ * Splits a string into its characters.
+ *
+ * Each element is one Unicode character.
+ *
+ * @param text the string
+ * @return the characters, each as a one-character string
+ * @see split
+ * @see charAt
+ * @group Strings
+ * @since 26.1
+ * @example
+ *     chars("héy")  // ["h", "é", "y"]
+ */
+fun chars(text: string): [string]
+
+/**
+ * Returns the Unicode code point of the first character of a string.
+ *
+ * @param text the string, usually a single character
+ * @return the code point, or `-1` for an empty string
+ * @see fromCharCode
+ * @group Strings
+ * @since 26.1
+ * @example
+ *     charCode("A")  // 65
+ *     charCode("é")  // 233
+ *     charCode("")   // -1
+ */
+fun charCode(text: string): int
+
+/**
+ * Returns the character with a Unicode code point as a string.
+ *
+ * @param code the code point
+ * @return a one-character string, or `""` when `code` is not a valid code point
+ * @see charCode
+ * @group Strings
+ * @since 26.1
+ * @example
+ *     fromCharCode(97)   // "a"
+ *     fromCharCode(233)  // "é"
+ */
+fun fromCharCode(code: int): string
+
+/**
+ * Tells whether every character of a string is a letter.
+ *
+ * Letters from all scripts count. An empty string gives `false`.
+ *
+ * @param text the string to test, often a single character
+ * @return `true` if the string is not empty and has only letters
+ * @see isAlphanumeric
+ * @group Strings
+ * @since 26.1
+ * @example
+ *     isLetter("abc")  // true
+ *     isLetter("é")    // true
+ *     isLetter("a1")   // false
+ */
+fun isLetter(text: string): bool
+
+/**
+ * Tells whether every character of a string is a digit from `0` to `9`.
+ *
+ * Only ASCII digits count. An empty string gives `false`.
+ *
+ * @param text the string to test, often a single character
+ * @return `true` if the string is not empty and has only the digits `0` to `9`
+ * @see isInt
+ * @group Strings
+ * @since 26.1
+ * @example
+ *     isDigit("2026")  // true
+ *     isDigit("-1")    // false
+ */
+fun isDigit(text: string): bool
+
+/**
+ * Tells whether every character of a string is a letter or a number.
+ *
+ * Letters and numbers from all scripts count, not only ASCII. An empty string
+ * gives `false`.
+ *
+ * @param text the string to test, often a single character
+ * @return `true` if the string is not empty and has only letters and numbers
+ * @see isLetter
+ * @see isDigit
+ * @group Strings
+ * @since 26.1
+ * @example
+ *     isAlphanumeric("abc123")  // true
+ *     isAlphanumeric("a b")     // false
+ */
+fun isAlphanumeric(text: string): bool
+
+/**
+ * Tells whether every character of a string is whitespace.
+ *
+ * Spaces, tabs, line breaks and other Unicode whitespace count. An empty string
+ * gives `false`.
+ *
+ * @param text the string to test, often a single character
+ * @return `true` if the string is not empty and has only whitespace
+ * @see trim
+ * @group Strings
+ * @since 26.1
+ * @example
+ *     isWhitespace(" \t\n")  // true
+ *     isWhitespace("")       // false
+ */
+fun isWhitespace(text: string): bool
+
+/**
+ * Returns the length of a string, array or map.
+ *
+ * Strings count Unicode characters, arrays count elements and maps count
+ * entries. An `any` value that is `null` has length `0`. It can also be
+ * written as a property: `items.length`.
+ *
+ * @param value a string, array or map
+ * @return the number of characters, elements or entries
+ * @throws when an `any` value holds something other than a string, array or map
+ * @group Arrays
+ * @alias length
+ * @alias size
+ * @since 26.1
+ * @example
+ *     len("héllo")    // 5
+ *     len([1, 2, 3])  // 3
+ *     len({"a": 1})   // 1
+ *     [1, 2].length   // 2
+ */
+fun len(value: any): int
+
+/**
+ * Adds a value to the end of an array.
+ *
+ * The array is changed in place. Usually called as a method: `items.push(x)`.
+ *
+ * @param items the array to change
+ * @param value the value to add
+ * @see append
+ * @see pop
+ * @see insert
+ * @group Arrays
+ * @since 26.1
+ * @example
+ *     var items = [1, 2]
+ *     items.push(3)
+ *     items  // [1, 2, 3]
+ */
+fun push(items: [T], value: T)
+
+/**
+ * Adds a value to the end of an array and returns the array.
+ *
+ * Works like `push`, but returns the same array, not a copy, so calls can be
+ * chained. Usually called as a method: `items.append(x)`.
+ *
+ * @param items the array to change
+ * @param value the value to add
+ * @return `items`, after the value was added
+ * @see push
+ * @group Arrays
+ * @since 26.1
+ * @example
+ *     var items = [1]
+ *     items.append(2).append(3)  // [1, 2, 3]
+ *     items                      // [1, 2, 3]
+ */
+fun append(items: [T], value: T): [T]
+
+/**
+ * Removes the last element of an array and returns it.
+ *
+ * Usually called as a method: `stack.pop()`.
+ *
+ * @param items the array to change
+ * @return the element that was removed
+ * @throws when the array is empty
+ * @see push
+ * @see remove
+ * @group Arrays
+ * @since 26.1
+ * @example
+ *     var items = [1, 2, 3]
+ *     items.pop()  // 3
+ *     items        // [1, 2]
+ */
+fun pop(items: [T]): T
+
+/**
+ * Inserts a value into an array before an index.
+ *
+ * Later elements move one place back. An index equal to the length adds the
+ * value at the end. Usually called as a method: `items.insert(0, x)`.
+ *
+ * @param items the array to change
+ * @param index the position the new value will have, from `0` to `len(items)`
+ * @param value the value to insert
+ * @throws when the index is below `0` or greater than the length
+ * @see push
+ * @see remove
+ * @group Arrays
+ * @since 26.1
+ * @example
+ *     var items = ["a", "c"]
+ *     items.insert(1, "b")
+ *     items  // ["a", "b", "c"]
+ */
+fun insert(items: [T], index: int, value: T)
+
+/**
+ * Removes the element at an index from an array and returns it.
+ *
+ * Later elements move one place forward. Given a map, `remove(map, key)`
+ * removes the key instead and returns whether it was there; a missing key is
+ * not an error. Usually called as a method: `items.remove(0)`.
+ *
+ * @param items the array to change, or a map
+ * @param index the position of the element, or the key for a map
+ * @return the element that was removed; for a map, `true` if the key was there
+ * @throws when the index is out of bounds
+ * @see pop
+ * @see insert
+ * @group Arrays
+ * @since 26.1
+ * @example
+ *     var items = [10, 20, 30]
+ *     items.remove(1)  // 20
+ *     items            // [10, 30]
+ *     var ages = {"ada": 36}
+ *     ages.remove("ada")  // true
+ *     ages.remove("bob")  // false
+ */
+fun remove(items: [T], index: int): T
+
+/**
+ * Tells whether an array contains a value.
+ *
+ * Elements are compared with `==`, so arrays, maps and structs are compared by
+ * content. Also works on strings, where it looks for a substring, and on maps,
+ * where it looks for a key.
+ *
+ * @param items the array to search, or a string or map
+ * @param value the element to look for; a substring for strings, a key for maps
+ * @return `true` if the value was found
+ * @see indexOf
+ * @see has
+ * @group Arrays
+ * @since 26.1
+ * @example
+ *     contains([1, 2, 3], 2)   // true
+ *     "hello".contains("ell")  // true
+ *     contains({"a": 1}, "b")  // false
+ */
+fun contains(items: [T], value: T): bool
+
+/**
+ * Returns the index of the first element equal to a value.
+ *
+ * Elements are compared with `==`. Also works on strings, where it returns the
+ * character index of the first occurrence of a substring.
+ *
+ * @param items the array to search, or a string
+ * @param value the element to look for, or a substring for strings
+ * @return the index of the first match, or `-1` if there is none
+ * @see contains
+ * @group Arrays
+ * @since 26.1
+ * @example
+ *     indexOf([10, 20, 30], 20)  // 1
+ *     indexOf("hello", "l")      // 2
+ *     indexOf([1, 2], 5)         // -1
+ */
+fun indexOf(items: [T], value: T): int
+
+/**
+ * Joins the elements of an array into one string.
+ *
+ * Elements are converted like `toString` does, so strings are not quoted.
+ *
+ * @param items the array
+ * @param separator the text to put between two elements
+ * @return the joined text
+ * @see split
+ * @group Arrays
+ * @since 26.1
+ * @example
+ *     join([1, 2, 3], ", ")  // "1, 2, 3"
+ *     join(["a", "b"])       // "ab"
+ */
+fun join(items: [T], separator: string = ""): string
+
+/**
+ * Reverses the order of the elements of an array.
+ *
+ * The array is changed in place. Given a string, returns a new string with the
+ * characters in reverse order instead.
+ *
+ * @param items the array to change, or a string
+ * @see sort
+ * @group Arrays
+ * @since 26.1
+ * @example
+ *     var items = [1, 2, 3]
+ *     items.reverse()
+ *     items           // [3, 2, 1]
+ *     reverse("abc")  // "cba"
+ */
+fun reverse(items: [T])
+
+/**
+ * Sorts an array in ascending order.
+ *
+ * The array is changed in place. Only arrays of `int`, `float`, `string`,
+ * `bool`, enum or `any` values can be sorted. Strings are compared byte by
+ * byte, so upper case letters come before lower case ones, and enum values are
+ * sorted by their position in the enum.
+ *
+ * @param items the array to sort
+ * @see reverse
+ * @group Arrays
+ * @since 26.1
+ * @example
+ *     var words = ["b", "a", "C"]
+ *     words.sort()
+ *     words  // ["C", "a", "b"]
+ */
+fun sort(items: [T])
+
+/**
+ * Returns a new array with the elements between two indexes.
+ *
+ * The result starts at `start` and ends before `end`. Indexes are clamped to
+ * the array, so this never fails; negative indexes count as `0`. Given a
+ * string, returns a substring like `substring` does.
+ *
+ * @param items the array, or a string
+ * @param start the index of the first element to include
+ * @param end the index after the last element to include
+ * @return a new array; the original is not changed
+ * @see substring
+ * @see copy
+ * @group Arrays
+ * @since 26.1
+ * @example
+ *     slice([1, 2, 3, 4], 1, 3)  // [2, 3]
+ *     slice([1, 2, 3, 4], 2)     // [3, 4]
+ *     slice("hello", 1, 3)       // "el"
+ */
+fun slice(items: [T], start: int, end: int = len(items)): [T]
+
+/**
+ * Returns a shallow copy of an array.
+ *
+ * Changing the copy does not change the original, but both share the elements
+ * themselves. Maps are not supported.
+ *
+ * @param items the array to copy
+ * @return a new array with the same elements
+ * @see slice
+ * @group Arrays
+ * @since 26.1
+ * @example
+ *     var a = [1, 2]
+ *     var b = copy(a)
+ *     b.push(3)
+ *     a  // [1, 2]
+ */
+fun copy(items: [T]): [T]
+
+/**
+ * Removes all elements from an array.
+ *
+ * The array is changed in place. Maps are not supported. Usually called as a
+ * method: `items.clear()`.
+ *
+ * @param items the array to empty
+ * @group Arrays
+ * @since 26.1
+ * @example
+ *     var items = [1, 2]
+ *     items.clear()
+ *     items  // []
+ */
+fun clear(items: [T])
+
+/**
+ * Returns the keys of a map.
+ *
+ * Keys are in insertion order. Usually called as a method: `map.keys()`.
+ *
+ * @param map the map
+ * @return a new array with the keys
+ * @see values
+ * @group Maps
+ * @since 26.1
+ * @example
+ *     keys({"b": 2, "a": 1})  // ["b", "a"]
+ */
+fun keys(map: {K: V}): [K]
+
+/**
+ * Returns the values of a map.
+ *
+ * Values are in insertion order of their keys. Usually called as a method:
+ * `map.values()`.
+ *
+ * @param map the map
+ * @return a new array with the values
+ * @see keys
+ * @group Maps
+ * @since 26.1
+ * @example
+ *     values({"b": 2, "a": 1})  // [2, 1]
+ */
+fun values(map: {K: V}): [V]
+
+/**
+ * Tells whether a map contains a key.
+ *
+ * Usually called as a method: `map.has(key)`.
+ *
+ * @param map the map
+ * @param key the key to look for
+ * @return `true` if the key is in the map
+ * @see get
+ * @see contains
+ * @group Maps
+ * @since 26.1
+ * @example
+ *     var ages = {"ada": 36}
+ *     ages.has("ada")  // true
+ *     ages.has("bob")  // false
+ */
+fun has(map: {K: V}, key: K): bool
+
+/**
+ * Returns the value for a key in a map.
+ *
+ * Without a fallback, a missing key stops the program, like `map[key]`. Given
+ * an array and an index, returns the element like `items[index]`. Usually
+ * called as a method: `map.get(key, fallback)`.
+ *
+ * @param map the map
+ * @param key the key to look up
+ * @param fallback the value to return when the key is missing; if omitted, a
+ *     missing key is an error
+ * @return the value for the key, or `fallback` when the key is missing
+ * @throws when the key is missing and no fallback is given
+ * @see has
+ * @see remove
+ * @group Maps
+ * @since 26.1
+ * @example
+ *     var ages = {"ada": 36}
+ *     ages.get("ada")     // 36
+ *     ages.get("bob", 0)  // 0
+ */
+fun get(map: {K: V}, key: K, fallback: V = none): V
+
+/**
+ * Returns the absolute value of a number.
+ *
+ * An `int` argument gives an `int`, a `float` argument a `float`.
+ *
+ * @param x the number
+ * @return `x` without its sign
+ * @group Math
+ * @since 26.1
+ * @example
+ *     abs(-5)    // 5
+ *     abs(-2.5)  // 2.5
+ */
+fun abs(x: float): float
+
+/**
+ * Returns the smaller of two numbers.
+ *
+ * When both arguments are `int` the result is an `int`; otherwise both are
+ * converted to `float`.
+ *
+ * @param a the first number
+ * @param b the second number
+ * @return the smaller of `a` and `b`
+ * @see max
+ * @group Math
+ * @since 26.1
+ * @example
+ *     min(3, 7)    // 3
+ *     min(2, 3.5)  // 2.0
+ */
+fun min(a: float, b: float): float
+
+/**
+ * Returns the larger of two numbers.
+ *
+ * When both arguments are `int` the result is an `int`; otherwise both are
+ * converted to `float`.
+ *
+ * @param a the first number
+ * @param b the second number
+ * @return the larger of `a` and `b`
+ * @see min
+ * @group Math
+ * @since 26.1
+ * @example
+ *     max(3, 7)    // 7
+ *     max(2.5, 1)  // 2.5
+ */
+fun max(a: float, b: float): float
+
+/**
+ * Raises a number to a power.
+ *
+ * When both arguments are `int` the result is an `int`: a negative exponent
+ * gives `0` and results that do not fit wrap around. Otherwise both are
+ * converted to `float`.
+ *
+ * @param base the number to raise
+ * @param exponent the power
+ * @return `base` raised to `exponent`
+ * @see sqrt
+ * @see exp
+ * @group Math
+ * @since 26.1
+ * @example
+ *     pow(2, 10)     // 1024
+ *     pow(2.0, 0.5)  // 1.4142135623730951
+ *     pow(2, -1)     // 0
+ */
+fun pow(base: float, exponent: float): float
+
+/**
+ * Returns the square root of a number.
+ *
+ * @param x a number, `int` values are converted to `float`
+ * @return the square root, `NaN` for negative numbers
+ * @see pow
+ * @group Math
+ * @since 26.1
+ * @example
+ *     sqrt(16.0)  // 4.0
+ *     sqrt(2)     // 1.4142135623730951
+ */
+fun sqrt(x: float): float
+
+/**
+ * Rounds a number down to the nearest `int`.
+ *
+ * An `int` argument is returned unchanged.
+ *
+ * @param x the number
+ * @return the largest `int` that is less than or equal to `x`
+ * @see ceil
+ * @see round
+ * @group Math
+ * @since 26.1
+ * @example
+ *     floor(2.7)   // 2
+ *     floor(-2.5)  // -3
+ */
+fun floor(x: float): int
+
+/**
+ * Rounds a number up to the nearest `int`.
+ *
+ * An `int` argument is returned unchanged.
+ *
+ * @param x the number
+ * @return the smallest `int` that is greater than or equal to `x`
+ * @see floor
+ * @see round
+ * @group Math
+ * @since 26.1
+ * @example
+ *     ceil(2.1)   // 3
+ *     ceil(-2.1)  // -2
+ */
+fun ceil(x: float): int
+
+/**
+ * Rounds a number to the nearest `int`.
+ *
+ * Halfway cases are rounded away from zero. An `int` argument is returned
+ * unchanged.
+ *
+ * @param x the number
+ * @return the `int` closest to `x`
+ * @see floor
+ * @see ceil
+ * @group Math
+ * @since 26.1
+ * @example
+ *     round(2.4)   // 2
+ *     round(2.5)   // 3
+ *     round(-2.5)  // -3
+ */
+fun round(x: float): int
+
+/**
+ * Returns Euler's number `e` raised to a power.
+ *
+ * @param x the exponent, `int` values are converted to `float`
+ * @return `e` to the power of `x`
+ * @see log
+ * @see pow
+ * @group Math
+ * @since 26.1
+ * @example
+ *     exp(0.0)  // 1.0
+ *     exp(1.0)  // 2.718281828459045
+ */
+fun exp(x: float): float
+
+/**
+ * Returns the natural logarithm of a number.
+ *
+ * @param x a number, `int` values are converted to `float`
+ * @return the logarithm to base `e`; `-Infinity` for `0.0` and `NaN` for
+ *     negative numbers
+ * @see log10
+ * @see exp
+ * @group Math
+ * @since 26.1
+ * @example
+ *     log(1.0)                // 0.0
+ *     log(2.718281828459045)  // 1.0
+ */
+fun log(x: float): float
+
+/**
+ * Returns the base 10 logarithm of a number.
+ *
+ * @param x a number, `int` values are converted to `float`
+ * @return the logarithm to base 10; `-Infinity` for `0.0` and `NaN` for
+ *     negative numbers
+ * @see log
+ * @group Math
+ * @since 26.1
+ * @example
+ *     log10(1000.0)  // 3.0
+ */
+fun log10(x: float): float
+
+/**
+ * Returns the sine of an angle.
+ *
+ * @param x the angle in radians, `int` values are converted to `float`
+ * @return the sine, from `-1.0` to `1.0`
+ * @see cos
+ * @see asin
+ * @group Math
+ * @since 26.1
+ * @example
+ *     sin(0.0)                      // 0.0
+ *     sin(3.141592653589793 / 2.0)  // 1.0
+ */
+fun sin(x: float): float
+
+/**
+ * Returns the cosine of an angle.
+ *
+ * @param x the angle in radians, `int` values are converted to `float`
+ * @return the cosine, from `-1.0` to `1.0`
+ * @see sin
+ * @see acos
+ * @group Math
+ * @since 26.1
+ * @example
+ *     cos(0.0)  // 1.0
+ */
+fun cos(x: float): float
+
+/**
+ * Returns the tangent of an angle.
+ *
+ * @param x the angle in radians, `int` values are converted to `float`
+ * @return the tangent
+ * @see atan
+ * @group Math
+ * @since 26.1
+ * @example
+ *     tan(0.0)  // 0.0
+ */
+fun tan(x: float): float
+
+/**
+ * Returns the arc sine of a number.
+ *
+ * @param x a number from `-1.0` to `1.0`, `int` values are converted to `float`
+ * @return the angle in radians, from `-PI / 2` to `PI / 2`; `NaN` when `x` is
+ *     outside the range
+ * @see sin
+ * @group Math
+ * @since 26.1
+ * @example
+ *     asin(1.0)  // 1.5707963267948966
+ */
+fun asin(x: float): float
+
+/**
+ * Returns the arc cosine of a number.
+ *
+ * @param x a number from `-1.0` to `1.0`, `int` values are converted to `float`
+ * @return the angle in radians, from `0.0` to `PI`; `NaN` when `x` is outside
+ *     the range
+ * @see cos
+ * @group Math
+ * @since 26.1
+ * @example
+ *     acos(1.0)   // 0.0
+ *     acos(-1.0)  // 3.141592653589793
+ */
+fun acos(x: float): float
+
+/**
+ * Returns the arc tangent of a number.
+ *
+ * @param x a number, `int` values are converted to `float`
+ * @return the angle in radians, from `-PI / 2` to `PI / 2`
+ * @see atan2
+ * @see tan
+ * @group Math
+ * @since 26.1
+ * @example
+ *     atan(1.0)  // 0.7853981633974483
+ */
+fun atan(x: float): float
+
+/**
+ * Returns the angle of the point `(x, y)` from the positive x axis.
+ *
+ * Unlike `atan(y / x)`, the signs of both arguments are used to find the
+ * quadrant, and `x` may be `0`.
+ *
+ * @param y the y coordinate, `int` values are converted to `float`
+ * @param x the x coordinate, `int` values are converted to `float`
+ * @return the angle in radians, from `-PI` to `PI`
+ * @see atan
+ * @group Math
+ * @since 26.1
+ * @example
+ *     atan2(1.0, 1.0)   // 0.7853981633974483
+ *     atan2(1.0, -1.0)  // 2.356194490192345
+ */
+fun atan2(y: float, x: float): float
+
+/**
+ * Returns a random float from `0.0` up to, but not including, `1.0`.
+ *
+ * The generator is seeded from the clock when the program starts; call `seed`
+ * for a repeatable sequence. It is not suitable for cryptography.
+ *
+ * @return a random number in the range `[0.0, 1.0)`
+ * @see randomInt
+ * @see seed
+ * @group Random
+ * @since 26.1
+ * @example
+ *     random()  // for example 0.7055475143366563
+ */
+fun random(): float
+
+/**
+ * Returns a random `int` in a range, both ends included.
+ *
+ * When `max` is not greater than `min`, returns `min`.
+ *
+ * @param min the smallest possible result
+ * @param max the largest possible result
+ * @return a random number from `min` to `max`
+ * @see random
+ * @see seed
+ * @group Random
+ * @since 26.1
+ * @example
+ *     randomInt(1, 6)  // a dice roll, for example 4
+ */
+fun randomInt(min: int, max: int): int
+
+/**
+ * Seeds the random number generator.
+ *
+ * After the same seed, `random` and `randomInt` return the same sequence of
+ * numbers.
+ *
+ * @param value the seed
+ * @see random
+ * @see randomInt
+ * @group Random
+ * @since 26.1
+ * @example
+ *     seed(42)
+ *     var a = random()
+ *     seed(42)
+ *     random() == a  // true
+ */
+fun seed(value: int)
+
+/**
+ * Returns the current time in seconds since the Unix epoch.
+ *
+ * The epoch is 1 January 1970 UTC. The fractional part holds the sub-second
+ * time.
+ *
+ * @return the seconds since the epoch
+ * @see nowMs
+ * @see clock
+ * @group Time
+ * @since 26.1
+ * @example
+ *     now()  // for example 1790749674.9705174
+ */
+fun now(): float
+
+/**
+ * Returns the current time in milliseconds since the Unix epoch.
+ *
+ * The epoch is 1 January 1970 UTC.
+ *
+ * @return the whole milliseconds since the epoch
+ * @see now
+ * @see clock
+ * @group Time
+ * @alias millis
+ * @since 26.1
+ * @example
+ *     nowMs()  // for example 1790749674970
+ */
+fun nowMs(): int
+
+/**
+ * Returns the value of a monotonic clock in nanoseconds.
+ *
+ * The clock never goes backwards, even when the system time changes, but its
+ * starting point is not fixed. Use it to measure durations by subtracting two
+ * values.
+ *
+ * @return the clock value in nanoseconds
+ * @see nowMs
+ * @group Time
+ * @since 26.1
+ * @example
+ *     var start = clock()
+ *     sleep(20)
+ *     (clock() - start) / 1000000 >= 20  // true
+ */
+fun clock(): int
+
+/**
+ * Pauses the current task for a number of milliseconds.
+ *
+ * Standard output is flushed first. A `float` is truncated to whole
+ * milliseconds, and negative values do not pause. Other async tasks keep
+ * running.
+ *
+ * @param ms how long to pause, in milliseconds
+ * @see clock
+ * @group Time
+ * @since 26.1
+ * @example
+ *     sleep(500)  // waits half a second
+ */
+fun sleep(ms: int)
+
+/**
+ * Returns the current local date and time as an array of numbers.
+ *
+ * The elements are year, month (`1` to `12`), day, hour, minute, second,
+ * millisecond, weekday (`0` is Sunday) and the offset from UTC in seconds.
+ * This is an internal function used by `std/date` and `std/time`; use `Date`
+ * and `Time` from those modules instead. It cannot be called as a method.
+ *
+ * @return `[year, month, day, hour, minute, second, millisecond, weekday, utcOffset]`
+ * @see now
+ * @group Time
+ * @since 26.1
+ * @example
+ *     __localTime()  // for example [2026, 9, 30, 6, 23, 21, 692, 3, 0]
+ */
+fun __localTime(): [int]
+
+/**
+ * Reads a whole file as text.
+ *
+ * Bytes that are not valid UTF-8 are replaced with `U+FFFD`.
+ *
+ * @param path the path of the file, relative to the working directory or absolute
+ * @return the contents of the file
+ * @throws when the file does not exist or cannot be read
+ * @see writeFile
+ * @see fileExists
+ * @group Files
+ * @since 26.1
+ * @example
+ *     writeFile("notes.txt", "one\n")
+ *     readFile("notes.txt")  // "one\n"
+ */
+fun readFile(path: string): string
+
+/**
+ * Writes text to a file, replacing its contents.
+ *
+ * The file is created if it does not exist; its directory must exist. The
+ * content is converted like `toString` does. Failure does not stop the program,
+ * so check the result.
+ *
+ * @param path the path of the file
+ * @param content the text to write
+ * @return `true` if the file was written, `false` on failure
+ * @see appendFile
+ * @see readFile
+ * @group Files
+ * @since 26.1
+ * @example
+ *     writeFile("notes.txt", "one\n")      // true
+ *     writeFile("/missing/dir/x.txt", "")  // false
+ */
+fun writeFile(path: string, content: any): bool
+
+/**
+ * Adds text to the end of a file.
+ *
+ * The file is created if it does not exist; its directory must exist. The
+ * content is converted like `toString` does, and no newline is added.
+ *
+ * @param path the path of the file
+ * @param content the text to add
+ * @return `true` if the text was written, `false` on failure
+ * @see writeFile
+ * @group Files
+ * @since 26.1
+ * @example
+ *     writeFile("log.txt", "one\n")
+ *     appendFile("log.txt", "two\n")
+ *     readFile("log.txt")  // "one\ntwo\n"
+ */
+fun appendFile(path: string, content: any): bool
+
+/**
+ * Tells whether a file or directory exists.
+ *
+ * @param path the path to test
+ * @return `true` if something exists at the path, including a directory
+ * @see readFile
+ * @group Files
+ * @since 26.1
+ * @example
+ *     writeFile("notes.txt", "")
+ *     fileExists("notes.txt")    // true
+ *     fileExists("missing.txt")  // false
+ */
+fun fileExists(path: string): bool
+
+/**
+ * Parses JSON text into a value.
+ *
+ * Objects become `{string: any}` maps, arrays become `[any]`, numbers become
+ * `int` or `float`, and `null` becomes `null`. Read the result with indexing
+ * (`data["name"]`, `data.tags[0]`) and narrow values with `is`.
+ *
+ * @param text the JSON text
+ * @return the parsed value
+ * @throws when the text is not valid JSON
+ * @see toJSON
+ * @group JSON
+ * @since 26.1
+ * @example
+ *     var data = parseJSON("{\"name\": \"Ada\", \"tags\": [\"x\", \"y\"]}")
+ *     data["name"]  // "Ada"
+ *     data.tags[1]  // "y"
+ */
+fun parseJSON(text: string): any
+
+/**
+ * Converts a value to JSON text.
+ *
+ * The output is compact, without whitespace between values. Maps and structs
+ * become objects, arrays become arrays, and `null` becomes `null`. Works as a method on every value,
+ * including structs: `point.toJSON()`.
+ *
+ * @param value the value to convert
+ * @return the value as JSON
+ * @see parseJSON
+ * @group JSON
+ * @since 26.1
+ * @example
+ *     toJSON({"a": [1, 2]})  // "{\"a\":[1,2]}"
+ *     toJSON("hi")           // "\"hi\""
+ */
+fun toJSON(value: any): string
+
+/**
+ * Sends an HTTP request and returns the raw response.
+ *
+ * The result has three strings: the status code, the body and the response
+ * headers, one per line. `http://` URLs are requested directly and `https://`
+ * URLs through the system `curl`. When the request fails, the status code is
+ * `"0"` and the body holds the error message. This is an internal function
+ * used by `std/http`; use `HTTP` from that module instead. It cannot be called
+ * as a method.
+ *
+ * @param method the HTTP method, such as `"GET"` or `"POST"`
+ * @param url the URL to request
+ * @param body the request body, empty for none
+ * @param headers the request headers, each as `"Name: value"`
+ * @return `[status, body, headers]`
+ * @group HTTP
+ * @since 26.1
+ * @example
+ *     var raw = __httpRequest("GET", "http://127.0.0.1:1/", "", [])
+ *     raw[0]  // "0" when nothing listens on the port
+ *     raw[1]  // "Connection refused (os error 111)"
+ */
+fun __httpRequest(method: string, url: string, body: string, headers: [string]): [string]
+
+/**
+ * Returns the name of the type of a value.
+ *
+ * For `any` and interface values this is the type of the value at runtime, and
+ * `null` gives `"null"`. Works as a method on every value, including structs:
+ * `shape.typeOf()`.
+ *
+ * @param value the value
+ * @return the type name, such as `"int"`, `"[string]"` or `"Point"`
+ * @see annotationsOf
+ * @group Types
+ * @since 26.1
+ * @example
+ *     typeOf(1.5)       // "float"
+ *     typeOf([1, 2])    // "[int]"
+ *     typeOf({"a": 1})  // "{string: int}"
+ */
+fun typeOf(value: any): string
+
+/**
+ * Returns the annotations declared on the type of a value.
+ *
+ * Only annotations declared with `def annotation` are listed, not built-in ones
+ * such as `@Getter`. Narrow each element with `is` to read its fields. For
+ * `any` and interface values the type at runtime is used.
+ *
+ * @param value the value whose type to inspect
+ * @return the annotation values, empty when there are none
+ * @see typeOf
+ * @group Types
+ * @since 26.1
+ * @example
+ *     // Users is declared as: @Route("/users") def struct Users() {}
+ *     annotationsOf(new Users())  // [Route { path: "/users" }]
+ *     annotationsOf(42)           // []
+ */
+fun annotationsOf(value: any): [any]
+
+/**
+ * Returns the command-line arguments of the program.
+ *
+ * The program name and the file name are not included.
+ *
+ * @return the arguments, in order
+ * @see env
+ * @group Program
+ * @since 26.1
+ * @example
+ *     args()  // ["a", "b"] for `burn app.bn a b`
+ */
+fun args(): [string]
+
+/**
+ * Returns the value of an environment variable.
+ *
+ * @param name the name of the variable
+ * @return the value, or `""` when the variable is not set
+ * @see args
+ * @group Program
+ * @since 26.1
+ * @example
+ *     env("HOME")  // for example "/home/ada"
+ */
+fun env(name: string): string
+
+/**
+ * Ends the program with an exit code.
+ *
+ * Waits for running async tasks and flushes the output first.
+ *
+ * @param code the exit code, `0` for success
+ * @see panic
+ * @group Program
+ * @since 26.1
+ * @example
+ *     if (len(args()) == 0) {
+ *         eprint("usage: app <file>")
+ *         exit(2)
+ *     }
+ */
+fun exit(code: int = 0)
+
+/**
+ * Stops the program with a runtime error.
+ *
+ * Prints the message and the source location to standard error and exits with
+ * code `1`. The message is converted like `toString` does.
+ *
+ * @param message the error message
+ * @throws always
+ * @see assert
+ * @see exit
+ * @group Program
+ * @since 26.1
+ * @example
+ *     panic("unknown command")  // runtime error: unknown command
+ */
+fun panic(message: string = "explicit panic")
+
+/**
+ * Stops the program with a runtime error when a condition is false.
+ *
+ * The error reads `assertion failed:` followed by the message. Without a
+ * message, the source text of the condition is used.
+ *
+ * @param condition the condition that must hold
+ * @param message the text to show when the condition is false
+ * @throws when the condition is false
+ * @see panic
+ * @group Program
+ * @since 26.1
+ * @example
+ *     var x = 3
+ *     assert(x > 5)  // runtime error: assertion failed: x > 5
+ */
+fun assert(condition: bool, message: string = "")
+
+/**
+ * Runs the garbage collector now.
+ *
+ * Memory is collected automatically, so this is rarely needed. It can help when
+ * measuring memory use.
+ *
+ * @group Program
+ * @since 26.1
+ * @example
+ *     gc()
+ */
+fun gc()

@@ -1,3 +1,11 @@
+/**
+ * Formats a number with leading zeros up to a given width.
+ *
+ * @param n the number, not negative
+ * @param width the minimum number of digits
+ * @return the number as text, for example `"007"` for `pad(7, 3)`
+ * @since 26.1
+ */
 priv fun pad(n: int, width: int): string {
     var s = toString(n)
     while (len(s) < width) {
@@ -6,16 +14,68 @@ priv fun pad(n: int, width: int): string {
     return s
 }
 
+/**
+ * A time of day or a duration, with millisecond precision.
+ *
+ * The fields are not validated or wrapped around: hours can go past 23,
+ * which makes `Time` usable for durations as well.
+ *
+ * @param hours the hours, usually from 0 to 23
+ * @param minutes the minutes, from 0 to 59
+ * @param seconds the seconds, from 0 to 59
+ * @param milliseconds the milliseconds, from 0 to 999
+ * @see Time.create
+ * @since 26.1
+ * @example
+ *     var t = new Time(9, 5, 30, 250)
+ *     t.formatWithMs()  // "09:05:30.250"
+ */
 pub def struct Time(hours: int, minutes: int, seconds: int, milliseconds: int) {
+    /**
+     * Creates a time from its parts.
+     *
+     * @param hours the hours, usually from 0 to 23
+     * @param minutes the minutes, from 0 to 59
+     * @param seconds the seconds, from 0 to 59
+     * @param milliseconds the milliseconds, from 0 to 999
+     * @return the new time, not validated
+     * @see createTime
+     * @since 26.1
+     * @example
+     *     Time.create(14, 30, 0, 0).format()  // "14:30:00"
+     */
     static fun create(hours: int, minutes: int, seconds: int, milliseconds: int): Time {
         return new Time(hours, minutes, seconds, milliseconds)
     }
 
+    /**
+     * Returns the current time of day in the local time zone.
+     *
+     * @return the current time
+     * @see currentTime
+     * @since 26.1
+     * @example
+     *     print("It is " + Time.now().format())
+     */
     static fun now(): Time {
         var t = __localTime()
         return new Time(t[3], t[4], t[5], t[6])
     }
 
+    /**
+     * Converts a number of milliseconds to a time.
+     *
+     * The milliseconds are split into hours, minutes, seconds and
+     * milliseconds. Hours are not wrapped at 24. A negative number gives negative
+     * fields.
+     *
+     * @param ms the number of milliseconds, not negative
+     * @return the time
+     * @see Time.toMilliseconds
+     * @since 26.1
+     * @example
+     *     Time.fromMilliseconds(3723004).formatWithMs()  // "01:02:03.004"
+     */
     static fun fromMilliseconds(ms: int): Time {
         var rest = ms
         var h = rest / 3600000
@@ -27,10 +87,38 @@ pub def struct Time(hours: int, minutes: int, seconds: int, milliseconds: int) {
         return new Time(h, m, s, rest)
     }
 
+    /**
+     * Converts a number of seconds to a time.
+     *
+     * The seconds are rounded to the nearest millisecond.
+     *
+     * @param seconds the number of seconds, not negative
+     * @return the time
+     * @see Time.toSeconds
+     * @since 26.1
+     * @example
+     *     Time.fromSeconds(90.5).formatWithMs()  // "00:01:30.500"
+     */
     static fun fromSeconds(seconds: float): Time {
         return Time.fromMilliseconds(round(seconds * 1000.0))
     }
 
+    /**
+     * Parses a time written as `H:MM:SS` with optional milliseconds.
+     *
+     * Accepts `H`, `H:MM` or `H:MM:SS`, optionally followed by a fraction
+     * of a second such as `.5`, `.25` or `.250`. Missing parts are 0, and
+     * the parts do not need leading zeros. Nothing is range-checked.
+     *
+     * @param text the text to parse, for example `"09:05:30.250"`
+     * @return the parsed time
+     * @throws when a part is not a whole number
+     * @see Time.format
+     * @see parseTime
+     * @since 26.1
+     * @example
+     *     Time.parse("1:02:03.5").formatWithMs()  // "01:02:03.500"
+     */
     static fun parse(text: string): Time {
         var main = text
         var ms = 0
@@ -61,75 +149,267 @@ pub def struct Time(hours: int, minutes: int, seconds: int, milliseconds: int) {
         return new Time(h, m, s, ms)
     }
 
+    /**
+     * Returns this time as a total number of milliseconds.
+     *
+     * @return the total number of milliseconds
+     * @see Time.fromMilliseconds
+     * @since 26.1
+     * @example
+     *     Time.create(0, 1, 30, 0).toMilliseconds()  // 90000
+     */
     fun toMilliseconds(): int {
         return self.hours * 3600000 + self.minutes * 60000 + self.seconds * 1000 + self.milliseconds
     }
 
+    /**
+     * Returns this time as a total number of seconds.
+     *
+     * @return the total number of seconds, including the milliseconds as a fraction
+     * @see Time.fromSeconds
+     * @since 26.1
+     * @example
+     *     Time.create(0, 1, 30, 500).toSeconds()  // 90.5
+     */
     fun toSeconds(): float {
         return self.toMilliseconds() / 1000.0
     }
 
+    /**
+     * Adds another time to this one.
+     *
+     * The result is not wrapped at 24 hours.
+     *
+     * @param other the time to add
+     * @return a new time; this time is not changed
+     * @see Time.subtract
+     * @since 26.1
+     * @example
+     *     Time.create(1, 45, 0, 0).add(Time.create(0, 30, 0, 0)).format()  // "02:15:00"
+     */
     fun add(other: Time): Time {
         return Time.fromMilliseconds(self.toMilliseconds() + other.toMilliseconds())
     }
 
+    /**
+     * Subtracts another time from this one.
+     *
+     * If `other` is longer than this time, the result has negative fields,
+     * see {@link Time.fromMilliseconds}.
+     *
+     * @param other the time to subtract
+     * @return a new time; this time is not changed
+     * @see Time.add
+     * @since 26.1
+     * @example
+     *     Time.create(2, 15, 0, 0).subtract(Time.create(0, 30, 0, 0)).format()  // "01:45:00"
+     */
     fun subtract(other: Time): Time {
         return Time.fromMilliseconds(self.toMilliseconds() - other.toMilliseconds())
     }
 
+    /**
+     * Formats this time as `HH:MM:SS` text.
+     *
+     * Each field has at least two digits. The milliseconds are left out,
+     * see {@link Time.formatWithMs}.
+     *
+     * @return the formatted time, for example `"09:05:30"`
+     * @see Time.formatWithMs
+     * @since 26.1
+     * @example
+     *     Time.create(9, 5, 30, 250).format()  // "09:05:30"
+     */
     fun format(): string {
         return "${pad(self.hours, 2)}:${pad(self.minutes, 2)}:${pad(self.seconds, 2)}"
     }
 
+    /**
+     * Formats this time as `HH:MM:SS.mmm` text.
+     *
+     * @return the formatted time, for example `"09:05:30.250"`
+     * @see Time.format
+     * @since 26.1
+     * @example
+     *     Time.create(9, 5, 30, 7).formatWithMs()  // "09:05:30.007"
+     */
     fun formatWithMs(): string {
         return "${self.format()}.${pad(self.milliseconds, 3)}"
     }
 }
 
+/**
+ * Creates a time from its parts.
+ *
+ * Same as {@link Time.create}.
+ *
+ * @param hours the hours, usually from 0 to 23
+ * @param minutes the minutes, from 0 to 59
+ * @param seconds the seconds, from 0 to 59
+ * @param milliseconds the milliseconds, from 0 to 999
+ * @return the new time, not validated
+ * @see Time.create
+ * @since 26.1
+ */
 pub fun createTime(hours: int, minutes: int, seconds: int, milliseconds: int): Time {
     return Time.create(hours, minutes, seconds, milliseconds)
 }
 
+/**
+ * Formats a number of seconds as `HH:MM:SS` text.
+ *
+ * The seconds are rounded to the nearest millisecond, and the
+ * milliseconds are then left out.
+ *
+ * @param totalSeconds the number of seconds, not negative
+ * @return the formatted time, for example `"01:02:05"`
+ * @see parseTime
+ * @since 26.1
+ * @example
+ *     formatTime(3725.0)  // "01:02:05"
+ */
 pub fun formatTime(totalSeconds: float): string {
     return Time.fromSeconds(totalSeconds).format()
 }
 
+/**
+ * Parses a time written as `H:MM:SS` and returns it in seconds.
+ *
+ * Accepts the same forms as {@link Time.parse}.
+ *
+ * @param text the text to parse, for example `"01:02:05.5"`
+ * @return the total number of seconds
+ * @throws when a part is not a whole number
+ * @see formatTime
+ * @since 26.1
+ * @example
+ *     parseTime("01:02:05.5")  // 3725.5
+ */
 pub fun parseTime(text: string): float {
     return Time.parse(text).toSeconds()
 }
 
+/**
+ * Returns the current local time of day as `HH:MM:SS` text.
+ *
+ * @return the current time, for example `"14:30:00"`
+ * @see Time.now
+ * @since 26.1
+ * @example
+ *     print("It is " + currentTime())
+ */
 pub fun currentTime(): string {
     return Time.now().format()
 }
 
+/**
+ * Converts hours to minutes.
+ *
+ * @param hours the number of hours
+ * @return the number of minutes
+ * @see minutesToHours
+ * @since 26.1
+ * @example
+ *     hoursToMinutes(1.5)  // 90.0
+ */
 pub fun hoursToMinutes(hours: float): float {
     return hours * 60.0
 }
 
+/**
+ * Converts minutes to hours.
+ *
+ * @param minutes the number of minutes
+ * @return the number of hours
+ * @see hoursToMinutes
+ * @since 26.1
+ * @example
+ *     minutesToHours(90.0)  // 1.5
+ */
 pub fun minutesToHours(minutes: float): float {
     return minutes / 60.0
 }
 
+/**
+ * Converts hours to seconds.
+ *
+ * @param hours the number of hours
+ * @return the number of seconds
+ * @see secondsToHours
+ * @since 26.1
+ * @example
+ *     hoursToSeconds(2.0)  // 7200.0
+ */
 pub fun hoursToSeconds(hours: float): float {
     return hours * 3600.0
 }
 
+/**
+ * Converts seconds to hours.
+ *
+ * @param seconds the number of seconds
+ * @return the number of hours
+ * @see hoursToSeconds
+ * @since 26.1
+ * @example
+ *     secondsToHours(5400.0)  // 1.5
+ */
 pub fun secondsToHours(seconds: float): float {
     return seconds / 3600.0
 }
 
+/**
+ * Converts minutes to seconds.
+ *
+ * @param minutes the number of minutes
+ * @return the number of seconds
+ * @see secondsToMinutes
+ * @since 26.1
+ * @example
+ *     minutesToSeconds(2.5)  // 150.0
+ */
 pub fun minutesToSeconds(minutes: float): float {
     return minutes * 60.0
 }
 
+/**
+ * Converts seconds to minutes.
+ *
+ * @param seconds the number of seconds
+ * @return the number of minutes
+ * @see minutesToSeconds
+ * @since 26.1
+ * @example
+ *     secondsToMinutes(150.0)  // 2.5
+ */
 pub fun secondsToMinutes(seconds: float): float {
     return seconds / 60.0
 }
 
+/**
+ * Converts seconds to milliseconds.
+ *
+ * @param seconds the number of seconds
+ * @return the number of milliseconds
+ * @see msToSeconds
+ * @since 26.1
+ * @example
+ *     secondsToMs(1.25)  // 1250.0
+ */
 pub fun secondsToMs(seconds: float): float {
     return seconds * 1000.0
 }
 
+/**
+ * Converts milliseconds to seconds.
+ *
+ * @param ms the number of milliseconds
+ * @return the number of seconds
+ * @see secondsToMs
+ * @since 26.1
+ * @example
+ *     msToSeconds(1250.0)  // 1.25
+ */
 pub fun msToSeconds(ms: float): float {
     return ms / 1000.0
 }

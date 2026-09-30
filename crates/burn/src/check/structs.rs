@@ -739,7 +739,8 @@ impl<'a> Checker<'a> {
         match gty {
             Some(t) => {
                 let ts = self.show(t);
-                self.hover(span, format!("static {} {}.{}: {}", if gconst { "const" } else { "var" }, rec.name, name, ts));
+                let text = self.with_doc(format!("static {} {}.{}: {}", if gconst { "const" } else { "var" }, rec.name, name, ts), gspan);
+                self.hover(span, text);
                 Some((g, t))
             }
             None => {
@@ -781,20 +782,20 @@ impl<'a> Checker<'a> {
         if !rec.is_class {
             return self.construct_record(t, args, span, ty.span);
         }
-        self.hover(
-            ty.span,
-            format!(
-                "{}struct {}",
-                if rec.is_abstract {
-                    "abstract "
-                } else if rec.is_static {
-                    "static "
-                } else {
-                    ""
-                },
-                rec.name
-            ),
+        let head = format!(
+            "{}struct {}",
+            if rec.is_abstract {
+                "abstract "
+            } else if rec.is_static {
+                "static "
+            } else {
+                ""
+            },
+            rec.name
         );
+        let dep = self.deprecated_types.get(&t).cloned();
+        let text = self.with_doc_dep(head, rec.span, dep.as_deref());
+        self.hover(ty.span, text);
         let fail = |c: &mut Self| {
             for a in args {
                 c.expr(a, None);
@@ -838,7 +839,8 @@ impl<'a> Checker<'a> {
         }
         self.def_link(name.span, def_span);
         let sig = self.method_sig_str(&params, ret, is_async);
-        self.hover(name.span, format!("{}.{}: {}", rec.name, name.name, sig));
+        let text = self.with_doc(format!("{}.{}: {}", rec.name, name.name, sig), def_span);
+        self.hover(name.span, text);
         let mut ps = vec![rec.ty];
         ps.extend(params);
         let recv = self.alive_wrap(recv, name.span);

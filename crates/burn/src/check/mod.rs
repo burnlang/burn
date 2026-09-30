@@ -398,6 +398,29 @@ impl<'a> Checker<'a> {
         }
     }
 
+    pub fn with_doc(&self, text: String, decl: Span) -> String {
+        self.with_doc_dep(text, decl, None)
+    }
+
+    pub fn with_doc_dep(&self, text: String, decl: Span, deprecated: Option<&str>) -> String {
+        if !self.opts.want_index || (decl.file as usize) >= self.sm.files.len() {
+            return text;
+        }
+        let src = &self.sm.file(decl.file).src;
+        let mut doc = crate::doc::comment::doc_before(src, decl.start as usize)
+            .map(|raw| crate::doc::comment::parse(&raw))
+            .unwrap_or_default();
+        if doc.deprecated.is_none() {
+            doc.deprecated = deprecated.map(|d| d.to_string());
+        }
+        let md = crate::doc::comment::to_markdown(&doc);
+        if md.is_empty() {
+            text
+        } else {
+            format!("{}\u{1}{}", text, md)
+        }
+    }
+
     pub fn hover(&mut self, span: Span, text: String) {
         if self.opts.want_index && !self.is_dry() {
             self.index.hovers.push((span, text));
@@ -1236,6 +1259,7 @@ impl<'a> Checker<'a> {
             };
             format!("{}fun {}({}){}", if info.is_async { "async " } else { "" }, info.name, ps.join(", "), r)
         };
+        let sig = self.with_doc(sig, decl.name.span);
         self.hover(decl.name.span, sig);
     }
 

@@ -398,3 +398,23 @@ fn fix_applies_the_compiler_suggestions() {
     let _ = std::fs::remove_dir_all(&tmp);
     assert_eq!(got, want);
 }
+
+#[test]
+fn doc_generates_pages_for_programs_the_standard_library_and_builtins() {
+    let root = root();
+    let out = std::env::temp_dir().join(format!("burn-doc-{}", std::process::id()));
+    let (log, code) = output(burn().current_dir(&root).arg("doc").arg("examples/zoo.bn").arg("-o").arg(&out));
+    assert_eq!(code, 0, "{}", log);
+    let read = |p: &str| std::fs::read_to_string(out.join(p)).unwrap_or_else(|_| panic!("missing {}", p));
+    let animal = read("t-zoo.Animal.html");
+    assert!(animal.contains("An animal living in the zoo."));
+    assert!(animal.contains("Extended by"));
+    assert!(animal.contains("the animal&#x27;s name") || animal.contains("the animal's name"));
+    let module = read("m-zoo.html");
+    assert!(module.contains("Deprecated"));
+    assert!(read("t-std-date.Date.html").contains("A calendar date"));
+    let builtins = read("builtins.html");
+    assert!(builtins.contains("println") && builtins.contains("id=\"sqrt\""));
+    assert!(read("search-index.js").contains("\"Animal.describe\""));
+    let _ = std::fs::remove_dir_all(&out);
+}
