@@ -939,29 +939,29 @@ impl<'a> Checker<'a> {
     }
 }
 
-fn devirt_stmts(stmts: &mut [Stmt], map: &HashMap<u32, FuncId>) {
+fn devirt_stmts(stmts: &mut [Stmt], map: &HashMap<u32, FuncId>, ctors: &HashMap<FuncId, (TyId, Vec<Expr>)>) {
     for s in stmts {
         match s {
-            Stmt::Expr(e) => devirt_expr(e, map),
+            Stmt::Expr(e) => devirt_expr(e, map, ctors),
             Stmt::If(c, a, b) => {
-                devirt_expr(c, map);
-                devirt_stmts(a, map);
-                devirt_stmts(b, map);
+                devirt_expr(c, map, ctors);
+                devirt_stmts(a, map, ctors);
+                devirt_stmts(b, map, ctors);
             }
             Stmt::Loop { cond, body, step } => {
                 if let Some(c) = cond {
-                    devirt_expr(c, map);
+                    devirt_expr(c, map, ctors);
                 }
-                devirt_stmts(body, map);
-                devirt_stmts(step, map);
+                devirt_stmts(body, map, ctors);
+                devirt_stmts(step, map, ctors);
             }
-            Stmt::Return(Some(e)) => devirt_expr(e, map),
+            Stmt::Return(Some(e)) => devirt_expr(e, map, ctors),
             _ => {}
         }
     }
 }
 
-fn devirt_expr(e: &mut Expr, map: &HashMap<u32, FuncId>) {
+fn devirt_expr(e: &mut Expr, map: &HashMap<u32, FuncId>, ctors: &HashMap<FuncId, (TyId, Vec<Expr>)>) {
     match &mut e.kind {
         ExprKind::SetLocal(_, x)
         | ExprKind::SetGlobal(_, x)
@@ -969,36 +969,76 @@ fn devirt_expr(e: &mut Expr, map: &HashMap<u32, FuncId>) {
         | ExprKind::Conv(_, x)
         | ExprKind::GetField(x, _)
         | ExprKind::ArrLen(x)
-        | ExprKind::BoxVal(x) => devirt_expr(x, map),
+        | ExprKind::BoxVal(x) => devirt_expr(x, map, ctors),
         ExprKind::Binary(_, a, b) | ExprKind::And(a, b) | ExprKind::Or(a, b) | ExprKind::SetField(a, _, b) | ExprKind::Index(a, b, _) => {
-            devirt_expr(a, map);
-            devirt_expr(b, map);
+            devirt_expr(a, map, ctors);
+            devirt_expr(b, map, ctors);
         }
         ExprKind::SetIndex(a, b, c, _) => {
-            devirt_expr(a, map);
-            devirt_expr(b, map);
-            devirt_expr(c, map);
+            devirt_expr(a, map, ctors);
+            devirt_expr(b, map, ctors);
+            devirt_expr(c, map, ctors);
         }
-        ExprKind::Call(_, xs) | ExprKind::Rt(_, xs) | ExprKind::Spawn(_, xs) | ExprKind::NewStruct(_, xs) | ExprKind::NewArray(_, xs) => {
-            xs.iter_mut().for_each(|x| devirt_expr(x, map))
+        ExprKind::Call(f, xs) => {
+            xs.iter_mut().for_each(|x| devirt_expr(x, map, ctors));
+            if let Some((t, vals)) = ctors.get(f) {
+                let mut args = std::mem::take(xs).into_iter();
+                let fields = vals
+                    .iter()
+                    .map(|v| match v.kind {
+                        ExprKind::Local(_) => args.next().unwrap(),
+                        _ => v.clone(),
+                    })
+                    .collect();
+                e.kind = ExprKind::NewStruct(*t, fields);
+            }
+        }
+        ExprKind::Rt(_, xs) | ExprKind::Spawn(_, xs) | ExprKind::NewStruct(_, xs) | ExprKind::NewArray(_, xs) => {
+            xs.iter_mut().for_each(|x| devirt_expr(x, map, ctors))
         }
         ExprKind::CallIndirect(f, xs) => {
-            devirt_expr(f, map);
-            xs.iter_mut().for_each(|x| devirt_expr(x, map));
+            devirt_expr(f, map, ctors);
+            xs.iter_mut().for_each(|x| devirt_expr(x, map, ctors));
         }
         ExprKind::CallIface(slot, xs) => {
-            xs.iter_mut().for_each(|x| devirt_expr(x, map));
+            xs.iter_mut().for_each(|x| devirt_expr(x, map, ctors));
             if let Some(f) = map.get(slot) {
                 let args = std::mem::take(xs);
                 e.kind = ExprKind::Call(*f, args);
             }
         }
         ExprKind::Seq(ss, x) => {
-            devirt_stmts(ss, map);
-            devirt_expr(x, map);
+            devirt_stmts(ss, map, ctors);
+            devirt_expr(x, map, ctors);
         }
         _ => {}
     }
+}
+
+fn simple_ctor(h: &hir::Func) -> Option<Vec<Expr>> {
+    let [Stmt::Expr(set), Stmt::Return(Some(ret))] = h.body.as_slice() else {
+        return None;
+    };
+    let (ExprKind::SetLocal(obj, v), ExprKind::Local(r)) = (&set.kind, &ret.kind) else {
+        return None;
+    };
+    if obj != r {
+        return None;
+    }
+    let ExprKind::NewStruct(_, vals) = &v.kind else { return None };
+    let mut next = 0;
+    for v in vals {
+        match &v.kind {
+            ExprKind::Local(k) if *k == next => next += 1,
+            ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Null | ExprKind::TypeId(_) => {}
+            ExprKind::NewArray(_, items) if items.is_empty() => {}
+            _ => return None,
+        }
+    }
+    if next != h.params {
+        return None;
+    }
+    Some(vals.clone())
 }
 
 impl<'a> Checker<'a> {
@@ -1012,12 +1052,20 @@ impl<'a> Checker<'a> {
                 }
             }
         }
-        if map.is_empty() {
+        let mut ctors = HashMap::new();
+        for r in &self.types.records {
+            let Some(c) = r.ctor else { continue };
+            let Some(h) = &self.funcs[c as usize].hir else { continue };
+            if let Some(vals) = simple_ctor(h) {
+                ctors.insert(c, (r.ty, vals));
+            }
+        }
+        if map.is_empty() && ctors.is_empty() {
             return;
         }
         for f in &mut self.funcs {
             if let Some(h) = &mut f.hir {
-                devirt_stmts(&mut h.body, &map);
+                devirt_stmts(&mut h.body, &map, &ctors);
             }
         }
     }
