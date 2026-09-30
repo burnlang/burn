@@ -1,0 +1,9 @@
+def interface Shape {
+    fun area(): float
+}
+
+def struct Square(side: float) : Shape {
+    fun area(): float {
+        return side * side
+    }
+}

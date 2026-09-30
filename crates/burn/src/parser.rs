@@ -12,12 +12,14 @@ pub struct Parser {
     pub diags: Vec<Diagnostic>,
     speculative: usize,
     no_struct: bool,
+    has_destroy: bool,
 }
 
 pub fn parse_module(toks: Vec<Token>, file: FileId) -> (Module, Vec<Diagnostic>) {
     let mut p = Parser::new(toks, file);
     let items = p.items();
-    (Module { items }, p.diags)
+    let has_destroy = p.has_destroy;
+    (Module { items, has_destroy }, p.diags)
 }
 
 pub fn parse_expr_tokens(toks: Vec<Token>, file: FileId) -> (Option<Expr>, Vec<Diagnostic>) {
@@ -52,6 +54,7 @@ impl Parser {
             diags: Vec::new(),
             speculative: 0,
             no_struct: false,
+            has_destroy: false,
         }
     }
 
@@ -108,7 +111,19 @@ impl Parser {
         } else {
             let tok = self.peek().clone();
             let span = if tok.nl_before && self.pos > 0 { self.prev_span() } else { tok.span };
-            self.err(span, format!("expected {} but found {}", what, describe(&tok.kind)));
+            let mut d = Diagnostic::error(span, format!("expected {} but found {}", what, describe(&tok.kind)));
+            let closer = match t {
+                Tok::RParen => Some(")"),
+                Tok::RBracket => Some("]"),
+                _ => None,
+            };
+            if let (Some(c), true) = (closer, tok.nl_before && self.pos > 0) {
+                let end = self.prev_span().end as usize;
+                d = d.maybe_fix(format!("add the missing `{}`", c), Span::new(span.file, end, end), c);
+            }
+            if self.speculative == 0 {
+                self.diags.push(d);
+            }
             Err(())
         }
     }
@@ -256,12 +271,12 @@ impl Parser {
                 let w = w.clone();
                 let span = self.peek().span;
                 if self.speculative == 0 {
-                    self.diags
-                        .push(Diagnostic::error(span, "definitions use the `def` keyword".to_string()).note(format!(
-                            "write `def {} {}` instead",
-                            w,
-                            self.peek_at(1).kind.ident_name()
-                        )));
+                    let at = Span::new(span.file, span.start as usize, span.start as usize);
+                    self.diags.push(Diagnostic::error(span, "definitions use the `def` keyword").fix(
+                        format!("write `def {} {}`", w, self.peek_at(1).kind.ident_name()),
+                        at,
+                        "def ",
+                    ));
                 }
                 ItemKind::Def(self.def()?)
             }
@@ -300,9 +315,26 @@ impl Parser {
         let class_get = on(annotations, "Getter");
         let class_set = on(annotations, "Setter");
         match d {
-            Def::Class { fields, methods, .. } => {
+            Def::Struct {
+                fields,
+                methods,
+                params,
+                param_anns,
+                ..
+            } => {
                 let mut extra = Vec::new();
-                for f in fields.iter() {
+                let param_fields: Vec<Field> = params
+                    .iter()
+                    .zip(param_anns.iter())
+                    .map(|(p, a)| Field {
+                        name: p.name.clone(),
+                        ty: p.ty.clone(),
+                        default: None,
+                        vis: Vis::Default,
+                        annotations: a.clone(),
+                    })
+                    .collect();
+                for f in param_fields.iter().chain(fields.iter()) {
                     let get = on(&f.annotations, "Getter").or(class_get);
                     let set = on(&f.annotations, "Setter").or(class_set);
                     let cap = {
@@ -347,6 +379,7 @@ impl Parser {
                                     span,
                                     annotations: Vec::new(),
                                     bodyless: false,
+                                    is_abstract: false,
                                 },
                             ));
                         }
@@ -389,6 +422,7 @@ impl Parser {
                                     span,
                                     annotations: Vec::new(),
                                     bodyless: false,
+                                    is_abstract: false,
                                 },
                             ));
                         }
@@ -403,7 +437,7 @@ impl Parser {
                     .map(|a| a.span)
                     .collect();
                 for s in spans {
-                    self.err(s, "@Getter and @Setter generate methods, so they can only be used on classes and their fields");
+                    self.err(s, "@Getter and @Setter generate methods, so they can only be used on structs and their fields");
                 }
                 if let Def::Type { fields, .. } | Def::Annotation { fields, .. } = d {
                     let spans: Vec<Span> = fields
@@ -413,7 +447,7 @@ impl Parser {
                         .map(|a| a.span)
                         .collect();
                     for s in spans {
-                        self.err(s, "@Getter and @Setter generate methods, so they can only be used on classes and their fields");
+                        self.err(s, "@Getter and @Setter generate methods, so they can only be used on structs and their fields");
                     }
                 }
             }
@@ -487,6 +521,7 @@ impl Parser {
             span: start.to(self.prev_span()),
             annotations: Vec::new(),
             bodyless,
+            is_abstract: false,
         })
     }
 
@@ -528,11 +563,18 @@ impl Parser {
     }
 
     fn def(&mut self) -> PResult<Def> {
+        let mut kind = StructKind::Normal;
+        for (word, k) in [("abstract", StructKind::Abstract), ("static", StructKind::Static)] {
+            if self.at_ident(word) && matches!(&self.peek_at(1).kind, Tok::Ident(n) if n == "struct" || n == "class") {
+                self.advance();
+                kind = k;
+            }
+        }
         let kw = match &self.peek().kind {
             Tok::Ident(s) => s.clone(),
             other => {
                 let msg = format!(
-                    "expected `type`, `interface`, `class`, `enum`, `annotation` or `fun` after `def` but found {}",
+                    "expected `type`, `interface`, `struct`, `enum`, `annotation` or `fun` after `def` but found {}",
                     describe(other)
                 );
                 let span = self.peek().span;
@@ -543,7 +585,20 @@ impl Parser {
         let kw_span = self.advance().span;
         let name = self.ident("a name")?;
         match kw.as_str() {
-            "type" | "struct" | "record" | "annotation" => {
+            "struct" | "class" => {
+                if kw == "class" {
+                    let note = format!("write `def struct {}(...)` and create objects with `new {}(...)`", name.name, name.name);
+                    if self.speculative == 0 {
+                        self.diags.push(Diagnostic::error(kw_span, "classes are now structs").help(note).maybe_fix(
+                            "declare it as a struct",
+                            kw_span,
+                            "struct",
+                        ));
+                    }
+                }
+                self.struct_def(name, kind)
+            }
+            "type" | "record" | "annotation" => {
                 if kw != "annotation" && self.eat(&Tok::Assign) {
                     let ty = self.ty()?;
                     self.end_stmt();
@@ -609,68 +664,6 @@ impl Parser {
                 self.expect(Tok::RBrace, "`}`")?;
                 Ok(Def::Interface { name, methods })
             }
-            "class" => {
-                let mut implements = Vec::new();
-                if self.eat(&Tok::Colon) {
-                    loop {
-                        implements.push(self.ident("interface name")?);
-                        if !self.eat(&Tok::Comma) {
-                            break;
-                        }
-                    }
-                }
-                self.expect(Tok::LBrace, "`{`")?;
-                let mut fields = Vec::new();
-                let mut methods = Vec::new();
-                while !self.at(&Tok::RBrace) && !self.at(&Tok::Eof) {
-                    if self.eat(&Tok::Comma) || self.eat(&Tok::Semi) {
-                        continue;
-                    }
-                    let member_anns = match self.annotations() {
-                        Ok(a) => a,
-                        Err(()) => {
-                            self.sync_member();
-                            continue;
-                        }
-                    };
-                    let vis = if self.eat(&Tok::Pub) {
-                        Vis::Pub
-                    } else if self.eat(&Tok::Priv) {
-                        Vis::Priv
-                    } else {
-                        Vis::Default
-                    };
-                    let is_method =
-                        self.at(&Tok::Fun) || self.at(&Tok::Async) || (self.at_ident("static") && matches!(self.peek_at(1).kind, Tok::Fun | Tok::Async));
-                    if is_method {
-                        match self.fun_decl(true) {
-                            Ok(mut f) => {
-                                f.annotations = member_anns;
-                                methods.push((vis, f))
-                            }
-                            Err(()) => self.sync_member(),
-                        }
-                    } else {
-                        if self.at(&Tok::Var) || self.at(&Tok::Const) {
-                            self.advance();
-                        }
-                        match self.field(vis) {
-                            Ok(mut f) => {
-                                f.annotations = member_anns;
-                                fields.push(f)
-                            }
-                            Err(()) => self.sync_member(),
-                        }
-                    }
-                }
-                self.expect(Tok::RBrace, "`}`")?;
-                Ok(Def::Class {
-                    name,
-                    implements,
-                    fields,
-                    methods,
-                })
-            }
             "enum" => {
                 self.expect(Tok::LBrace, "`{`")?;
                 let mut variants = Vec::new();
@@ -687,13 +680,194 @@ impl Parser {
                 self.err(
                     kw_span,
                     format!(
-                        "unknown definition kind `{}` (expected `type`, `interface`, `class`, `enum`, `annotation` or `fun`)",
+                        "unknown definition kind `{}` (expected `type`, `interface`, `struct`, `enum`, `annotation` or `fun`)",
                         other
                     ),
                 );
                 Err(())
             }
         }
+    }
+
+    fn struct_def(&mut self, name: Ident, kind: StructKind) -> PResult<Def> {
+        let mut params = Vec::new();
+        let mut param_anns = Vec::new();
+        if self.at(&Tok::LParen) && !self.peek().nl_before {
+            self.advance();
+            while !self.at(&Tok::RParen) && !self.at(&Tok::Eof) {
+                param_anns.push(self.annotations()?);
+                params.push(self.param()?);
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
+            }
+            self.expect(Tok::RParen, "`)` to close the constructor parameters")?;
+        }
+        let mut extends = None;
+        let mut supers = Vec::new();
+        if self.eat(&Tok::Colon) {
+            let s = self.ident("the name of the struct to extend")?;
+            let args = if self.at(&Tok::LParen) && !self.peek().nl_before {
+                Some(self.call_args()?)
+            } else {
+                None
+            };
+            extends = Some((s, args));
+            if self.eat(&Tok::Comma) {
+                while matches!(self.peek().kind, Tok::Ident(_)) {
+                    let s = self.ident("a name")?;
+                    let args = if self.at(&Tok::LParen) && !self.peek().nl_before {
+                        Some(self.call_args()?)
+                    } else {
+                        None
+                    };
+                    supers.push((s, args));
+                    if !self.eat(&Tok::Comma) {
+                        break;
+                    }
+                }
+            }
+        }
+        let colon_extra = supers.len();
+        if self.eat(&Tok::ColonColon) {
+            loop {
+                let s = self.ident("an interface or abstract struct name")?;
+                let args = if self.at(&Tok::LParen) && !self.peek().nl_before {
+                    Some(self.call_args()?)
+                } else {
+                    None
+                };
+                supers.push((s, args));
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
+            }
+        }
+        self.expect(Tok::LBrace, "`{`")?;
+        let mut fields = Vec::new();
+        let mut methods = Vec::new();
+        let mut statics = Vec::new();
+        while !self.at(&Tok::RBrace) && !self.at(&Tok::Eof) {
+            if self.eat(&Tok::Comma) || self.eat(&Tok::Semi) {
+                continue;
+            }
+            let member_anns = match self.annotations() {
+                Ok(a) => a,
+                Err(()) => {
+                    self.sync_member();
+                    continue;
+                }
+            };
+            let vis = if self.eat(&Tok::Pub) {
+                Vis::Pub
+            } else if self.eat(&Tok::Priv) {
+                Vis::Priv
+            } else {
+                Vis::Default
+            };
+            if self.at_ident("abstract") && matches!(self.peek_at(1).kind, Tok::Fun | Tok::Async) {
+                let abs_span = self.advance().span;
+                match self.fun_decl(true) {
+                    Ok(mut f) => {
+                        if !f.bodyless {
+                            self.err(f.name.span, format!("abstract method `{}` cannot have a body", f.name.name));
+                        }
+                        if kind != StructKind::Abstract {
+                            self.err(abs_span, "abstract methods can only be declared in an `abstract struct`");
+                        }
+                        f.bodyless = true;
+                        f.is_abstract = true;
+                        f.body.stmts.clear();
+                        f.annotations = member_anns;
+                        methods.push((vis, f));
+                    }
+                    Err(()) => self.sync_member(),
+                }
+                continue;
+            }
+            let is_method = self.at(&Tok::Fun) || self.at(&Tok::Async) || (self.at_ident("static") && matches!(self.peek_at(1).kind, Tok::Fun | Tok::Async));
+            if is_method {
+                match self.fun_decl(true) {
+                    Ok(mut f) => {
+                        if kind == StructKind::Static {
+                            f.is_static = true;
+                        }
+                        f.annotations = member_anns;
+                        methods.push((vis, f))
+                    }
+                    Err(()) => self.sync_member(),
+                }
+                continue;
+            }
+            let static_val = kind == StructKind::Static || self.at_ident("static");
+            if static_val {
+                if self.at_ident("static") {
+                    self.advance();
+                }
+                match self.static_val(vis) {
+                    Ok(v) => statics.push(v),
+                    Err(()) => self.sync_member(),
+                }
+                continue;
+            }
+            if self.at(&Tok::Var) || self.at(&Tok::Const) {
+                self.advance();
+            }
+            match self.field(vis) {
+                Ok(mut f) => {
+                    f.annotations = member_anns;
+                    fields.push(f)
+                }
+                Err(()) => self.sync_member(),
+            }
+        }
+        self.expect(Tok::RBrace, "`}`")?;
+        Ok(Def::Struct {
+            name,
+            kind,
+            params,
+            param_anns,
+            extends,
+            supers,
+            colon_extra,
+            fields,
+            methods,
+            statics,
+        })
+    }
+
+    fn static_val(&mut self, vis: Vis) -> PResult<StaticVal> {
+        let kw = if self.at(&Tok::Var) || self.at(&Tok::Const) {
+            Some(self.advance().kind == Tok::Const)
+        } else {
+            None
+        };
+        let (name, ty) = if kw.is_some() && !self.looks_like_typed_decl() {
+            let name = self.ident("a name")?;
+            let ty = if self.eat(&Tok::Colon) { Some(self.ty()?) } else { None };
+            (name, ty)
+        } else if matches!(self.peek().kind, Tok::Ident(_)) && self.peek_at(1).kind == Tok::Colon {
+            let name = self.ident("a name")?;
+            self.advance();
+            (name, Some(self.ty()?))
+        } else {
+            let ty = self.ty()?;
+            (self.ident("a name")?, Some(ty))
+        };
+        if !self.at(&Tok::Assign) {
+            let s = name.span;
+            self.err(s, format!("static value `{}` needs an initial value", name.name));
+            return Err(());
+        }
+        self.advance();
+        let init = self.expr()?;
+        Ok(StaticVal {
+            name,
+            ty,
+            init,
+            is_const: kw == Some(true),
+            vis,
+        })
     }
 
     fn sync_member(&mut self) {
@@ -865,8 +1039,11 @@ impl Parser {
             Tok::Ident(_) | Tok::LBracket | Tok::Fun | Tok::LBrace => {}
             _ => return false,
         }
-        if let Tok::Ident(_) = self.peek().kind {
+        if let Tok::Ident(first) = &self.peek().kind {
             if let Tok::Ident(_) = self.peek_at(1).kind {
+                if first == "new" && self.peek_at(2).kind == Tok::LParen {
+                    return false;
+                }
                 return !self.peek_at(1).nl_before;
             }
             if !matches!(self.peek_at(1).kind, Tok::Question | Tok::Lt) {
@@ -936,6 +1113,38 @@ impl Parser {
                 StmtKind::Continue
             }
             Tok::LBrace if !self.looks_like_typed_decl() => StmtKind::Block(self.block()?),
+            Tok::Ident(w)
+                if w == "destroy" && matches!(self.peek_at(1).kind, Tok::Ident(_)) && !self.peek_at(1).nl_before && self.peek_at(2).kind == Tok::LParen =>
+            {
+                self.advance();
+                let target = self.ident("object name")?;
+                let args = self.call_args()?;
+                self.end_stmt();
+                self.has_destroy = true;
+                StmtKind::Destroy { target, args }
+            }
+            Tok::Ident(_) if self.peek_at(1).kind == Tok::Dot && self.is_extension() => {
+                let target = self.ident("object name")?;
+                self.advance();
+                let name = self.ident("function name")?;
+                let (params, ret) = self.signature()?;
+                let body = self.block()?;
+                StmtKind::Extend {
+                    target,
+                    func: Box::new(FunDecl {
+                        span: name.span.to(self.prev_span()),
+                        name,
+                        params,
+                        ret,
+                        body,
+                        is_async: false,
+                        is_static: false,
+                        annotations: Vec::new(),
+                        bodyless: false,
+                        is_abstract: false,
+                    }),
+                }
+            }
             _ => {
                 if self.looks_like_typed_decl() {
                     let s = self.typed_decl(false)?;
@@ -952,6 +1161,21 @@ impl Parser {
             kind,
             span: start.to(self.prev_span()),
         })
+    }
+
+    fn is_extension(&mut self) -> bool {
+        if !matches!(self.peek_at(2).kind, Tok::Ident(_)) || self.peek_at(3).kind != Tok::LParen || self.peek_at(3).nl_before {
+            return false;
+        }
+        let save = self.pos;
+        self.speculative += 1;
+        self.advance();
+        self.advance();
+        self.advance();
+        let ok = self.signature().is_ok() && self.at(&Tok::LBrace) && !self.peek().nl_before;
+        self.speculative -= 1;
+        self.pos = save;
+        ok
     }
 
     fn typed_decl(&mut self, is_const: bool) -> PResult<StmtKind> {
@@ -1322,24 +1546,35 @@ impl Parser {
         }
     }
 
+    fn call_args(&mut self) -> PResult<Vec<Expr>> {
+        self.expect(Tok::LParen, "`(`")?;
+        let saved = self.no_struct;
+        self.no_struct = false;
+        let mut args = Vec::new();
+        while !self.at(&Tok::RParen) && !self.at(&Tok::Eof) {
+            match self.expr() {
+                Ok(a) => args.push(a),
+                Err(()) => {
+                    self.no_struct = saved;
+                    return Err(());
+                }
+            }
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        self.no_struct = saved;
+        self.expect(Tok::RParen, "`)` to close arguments")?;
+        Ok(args)
+    }
+
     fn postfix(&mut self) -> PResult<Expr> {
         let mut e = self.primary()?;
         loop {
             let t = self.peek().clone();
             match t.kind {
                 Tok::LParen if !t.nl_before => {
-                    self.advance();
-                    let saved = self.no_struct;
-                    self.no_struct = false;
-                    let mut args = Vec::new();
-                    while !self.at(&Tok::RParen) && !self.at(&Tok::Eof) {
-                        args.push(self.expr()?);
-                        if !self.eat(&Tok::Comma) {
-                            break;
-                        }
-                    }
-                    self.no_struct = saved;
-                    self.expect(Tok::RParen, "`)` to close arguments")?;
+                    let args = self.call_args()?;
                     let span = e.span.to(self.prev_span());
                     e = Expr {
                         kind: ExprKind::Call { callee: Box::new(e), args },
@@ -1437,6 +1672,21 @@ impl Parser {
                 self.advance();
                 ExprKind::Null
             }
+            Tok::Ident(name) if name == "new" && matches!(self.peek_at(1).kind, Tok::Ident(_)) && !self.peek_at(1).nl_before => {
+                self.advance();
+                let ty = self.ident("struct name")?;
+                let args = if self.at(&Tok::LParen) && !self.peek().nl_before {
+                    self.call_args()?
+                } else {
+                    let s = self.prev_span();
+                    self.err(s, format!("expected `(` after `new {}`", ty.name));
+                    return Err(());
+                };
+                return Ok(Expr {
+                    kind: ExprKind::New { ty, args },
+                    span: span.to(self.prev_span()),
+                });
+            }
             Tok::Ident(name) => {
                 self.advance();
                 if self.at(&Tok::LBrace) && !self.no_struct && !self.peek().nl_before && self.brace_is_struct_lit() {
@@ -1524,6 +1774,7 @@ impl Parser {
                     is_static: false,
                     annotations: Vec::new(),
                     bodyless: false,
+                    is_abstract: false,
                     span,
                 };
                 ExprKind::Lambda(Box::new(f))

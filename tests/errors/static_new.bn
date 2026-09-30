@@ -1,0 +1,5 @@
+def static struct Config {
+    const port = 8080
+}
+
+var c = new Config()

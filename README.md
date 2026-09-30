@@ -18,9 +18,7 @@ def interface Shape {
     fun area(): float
 }
 
-def class Circle: Shape {
-    float radius
-
+def struct Circle(radius: float) :: Shape {
     fun area(): float {
         return 3.14159 * radius * radius
     }
@@ -44,7 +42,7 @@ fun describe(value: any): string {
 fun main() {
     String name = "Burn"
     var p = Point { x: 1, y: 2 }
-    print(describe(Circle { radius: 2 }), describe(name), p)
+    print(describe(new Circle(2)), describe(name), p)
 }
 ```
 
@@ -54,9 +52,9 @@ fun main() {
 - Smart casts: `is` checks, `!= null` checks, early returns and assignments narrow types automatically
 - Null safety with `T?`
 - Type-first declarations: `String name = "Burn"`, `[int] ids = []`
-- One definition syntax for everything: `def type`, `def class`, `def interface`, `def enum`, `def annotation`
+- One definition syntax for everything: `def type`, `def struct`, `def interface`, `def enum`, `def annotation`
 - Annotations like Java's: `@Getter`, `@Setter`, `@Deprecated`, your own `def annotation`s and `annotationsOf(value)`
-- Classes with fields, methods, constructors, static functions and private members; interfaces with checked conformance
+- Structs with constructors, methods, static and private members, inheritance, abstract and static structs, per-object functions and `destroy`; interfaces with checked conformance
 - Arrays, maps, records, enums, first-class functions and lambdas, string templates
 - `async fun` / `await` running on real threads
 - Modules with `pub` and `priv`
@@ -153,9 +151,7 @@ def interface Greeter {
     fun greet(): string
 }
 
-def class Human: Greeter {
-    string name
-
+def struct Human(name: string) :: Greeter {
     fun greet(): string {
         return "Hello, " + name
     }
@@ -207,12 +203,11 @@ def annotation Route {
 @Route("/accounts", method: "POST")
 @Getter
 @Setter
-def class CreateAccount {
-    string owner
-    int balance
+def struct CreateAccount(owner: string) {
+    int balance = 0
 }
 
-var c = CreateAccount { owner: "Ada", balance: 0 }
+var c = new CreateAccount("Ada")
 c.setBalance(100)
 for a in annotationsOf(c) {
     if (a is Route) {
@@ -305,7 +300,7 @@ both on bvm and in the native executable. See [the bvm documentation](docs/bvm/o
 ## Documentation
 
 The full documentation is written in MDX in [`docs/`](docs/index.mdx): a syntax tour, types, smart casts,
-classes and interfaces, modules, async, the standard library, the command line, how the compiler works and
+structs and interfaces, modules, async, the standard library, the command line, how the compiler works and
 the Burn Virtual Machine.
 
 ## Examples

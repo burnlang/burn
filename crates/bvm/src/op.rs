@@ -134,6 +134,8 @@ pub enum Op {
     LoadField(u32, u32),
     Load2(u32, u32),
     LoadK(u32, i32),
+    CallSelf,
+    LoopJmp(u32),
 }
 
 impl Op {
@@ -225,23 +227,25 @@ impl Op {
             Op::LoadField(_, _) => "load.field",
             Op::Load2(_, _) => "load2",
             Op::LoadK(_, _) => "load.const",
+            Op::CallSelf => "call.self",
+            Op::LoopJmp(_) => "jmp.loop",
         }
     }
 
     pub fn is_fused(&self) -> bool {
         matches!(
             self,
-            Op::IncLocal(..) | Op::JCmpLL(..) | Op::JCmpLC(..) | Op::LoadField(..) | Op::Load2(..) | Op::LoadK(..)
+            Op::IncLocal(..) | Op::JCmpLL(..) | Op::JCmpLC(..) | Op::LoadField(..) | Op::Load2(..) | Op::LoadK(..) | Op::CallSelf | Op::LoopJmp(_)
         )
     }
 
     pub fn is_terminator(&self) -> bool {
-        matches!(self, Op::Jmp(_) | Op::Ret | Op::RetVoid)
+        matches!(self, Op::Jmp(_) | Op::LoopJmp(_) | Op::Ret | Op::RetVoid)
     }
 
     pub fn jump_target(&self) -> Option<u32> {
         match self {
-            Op::Jmp(t) | Op::Jz(t) | Op::Jnz(t) | Op::JzKeep(t) | Op::JnzKeep(t) => Some(*t),
+            Op::Jmp(t) | Op::LoopJmp(t) | Op::Jz(t) | Op::Jnz(t) | Op::JzKeep(t) | Op::JnzKeep(t) => Some(*t),
             _ => None,
         }
     }
@@ -249,6 +253,7 @@ impl Op {
     pub fn with_jump_target(self, t: u32) -> Op {
         match self {
             Op::Jmp(_) => Op::Jmp(t),
+            Op::LoopJmp(_) => Op::LoopJmp(t),
             Op::Jz(_) => Op::Jz(t),
             Op::Jnz(_) => Op::Jnz(t),
             Op::JzKeep(_) => Op::JzKeep(t),

@@ -3,6 +3,7 @@ pub mod builtins;
 pub mod expr;
 pub mod libs;
 pub mod stmt;
+pub mod structs;
 
 use crate::ast::{self, Def, ItemKind, TypeExpr, TypeExprKind, Vis};
 use crate::diag::{Diagnostic, Severity};
@@ -15,6 +16,32 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 pub const GLOBAL_KEY: u32 = 1 << 31;
+pub const FACT_KEY: u32 = 1 << 30;
+
+#[derive(Clone, Debug)]
+pub enum Fact {
+    Ext { var: u32, name: String, fid: FuncId },
+    Dead { var: u32, span: Span },
+}
+
+#[derive(Clone, Debug)]
+pub struct StructDecl {
+    pub module: usize,
+    pub params: Vec<(String, TyId, Span)>,
+    pub super_args: Option<Vec<ast::Expr>>,
+    pub super_span: Span,
+    pub own_start: usize,
+    pub param_fields: Vec<bool>,
+    pub statics: Vec<ast::StaticVal>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AbstractSig {
+    pub params: Vec<TyId>,
+    pub ret: TyId,
+    pub is_async: bool,
+    pub span: Span,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ValSym {
@@ -146,6 +173,15 @@ pub struct Checker<'a> {
     pub type_anns: HashMap<TyId, Vec<hir::Annotation>>,
     pub deprecated_types: HashMap<TyId, String>,
     pub libs: Vec<hir::Library>,
+    pub struct_decls: HashMap<u32, StructDecl>,
+    pub abstract_sigs: HashMap<(u32, String), AbstractSig>,
+    pub vslots: HashMap<(u32, String), u32>,
+    pub vslot_set: HashSet<u32>,
+    pub facts: Vec<Fact>,
+    pub any_dead: bool,
+    pub has_destroy: bool,
+    pub ext_funcs: HashSet<FuncId>,
+    pub static_private: HashSet<u32>,
 }
 
 pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
@@ -171,6 +207,15 @@ pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
         type_anns: HashMap::new(),
         deprecated_types: HashMap::new(),
         libs: Vec::new(),
+        struct_decls: HashMap::new(),
+        abstract_sigs: HashMap::new(),
+        vslots: HashMap::new(),
+        vslot_set: HashSet::new(),
+        facts: Vec::new(),
+        any_dead: false,
+        has_destroy: loaded.modules.iter().any(|m| m.ast.has_destroy),
+        ext_funcs: HashSet::new(),
+        static_private: HashSet::new(),
     };
     c.run(loaded);
     let has_errors = loaded.diags.iter().chain(c.diags.iter()).any(|d| d.severity == Severity::Error);
@@ -219,16 +264,19 @@ pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
 pub fn edit_distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
-    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut rows: Vec<Vec<usize>> = vec![(0..=b.len()).collect()];
     for i in 1..=a.len() {
         let mut cur = vec![i; b.len() + 1];
         for j in 1..=b.len() {
             let cost = if a[i - 1].eq_ignore_ascii_case(&b[j - 1]) { 0 } else { 1 };
-            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
+            cur[j] = (rows[i - 1][j] + 1).min(cur[j - 1] + 1).min(rows[i - 1][j - 1] + cost);
+            if i > 1 && j > 1 && a[i - 1].eq_ignore_ascii_case(&b[j - 2]) && a[i - 2].eq_ignore_ascii_case(&b[j - 1]) {
+                cur[j] = cur[j].min(rows[i - 2][j - 2] + 1);
+            }
         }
-        prev = cur;
+        rows.push(cur);
     }
-    prev[b.len()]
+    rows[a.len()][b.len()]
 }
 
 pub fn suggest<'b>(name: &str, candidates: impl Iterator<Item = &'b str>) -> Option<String> {
@@ -259,13 +307,117 @@ impl<'a> Checker<'a> {
 
     pub fn error_note(&mut self, span: Span, msg: impl Into<String>, note: impl Into<String>) {
         if !self.is_dry() {
+            self.diags.push(Diagnostic::error(span, msg).help(note));
+        }
+    }
+
+    pub fn error_detail(&mut self, span: Span, msg: impl Into<String>, note: impl Into<String>) {
+        if !self.is_dry() {
             self.diags.push(Diagnostic::error(span, msg).note(note));
+        }
+    }
+
+    pub fn wrap_suffix(&self, span: Span, suffix: &str) -> String {
+        let text = self.src_text(span);
+        if text
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '(' | ')' | '[' | ']' | '"'))
+        {
+            format!("{}{}", text, suffix)
+        } else {
+            format!("({}){}", text, suffix)
+        }
+    }
+
+    pub fn params_close(&self, name: Span) -> Option<Span> {
+        if (name.file as usize) >= self.sm.files.len() {
+            return None;
+        }
+        let src = self.sm.file(name.file).src.as_bytes();
+        let mut i = name.end as usize;
+        while i < src.len() && src[i] == b' ' {
+            i += 1;
+        }
+        if src.get(i) != Some(&b'(') {
+            return None;
+        }
+        let mut depth = 0;
+        while i < src.len() {
+            match src[i] {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(Span::new(name.file, i + 1, i + 1));
+                    }
+                }
+                b'\n' | b'{' => return None,
+                _ => {}
+            }
+            i += 1;
+        }
+        None
+    }
+
+    pub fn keyword_before(&self, decl: Span, word: &str) -> Option<Span> {
+        if (decl.file as usize) >= self.sm.files.len() {
+            return None;
+        }
+        let f = self.sm.file(decl.file);
+        let (line, _) = f.line_col(decl.start as usize);
+        let start = f.line_start(line);
+        let before = &f.src[start..decl.start as usize];
+        let i = before.rfind(word)?;
+        let ok_left = i == 0 || !before.as_bytes()[i - 1].is_ascii_alphanumeric();
+        let ok_right = before.as_bytes().get(i + word.len()).map(|c| !c.is_ascii_alphanumeric()).unwrap_or(true);
+        (ok_left && ok_right).then(|| Span::new(decl.file, start + i, start + i + word.len()))
+    }
+
+    pub fn error_fix(&mut self, span: Span, msg: impl Into<String>, replacement: &str) {
+        let d = Diagnostic::error(span, msg).fix(format!("did you mean `{}`?", replacement), span, replacement);
+        self.emit(d);
+    }
+
+    pub fn emit(&mut self, d: Diagnostic) {
+        if !self.is_dry() {
+            self.diags.push(d);
+        }
+    }
+
+    pub fn src_text(&self, span: Span) -> String {
+        if (span.file as usize) < self.sm.files.len() {
+            self.sm.file(span.file).text(span).to_string()
+        } else {
+            String::new()
         }
     }
 
     pub fn warn(&mut self, span: Span, msg: impl Into<String>) {
         if !self.is_dry() {
             self.diags.push(Diagnostic::warning(span, msg));
+        }
+    }
+
+    pub fn with_doc(&self, text: String, decl: Span) -> String {
+        self.with_doc_dep(text, decl, None)
+    }
+
+    pub fn with_doc_dep(&self, text: String, decl: Span, deprecated: Option<&str>) -> String {
+        if !self.opts.want_index || (decl.file as usize) >= self.sm.files.len() {
+            return text;
+        }
+        let src = &self.sm.file(decl.file).src;
+        let mut doc = crate::doc::comment::doc_before(src, decl.start as usize)
+            .map(|raw| crate::doc::comment::parse(&raw))
+            .unwrap_or_default();
+        if doc.deprecated.is_none() {
+            doc.deprecated = deprecated.map(|d| d.to_string());
+        }
+        let md = crate::doc::comment::to_markdown(&doc);
+        if md.is_empty() {
+            text
+        } else {
+            format!("{}\u{1}{}", text, md)
         }
     }
 
@@ -473,7 +625,7 @@ impl<'a> Checker<'a> {
                     .chain(["int", "float", "string", "bool", "void", "any"].iter().map(|s| s.to_string()))
                     .collect();
                 match suggest(name, cands.iter().map(|s| s.as_str())) {
-                    Some(s) => self.error_note(te.span, format!("unknown type `{}`", name), format!("did you mean `{}`?", s)),
+                    Some(s) => self.error_fix(te.span, format!("unknown type `{}`", name), &s),
                     None => {
                         if self.is_private_elsewhere(module, name) {
                             self.error(te.span, format!("type `{}` is private to its module", name))
@@ -584,6 +736,7 @@ impl<'a> Checker<'a> {
                 }
             }
         }
+        self.link_structs();
         for (mi, m) in loaded.modules.iter().enumerate() {
             for item in &m.ast.items {
                 if let ItemKind::Def(d) = &item.kind {
@@ -608,34 +761,13 @@ impl<'a> Checker<'a> {
                         }
                         self.add_value(mi, &f.name.name, ValSym::Func(fid), item.vis, f.name.span);
                     }
-                    ItemKind::Def(Def::Class { name, methods, .. }) => {
+                    ItemKind::Def(Def::Struct { name, methods, statics, .. }) => {
                         let t = self.mods[mi].types.get(&name.name).map(|e| e.sym).unwrap_or(T_ERROR);
                         if let Ty::Record(ri) = self.types.get(t).clone() {
                             if self.types.records[ri as usize].span != name.span {
                                 continue;
                             }
-                            for (vis, mdecl) in methods {
-                                let self_ty = if mdecl.is_static { None } else { Some(t) };
-                                let fid = self.declare_fun(mi, mdecl, self_ty, *vis == Vis::Priv, true);
-                                self.funcs[fid as usize].name = format!("{}.{}", name.name, mdecl.name.name);
-                                self.funcs[fid as usize].is_static = mdecl.is_static;
-                                let rec = &mut self.types.records[ri as usize];
-                                let dup = rec.methods.contains_key(&mdecl.name.name)
-                                    || rec.statics.contains_key(&mdecl.name.name)
-                                    || rec.field_index(&mdecl.name.name).is_some();
-                                if mdecl.is_static {
-                                    rec.statics.insert(mdecl.name.name.clone(), fid);
-                                } else {
-                                    if mdecl.name.name == "init" {
-                                        rec.init = Some(fid);
-                                        self.funcs[fid as usize].ret = Some(T_VOID);
-                                    }
-                                    rec.methods.insert(mdecl.name.name.clone(), fid);
-                                }
-                                if dup {
-                                    self.error(mdecl.name.span, format!("`{}` is already defined in class `{}`", mdecl.name.name, name.name));
-                                }
-                            }
+                            self.declare_struct_members(mi, ri, name, methods, statics);
                         }
                     }
                     ItemKind::Stmt(s) => {
@@ -655,8 +787,10 @@ impl<'a> Checker<'a> {
                 }
             }
         }
+        self.check_structs();
         self.check_conformance(loaded);
         self.check_mixins();
+        self.build_ctors();
         for &mi in &loaded.order {
             self.check_init(mi, &loaded.modules[mi].ast);
         }
@@ -702,20 +836,19 @@ impl<'a> Checker<'a> {
 
     fn declare_def(&mut self, mi: usize, d: &Def, vis: Vis, aliases: &mut Vec<(usize, String, TypeExpr, Span)>) {
         match d {
-            Def::Type { name, .. } | Def::Class { name, .. } | Def::Annotation { name, .. } => {
-                let is_class = matches!(d, Def::Class { .. });
+            Def::Type { name, .. } | Def::Struct { name, .. } | Def::Annotation { name, .. } => {
+                let kind = match d {
+                    Def::Struct { kind, .. } => Some(*kind),
+                    _ => None,
+                };
                 let ri = self.types.new_record(RecordDef {
                     name: name.name.clone(),
-                    fields: Vec::new(),
-                    is_class,
-                    anon: false,
-                    implements: Vec::new(),
-                    methods: HashMap::new(),
-                    statics: HashMap::new(),
-                    init: None,
+                    is_class: kind.is_some(),
+                    is_abstract: kind == Some(ast::StructKind::Abstract),
+                    is_static: kind == Some(ast::StructKind::Static),
                     module: mi as u32,
                     span: name.span,
-                    ty: 0,
+                    ..Default::default()
                 });
                 let t = self.types.records[ri as usize].ty;
                 self.add_type(mi, name, t, vis);
@@ -768,12 +901,33 @@ impl<'a> Checker<'a> {
             _ => return,
         };
         match d {
-            Def::Type { fields, .. } | Def::Class { fields, .. } | Def::Annotation { fields, .. } => {
+            Def::Type { fields, .. } | Def::Struct { fields, .. } | Def::Annotation { fields, .. } => {
                 let ri = match self.types.get(t) {
                     Ty::Record(r) => *r,
                     _ => return,
                 };
                 let mut out = Vec::new();
+                let mut pdecl = Vec::new();
+                if let Def::Struct { params, .. } = d {
+                    for p in params {
+                        let pt = self.resolve_type_in(&p.ty, mi);
+                        if pt == T_VOID {
+                            self.error(p.ty.span, "parameters cannot have type void");
+                        }
+                        if out.iter().any(|x: &FieldDef| x.name == p.name.name) {
+                            self.error(p.name.span, format!("duplicate parameter `{}`", p.name.name));
+                            continue;
+                        }
+                        out.push(FieldDef {
+                            name: p.name.name.clone(),
+                            ty: pt,
+                            default: None,
+                            private: false,
+                            span: p.name.span,
+                        });
+                        pdecl.push((p.name.name.clone(), pt, p.name.span));
+                    }
+                }
                 for f in fields {
                     let ft = self.resolve_type_in(&f.ty, mi);
                     if ft == T_VOID {
@@ -792,22 +946,18 @@ impl<'a> Checker<'a> {
                     });
                 }
                 self.types.records[ri as usize].fields = out;
-                if let Def::Class { implements, .. } = d {
-                    let mut impls = Vec::new();
-                    for i in implements {
-                        match self.lookup_type_name(mi, &i.name, i.span) {
-                            Some(it) => match self.types.get(it) {
-                                Ty::Interface(ii) => impls.push(*ii),
-                                Ty::Error => {}
-                                _ => {
-                                    let s = self.show(it);
-                                    self.error(i.span, format!("`{}` is not an interface", s));
-                                }
-                            },
-                            None => self.error(i.span, format!("unknown interface `{}`", i.name)),
-                        }
-                    }
-                    self.types.records[ri as usize].implements = impls;
+                if let Def::Struct {
+                    name,
+                    kind,
+                    params,
+                    extends,
+                    supers,
+                    colon_extra,
+                    statics,
+                    ..
+                } = d
+                {
+                    self.fill_struct(mi, ri, name, *kind, params, (extends, supers, *colon_extra), statics, pdecl);
                 }
             }
             Def::Interface { methods, .. } => {
@@ -852,7 +1002,7 @@ impl<'a> Checker<'a> {
             _ => return,
         };
         let site = annot::Site::Type {
-            class: matches!(d, Def::Class { .. }),
+            class: matches!(d, Def::Struct { .. }),
         };
         let resolved = self.resolve_annotations(mi, anns, site);
         if let Some(msg) = Self::deprecation_note(&resolved) {
@@ -862,12 +1012,19 @@ impl<'a> Checker<'a> {
             self.type_anns.insert(t, resolved);
         }
         let fields: &[ast::Field] = match d {
-            Def::Type { fields, .. } | Def::Class { fields, .. } | Def::Annotation { fields, .. } => fields,
+            Def::Type { fields, .. } | Def::Struct { fields, .. } | Def::Annotation { fields, .. } => fields,
             _ => &[],
         };
         for f in fields {
             if !f.annotations.is_empty() {
                 self.resolve_annotations(mi, &f.annotations, annot::Site::Field);
+            }
+        }
+        if let Def::Struct { param_anns, .. } = d {
+            for a in param_anns {
+                if !a.is_empty() {
+                    self.resolve_annotations(mi, a, annot::Site::Field);
+                }
             }
         }
     }
@@ -901,11 +1058,12 @@ impl<'a> Checker<'a> {
             );
         }
         if external.is_some() && f.ret.is_none() {
-            self.error_note(
-                f.name.span,
-                format!("@Native function `{}` needs a return type", f.name.name),
-                "write `: void` if it returns nothing",
-            );
+            let mut d = Diagnostic::error(f.name.span, format!("@Native function `{}` needs a return type", f.name.name));
+            match self.params_close(f.name.span) {
+                Some(at) => d = d.maybe_fix("if it returns nothing, say so", at, ": void"),
+                None => d = d.help("write `: void` if it returns nothing"),
+            }
+            self.emit(d);
         }
         let fid = self.funcs.len() as FuncId;
         self.funcs.push(FuncInfo {
@@ -931,6 +1089,9 @@ impl<'a> Checker<'a> {
     fn check_conformance(&mut self, _loaded: &Loaded) {
         for ri in 0..self.types.records.len() {
             let rec = self.types.records[ri].clone();
+            if rec.is_abstract {
+                continue;
+            }
             for ii in rec.implements.iter() {
                 let iface = self.types.ifaces[*ii as usize].clone();
                 for m in &iface.methods {
@@ -945,7 +1106,7 @@ impl<'a> Checker<'a> {
                             if ps != m.params || ret != m.ret || is_async != m.is_async {
                                 let want = self.method_sig_str(&m.params, m.ret, m.is_async);
                                 let got = self.method_sig_str(&ps, ret, is_async);
-                                self.error_note(
+                                self.error_detail(
                                     fspan,
                                     format!("method `{}` does not match interface `{}`", m.name, iface.name),
                                     format!("expected `{}` but found `{}`", want, got),
@@ -957,7 +1118,7 @@ impl<'a> Checker<'a> {
                             let want = self.method_sig_str(&m.params, m.ret, m.is_async);
                             self.error_note(
                                 rec.span,
-                                format!("class `{}` does not implement `{}.{}`", rec.name, iface.name, m.name),
+                                format!("struct `{}` does not implement `{}.{}`", rec.name, iface.name, m.name),
                                 format!("add `{}`", want.replacen("fun(", &format!("fun {}(", m.name), 1)),
                             );
                         }
@@ -1098,6 +1259,7 @@ impl<'a> Checker<'a> {
             };
             format!("{}fun {}({}){}", if info.is_async { "async " } else { "" }, info.name, ps.join(", "), r)
         };
+        let sig = self.with_doc(sig, decl.name.span);
         self.hover(decl.name.span, sig);
     }
 
@@ -1182,6 +1344,20 @@ impl<'a> Checker<'a> {
         let file = self.mods[mi].file;
         let n = ast.items.len();
         for (idx, item) in ast.items.iter().enumerate() {
+            if let ItemKind::Def(Def::Struct { name, statics, .. }) = &item.kind {
+                if !statics.is_empty() {
+                    let skipped = matches!(skip, Some((f, off)) if f == file && item.span.start < off);
+                    if skipped {
+                        self.ctx().dry = true;
+                    }
+                    let out = self.static_inits(name);
+                    if skipped {
+                        self.ctx().dry = false;
+                    } else {
+                        body.extend(out);
+                    }
+                }
+            }
             if let ItemKind::Stmt(s) = &item.kind {
                 let skipped = matches!(skip, Some((f, off)) if f == file && item.span.start < off);
                 let echo = self.opts.repl_echo && idx + 1 == n && !skipped && matches!(skip, Some((f, _)) if f == file);
@@ -1231,6 +1407,7 @@ impl<'a> Checker<'a> {
     }
 
     fn build_program(&mut self, loaded: &Loaded) -> hir::Program {
+        self.devirtualize();
         let entry = self.funcs.len() as FuncId;
         let mut body = Vec::new();
         for &mi in &loaded.order {

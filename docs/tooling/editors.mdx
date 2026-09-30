@@ -1,7 +1,7 @@
 ---
 title: Editor support
 description: The language server and the VS Code extension.
-order: 24
+order: 26
 ---
 
 # Editor support
@@ -13,7 +13,8 @@ the errors the compiler reports. It supports:
 
 - diagnostics while you type, including errors in imported files
 - hover with inferred types, signatures and built-in documentation
-- completion for locals, globals, functions, types, keywords, built-ins and members after `.`
+- completion for locals, globals, functions, types, keywords (including `struct`, `abstract`, `new` and `destroy`),
+  built-ins and members after `.`
 - go to definition, including into imported modules
 - document outline
 - formatting (the same as `burn fmt`)
@@ -27,7 +28,8 @@ vim.lsp.start({ name = "burn", cmd = { "burn", "lsp" }, root_dir = vim.fn.getcwd
 ## VS Code
 
 The extension lives in `editors/vscode`. It adds syntax highlighting, snippets, the language server client and
-commands to run, natively run and build the current file.
+commands to run, natively run and build the current file. Snippets include `defstruct`, `defabstract` and
+`defstatic` for the three kinds of struct, `new` and `destroy`.
 
 ```sh
 cd editors/vscode

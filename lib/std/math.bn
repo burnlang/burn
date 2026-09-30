@@ -1,24 +1,108 @@
+/**
+ * The ratio of a circle's circumference to its diameter, about `3.14159`.
+ *
+ * @see TAU
+ * @since 26.1
+ */
 pub const PI = 3.141592653589793
+
+/**
+ * Euler's number, the base of the natural logarithm, about `2.71828`.
+ *
+ * @since 26.1
+ */
 pub const E = 2.718281828459045
+
+/**
+ * The ratio of a circle's circumference to its radius, equal to `2 * PI`.
+ *
+ * @see PI
+ * @since 26.1
+ */
 pub const TAU = 6.283185307179586
 
-pub def class Math {
+/**
+ * Math helpers that complement the built-in math functions.
+ *
+ * Basic operations such as `sqrt`, `abs`, `min`, `max` and `pow` are
+ * built in and need no import.
+ *
+ * @since 26.1
+ */
+pub def static struct Math {
+    /**
+     * Limits a number to a range.
+     *
+     * If `low` is greater than `high`, the result is always `low`.
+     *
+     * @param x the number to limit
+     * @param low the lower bound
+     * @param high the upper bound
+     * @return `low` if `x` is below the range, `high` if it is above, `x` otherwise
+     * @since 26.1
+     * @example
+     *     Math.clamp(12.5, 0.0, 10.0)  // 10.0
+     *     Math.clamp(-3.0, 0.0, 10.0)  // 0.0
+     */
     static fun clamp(x: float, low: float, high: float): float {
         return max(low, min(high, x))
     }
 
+    /**
+     * Interpolates linearly between two numbers.
+     *
+     * `t` is not limited to the range 0 to 1, so values outside it
+     * extrapolate.
+     *
+     * @param a the start value, returned for `t = 0`
+     * @param b the end value, returned for `t = 1`
+     * @param t the position between `a` and `b`
+     * @return `a + (b - a) * t`
+     * @since 26.1
+     * @example
+     *     Math.lerp(10.0, 20.0, 0.25)  // 12.5
+     */
     static fun lerp(a: float, b: float, t: float): float {
         return a + (b - a) * t
     }
 
+    /**
+     * Converts an angle from degrees to radians.
+     *
+     * @param degrees the angle in degrees
+     * @return the angle in radians
+     * @see Math.toDegrees
+     * @since 26.1
+     * @example
+     *     Math.toRadians(180.0)  // 3.141592653589793
+     */
     static fun toRadians(degrees: float): float {
         return degrees * PI / 180.0
     }
 
+    /**
+     * Converts an angle from radians to degrees.
+     *
+     * @param radians the angle in radians
+     * @return the angle in degrees
+     * @see Math.toRadians
+     * @since 26.1
+     * @example
+     *     Math.toDegrees(PI / 2.0)  // 90.0
+     */
     static fun toDegrees(radians: float): float {
         return radians * 180.0 / PI
     }
 
+    /**
+     * Returns the sign of a number.
+     *
+     * @param x the number
+     * @return `1` if `x` is positive, `-1` if it is negative, `0` otherwise
+     * @since 26.1
+     * @example
+     *     Math.sign(-2.5)  // -1
+     */
     static fun sign(x: float): int {
         if (x > 0.0) {
             return 1
@@ -29,10 +113,33 @@ pub def class Math {
         return 0
     }
 
+    /**
+     * Returns the length of the hypotenuse of a right triangle.
+     *
+     * @param a the length of one side
+     * @param b the length of the other side
+     * @return `sqrt(a * a + b * b)`
+     * @since 26.1
+     * @example
+     *     Math.hypot(3.0, 4.0)  // 5.0
+     */
     static fun hypot(a: float, b: float): float {
         return sqrt(a * a + b * b)
     }
 
+    /**
+     * Returns the greatest common divisor of two integers.
+     *
+     * Uses Euclid's algorithm on the absolute values.
+     *
+     * @param a the first integer
+     * @param b the second integer
+     * @return the greatest common divisor, never negative; `0` when both are `0`
+     * @see Math.lcm
+     * @since 26.1
+     * @example
+     *     Math.gcd(12, 18)  // 6
+     */
     static fun gcd(a: int, b: int): int {
         var x = abs(a)
         var y = abs(b)
@@ -44,6 +151,17 @@ pub def class Math {
         return x
     }
 
+    /**
+     * Returns the least common multiple of two integers.
+     *
+     * @param a the first integer
+     * @param b the second integer
+     * @return the least common multiple, never negative; `0` when either is `0`
+     * @see Math.gcd
+     * @since 26.1
+     * @example
+     *     Math.lcm(4, 6)  // 12
+     */
     static fun lcm(a: int, b: int): int {
         if (a == 0 || b == 0) {
             return 0
@@ -51,6 +169,18 @@ pub def class Math {
         return abs(a / Math.gcd(a, b) * b)
     }
 
+    /**
+     * Returns the factorial of a number.
+     *
+     * The factorial is the product of all integers from 1 to `n`. The
+     * result overflows for `n` greater than 20.
+     *
+     * @param n the number
+     * @return `n!`, or `1` when `n` is less than 2
+     * @since 26.1
+     * @example
+     *     Math.factorial(5)  // 120
+     */
     static fun factorial(n: int): int {
         var r = 1
         for i in 2..=n {
@@ -59,6 +189,18 @@ pub def class Math {
         return r
     }
 
+    /**
+     * Tells whether a number is prime.
+     *
+     * Uses trial division, so it is meant for small numbers.
+     *
+     * @param n the number
+     * @return `true` if `n` is prime; `false` for numbers below 2
+     * @since 26.1
+     * @example
+     *     Math.isPrime(97)  // true
+     *     Math.isPrime(91)  // false
+     */
     static fun isPrime(n: int): bool {
         if (n < 2) {
             return false
@@ -73,6 +215,16 @@ pub def class Math {
         return true
     }
 
+    /**
+     * Returns the sum of a list of numbers.
+     *
+     * @param values the numbers to add
+     * @return the sum, `0.0` for an empty list
+     * @see Math.average
+     * @since 26.1
+     * @example
+     *     Math.sum([1.5, 2.5, 3.0])  // 7.0
+     */
     static fun sum(values: [float]): float {
         var total = 0.0
         for v in values {
@@ -81,6 +233,16 @@ pub def class Math {
         return total
     }
 
+    /**
+     * Returns the arithmetic mean of a list of numbers.
+     *
+     * @param values the numbers
+     * @return the average, `0.0` for an empty list
+     * @see Math.sum
+     * @since 26.1
+     * @example
+     *     Math.average([1.0, 2.0, 6.0])  // 3.0
+     */
     static fun average(values: [float]): float {
         if (len(values) == 0) {
             return 0.0

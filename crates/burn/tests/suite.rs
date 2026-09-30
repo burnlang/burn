@@ -382,3 +382,76 @@ fn bytecode_libraries_run_on_bvm_in_archives_and_in_native_executables() {
     assert!(err.contains("bytecode library"), "{}", err);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn fix_applies_the_compiler_suggestions() {
+    let root = root();
+    let tmp = std::env::temp_dir().join(format!("burn-fix-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let file = tmp.join("input.bn");
+    std::fs::copy(root.join("tests/fix/input.bn"), &file).unwrap();
+    let (out, code) = output(burn().arg("fix").arg(&file));
+    assert_eq!(code, 0, "{}", out);
+    assert!(out.contains("fixed 7 problems"), "{}", out);
+    let got = std::fs::read_to_string(&file).unwrap();
+    let want = std::fs::read_to_string(root.join("tests/fix/expected.bn")).unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert_eq!(got, want);
+}
+
+#[test]
+fn doc_generates_pages_for_programs_the_standard_library_and_builtins() {
+    let root = root();
+    let out = std::env::temp_dir().join(format!("burn-doc-{}", std::process::id()));
+    let (log, code) = output(burn().current_dir(&root).arg("doc").arg("examples/zoo.bn").arg("-o").arg(&out));
+    assert_eq!(code, 0, "{}", log);
+    let read = |p: &str| std::fs::read_to_string(out.join(p)).unwrap_or_else(|_| panic!("missing {}", p));
+    let animal = read("t-zoo.Animal.html");
+    assert!(animal.contains("An animal living in the zoo."));
+    assert!(animal.contains("Extended by"));
+    assert!(animal.contains("the animal&#x27;s name") || animal.contains("the animal's name"));
+    let module = read("m-zoo.html");
+    assert!(module.contains("Deprecated"));
+    assert!(read("t-std-date.Date.html").contains("A calendar date"));
+    let builtins = read("builtins.html");
+    assert!(builtins.contains("println") && builtins.contains("id=\"sqrt\""));
+    assert!(read("search-index.js").contains("\"Animal.describe\""));
+    let _ = std::fs::remove_dir_all(&out);
+}
+
+#[test]
+fn optimizing_everything_while_running_changes_no_output() {
+    let root = root();
+    let mut failures = Vec::new();
+    for (file, expected) in cases() {
+        let rel = file.strip_prefix(&root).unwrap();
+        let (out, _) = output(burn().current_dir(&root).env("BVM_HOT", "1").arg(rel));
+        if out != expected {
+            failures.push(format!("{}:\n--- expected\n{}\n--- got\n{}", rel.display(), expected, out));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn hot_code_is_optimized_while_running() {
+    let tmp = std::env::temp_dir().join(format!("burn-hot-{}.bn", std::process::id()));
+    std::fs::write(
+        &tmp,
+        "def struct P(x: int) {\n    fun get(): int {\n        return x\n    }\n}\nfun sq(n: int): int {\n    return n * n\n}\nfun unused(): int {\n    return 1\n}\nfun main() {\n    var p = new P(3)\n    var t = 0\n    var i = 0\n    while (i < 200000) {\n        t += sq(p.get()) + 2 * 3\n        i += 1\n    }\n    print(t)\n}\n",
+    )
+    .unwrap();
+    let (out, code) = output(burn().env("BVM_STATS", "1").arg(&tmp));
+    let _ = std::fs::remove_file(&tmp);
+    assert_eq!(code, 0, "{}", out);
+    assert!(out.starts_with("3000000\n"), "{}", out);
+    assert!(out.contains("never loaded"), "{}", out);
+    let inlined: u32 = out
+        .split(" calls inlined")
+        .next()
+        .and_then(|s| s.rsplit(' ').next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0);
+    assert!(inlined >= 2, "{}", out);
+    assert!(out.contains("1 loops switched to optimized code"), "{}", out);
+}

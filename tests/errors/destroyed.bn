@@ -1,0 +1,7 @@
+def struct Conn(host: string) {}
+
+fun main() {
+    var c = new Conn("db")
+    destroy c()
+    print(c.host)
+}

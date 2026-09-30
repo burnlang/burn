@@ -79,9 +79,22 @@ var c = Color.Green
 print(c, c == Color.Green, c as int)
 ```
 
-### `def class` and `def interface`
+### `def struct` and `def interface`
 
-See [classes and interfaces](./classes-and-interfaces.mdx).
+Structs hold fields and methods and are created with `new`:
+
+```burn
+def struct Point(x: int, y: int) {
+    fun sum(): int {
+        return x + y
+    }
+}
+
+var p = new Point(1, 2)
+```
+
+See [structs and interfaces](./structs-and-interfaces.mdx) for constructors, inheritance, abstract and static
+structs, and destroying objects.
 
 ## Arrays
 

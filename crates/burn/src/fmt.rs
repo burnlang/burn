@@ -90,7 +90,7 @@ fn lex_line(line: &str) -> Vec<T> {
             i += 3;
             continue;
         }
-        if ["==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "..", "->", "!!"].contains(&two.as_str()) {
+        if ["==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "..", "->", "!!", "::"].contains(&two.as_str()) {
             out.push(T::Op(two));
             i += 2;
             continue;
@@ -119,13 +119,29 @@ fn is_operand_end(t: &T) -> bool {
     }
 }
 
+fn is_struct_head(toks: &[T]) -> bool {
+    let words: Vec<&str> = toks
+        .iter()
+        .take(5)
+        .map(|t| match t {
+            T::Word(w) => w.as_str(),
+            _ => "",
+        })
+        .collect();
+    let start = if matches!(words.first(), Some(&"pub") | Some(&"priv")) { 1 } else { 0 };
+    words.get(start) == Some(&"def") && words.iter().skip(start + 1).take(2).any(|w| *w == "struct")
+}
+
 fn render_line(toks: &[T]) -> String {
     let mut out = String::new();
     let mut prev: Option<&T> = None;
     let mut generic_depth = 0;
+    let head = is_struct_head(toks);
+    let mut parens = 0;
     for (idx, t) in toks.iter().enumerate() {
         let space = match (prev, t) {
             (None, _) => false,
+            (_, T::Colon) if head && parens == 0 => true,
             (_, T::Comment(_)) => true,
             (Some(T::Op(o)), _) if o == "@" => false,
             (Some(T::Open('{', tight)), _) => !tight && !matches!(t, T::Close('}', _)),
@@ -172,6 +188,11 @@ fn render_line(toks: &[T]) -> String {
             T::Semi => out.push(';'),
             T::Colon => out.push(':'),
             T::Dot => out.push('.'),
+        }
+        match t {
+            T::Open('(', _) => parens += 1,
+            T::Close(')', _) => parens -= 1,
+            _ => {}
         }
         prev = Some(t);
     }
@@ -234,7 +255,13 @@ pub fn format(src: &str) -> String {
     for raw in src.lines() {
         let line = raw.trim();
         if in_block_comment {
-            out.push_str(raw.trim_end());
+            if line.starts_with('*') {
+                out.push_str(&"    ".repeat(depth.max(0) as usize));
+                out.push(' ');
+                out.push_str(line);
+            } else {
+                out.push_str(raw.trim_end());
+            }
             out.push('\n');
             if line.contains("*/") {
                 in_block_comment = false;
@@ -242,6 +269,12 @@ pub fn format(src: &str) -> String {
             continue;
         }
         if line.starts_with("/*") {
+            if (started && blank > 0) || last_was_close {
+                out.push('\n');
+            }
+            blank = 0;
+            last_was_close = false;
+            started = true;
             out.push_str(&"    ".repeat(depth.max(0) as usize));
             out.push_str(line);
             out.push('\n');

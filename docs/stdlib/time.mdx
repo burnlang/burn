@@ -9,16 +9,16 @@ order: 12
 ```burn
 import "time"
 
-var t = Time.create(9, 30, 0, 0)
-print(t.add(Time.create(1, 15, 0, 0)).format())
+var t = new Time(9, 30, 0, 0)
+print(t.add(new Time(1, 15, 0, 0)).format())
 print(formatTime(3661.0))
 ```
 
-`Time` has the fields `hours`, `minutes`, `seconds` and `milliseconds`.
+`Time` is a struct with the constructor parameters `hours`, `minutes`, `seconds` and `milliseconds`.
 
 | Function | Description |
 | --- | --- |
-| `Time.create(h, m, s, ms)`, `createTime(...)` | build a time |
+| `new Time(h, m, s, ms)`, `Time.create(h, m, s, ms)`, `createTime(...)` | build a time |
 | `Time.now()` | the current local time |
 | `Time.fromMilliseconds(ms)`, `Time.fromSeconds(s)` | from a duration |
 | `Time.parse("HH:MM:SS.mmm")` | parse; the milliseconds part is optional |

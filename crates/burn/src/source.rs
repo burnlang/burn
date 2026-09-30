@@ -95,6 +95,16 @@ impl SourceFile {
         self.src[start..end.max(start)].trim_end_matches('\r')
     }
 
+    pub fn line_start(&self, line: usize) -> usize {
+        self.line_starts.get(line.saturating_sub(1)).copied().unwrap_or(self.src.len())
+    }
+
+    pub fn text(&self, span: Span) -> &str {
+        let s = (span.start as usize).min(self.src.len());
+        let e = (span.end as usize).clamp(s, self.src.len());
+        &self.src[s..e]
+    }
+
     pub fn line_count(&self) -> usize {
         self.line_starts.len()
     }

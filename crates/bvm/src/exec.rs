@@ -5,7 +5,8 @@ use burn_runtime::obj::*;
 use burn_runtime::{api, gc, io, meta, task};
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicU8, Ordering};
+use std::sync::{Arc, Mutex};
 
 const MAX_FRAMES: usize = 1_000_000;
 
@@ -73,25 +74,168 @@ impl From<VerifyError> for LoadError {
 #[derive(Clone, Debug)]
 pub struct FuncInfo {
     pub name: String,
-    pub entry: u32,
     pub params: u32,
     pub locals: u32,
     pub frame: u32,
 }
 
-pub struct Program {
+pub struct Code {
     pub ops: Vec<Op>,
+    pub params: u32,
+    pub locals: u32,
+    pub frame: u32,
+    pub func: u32,
+    pub heat: AtomicU32,
+    pub tier: u8,
+    pub osr: Vec<(u32, u32)>,
+}
+
+impl Code {
+    fn osr_target(&self, raw_pc: u32) -> Option<u32> {
+        self.osr.iter().find(|(r, _)| *r == raw_pc).map(|(_, n)| *n)
+    }
+}
+
+#[derive(Default)]
+pub struct Stats {
+    pub loaded: AtomicU32,
+    pub optimized: AtomicU32,
+    pub inlined: AtomicU32,
+    pub folded: AtomicU32,
+    pub removed: AtomicU32,
+    pub osr: AtomicU32,
+}
+
+pub struct Program {
     pub funcs: Vec<FuncInfo>,
+    pub raw: Vec<Vec<Op>>,
     pub entry: Option<u32>,
     pub nglobals: usize,
+    pub hot: u32,
+    pub stats: Stats,
+    code: Vec<AtomicPtr<Code>>,
+    state: Vec<AtomicU8>,
+    owned: Mutex<Vec<usize>>,
     strings: Vec<u64>,
     tables: Vec<Vec<u32>>,
     hosts: Vec<(u32, HostFn)>,
 }
 
+unsafe impl Send for Program {}
+unsafe impl Sync for Program {}
+
+impl Drop for Program {
+    fn drop(&mut self) {
+        let owned = std::mem::take(self.owned.get_mut().unwrap_or_else(|e| e.into_inner()));
+        for p in owned {
+            drop(unsafe { Box::from_raw(p as *mut Code) });
+        }
+    }
+}
+
+fn hot_threshold() -> u32 {
+    match std::env::var("BVM_HOT").ok().and_then(|v| v.trim().parse::<u32>().ok()) {
+        Some(0) => u32::MAX,
+        Some(n) => n,
+        None => 1000,
+    }
+}
+
 impl Program {
     pub fn func(&self, name: &str) -> Option<u32> {
         self.funcs.iter().position(|f| f.name == name).map(|i| i as u32)
+    }
+
+    pub fn host_argc(&self, i: u32) -> Option<u32> {
+        self.hosts.get(i as usize).map(|h| h.0)
+    }
+
+    #[inline(always)]
+    pub fn code(&self, f: u32) -> *const Code {
+        let p = unsafe { self.code.get_unchecked(f as usize) }.load(Ordering::Acquire);
+        if p.is_null() {
+            self.prepare(f)
+        } else {
+            p
+        }
+    }
+
+    fn install(&self, f: u32, code: Code) -> *const Code {
+        let p = Box::into_raw(Box::new(code));
+        self.owned.lock().unwrap_or_else(|e| e.into_inner()).push(p as usize);
+        self.code[f as usize].store(p, Ordering::Release);
+        p
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn prepare(&self, f: u32) -> *const Code {
+        let mut owned = self.owned.lock().unwrap_or_else(|e| e.into_inner());
+        let cur = self.code[f as usize].load(Ordering::Acquire);
+        if !cur.is_null() {
+            return cur;
+        }
+        let info = &self.funcs[f as usize];
+        let mut ops = self.raw[f as usize].clone();
+        for (i, op) in ops.iter_mut().enumerate() {
+            if let Op::Jmp(t) = *op {
+                if (t as usize) < i && self.hot != u32::MAX {
+                    *op = Op::LoopJmp(t);
+                }
+            }
+        }
+        fuse(&mut ops);
+        let p = Box::into_raw(Box::new(Code {
+            ops,
+            params: info.params,
+            locals: info.locals,
+            frame: info.frame,
+            func: f,
+            heat: AtomicU32::new(0),
+            tier: 0,
+            osr: Vec::new(),
+        }));
+        owned.push(p as usize);
+        self.code[f as usize].store(p, Ordering::Release);
+        self.stats.loaded.fetch_add(1, Ordering::Relaxed);
+        p
+    }
+
+    pub fn is_optimized(&self, f: u32) -> bool {
+        self.state[f as usize].load(Ordering::Relaxed) != 0
+    }
+
+    #[cold]
+    #[inline(never)]
+    pub fn optimize(&self, f: u32) {
+        let st = &self.state[f as usize];
+        if st.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Relaxed).is_err() {
+            return;
+        }
+        if let Some((code, gains)) = crate::tier::optimize(self, f) {
+            self.install(f, code);
+            self.stats.optimized.fetch_add(1, Ordering::Relaxed);
+            self.stats.inlined.fetch_add(gains.inlined, Ordering::Relaxed);
+            self.stats.folded.fetch_add(gains.folded, Ordering::Relaxed);
+            self.stats.removed.fetch_add(gains.removed, Ordering::Relaxed);
+        }
+        st.store(2, Ordering::Release);
+    }
+
+    pub fn report(&self) -> String {
+        let s = &self.stats;
+        let loaded = s.loaded.load(Ordering::Relaxed);
+        format!(
+            "[bvm] {} of {} functions ran ({} never loaded); {} optimized while running: {} calls inlined, {} constants folded, {} instructions removed, {} loops switched to optimized code",
+            loaded,
+            self.funcs.len(),
+            self.funcs.len() as u32 - loaded,
+            s.optimized.load(Ordering::Relaxed),
+            s.inlined.load(Ordering::Relaxed),
+            s.folded.load(Ordering::Relaxed),
+            s.removed.load(Ordering::Relaxed),
+            s.osr.load(Ordering::Relaxed),
+        )
     }
 }
 
@@ -140,23 +284,17 @@ pub fn load_with(m: &Module, host: &Host, install_meta: bool) -> Result<Arc<Prog
 }
 
 fn link(m: &Module, max: &[u32], hosts: Vec<(u32, HostFn)>) -> Program {
-    let mut ops = Vec::with_capacity(m.code_size());
     let mut funcs = Vec::with_capacity(m.funcs.len());
+    let mut raw = Vec::with_capacity(m.funcs.len());
     for (f, max) in m.funcs.iter().zip(max) {
-        let entry = ops.len() as u32;
-        ops.extend(f.code.iter().map(|op| match op.jump_target() {
-            Some(t) => op.with_jump_target(entry + t),
-            None => *op,
-        }));
+        raw.push(f.code.clone());
         funcs.push(FuncInfo {
             name: f.name.clone(),
-            entry,
             params: f.params,
             locals: f.locals,
             frame: f.locals + max + 1,
         });
     }
-    fuse(&mut ops);
     let ntypes = m.types.len();
     let tables = m
         .tables
@@ -170,11 +308,17 @@ fn link(m: &Module, max: &[u32], hosts: Vec<(u32, HostFn)>) -> Program {
         })
         .collect();
     let strings = m.strings.iter().map(|s| str_static(s.as_bytes())).collect();
+    let n = funcs.len();
     Program {
-        ops,
         funcs,
+        raw,
         entry: m.entry,
         nglobals: m.globals.len(),
+        hot: hot_threshold(),
+        stats: Stats::default(),
+        code: (0..n).map(|_| AtomicPtr::new(std::ptr::null_mut())).collect(),
+        state: (0..n).map(|_| AtomicU8::new(0)).collect(),
+        owned: Mutex::new(Vec::new()),
         strings,
         tables,
         hosts,
@@ -239,6 +383,7 @@ pub fn fuse(ops: &mut [Op]) {
 struct Frame {
     pc: u32,
     base: u32,
+    code: *const Code,
 }
 
 pub struct Vm {
@@ -246,6 +391,8 @@ pub struct Vm {
     frames: Vec<Frame>,
     prog: Arc<Program>,
     globals: *mut u64,
+    code: *const Code,
+    back: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -281,6 +428,9 @@ fn record_ok(o: u64, i: u32) -> bool {
 fn bad_record(o: u64, i: u32) -> ! {
     if o == 0 {
         api::err_null(NO_LOC as u64);
+    }
+    if kind_of(o) == K_DEAD {
+        io::rt_error("this object was destroyed and can no longer be used", u64::MAX);
     }
     io::rt_error(
         &format!("field {} does not exist on a value of type {}", i, meta::type_name(tid_of(o))),
@@ -324,6 +474,8 @@ impl Vm {
             frames: Vec::with_capacity(256),
             prog,
             globals,
+            code: std::ptr::null(),
+            back: 0,
         })
     }
 
@@ -355,26 +507,62 @@ impl Vm {
         self.stack.as_mut_ptr()
     }
 
+    #[cold]
+    #[inline(never)]
+    fn backedge(&mut self, t: u32, bp: *mut u64, s0: *mut u64, cap: usize) -> Option<(usize, *mut u64, *mut u64, *mut u64, usize)> {
+        let prog = self.prog.clone();
+        let code = self.code;
+        let cur = unsafe { (*code).func };
+        let h = unsafe { &(*code).heat };
+        let hv = h.load(Ordering::Relaxed).saturating_add(64);
+        h.store(hv, Ordering::Relaxed);
+        if hv >= prog.hot && !prog.is_optimized(cur) {
+            prog.optimize(cur);
+        }
+        let nc = prog.code(cur);
+        if nc == code || unsafe { (*code).tier } != 0 {
+            return None;
+        }
+        let np = unsafe { (*nc).osr_target(t) }?;
+        let old = unsafe { (*code).locals };
+        let (nl, nf) = unsafe { ((*nc).locals, (*nc).frame) };
+        let at = unsafe { bp.offset_from(s0) } as usize;
+        let (mut s0, mut cap) = (s0, cap);
+        if at + nf as usize > cap {
+            s0 = self.grow(at + old as usize, at + nf as usize);
+            cap = self.stack.capacity();
+        }
+        let bp = unsafe { s0.add(at) };
+        unsafe { std::ptr::write_bytes(bp.add(old as usize), 0, (nl - old) as usize) };
+        self.code = nc;
+        prog.stats.osr.fetch_add(1, Ordering::Relaxed);
+        Some((np as usize, bp, unsafe { bp.add(nl as usize) }, s0, cap))
+    }
+
     fn run(&mut self, func: u32) -> u64 {
         let prog = self.prog.clone();
-        let ops: &[Op] = &prog.ops;
         let funcs = &prog.funcs;
         let stop = self.frames.len();
         let globals = self.globals;
         let mut s0 = self.stack.as_mut_ptr();
         let mut cap = self.stack.capacity();
-        let fi = &funcs[func as usize];
-        let start = self.stack.len() - fi.params as usize;
-        if start + fi.frame as usize > cap {
-            s0 = self.grow(start + fi.params as usize, start + fi.frame as usize);
+        let saved_code = self.code;
+        self.code = prog.code(func);
+        let mut ops: *const Op = unsafe { (*self.code).ops.as_ptr() };
+        let (params, locals, frame) = unsafe { ((*self.code).params, (*self.code).locals, (*self.code).frame) };
+        let start = self.stack.len() - params as usize;
+        if start + frame as usize > cap {
+            s0 = self.grow(start + params as usize, start + frame as usize);
             cap = self.stack.capacity();
         }
         let mut bp = unsafe { s0.add(start) };
         let mut sp = unsafe {
-            std::ptr::write_bytes(bp.add(fi.params as usize), 0, (fi.locals - fi.params) as usize);
-            bp.add(fi.locals as usize)
+            if locals > params {
+                std::ptr::write_bytes(bp.add(params as usize), 0, (locals - params) as usize);
+            }
+            bp.add(locals as usize)
         };
-        let mut pc = fi.entry as usize;
+        let mut pc = 0usize;
         macro_rules! push {
             ($v:expr) => {{
                 let v = $v;
@@ -420,8 +608,8 @@ impl Vm {
                 *t = $e;
             }};
         }
-        macro_rules! enter {
-            ($func:expr) => {{
+        macro_rules! enter_code {
+            ($code:expr) => {{
                 if self.frames.len() > MAX_FRAMES {
                     sync!();
                     overflow();
@@ -429,18 +617,36 @@ impl Vm {
                 self.frames.push(Frame {
                     pc: pc as u32,
                     base: unsafe { bp.offset_from(s0) } as u32,
+                    code: self.code,
                 });
-                let fi = unsafe { funcs.get_unchecked($func as usize) };
-                let mut at = unsafe { sp.offset_from(s0) } as usize - fi.params as usize;
-                if at + fi.frame as usize > cap {
-                    s0 = self.grow(at + fi.params as usize, at + fi.frame as usize);
+                self.code = $code;
+                let c = unsafe { &*self.code };
+                if c.tier == 0 {
+                    let h = c.heat.load(Ordering::Relaxed).wrapping_add(1);
+                    c.heat.store(h, Ordering::Relaxed);
+                    if h == prog.hot {
+                        prog.optimize(c.func);
+                    }
+                }
+                let (params, locals, frame) = (c.params, c.locals, c.frame);
+                ops = c.ops.as_ptr();
+                let mut at = unsafe { sp.offset_from(s0) } as usize - params as usize;
+                if at + frame as usize > cap {
+                    s0 = self.grow(at + params as usize, at + frame as usize);
                     cap = self.stack.capacity();
                     at = at.min(cap);
                 }
                 bp = unsafe { s0.add(at) };
-                unsafe { std::ptr::write_bytes(bp.add(fi.params as usize), 0, (fi.locals - fi.params) as usize) };
-                sp = unsafe { bp.add(fi.locals as usize) };
-                pc = fi.entry as usize;
+                if locals > params {
+                    unsafe { std::ptr::write_bytes(bp.add(params as usize), 0, (locals - params) as usize) };
+                }
+                sp = unsafe { bp.add(locals as usize) };
+                pc = 0;
+            }};
+        }
+        macro_rules! enter {
+            ($func:expr) => {{
+                enter_code!(prog.code($func as u32))
             }};
         }
         macro_rules! ret {
@@ -449,16 +655,19 @@ impl Vm {
                 sp = bp;
                 if self.frames.len() == stop {
                     sync!();
+                    self.code = saved_code;
                     return v;
                 }
                 let fr = unsafe { self.frames.pop().unwrap_unchecked() };
                 push!(v);
                 pc = fr.pc as usize;
                 bp = unsafe { s0.add(fr.base as usize) };
+                self.code = fr.code;
+                ops = unsafe { (*self.code).ops.as_ptr() };
             }};
         }
         loop {
-            let op = unsafe { *ops.get_unchecked(pc) };
+            let op = unsafe { *ops.add(pc) };
             pc += 1;
             match op {
                 Op::Const(v) => push!(v),
@@ -545,6 +754,23 @@ impl Vm {
                     *t = float_to_int(f(*t)) as u64
                 }
                 Op::Jmp(t) => pc = t as usize,
+                Op::LoopJmp(t) => {
+                    {
+                        self.back = self.back.wrapping_add(1);
+                        if self.back & 1023 == 0 {
+                            if let Some((np, bp2, sp2, s02, cap2)) = self.backedge(t, bp, s0, cap) {
+                                s0 = s02;
+                                cap = cap2;
+                                bp = bp2;
+                                sp = sp2;
+                                ops = unsafe { (*self.code).ops.as_ptr() };
+                                pc = np;
+                                continue;
+                            }
+                        }
+                    }
+                    pc = t as usize
+                }
                 Op::Jz(t) => {
                     if pop!() == 0 {
                         pc = t as usize
@@ -604,6 +830,7 @@ impl Vm {
                     pc += 1
                 }
                 Op::Call(func) => enter!(func),
+                Op::CallSelf => enter_code!(self.code),
                 Op::CallInd(argc) => {
                     let func = pop!();
                     match funcs.get(func as usize) {
@@ -790,6 +1017,9 @@ impl Runner {
     pub fn finish(self) -> Vec<u64> {
         task::wait_all();
         io::flush();
+        if std::env::var_os("BVM_STATS").is_some() {
+            eprintln!("{}", self.prog.report());
+        }
         gc::remove_vm_stack(&self.vm.stack as *const Vec<u64>);
         gc::clear_root_ranges();
         gc::clear_stack_base();

@@ -1,0 +1,102 @@
+/**
+ * A tiny zoo simulation that shows how Burndoc documents a program.
+ *
+ * Run it with `burn zoo.bn`.
+ */
+
+/**
+ * Anything that can be named in a report.
+ */
+def interface Named {
+    /**
+     * Returns the display name.
+     *
+     * @return a short, human readable name
+     */
+    fun label(): string
+}
+
+/**
+ * An animal living in the zoo.
+ *
+ * Every animal has a name and makes a sound. Concrete animals such as {@link Dog} decide which sound.
+ *
+ * @param name the animal's name, shown on its enclosure
+ * @since 1.0
+ * @see Keeper
+ */
+def abstract struct Animal(name: string) :: Named {
+    /** How many legs the animal walks on. */
+    int legs = 4
+
+    /**
+     * Returns the sound the animal makes.
+     *
+     * @return the sound, for example `"woof"`
+     */
+    abstract fun sound(): string
+
+    /**
+     * Describes the animal in one sentence.
+     *
+     * @return a sentence like `Rex says woof`
+     * @example
+     *     new Dog("Rex", "lab").describe()  // Rex says woof
+     */
+    fun describe(): string {
+        return name + " says " + sound()
+    }
+
+    fun label(): string {
+        return name
+    }
+}
+
+/**
+ * A dog.
+ *
+ * @param name the dog's name
+ * @param breed the breed, for example `"lab"`
+ */
+def struct Dog(name: string, breed: string) :: Animal(name) {
+    fun sound(): string {
+        return "woof"
+    }
+}
+
+/**
+ * Keeps track of feeding times.
+ */
+def static struct Keeper {
+    /** Number of meals served today. */
+    var meals = 0
+
+    /**
+     * Feeds an animal.
+     *
+     * @param a the animal to feed
+     * @param portions how many portions, at least 1
+     * @return the total number of meals served today
+     * @throws when `portions` is 0, because of a division by zero
+     */
+    fun feed(a: Animal, portions: int): int {
+        meals += portions / portions
+        return meals
+    }
+}
+
+/**
+ * Prints a short report for the given animals.
+ *
+ * @param animals the animals to report on
+ */
+@Deprecated("use Animal.describe directly")
+fun report(animals: [Animal]) {
+    for a in animals {
+        print(a.describe())
+    }
+}
+
+fun main() {
+    print(new Dog("Rex", "lab").describe())
+}

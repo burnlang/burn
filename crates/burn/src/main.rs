@@ -1,7 +1,9 @@
 mod ast;
 mod check;
 mod diag;
+mod doc;
 mod driver;
+mod fix;
 mod fmt;
 mod hir;
 mod js;
@@ -35,6 +37,8 @@ Usage:
       --emit-asm <path>               also write the generated assembly (x86-64, or bvm text)
       --no-strip                      keep symbols in the executable
   burn check <file.bn>                type-check without running
+  burn fix [--dry-run] <files...>     apply the compiler's suggested fixes
+  burn doc [files...] [-o dir]        generate HTML documentation from Burndoc comments
   burn fmt [-w] [--check] <files...>  format source files
   burn repl                           start the interactive REPL
   burn eval '<code>'                  evaluate code from the command line
@@ -513,6 +517,8 @@ fn main() -> ExitCode {
         },
         "lsp" | "--lsp" => lsp::run(),
         "fmt" => fmt::cmd(rest),
+        "fix" => fix::cmd(rest),
+        "doc" => doc::cmd(rest),
         "check" => {
             if rest.is_empty() {
                 eprintln!("error: no source file given");

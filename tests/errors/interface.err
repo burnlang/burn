@@ -1,1 +1,1 @@
-5:11 class `Square` does not implement `Shape.area`
+5:12 struct `Square` does not implement `Shape.area`

@@ -1,24 +1,101 @@
-pub def class JSON {
+/**
+ * Helpers to read and write JSON.
+ *
+ * Parsed JSON is returned as `any`: objects become `{string: any}` maps,
+ * arrays become `[any]` lists, and numbers, strings, booleans and `null`
+ * become the matching Burn values.
+ *
+ * @since 26.1
+ */
+pub def static struct JSON {
+    /**
+     * Parses JSON text.
+     *
+     * @param text the JSON text
+     * @return the parsed value
+     * @throws when the text is not valid JSON
+     * @see JSON.stringify
+     * @since 26.1
+     * @example
+     *     var data = JSON.parse("{\"name\": \"Ada\", \"tags\": [\"x\", \"y\"]}")
+     *     JSON.get(data, "name")  // "Ada"
+     */
     static fun parse(text: string): any {
         return parseJSON(text)
     }
 
+    /**
+     * Converts a value to compact JSON text.
+     *
+     * @param value the value to convert
+     * @return the JSON text, without spaces or line breaks
+     * @see JSON.parse
+     * @since 26.1
+     * @example
+     *     JSON.stringify([1, 2, 3])  // "[1,2,3]"
+     */
     static fun stringify(value: any): string {
         return toJSON(value)
     }
 
+    /**
+     * Returns the value stored under a key of a JSON object.
+     *
+     * @param value the JSON object
+     * @param key the key to look up
+     * @return the value for `key`, or `null` if the object has no such key
+     * @throws when `value` cannot be indexed, for example a number
+     * @see JSON.at
+     * @since 26.1
+     * @example
+     *     var data = JSON.parse("{\"id\": 7}")
+     *     JSON.get(data, "id")  // 7
+     */
     static fun get(value: any, key: string): any {
         return value[key]
     }
 
+    /**
+     * Returns the element at a position of a JSON array.
+     *
+     * @param value the JSON array
+     * @param index the position, from 0 to the length minus 1
+     * @return the element at `index`
+     * @throws when the index is out of bounds or `value` cannot be indexed
+     * @see JSON.get
+     * @since 26.1
+     * @example
+     *     var list = JSON.parse("[10, 20, 30]")
+     *     JSON.at(list, 1)  // 20
+     */
     static fun at(value: any, index: int): any {
         return value[index]
     }
 
+    /**
+     * Tells whether a parsed JSON value is an object.
+     *
+     * @param value the value to test
+     * @return `true` if `value` is a `{string: any}` map
+     * @see JSON.isArray
+     * @since 26.1
+     * @example
+     *     JSON.isObject(JSON.parse("{}"))  // true
+     */
     static fun isObject(value: any): bool {
         return value is {string: any}
     }
 
+    /**
+     * Tells whether a parsed JSON value is an array.
+     *
+     * @param value the value to test
+     * @return `true` if `value` is an `[any]` list
+     * @see JSON.isObject
+     * @since 26.1
+     * @example
+     *     JSON.isArray(JSON.parse("[1, 2]"))  // true
+     */
     static fun isArray(value: any): bool {
         return value is [any]
     }

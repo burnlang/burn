@@ -2,6 +2,5 @@ def interface Shape {
     fun area(): float
 }
 
-def class Square: Shape {
-    float side
+def struct Square(side: float) :: Shape {
 }

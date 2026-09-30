@@ -257,7 +257,7 @@ fn write_op(w: &mut W, op: &Op, rt: &mut HashMap<&'static str, u32>, rt_list: &m
         Op::Unbox => 56,
         Op::TypeConst(_) => 57,
         Op::LocConst(_) => 58,
-        Op::IncLocal(..) | Op::JCmpLL(..) | Op::JCmpLC(..) | Op::LoadField(..) | Op::Load2(..) | Op::LoadK(..) => {
+        Op::IncLocal(..) | Op::JCmpLL(..) | Op::JCmpLC(..) | Op::LoadField(..) | Op::Load2(..) | Op::LoadK(..) | Op::CallSelf | Op::LoopJmp(_) => {
             panic!("{} is internal and is never written to a module", op.mnemonic())
         }
     };

@@ -1,27 +1,91 @@
+/**
+ * Pads text on the left until it is at least a given length.
+ *
+ * Text that is already long enough is returned unchanged. With a fill of
+ * more than one character the result can be longer than `width`. An empty
+ * fill returns the text unchanged.
+ *
+ * @param text the text to pad
+ * @param width the minimum length, in characters
+ * @param fill the text to add in front
+ * @return the padded text
+ * @see padRight
+ * @since 26.1
+ * @example
+ *     padLeft("42", 5, "0")  // "00042"
+ */
 pub fun padLeft(text: string, width: int, fill: string): string {
     var s = text
-    while (len(s) < width) {
+    while (len(s) < width && len(fill) > 0) {
         s = fill + s
     }
     return s
 }
 
+/**
+ * Pads text on the right until it is at least a given length.
+ *
+ * Text that is already long enough is returned unchanged. With a fill of
+ * more than one character the result can be longer than `width`. An empty
+ * fill returns the text unchanged.
+ *
+ * @param text the text to pad
+ * @param width the minimum length, in characters
+ * @param fill the text to add at the end
+ * @return the padded text
+ * @see padLeft
+ * @since 26.1
+ * @example
+ *     padRight("ab", 5, ".")  // "ab..."
+ */
 pub fun padRight(text: string, width: int, fill: string): string {
     var s = text
-    while (len(s) < width) {
+    while (len(s) < width && len(fill) > 0) {
         s = s + fill
     }
     return s
 }
 
+/**
+ * Tells whether text is empty.
+ *
+ * @param text the text to test
+ * @return `true` if the text has no characters
+ * @see isBlank
+ * @since 26.1
+ * @example
+ *     isEmpty("")   // true
+ *     isEmpty(" ")  // false
+ */
 pub fun isEmpty(text: string): bool {
     return len(text) == 0
 }
 
+/**
+ * Tells whether text is empty or contains only whitespace.
+ *
+ * @param text the text to test
+ * @return `true` if nothing is left after trimming whitespace
+ * @see isEmpty
+ * @since 26.1
+ * @example
+ *     isBlank("  \t")  // true
+ */
 pub fun isBlank(text: string): bool {
     return len(trim(text)) == 0
 }
 
+/**
+ * Makes the first character of text uppercase.
+ *
+ * The rest of the text is left unchanged.
+ *
+ * @param text the text to capitalize
+ * @return the capitalized text, or `""` for empty text
+ * @since 26.1
+ * @example
+ *     capitalize("hello world")  // "Hello world"
+ */
 pub fun capitalize(text: string): string {
     if (len(text) == 0) {
         return text
@@ -29,6 +93,18 @@ pub fun capitalize(text: string): string {
     return upper(substring(text, 0, 1)) + substring(text, 1)
 }
 
+/**
+ * Counts the occurrences of a piece of text.
+ *
+ * Occurrences do not overlap: `"aa"` occurs twice in `"aaaa"`.
+ *
+ * @param text the text to search
+ * @param part the text to count
+ * @return the number of occurrences, `0` when `part` is empty
+ * @since 26.1
+ * @example
+ *     countOf("banana", "an")  // 2
+ */
 pub fun countOf(text: string, part: string): int {
     if (len(part) == 0) {
         return 0
@@ -36,10 +112,34 @@ pub fun countOf(text: string, part: string): int {
     return len(split(text, part)) - 1
 }
 
+/**
+ * Splits text into lines.
+ *
+ * Both `\n` and `\r\n` line endings are recognized. A line break at the
+ * end of the text gives an empty last line.
+ *
+ * @param text the text to split
+ * @return the lines, without their line endings
+ * @since 26.1
+ * @example
+ *     lines("one\r\ntwo\nthree")  // ["one", "two", "three"]
+ */
 pub fun lines(text: string): [string] {
     return split(replace(text, "\r\n", "\n"), "\n")
 }
 
+/**
+ * Splits text into words separated by spaces.
+ *
+ * Runs of spaces are treated as one separator. Only the space character
+ * separates words; tabs and line breaks do not.
+ *
+ * @param text the text to split
+ * @return the non-empty words
+ * @since 26.1
+ * @example
+ *     words("  the quick  fox ")  // ["the", "quick", "fox"]
+ */
 pub fun words(text: string): [string] {
     var out: [string] = []
     for w in split(text, " ") {
@@ -50,6 +150,19 @@ pub fun words(text: string): [string] {
     return out
 }
 
+/**
+ * Tells whether text consists only of the digits `0` to `9`.
+ *
+ * Signs, decimal points and spaces are not digits.
+ *
+ * @param text the text to test
+ * @return `true` if the text is not empty and every character is a digit
+ * @see isAlpha
+ * @since 26.1
+ * @example
+ *     isDigits("2024")  // true
+ *     isDigits("-1")    // false
+ */
 pub fun isDigits(text: string): bool {
     if (len(text) == 0) {
         return false
@@ -62,6 +175,19 @@ pub fun isDigits(text: string): bool {
     return true
 }
 
+/**
+ * Tells whether text consists only of ASCII letters.
+ *
+ * Letters are `a` to `z` and `A` to `Z`; accented letters do not count.
+ *
+ * @param text the text to test
+ * @return `true` if the text is not empty and every character is a letter
+ * @see isDigits
+ * @since 26.1
+ * @example
+ *     isAlpha("Burn")   // true
+ *     isAlpha("Burn2")  // false
+ */
 pub fun isAlpha(text: string): bool {
     if (len(text) == 0) {
         return false

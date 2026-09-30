@@ -1,0 +1,242 @@
+def interface Shape {
+    fun area(): float
+    fun name(): string
+}
+
+def interface Named {
+    fun name(): string
+}
+
+def struct Circle(radius: float) :: Shape, Named {
+    fun area(): float {
+        return 3.14159 * radius * radius
+    }
+
+    fun name(): string {
+        return "circle"
+    }
+}
+
+def struct Rect(w: float, h: float) :: Shape {
+    fun area(): float {
+        return w * h
+    }
+
+    fun name(): string {
+        return "rect"
+    }
+
+    fun scale(k: float) {
+        self.w *= k
+        h = h * k
+    }
+}
+
+def struct Counter(label: string) {
+    priv int value = 0
+    static var made = 0
+
+    fun init() {
+        made += 1
+    }
+
+    fun increment(): Counter {
+        value += 1
+        return self
+    }
+
+    fun get(): int {
+        return value
+    }
+
+    static fun named(label: string): Counter {
+        return new Counter(label)
+    }
+}
+
+def struct Human(name: string, age: int) {
+    static fun make(name: string, age: int): Human {
+        return new Human(name, age)
+    }
+
+    fun greet(): string {
+        return "Hello, " + name + "!"
+    }
+}
+
+def abstract struct Animal(name: string) {
+    int legs = 4
+    string tag = "animal:" + name
+
+    abstract fun sound(): string
+
+    fun init() {
+        print("init Animal", name)
+    }
+
+    fun describe(): string {
+        return "${name} says ${sound()} on ${legs} legs"
+    }
+
+    fun destroy() {
+        print("bye", name)
+    }
+}
+
+def struct Dog(name: string, breed: string) :: Animal(name) {
+    fun sound(): string {
+        return "woof"
+    }
+}
+
+def struct Bird(name: string) :: Animal(name) {
+    fun init() {
+        legs = 2
+        print("init Bird", name)
+    }
+
+    fun sound(): string {
+        return "tweet"
+    }
+
+    fun describe(): string {
+        return "bird " + name
+    }
+}
+
+def static struct Geometry {
+    const unit = 1.0
+    var calls = 0
+
+    fun square(x: float): float {
+        calls += 1
+        return x * x * unit
+    }
+}
+
+def struct File(path: string) {
+    bool open = true
+
+    fun destroy(reason: string) {
+        open = false
+        print("closing", path, "because", reason)
+    }
+}
+
+fun totalArea(shapes: [Shape]): float {
+    var total = 0.0
+    for s in shapes {
+        total += s.area()
+    }
+    return total
+}
+
+var shapes: [Shape] = [new Circle(1), new Rect(2, 3)]
+for s in shapes {
+    print(s.name(), s.area())
+}
+print(totalArea(shapes))
+
+Rect r = new Rect(1, 2)
+r.scale(3)
+print(r, r.area())
+
+var counter = Counter.named("clicks")
+counter.increment().increment().increment()
+var other = new Counter("other")
+print(counter.label, counter.get(), Counter.made)
+
+var john = Human.make("John", 30)
+print(john.greet())
+print(Human.greet(john))
+
+var s: Shape = new Circle(2)
+if (s is Circle) {
+    print("circle with radius", s.radius)
+}
+var n: Named = new Circle(1)
+print(n.name())
+print(s)
+
+Dog rex = new Dog("Rex", "lab")
+Animal tweety = new Bird("Tweety")
+var zoo: [Animal] = [rex, tweety]
+for a in zoo {
+    print(a.describe(), a.tag)
+}
+if (tweety is Bird) {
+    print("tweety is a bird with", tweety.legs, "legs")
+}
+print(rex is Animal, tweety is Dog)
+print(rex)
+
+print(Geometry.square(3), Geometry.square(2), Geometry.calls, Geometry.unit)
+Geometry.calls = 10
+print(Geometry.calls)
+
+rex.fetch(thing: string): string {
+    return "${name} fetches the ${thing}"
+}
+print(rex.fetch("ball"))
+var pup = new Dog("Pup", "pug")
+pup.fetch(thing: string): string {
+    return "${name} ignores the ${thing}"
+}
+print(pup.fetch("stick"), rex.fetch("stick"))
+
+destroy rex()
+destroy tweety()
+File f = new File("data.txt")
+File g = f
+destroy f("done")
+print(g)
+f = new File("next.txt")
+print(f.open, f.path)
+
+def interface Tagged {
+    fun tagLine(): string
+}
+
+def struct Puppy(name: string) : Dog(name, "mixed") :: Tagged {
+    int age = 1
+
+    fun sound(): string {
+        return "yip"
+    }
+
+    fun tagLine(): string {
+        return "puppy " + name
+    }
+}
+
+def struct Base(x: int) {
+    fun hi(): string {
+        return "hi from " + who()
+    }
+
+    fun who(): string {
+        return "base ${x}"
+    }
+}
+
+def struct Derived(x: int, y: int) : Base(x) {
+    fun who(): string {
+        return "derived ${x} ${y}"
+    }
+}
+
+Dog bit = new Puppy("Bit")
+print(bit.describe(), bit.breed)
+Animal an = bit
+print(an.sound())
+Tagged tagged = new Puppy("Nib")
+print(tagged.tagLine())
+if (bit is Puppy) {
+    print("puppy aged", bit.age)
+}
+var bases: [Base] = [new Base(1), new Derived(2, 3)]
+for b in bases {
+    print(b.hi())
+}
+new Base(9)
+print(new Derived(4, 5))

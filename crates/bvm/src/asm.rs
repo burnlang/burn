@@ -49,7 +49,7 @@ impl fmt::Display for Tok {
 type R<T> = Result<T, String>;
 
 const BUILTIN_TYPES: [&str; 8] = ["error", "void", "null", "int", "float", "bool", "string", "any"];
-const TYPE_WORDS: [&str; 8] = ["fun", "map", "future", "record", "class", "interface", "enum", "implements"];
+const TYPE_WORDS: [&str; 9] = ["fun", "map", "future", "record", "struct", "class", "interface", "enum", "implements"];
 
 fn ident_start(c: char) -> bool {
     c.is_ascii_alphabetic() || c == '_' || c == '$'
@@ -369,7 +369,7 @@ impl Asm {
                     c.expect('>')?;
                     TyRef::D(Desc::Future(t))
                 }
-                "record" | "class" | "interface" | "enum" => {
+                "record" | "struct" | "class" | "interface" | "enum" => {
                     c.i -= 1;
                     TyRef::D(self.def(c, "")?)
                 }
@@ -398,7 +398,7 @@ impl Asm {
 
     fn def(&mut self, c: &mut Cur, decl: &str) -> R<Desc> {
         let kind = match c.peek() {
-            Some(Tok::Ident(s)) if matches!(s.as_str(), "record" | "class" | "interface" | "enum") => s.clone(),
+            Some(Tok::Ident(s)) if matches!(s.as_str(), "record" | "struct" | "class" | "interface" | "enum") => s.clone(),
             _ => {
                 return match self.ty_ref(c)? {
                     TyRef::D(d) => Ok(d),
@@ -453,7 +453,7 @@ impl Asm {
                 Ok(Desc::Record {
                     name,
                     fields,
-                    class: kind == "class",
+                    class: kind == "class" || kind == "struct",
                     implements,
                 })
             }
@@ -1154,9 +1154,9 @@ impl Names {
                 implements,
             } => {
                 let fs: Vec<String> = fields.iter().map(|(n, t)| format!("{}: {}", quoted(n), self.ty(m, *t))).collect();
-                let mut s = format!("{} {{ {} }}", named(if *class { "class" } else { "record" }, name), fs.join(", "));
+                let mut s = format!("{} {{ {} }}", named(if *class { "struct" } else { "record" }, name), fs.join(", "));
                 if fs.is_empty() {
-                    s = format!("{} {{}}", named(if *class { "class" } else { "record" }, name));
+                    s = format!("{} {{}}", named(if *class { "struct" } else { "record" }, name));
                 }
                 if !implements.is_empty() {
                     let is: Vec<String> = implements.iter().map(|t| self.ty(m, *t)).collect();

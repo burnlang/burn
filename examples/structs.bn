@@ -1,0 +1,65 @@
+def struct Human(name: string, age: int) {
+    fun greet(): string {
+        return "Hello, " + name + "!"
+    }
+}
+
+def abstract struct Pet(name: string) {
+    int walks = 0
+
+    abstract fun sound(): string
+
+    fun speak(): string {
+        return name + " says " + sound()
+    }
+
+    fun destroy() {
+        print(name + " went home after " + walks.toString() + " walks")
+    }
+}
+
+def struct Dog(name: string, breed: string) :: Pet(name) {
+    fun sound(): string {
+        return "Woof!"
+    }
+}
+
+def struct Cat(name: string) :: Pet(name) {
+    fun init() {
+        walks = 1
+    }
+
+    fun sound(): string {
+        return "Meow!"
+    }
+}
+
+def static struct Shelter {
+    var adopted = 0
+
+    fun adopt(p: Pet): Pet {
+        adopted += 1
+        return p
+    }
+}
+
+fun main() {
+    Human john = new Human("John", 30)
+    print(john.greet())
+
+    Dog rex = new Dog("Rex", "Golden Retriever")
+    Pet tom = Shelter.adopt(new Cat("Tom"))
+    Shelter.adopt(rex)
+    print(rex.speak())
+    print(tom.speak())
+    print("adopted: " + Shelter.adopted.toString())
+
+    rex.fetch(thing: string): string {
+        walks += 1
+        return name + " brings back the " + thing
+    }
+    print(rex.fetch("ball"))
+
+    destroy rex()
+    destroy tom()
+}

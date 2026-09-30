@@ -1,0 +1,37 @@
+circle 3.14159
+rect 6.0
+9.14159
+Rect { w: 3.0, h: 6.0 } 18.0
+clicks 3 2
+Hello, John!
+Hello, John!
+circle with radius 2.0
+circle
+Circle { radius: 2.0 }
+init Animal Rex
+init Animal Tweety
+init Bird Tweety
+Rex says woof on 4 legs animal:Rex
+bird Tweety animal:Tweety
+tweety is a bird with 2 legs
+true false
+Dog { name: "Rex", legs: 4, tag: "animal:Rex", breed: "lab" }
+9.0 4.0 2 1.0
+10
+Rex fetches the ball
+init Animal Pup
+Pup ignores the stick Rex fetches the stick
+bye Rex
+bye Tweety
+closing data.txt because done
+<destroyed File>
+true next.txt
+init Animal Bit
+Bit says yip on 4 legs mixed
+yip
+init Animal Nib
+puppy Nib
+puppy aged 1
+hi from base 1
+hi from derived 2 3
+Derived { x: 4, y: 5 }

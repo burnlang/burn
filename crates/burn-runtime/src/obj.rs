@@ -9,6 +9,7 @@ pub const K_STRUCT: u8 = 3;
 pub const K_BOX: u8 = 4;
 pub const K_MAP: u8 = 5;
 pub const K_FUTURE: u8 = 6;
+pub const K_DEAD: u8 = 7;
 
 pub const F_STATIC: u8 = 1;
 pub const F_ASCII: u8 = 2;

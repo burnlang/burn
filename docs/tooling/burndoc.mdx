@@ -1,0 +1,122 @@
+---
+title: Burndoc
+description: Documentation comments and the burn doc generator.
+order: 24
+---
+
+# Burndoc
+
+Burndoc is Burn's version of Javadoc. You write documentation comments next to your code, and
+`burn doc` turns them into a website. The editor shows the same text when you hover a name.
+
+```burn
+/**
+ * Returns the number of days in a month.
+ *
+ * February has 29 days in leap years, see {@link Date.isLeapYear}.
+ *
+ * @param year the year, for example `2024`
+ * @param month the month, from 1 to 12
+ * @return the number of days, from 28 to 31
+ * @since 1.2
+ * @example
+ *     daysInMonth(2024, 2)  // 29
+ */
+fun daysInMonth(year: int, month: int): int {
+    ...
+}
+```
+
+## Writing comments
+
+A doc comment starts with `/**` and sits directly above what it documents: a function, struct,
+interface, enum, type, method, field, static value, global or enum variant. Annotations may come between
+the comment and the definition. A comment at the very top of a file followed by a blank line documents the
+whole module.
+
+- The **first sentence** is the summary shown in tables and search results. Keep it short.
+- Further **paragraphs** follow after an empty ` *` line.
+- `` `code` `` and `{@code x}` show code. `{@link Name}` and `{@link Struct.member}` link to other
+  documented items, including items in the standard library and built-in functions.
+- Lines starting with `- ` form a list. Lines indented by four spaces, or wrapped in ```` ``` ````, form a
+  code block.
+
+### Tags
+
+| Tag | Meaning |
+| --- | --- |
+| `@param name text` | describes a parameter; on a struct, a constructor parameter |
+| `@return text` | describes the result |
+| `@throws text` | when the function stops the program with a runtime error |
+| `@see Name` | a related item, linked when it is documented |
+| `@since version` | the version that added it |
+| `@example` | the indented lines below it are an example |
+| `@author name` | who wrote it |
+
+### Deprecating
+
+Deprecate a function, method, struct or type with the `@Deprecated` annotation, not with a comment. The
+compiler then warns at every use, and the documentation and hovers show the message:
+
+```burn
+/**
+ * Prints a short report for the given animals.
+ *
+ * @param animals the animals to report on
+ */
+@Deprecated("use Animal.describe directly")
+fun report(animals: [Animal]) {
+    ...
+}
+```
+
+A `@deprecated text` tag inside the comment is still read and shown, for code that was written that way,
+but only the annotation makes the compiler warn.
+
+Structs document their constructor parameters with `@param`. Those descriptions also appear on the
+fields the parameters become:
+
+```burn
+/**
+ * A dog.
+ *
+ * @param name the dog's name
+ * @param breed the breed, for example `"lab"`
+ */
+def struct Dog(name: string, breed: string) :: Animal(name) {
+    ...
+}
+```
+
+## Generating the site
+
+```sh
+burn doc main.bn                  # main.bn, its imports, the standard library and the builtins
+burn doc main.bn -o site          # write to site/ instead of burndoc/
+burn doc                          # only the standard library and the builtins
+burn doc main.bn --no-std         # only your code
+burn doc main.bn --private        # also include priv definitions
+burn doc main.bn --title "My App"
+```
+
+The result is a static site: open `burndoc/index.html`, or put the folder on any web server. It has:
+
+- an overview of your modules, the standard library and the built-in functions,
+- a page per module with summary tables and the details of its functions and values,
+- a page per struct, interface, enum and type with its constructor, fields, methods, the structs that
+  extend it and the members it inherits,
+- a page for the built-in functions, grouped by topic,
+- search: press `/`, type a name and press Enter.
+
+It follows the system's light or dark mode and works on phones.
+
+## In the editor
+
+Hovering a function, method, struct, field, static value or built-in function in an editor that uses
+`burn lsp` shows its signature and its Burndoc: the description, parameters, return value, errors and the
+first example.
+
+## The standard library
+
+Every function in the standard library and every built-in function is documented. `burn doc` with no
+arguments builds that reference, and [Built-in functions](../stdlib/builtins.mdx) covers the same material.

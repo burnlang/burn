@@ -19,10 +19,30 @@
     "body": ["def type ${1:Name} {", "\t${2:string} ${3:field}", "}"],
     "description": "Record type"
   },
-  "Class definition": {
-    "prefix": "defclass",
-    "body": ["def class ${1:Name} {", "\t${2:string} ${3:field}", "", "\tfun ${4:method}(): ${5:string} {", "\t\t$0", "\t}", "}"],
-    "description": "Class with fields and methods"
+  "Struct definition": {
+    "prefix": "defstruct",
+    "body": ["def struct ${1:Name}(${2:name}: ${3:string}) {", "\tfun ${4:method}(): ${5:string} {", "\t\t$0", "\t}", "}"],
+    "description": "Struct with constructor parameters and methods"
+  },
+  "Abstract struct definition": {
+    "prefix": "defabstract",
+    "body": ["def abstract struct ${1:Name}(${2:name}: ${3:string}) {", "\tabstract fun ${4:method}(): ${5:string}", "}"],
+    "description": "Abstract struct that other structs extend"
+  },
+  "Static struct definition": {
+    "prefix": "defstatic",
+    "body": ["def static struct ${1:Name} {", "\tconst ${2:value} = ${3:0}", "", "\tfun ${4:helper}(): ${5:int} {", "\t\t$0", "\t}", "}"],
+    "description": "Static struct with values and functions, no objects"
+  },
+  "New object": {
+    "prefix": "new",
+    "body": ["${1:Name} ${2:name} = new ${1:Name}($0)"],
+    "description": "Create a struct object"
+  },
+  "Destroy object": {
+    "prefix": "destroy",
+    "body": ["destroy ${1:name}($0)"],
+    "description": "Destroy a struct object"
   },
   "Interface definition": {
     "prefix": "definterface",

@@ -1,3 +1,10 @@
+/**
+ * Formats a number with at least two digits, adding a leading zero.
+ *
+ * @param n the number, usually a month or a day
+ * @return the number as text, for example `"07"` for `7`
+ * @since 26.1
+ */
 priv fun pad2(n: int): string {
     if (n < 10) {
         return "0${n}"
@@ -5,6 +12,20 @@ priv fun pad2(n: int): string {
     return toString(n)
 }
 
+/**
+ * Converts a calendar date to the number of days since 1970-01-01.
+ *
+ * Uses the proleptic Gregorian calendar, so it works for any year,
+ * including years before 1970 (negative results) and before year 1.
+ * A day past the end of the month simply counts on into the next month.
+ *
+ * @param year the year
+ * @param month the month, from 1 to 12
+ * @param day the day of the month
+ * @return the number of days since 1970-01-01, negative for earlier dates
+ * @see civilFromDays
+ * @since 26.1
+ */
 priv fun daysFromCivil(year: int, month: int, day: int): int {
     var y = year
     if (month <= 2) {
@@ -24,6 +45,17 @@ priv fun daysFromCivil(year: int, month: int, day: int): int {
     return era * 146097 + doe - 719468
 }
 
+/**
+ * Converts a number of days since 1970-01-01 to a calendar date.
+ *
+ * This is the inverse of {@link daysFromCivil} and always returns a
+ * valid date.
+ *
+ * @param days the number of days since 1970-01-01, negative for earlier dates
+ * @return the date that many days after 1970-01-01
+ * @see daysFromCivil
+ * @since 26.1
+ */
 priv fun civilFromDays(days: int): Date {
     var z = days + 719468
     var era = z / 146097
@@ -43,59 +75,193 @@ priv fun civilFromDays(days: int): Date {
     if (m <= 2) {
         y += 1
     }
-    return Date { year: y, month: m, day: d }
+    return new Date(y, m, d)
 }
 
-pub def class Date {
-    int year
-    int month
-    int day
-
+/**
+ * A calendar date without a time of day.
+ *
+ * Dates use the proleptic Gregorian calendar. The constructor does not
+ * validate its arguments: `new Date(2024, 2, 30)` is accepted, and the
+ * day arithmetic such as {@link Date.addDays} normalizes it to
+ * 2024-03-01.
+ *
+ * @param year the year, for example `2024`
+ * @param month the month, from 1 to 12
+ * @param day the day of the month, from 1 to 31
+ * @see Date.create
+ * @since 26.1
+ * @example
+ *     var d = new Date(2024, 3, 5)
+ *     d.format()  // "2024-03-05"
+ */
+pub def struct Date(year: int, month: int, day: int) {
+    /**
+     * Returns today's date in the local time zone.
+     *
+     * @return today's date
+     * @see Date.today
+     * @since 26.1
+     * @example
+     *     var today = Date.now()
+     *     print("Year: ${today.year}")
+     */
     static fun now(): Date {
         var t = __localTime()
-        return Date { year: t[0], month: t[1], day: t[2] }
+        return new Date(t[0], t[1], t[2])
     }
 
+    /**
+     * Returns today's date in the local time zone as `YYYY-MM-DD` text.
+     *
+     * @return today's date, for example `"2024-03-05"`
+     * @see Date.now
+     * @see Date.formatDate
+     * @since 26.1
+     * @example
+     *     print("Today is " + Date.today())
+     */
     static fun today(): string {
         return Date.formatDate(Date.now())
     }
 
+    /**
+     * Creates a date from a year, a month and a day.
+     *
+     * Same as {@link Date.create}.
+     *
+     * @param year the year, for example `2024`
+     * @param month the month, from 1 to 12
+     * @param day the day of the month, from 1 to 31
+     * @return the new date, not validated
+     * @see Date.create
+     * @since 26.1
+     */
     static fun createDate(year: int, month: int, day: int): Date {
-        return Date { year: year, month: month, day: day }
+        return new Date(year, month, day)
     }
 
+    /**
+     * Creates a date from a year, a month and a day.
+     *
+     * The arguments are not validated, see {@link Date}.
+     *
+     * @param year the year, for example `2024`
+     * @param month the month, from 1 to 12
+     * @param day the day of the month, from 1 to 31
+     * @return the new date
+     * @since 26.1
+     * @example
+     *     Date.create(1990, 5, 15).format()  // "1990-05-15"
+     */
     static fun create(year: int, month: int, day: int): Date {
-        return Date { year: year, month: month, day: day }
+        return new Date(year, month, day)
     }
 
+    /**
+     * Formats a date as `YYYY-MM-DD` text.
+     *
+     * The month and the day always have two digits; the year is written
+     * as is, without padding.
+     *
+     * @param date the date to format
+     * @return the formatted date, for example `"2024-03-05"`
+     * @see Date.format
+     * @see Date.parse
+     * @since 26.1
+     * @example
+     *     Date.formatDate(Date.create(2024, 3, 5))  // "2024-03-05"
+     */
     static fun formatDate(date: Date): string {
         return "${date.year}-${pad2(date.month)}-${pad2(date.day)}"
     }
 
+    /**
+     * Parses a date written as `YYYY-MM-DD`.
+     *
+     * Whitespace around the text is ignored and the parts do not need
+     * leading zeros, so `"2024-3-5"` also works. The month and the day are
+     * not range-checked. Negative years cannot be parsed.
+     *
+     * @param text the text to parse, for example `"2024-03-05"`
+     * @return the parsed date
+     * @throws when the text is not three whole numbers separated by `-`
+     * @see Date.formatDate
+     * @since 26.1
+     * @example
+     *     var d = Date.parse("2024-03-05")
+     *     d.month  // 3
+     */
     static fun parse(text: string): Date {
         var parts = split(trim(text), "-")
         if (len(parts) != 3) {
             panic("invalid date \"${text}\", expected YYYY-MM-DD")
         }
-        return Date { year: toInt(parts[0]), month: toInt(parts[1]), day: toInt(parts[2]) }
+        return new Date(toInt(parts[0]), toInt(parts[1]), toInt(parts[2]))
     }
 
+    /**
+     * Returns the current year in the local time zone.
+     *
+     * @return the current year, for example `2024`
+     * @since 26.1
+     */
     static fun currentYear(): int {
         return __localTime()[0]
     }
 
+    /**
+     * Returns the current month in the local time zone.
+     *
+     * @return the current month, from 1 to 12
+     * @since 26.1
+     */
     static fun currentMonth(): int {
         return __localTime()[1]
     }
 
+    /**
+     * Returns the current day of the month in the local time zone.
+     *
+     * @return the current day of the month, from 1 to 31
+     * @since 26.1
+     */
     static fun currentDay(): int {
         return __localTime()[2]
     }
 
+    /**
+     * Tells whether a year is a leap year in the Gregorian calendar.
+     *
+     * A year is a leap year when it is divisible by 4, except for years
+     * divisible by 100 that are not divisible by 400.
+     *
+     * @param year the year, for example `2024`
+     * @return `true` if the year has 366 days
+     * @since 26.1
+     * @example
+     *     Date.isLeapYear(2024)  // true
+     *     Date.isLeapYear(1900)  // false
+     *     Date.isLeapYear(2000)  // true
+     */
     static fun isLeapYear(year: int): bool {
         return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
     }
 
+    /**
+     * Returns the number of days in a month.
+     *
+     * February has 29 days in leap years, see {@link Date.isLeapYear}.
+     *
+     * @param year the year, for example `2024`
+     * @param month the month, from 1 to 12
+     * @return the number of days, from 28 to 31
+     * @see Date.isLeapYear
+     * @since 26.1
+     * @example
+     *     Date.daysInMonth(2024, 2)  // 29
+     *     Date.daysInMonth(2023, 4)  // 30
+     */
     static fun daysInMonth(year: int, month: int): int {
         if (month == 2) {
             if (Date.isLeapYear(year)) {
@@ -109,40 +275,138 @@ pub def class Date {
         return 31
     }
 
+    /**
+     * Returns the day of the week of a date as a number.
+     *
+     * The week starts on Saturday: 0 is Saturday, 1 is Sunday, 2 is Monday
+     * and so on up to 6 for Friday.
+     *
+     * @param date the date
+     * @return the day of the week, from 0 (Saturday) to 6 (Friday)
+     * @see Date.dayName
+     * @since 26.1
+     * @example
+     *     Date.dayOfWeek(Date.create(2024, 1, 1))  // 2, a Monday
+     */
     static fun dayOfWeek(date: Date): int {
         var d = daysFromCivil(date.year, date.month, date.day)
         return ((d + 5) % 7 + 7) % 7
     }
 
+    /**
+     * Returns the English name of the day of the week of a date.
+     *
+     * @param date the date
+     * @return the name of the day, from `"Monday"` to `"Sunday"`
+     * @see Date.dayOfWeek
+     * @since 26.1
+     * @example
+     *     Date.dayName(Date.create(2024, 1, 1))  // "Monday"
+     */
     static fun dayName(date: Date): string {
         var names = ["Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
         return names[Date.dayOfWeek(date)]
     }
 
+    /**
+     * Returns the date a number of days after another date.
+     *
+     * Month and year boundaries and leap years are handled; a negative
+     * number of days goes back in time.
+     *
+     * @param date the start date
+     * @param days the number of days to add, may be negative
+     * @return a new date; the given date is not changed
+     * @see Date.subtractDays
+     * @see Date.plusDays
+     * @since 26.1
+     * @example
+     *     Date.addDays(Date.create(2024, 2, 28), 2).format()  // "2024-03-01"
+     */
     static fun addDays(date: Date, days: int): Date {
         return civilFromDays(daysFromCivil(date.year, date.month, date.day) + days)
     }
 
+    /**
+     * Returns the date a number of days before another date.
+     *
+     * @param date the start date
+     * @param days the number of days to subtract, may be negative
+     * @return a new date; the given date is not changed
+     * @see Date.addDays
+     * @since 26.1
+     * @example
+     *     Date.subtractDays(Date.create(2024, 1, 1), 1).format()  // "2023-12-31"
+     */
     static fun subtractDays(date: Date, days: int): Date {
         return civilFromDays(daysFromCivil(date.year, date.month, date.day) - days)
     }
 
+    /**
+     * Returns the number of days from one date to another.
+     *
+     * @param from the start date
+     * @param to the end date
+     * @return the number of days, negative when `to` is before `from`
+     * @since 26.1
+     * @example
+     *     Date.daysBetween(Date.create(2024, 1, 1), Date.create(2025, 1, 1))  // 366
+     */
     static fun daysBetween(from: Date, to: Date): int {
         return daysFromCivil(to.year, to.month, to.day) - daysFromCivil(from.year, from.month, from.day)
     }
 
+    /**
+     * Formats this date as `YYYY-MM-DD` text.
+     *
+     * @return the formatted date, for example `"2024-03-05"`
+     * @see Date.formatDate
+     * @since 26.1
+     * @example
+     *     Date.create(2024, 3, 5).format()  // "2024-03-05"
+     */
     fun format(): string {
         return Date.formatDate(self)
     }
 
+    /**
+     * Returns the date a number of days after this date.
+     *
+     * @param days the number of days to add, may be negative
+     * @return a new date; this date is not changed
+     * @see Date.addDays
+     * @since 26.1
+     * @example
+     *     Date.create(2024, 12, 31).plusDays(1).format()  // "2025-01-01"
+     */
     fun plusDays(days: int): Date {
         return Date.addDays(self, days)
     }
 
+    /**
+     * Tells whether this date is before another date.
+     *
+     * @param other the date to compare with
+     * @return `true` if this date is strictly earlier, `false` for the same day
+     * @see Date.isAfter
+     * @since 26.1
+     * @example
+     *     Date.create(2024, 1, 1).isBefore(Date.create(2024, 1, 2))  // true
+     */
     fun isBefore(other: Date): bool {
         return Date.daysBetween(self, other) > 0
     }
 
+    /**
+     * Tells whether this date is after another date.
+     *
+     * @param other the date to compare with
+     * @return `true` if this date is strictly later, `false` for the same day
+     * @see Date.isBefore
+     * @since 26.1
+     * @example
+     *     Date.create(2024, 1, 1).isAfter(Date.create(2024, 1, 2))  // false
+     */
     fun isAfter(other: Date): bool {
         return Date.daysBetween(self, other) < 0
     }

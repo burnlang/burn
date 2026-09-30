@@ -1,0 +1,64 @@
+---
+title: Optimizing while running
+description: How bvm loads only the code a program uses and speeds up hot code while the program runs.
+order: 42
+---
+
+# Optimizing while running
+
+bvm gets faster as a program runs. It never works on code the program doesn't use, and it re-optimizes
+the functions the program spends its time in, while the program keeps running. There is nothing to
+configure and no cache on disk. It works for every language built on bvm, not just Burn.
+
+## Tier 0: only what runs
+
+When a module is loaded, bvm verifies it but doesn't prepare any function. A function is prepared the
+first time it is called: its jumps are resolved and common instruction sequences are fused into
+superinstructions. A function that is never called is never prepared and costs nothing, so unused code in
+large libraries and archives is dropped for free.
+
+## Tier 1: hot code gets rebuilt
+
+bvm counts how often each function is called and how often its loops go round. When a function becomes
+hot (1000 calls, or about 16,000 loop iterations), bvm rebuilds it:
+
+- **Inlining.** Calls to small functions without loops or further calls, such as getters, setters and
+  one-line helpers, are replaced by the function's body. `p.get()` becomes a direct field read.
+- **Constant folding.** Arithmetic and comparisons on constants are computed once, and branches on
+  constants become plain jumps or disappear.
+- **Dead code removal.** Instructions that can no longer run, values that are computed and thrown away,
+  and temporaries nobody reads are removed.
+- **Peephole rules.** For example `store x; load x` becomes `tee x`, and `not; jz` becomes `jnz`.
+- **Self calls.** A recursive call to the same function skips the function lookup.
+- **Superinstructions** are fused again over the new code.
+
+The rebuilt code replaces the old version for all later calls. A loop that is already running switches
+to the new code at its next iteration (on-stack replacement), so even a long loop in `main` gets faster
+without being called again. Threads started with `async` share the optimized code.
+
+## Seeing it work
+
+Set `BVM_STATS` to get a summary when the program ends:
+
+```sh
+BVM_STATS=1 burn app.bn
+```
+
+```text
+[bvm] 7 of 9 functions ran (2 never loaded); 5 optimized while running: 2 calls inlined, 0 constants folded, 8 instructions removed, 1 loops switched to optimized code
+```
+
+`BVM_HOT` changes when code counts as hot: `BVM_HOT=1` optimizes every function on its first call, and
+`BVM_HOT=0` turns tier 1 off. The results are always the same; only the speed changes. Burn's test suite
+runs every program with `BVM_HOT=1` to make sure of that.
+
+## Numbers
+
+Instructions executed, measured with callgrind, before and after this feature:
+
+| Program | Before | After |
+| --- | --- | --- |
+| `fib(27)`, recursive calls | 115.5M | 103.4M (−10%) |
+| interface calls, getters, small helpers | 2.09G | 1.35G (−35%) |
+| arithmetic helpers and a method in a loop | 4.05G | 3.22G (−20%) |
+| a plain loop over globals | 765M | 781M (+2%) |

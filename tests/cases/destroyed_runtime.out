@@ -1,0 +1,7 @@
+closed <destroyed Session>
+runtime error: this object was destroyed and can no longer be used
+  --> tests/cases/destroyed_runtime.bn:18:3
+   |
+18 | b.hit()
+   |   ^
+   = help: another variable or function destroyed this object; do not use it after `destroy`

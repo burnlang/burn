@@ -16,9 +16,7 @@ def interface Shape {
     fun area(): float
 }
 
-def class Circle: Shape {
-    float radius
-
+def struct Circle(radius: float) :: Shape {
     fun area(): float {
         return 3.14159 * radius * radius
     }
@@ -31,7 +29,7 @@ fun describe(value: any): string {
     return "something else"
 }
 
-print(describe(Circle { radius: 2 }))
+print(describe(new Circle(2)))
 ```
 
 ## Ways to run the same program
@@ -55,7 +53,7 @@ format, verifier and Rust API, and other languages can compile to it.
 - [Syntax tour](./language/syntax.mdx)
 - [Types and definitions](./language/types.mdx)
 - [Smart casts and null safety](./language/smart-casts.mdx)
-- [Classes and interfaces](./language/classes-and-interfaces.mdx)
+- [Structs and interfaces](./language/structs-and-interfaces.mdx)
 - [Modules, `pub` and `priv`](./language/modules.mdx)
 - [Async](./language/async.mdx)
 - [Annotations](./language/annotations.mdx)
@@ -64,6 +62,8 @@ format, verifier and Rust API, and other languages can compile to it.
 - [The toolchain: burn, burni, burnc, burnfmt, burn-lsp, bvm](./tooling/toolchain.mdx)
 - [burnfmt](./tooling/burnfmt.mdx)
 - [Command line](./tooling/cli.mdx)
+- [Errors, help and `burn fix`](./tooling/fixing-errors.mdx)
+- [Burndoc: documentation comments and `burn doc`](./tooling/burndoc.mdx)
 - [How the compiler works](./tooling/compiler.mdx)
 - [Editor support](./tooling/editors.mdx)
 - [The Burn Virtual Machine (bvm)](./bvm/overview.mdx)
@@ -76,4 +76,5 @@ format, verifier and Rust API, and other languages can compile to it.
   - [Burn archives (.bar)](./bvm/archives.mdx)
   - [Mixins](./bvm/mixins.mdx)
   - [Native interop](./bvm/native-interop.mdx)
+  - [Optimizing while running](./bvm/optimizing.mdx)
 - [Migrating from the Go version](./migration.mdx)

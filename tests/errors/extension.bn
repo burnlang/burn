@@ -1,0 +1,11 @@
+def struct Robot(name: string) {}
+
+fun main() {
+    var a = new Robot("a")
+    var b = new Robot("b")
+    a.wave() {
+        print(name + " waves")
+    }
+    a.wave()
+    b.wave()
+}

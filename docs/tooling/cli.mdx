@@ -25,6 +25,8 @@ This page lists every subcommand of `burn`. The shorter toolchain commands map o
 | `burn build <file.bn> --emit-asm out.s` | also keep the generated assembly (bvm assembly with `--target bvm`) |
 | `burn build <file.bn> --no-strip` | keep symbols in the executable |
 | `burn check <files...>` | report errors and warnings without running |
+| `burn fix [--dry-run] <files...>` | apply the compiler's certain fixes, then report what is left ([details](./fixing-errors.mdx)) |
+| `burn doc [files...] [-o dir]` | generate an HTML reference from Burndoc comments ([details](./burndoc.mdx)) |
 | `burn fmt <files...>` | print formatted code; `-w` rewrites files, `--check` fails when files are not formatted |
 | `burn repl` | interactive session |
 | `burn eval '<code>'` | run a snippet |

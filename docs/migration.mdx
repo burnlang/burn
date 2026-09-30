@@ -1,7 +1,7 @@
 ---
 title: Migrating from the Go version
 description: What changed in the Rust rewrite and how to update existing code.
-order: 40
+order: 42
 ---
 
 # Migrating from the Go version
@@ -9,7 +9,7 @@ order: 40
 | Go version | Current Burn |
 | --- | --- |
 | `type Person { ... }` | `def type Person { ... }` |
-| `class Human { fun create(...) ... }` | `def class Human { ... static fun create(...) ... }` |
+| `class Human { fun create(...) ... }` | `def struct Human(...) { ... static fun create(...) ... }` |
 | interpreter written in Go | compiler written in Rust and x86-64 assembly |
 | `burn -exe file.bn` embedded the source in a Go program | `burn build file.bn` produces real machine code |
 | every number was a float | `int` and `float` are separate types |
@@ -19,16 +19,13 @@ order: 40
 
 ## Classes
 
-In the Go version classes were only namespaces for functions and the data lived in a separate `type`. Now a class
-holds its fields and methods together:
+In the Go version classes were only namespaces for functions and the data lived in a separate `type`. Now a
+struct holds its fields and methods together:
 
 ```burn
-def class Human {
-    string name
-    int age
-
+def struct Human(name: string, age: int) {
     static fun create(name: string, age: int): Human {
-        return Human { name: name, age: age }
+        return new Human(name, age)
     }
 
     fun greet(): string {
@@ -41,7 +38,66 @@ print(john.greet())
 print(Human.greet(john))
 ```
 
-`Human.greet(john)` still works, so most existing call sites compile unchanged once the class is updated.
+`Human.greet(john)` still works, so most existing call sites compile unchanged once the struct is written.
+
+## Classes to structs
+
+Earlier versions of the Rust rewrite had `def class`. Classes were replaced by
+[structs](./language/structs-and-interfaces.mdx), and `def class` is now a compile error ("classes are now
+structs"). To update a class:
+
+| Class | Struct |
+| --- | --- |
+| `def class Human` with the fields `string name` and `int age` | `def struct Human(name: string, age: int)` |
+| `fun init(name: string) { self.name = name }` | a constructor parameter `name`, plus a parameterless `fun init()` for any other setup |
+| `Human("John", 30)` or `Human { name: "John", age: 30 }` | `new Human("John", 30)` |
+| `def class Circle: Shape` | `def struct Circle(radius: float) :: Shape` |
+| a class with only static functions | `def static struct Name { ... }` |
+
+- Fields that callers set when they create an object, usually the ones without a default, become constructor
+  parameters. Other fields stay in the body and need a default unless their type has a zero value (`int`,
+  `float`, `bool`, `string`, arrays, maps, optionals and enums).
+- An `init` with parameters becomes constructor parameters. Code that computed other fields from them moves to a
+  field default (`string id = name.lower()`) or to `fun init()` without parameters, which runs after the fields
+  are set.
+- Every place that creates an object needs `new`. The compiler reports each one with "`Human` is a struct, so its
+  objects are created with `new`".
+- Interfaces are listed after `::` instead of `:`.
+- A class that only had `static fun` methods and static values becomes a `def static struct`. Inside it the
+  `static` keyword is optional, and callers keep writing `Name.function()`.
+- `def type` records are unchanged: `Pair(1, "x")` and `Pair { first: 1, second: "x" }` still work.
+
+Before:
+
+```burn
+def class Account {
+    string owner
+    int balance
+    string id
+
+    fun init(owner: string, balance: int) {
+        self.owner = owner
+        self.balance = balance
+        self.id = owner.lower() + "-1"
+    }
+}
+
+var a = Account("Ada", 10)
+```
+
+After:
+
+```burn
+def struct Account(owner: string, balance: int) {
+    string id = ""
+
+    fun init() {
+        id = owner.lower() + "-1"
+    }
+}
+
+var a = new Account("Ada", 10)
+```
 
 ## Numbers
 

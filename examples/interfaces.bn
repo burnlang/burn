@@ -3,9 +3,7 @@ def interface Shape {
     fun name(): string
 }
 
-def class Circle: Shape {
-    float radius
-
+def struct Circle(radius: float) :: Shape {
     fun area(): float {
         return 3.14159 * radius * radius
     }
@@ -15,9 +13,7 @@ def class Circle: Shape {
     }
 }
 
-def class Square: Shape {
-    float side
-
+def struct Square(side: float) :: Shape {
     fun area(): float {
         return side * side
     }
@@ -41,7 +37,7 @@ fun classify(s: Shape): Size {
 }
 
 fun main() {
-    var shapes: [Shape] = [Circle { radius: 1 }, Square { side: 3 }, Circle { radius: 4 }]
+    var shapes: [Shape] = [new Circle(1), new Square(3), new Circle(4)]
     for s in shapes {
         print("${s.name()} area=${s.area()} size=${classify(s)}")
         if (s is Circle) {

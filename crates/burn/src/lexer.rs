@@ -59,6 +59,7 @@ pub enum Tok {
     Comma,
     Semi,
     Colon,
+    ColonColon,
     Dot,
     DotDot,
     DotDotEq,
@@ -173,6 +174,7 @@ pub fn symbol(t: &Tok) -> &'static str {
         Tok::Comma => ",",
         Tok::Semi => ";",
         Tok::Colon => ":",
+        Tok::ColonColon => "::",
         Tok::Dot => ".",
         Tok::DotDot => "..",
         Tok::DotDotEq => "..=",
@@ -311,6 +313,7 @@ impl<'a> Lexer<'a> {
                     b']' => (Tok::RBracket, 1),
                     b',' => (Tok::Comma, 1),
                     b';' => (Tok::Semi, 1),
+                    b':' if self.src.as_bytes().get(self.pos + 1) == Some(&b':') => (Tok::ColonColon, 2),
                     b':' => (Tok::Colon, 1),
                     b'.' => (Tok::Dot, 1),
                     b'?' => (Tok::Question, 1),
@@ -318,12 +321,16 @@ impl<'a> Lexer<'a> {
                     _ => {
                         let ch = self.src[self.pos..].chars().next().unwrap_or('?');
                         self.pos += ch.len_utf8();
-                        let msg = match ch {
-                            '&' => "unexpected character `&` (did you mean `&&`?)".to_string(),
-                            '|' => "unexpected character `|` (did you mean `||`?)".to_string(),
-                            _ => format!("unexpected character `{}`", ch),
-                        };
-                        self.error(start, msg);
+                        let span = Span::new(self.file, start, self.pos);
+                        let mut d = Diagnostic::error(span, format!("unexpected character `{}`", ch));
+                        if ch == '&' || ch == '|' {
+                            let op = format!("{}{}", ch, ch);
+                            d = d.fix(format!("use `{}` for logical {}", op, if ch == '&' { "and" } else { "or" }), span, op);
+                            self.diags.push(d);
+                            self.push(if ch == '&' { Tok::AndAnd } else { Tok::OrOr }, start);
+                            continue;
+                        }
+                        self.diags.push(d);
                         continue;
                     }
                 },

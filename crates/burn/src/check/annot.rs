@@ -15,7 +15,7 @@ impl Site {
         match self {
             Site::Func { method: true, .. } => "a method",
             Site::Func { .. } => "a function",
-            Site::Type { class: true } => "a class",
+            Site::Type { class: true } => "a struct",
             Site::Type { .. } => "a type",
             Site::Field => "a field",
         }
@@ -105,7 +105,7 @@ impl<'a> Checker<'a> {
                     if bad_site(matches!(site, Site::Type { class: true } | Site::Field)) {
                         self.error(
                             a.span,
-                            format!("@{} can only be used on classes and their fields, not on {}", name, site.describe()),
+                            format!("@{} can only be used on structs and their fields, not on {}", name, site.describe()),
                         );
                     }
                     self.builtin_args(a, &[], None)
@@ -217,7 +217,7 @@ impl<'a> Checker<'a> {
                     }
                 }
                 match suggest(name, cands.iter().map(|s| s.as_str())) {
-                    Some(s) => self.error_note(a.name.span, format!("unknown annotation `@{}`", name), format!("did you mean `@{}`?", s)),
+                    Some(s) => self.error_fix(a.name.span, format!("unknown annotation `@{}`", name), &s),
                     None => self.error_note(
                         a.name.span,
                         format!("unknown annotation `@{}`", name),
@@ -481,7 +481,7 @@ impl<'a> Checker<'a> {
             if hp != want_params {
                 let want: Vec<String> = want_params.iter().map(|t| self.show(*t)).collect();
                 let got: Vec<String> = hp.iter().map(|t| self.show(*t)).collect();
-                self.error_note(
+                self.error_detail(
                     a.span,
                     format!("the mixin `{}` must take the parameters of {}", hname, what),
                     format!("expected ({}) but `{}` takes ({})", want.join(", "), hname, got.join(", ")),
@@ -493,7 +493,7 @@ impl<'a> Checker<'a> {
                 let ok = got == want || (want != T_VOID && self.types.unwrap_optional(want) == got && self.types.is_nullable(want) && got != T_VOID);
                 if !ok {
                     let (w, g) = (self.show(want), self.show(got));
-                    self.error_note(
+                    self.error_detail(
                         a.span,
                         format!("the mixin `{}` must return {}", hname, w),
                         format!("it returns {}", if got == T_VOID { "nothing".to_string() } else { g }),

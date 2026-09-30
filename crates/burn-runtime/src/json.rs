@@ -252,6 +252,10 @@ pub fn stringify(v: u64, tid: u32, out: &mut String) {
             out.push('}');
         }
         Desc::Record { fields, .. } => {
+            if v != 0 && kind_of(v) == K_DEAD {
+                out.push_str("null");
+                return;
+            }
             let real = tid_of(v);
             if real != tid {
                 if let Desc::Record { .. } = desc(real) {

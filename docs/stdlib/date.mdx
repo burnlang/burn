@@ -13,15 +13,18 @@ var today = Date.now()
 print(today.year, today.month, today.day)
 print(Date.today())
 print(Date.addDays(today, 30).format())
+var leap = new Date(2024, 2, 29)
+print(leap.plusDays(1).format())
 ```
 
-`Date` is a class with the fields `year`, `month` and `day`.
+`Date` is a struct with the constructor parameters `year`, `month` and `day`, so `new Date(2024, 2, 29)` creates
+a date.
 
 | Function | Description |
 | --- | --- |
 | `Date.now()` | the current local date |
 | `Date.today()` | the current date as `YYYY-MM-DD` |
-| `Date.createDate(y, m, d)`, `Date.create(y, m, d)` | build a date |
+| `new Date(y, m, d)`, `Date.createDate(y, m, d)`, `Date.create(y, m, d)` | build a date |
 | `Date.parse("YYYY-MM-DD")` | parse a date |
 | `Date.formatDate(date)`, `date.format()` | format as `YYYY-MM-DD` |
 | `Date.currentYear()`, `currentMonth()`, `currentDay()` | parts of today |
