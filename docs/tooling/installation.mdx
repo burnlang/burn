@@ -1,18 +1,25 @@
 ---
 title: Installation
-description: Install, update and uninstall the Burn toolchain with burnup.
+description: Install Burn and switch between versions with burnup.
 order: 19
 ---
 
 # Installation
 
-The Burn toolchain is installed and updated by [burnup](https://github.com/burnlang/burnup):
+Burn is installed and managed by [burnup](https://github.com/burnlang/burnup), a version manager written in Burn:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/burnlang/burnup/master/install.sh | sh
 ```
 
-It installs these commands into `~/.burn/bin`:
+This installs burnup, the newest Burn and ash into `~/.burn` and adds `~/.burn/bin` to your `PATH` in
+`~/.profile`, `~/.bashrc`, `~/.zshrc` (whichever exist) and fish. Open a new terminal (or run `. ~/.burn/env`)
+and check it:
+
+```sh
+burn version
+burni -e 'print("hello")'
+```
 
 | Command | What it is |
 | --- | --- |
@@ -23,102 +30,94 @@ It installs these commands into `~/.burn/bin`:
 | `burn-lsp` | the language server for editors |
 | `bvm` | the Burn virtual machine: runs, assembles and inspects bytecode |
 | `ash` | the [package manager](./packages.mdx), written in Burn itself |
-| `burnup` | updates and uninstalls all of the above |
+| `burnup` | installs, updates and switches Burn versions |
 
 See [the toolchain](./toolchain.mdx) for what each command does.
-
-burnup:
-
-1. downloads a prebuilt release for your platform if one exists, otherwise downloads the sources and builds them
-   with `cargo` (the first build takes about a minute)
-2. builds `ash` from its Burn source
-3. adds `~/.burn/bin` to your `PATH` in `~/.profile`, `~/.bashrc`, `~/.zshrc` (whichever exist) and fish
-4. checks that `burni` runs a program, `burnfmt` formats one, `bvm` runs bytecode and `ash` starts
-
-Open a new terminal (or run `. ~/.burn/env`) and check the installation:
-
-```sh
-burn version
-burni -e 'print("hello")'
-```
 
 ## Requirements
 
 - Linux or macOS (Windows: see [manual installation](#manual-installation))
-- `git`, which ash uses to download packages
-- A Rust toolchain (1.85 or newer) when building from source. Pass `--install-rust` to let burnup install Rust
-  with rustup if `cargo` is missing.
+- `git`, which burnup and ash use to download Burn versions and packages
+- Rust 1.85 or newer for versions built from source (branches such as `master`, and any version without a
+  prebuilt release). Pass `--install-rust` to the installer to get it with rustup.
 - A C toolchain (`cc`) to build native executables with `burnc`. Everything else works without it.
+
+## Versions
+
+```sh
+burnup install 26.1          # a release: the newest 26.1.x
+burnup install master        # the newest commit, built from source
+burnup default 26.1          # the version used everywhere
+burnup list                  # installed versions
+burnup list --remote         # versions that can be installed
+burnup update                # rebuild branch versions that moved, and update ash
+burnup uninstall master
+```
+
+A version is a release (`26.1`, `v26.1.0`, `^26.1`), `latest`, a branch or a commit. Each one lives in its own
+folder in `~/.burn/toolchains`, and the commands in `~/.burn/bin` are small shims that run the active one.
+
+## A version per project
+
+A project asks for a Burn version in its `burn.toml`:
+
+```toml
+[package]
+name = "github.com/you/app"
+burn = "26.1"
+```
+
+A `.burn-version` file does the same for any folder, and `burnup pin 26.1` writes whichever fits. Inside the
+folder every Burn command runs that version; burnup installs it the first time it is needed. The order is
+`BURN_TOOLCHAIN`, then the nearest `burn.toml` with `burn` or `.burn-version`, then the default.
+
+```sh
+burnup show                  # which version runs here, and why
+burnup which burnc           # the file that runs
+burnup run master burn check # one command with another version
+```
 
 ## Updating and uninstalling
 
 ```sh
-burnup update       # newest Burn, ash and burnup
-burnup show         # installed versions
-burnup uninstall    # remove everything, including downloaded packages
+burnup update                # branch versions and ash
+burnup self update           # burnup itself
+burnup self uninstall        # everything: versions, packages, commands and the PATH lines
 ```
 
-## Options
+## Installer options
 
 | Option | Description |
 | --- | --- |
 | `--prefix <dir>` | install into `<dir>` instead of `~/.burn` |
-| `--ref <ref>` | build a specific branch, tag or commit of Burn |
-| `--ash-ref <ref>` | build a specific branch, tag or commit of ash |
-| `--from-source` | always build from source, even if a release exists |
-| `--install-rust` | install Rust with rustup when `cargo` is missing |
+| `--toolchain <version>` | the Burn version to install first (default: the latest) |
+| `--from-source` | build Burn and burnup from source instead of downloading them |
+| `--install-rust` | install Rust with rustup when a source build needs it |
 | `--no-ash` | do not install ash |
 | `--no-modify-path` | do not touch your shell profile |
-| `-q`, `--quiet` | only print errors |
 
-Pass options to the piped installer with `sh -s --`:
+Pass them with `sh -s --`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/burnlang/burnup/master/install.sh | sh -s -- --prefix /opt/burn --no-modify-path
 ```
 
-The same settings can be given as environment variables: `BURN_HOME` (prefix), `BURN_REF` and `BURN_REPO`,
-`ASH_REF` and `ASH_REPO`. The old address, `burnlang/burn/master/install.sh`, still works and runs burnup.
+The old address, `burnlang/burn/master/install.sh`, still works and runs burnup.
 
-## What gets installed
+## Working on Burn itself
 
-```text
-~/.burn/
-├── bin/
-│   ├── burn          the compiler binary
-│   ├── burni -> burn
-│   ├── burnc -> burn
-│   ├── burn-lsp -> burn
-│   ├── burnfmt       native executable compiled from Burn source
-│   ├── bvm           the Burn virtual machine
-│   ├── ash           the package manager
-│   └── burnup        the installer
-├── share/burn/
-│   ├── tools/burnfmt/burnfmt.bn
-│   ├── ash/          the ash sources
-│   └── examples/     including examples/bvm/ (assembly and Ember)
-├── packages/         packages downloaded by ash, one folder per version
-├── tools/            the sources of commands installed with `ash install -g`
-└── env               adds bin/ to PATH
-```
-
-`burni`, `burnc` and `burn-lsp` are links to the same binary: `burn` looks at the name it was started with and
-behaves like that command. The standard library is built into the binary, so nothing else is needed at runtime.
-
-## Installing from a checkout
-
-`scripts/package.sh` builds a checkout and lays it out the same way. Release archives are made with it:
+`scripts/package.sh` builds a checkout into the same layout as a release. Add the result to burnup as a version:
 
 ```sh
-git clone https://github.com/burnlang/burn.git
-cd burn
-sh scripts/package.sh --prefix ~/.burn
+sh scripts/package.sh --prefix ~/burn-dev
+burnup link dev ~/burn-dev
+burnup run dev burn version
 ```
 
 ## Prebuilt releases
 
-Tagged versions (`v*`) are built by the release workflow for `linux-x86_64`, `macos-x86_64` and `macos-aarch64`.
-burnup picks the right one automatically; to install one by hand:
+Tagged versions (`v*`) are built by the release workflow for `linux-x86_64`, `macos-x86_64` and `macos-aarch64`,
+and burnup downloads them. To unpack one by hand:
 
 ```sh
 tar -xzf burn-linux-x86_64.tar.gz

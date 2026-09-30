@@ -74,8 +74,9 @@ fun main() {
 curl -fsSL https://raw.githubusercontent.com/burnlang/burnup/master/install.sh | sh
 ```
 
-[burnup](https://github.com/burnlang/burnup) puts the whole toolchain, including ash, into `~/.burn/bin` and adds it
-to your `PATH`; `burnup update` keeps it current. It builds from source when no
+[burnup](https://github.com/burnlang/burnup), the Burn version manager, puts the toolchain and ash into `~/.burn/bin`
+and adds it to your `PATH`. It installs and switches versions (`burnup install 26.1`, `burnup default master`), and
+a project can pin its version with `burn = "26.1"` in `burn.toml`. It builds from source when no
 prebuilt release is available, which needs Rust 1.85 or newer (`--install-rust` sets that up for you). Native
 executables need a C toolchain (`cc`) and currently target x86-64 Linux and macOS.
 See [docs/tooling/installation.mdx](docs/tooling/installation.mdx) for all options, updating and uninstalling.

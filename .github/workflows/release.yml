@@ -14,7 +14,7 @@ jobs:
         include:
           - os: ubuntu-latest
             asset: burn-linux-x86_64.tar.gz
-          - os: macos-13
+          - os: macos-15-intel
             asset: burn-macos-x86_64.tar.gz
           - os: macos-14
             asset: burn-macos-aarch64.tar.gz
