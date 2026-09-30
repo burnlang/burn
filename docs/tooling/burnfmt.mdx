@@ -33,6 +33,10 @@ Without an installed `burnfmt`, the same program runs on the interpreter:
 burni tools/burnfmt/burnfmt.bn -w file.bn
 ```
 
+The older Go build from [bnfmt](https://github.com/burnlang/bnfmt) (`go install github.com/burnlang/burnfmt`) is
+deprecated. Remove it with `rm "$(go env GOPATH)/bin/burnfmt"` and use this one: it takes the same options and
+always matches your Burn version.
+
 ## Rules
 
 - Indentation is 4 spaces per open brace, bracket or parenthesis.
