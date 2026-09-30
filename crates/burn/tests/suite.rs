@@ -610,3 +610,51 @@ fn language_server_completes_imports_and_reports_ambiguity_once() {
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn apps_can_be_imported_as_bytecode_and_changed_with_mixins() {
+    let dir = temp_dir("app-bytecode");
+    let run = |cwd: &Path, args: &[&str]| output(burn().current_dir(cwd).env("BURN_HOME", dir.join("home")).args(args));
+    let (out, code) = run(&dir, &["init", "example.com/ada/game", "--no-git"]);
+    assert_eq!(code, 0, "{}", out);
+    let game = dir.join("game/src/main.bn");
+    std::fs::write(
+        &game,
+        "pub fun score(points: int): int {\n    return points * 10\n}\n\nfun main() {\n    print(\"score\", score(3))\n}\n",
+    )
+    .unwrap();
+    let (out, code) = run(&dir, &["init", "example.com/ada/mod", "--no-git"]);
+    assert_eq!(code, 0, "{}", out);
+    let m = dir.join("mod");
+    let toml = std::fs::read_to_string(m.join("burn.toml")).unwrap();
+    std::fs::write(
+        m.join("burn.toml"),
+        toml.replace("[dependencies]\n", "[dependencies]\n\"example.com/ada/game\" = { path = \"../game\" }\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        m.join("src/main.bn"),
+        "import \"example.com/ada/game.bvmc\"\n\n@Inject(target: \"score\", at: \"return\")\nfun doubled(points: int, result: int): int {\n    return result * 2\n}\n",
+    )
+    .unwrap();
+    let (out, code) = run(&m, &["run"]);
+    assert_eq!((out.as_str(), code), ("score 60\n", 0));
+    assert!(dir.join("game/build/game.bvmc").is_file());
+    if native_supported() {
+        let (out, code) = run(&m, &["run", "--native"]);
+        assert_eq!((out.as_str(), code), ("score 60\n", 0));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    std::fs::write(
+        &game,
+        "pub fun score(points: int): int {\n    return points * 100\n}\n\nfun main() {\n    print(\"score\", score(3))\n}\n",
+    )
+    .unwrap();
+    let (out, _) = run(&m, &["run"]);
+    assert_eq!(out, "score 600\n");
+    std::fs::write(m.join("src/self.bn"), "import \"example.com/ada/mod.bvmc\"\n").unwrap();
+    let (out, code) = run(&m, &["check", "src/self.bn"]);
+    assert_eq!(code, 1);
+    assert!(out.contains("cannot import its own bytecode"), "{}", out);
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -229,6 +229,11 @@ fn cmd_build(args: &[String]) -> ExitCode {
             main
         }
     };
+    if let Some(parent) = output.as_ref().and_then(|o| o.parent()) {
+        if !parent.as_os_str().is_empty() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
     if is_bvm_file(&file) {
         return build_bundle(&file, output, emit_asm, strip);
     }
