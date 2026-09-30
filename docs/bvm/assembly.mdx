@@ -91,13 +91,14 @@ Definitions after `=` can also be:
 
 ```bvm
 type Shape  = interface
-type Circle = class { r: float } implements Shape
+type Circle = struct { r: float } implements Shape
 type Color  = enum { Red, Green, Blue }
 type #20    = record "Point" { x: int }   ; a record named Point whose type is declared by number
 ```
 
 Type names are used when values are printed and in error messages. `implements` lists the interfaces that
-`is_type` and `cast` accept for a class.
+`is_type` and `cast` accept for a struct. `class` is accepted as another spelling of `struct`, and `bvm dis`
+always prints `struct`.
 
 ## Functions
 

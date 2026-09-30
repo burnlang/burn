@@ -1,0 +1,330 @@
+---
+title: Structs and interfaces
+description: Constructors, fields, methods, static members, interfaces, inheritance, static structs and destroying objects.
+order: 5
+---
+
+# Structs and interfaces
+
+## Structs
+
+```burn
+def struct Point(x: int, y: int) {
+    fun plus(other: Point): Point {
+        return new Point(x + other.x, self.y + other.y)
+    }
+
+    static fun origin(): Point {
+        return new Point(0, 0)
+    }
+}
+
+Point p = new Point(1, 2)
+var q = p.plus(Point.origin())
+print(p, q.x)
+```
+
+The parentheses after the name hold the constructor parameters, and every parameter becomes a field, like a primary
+constructor in Kotlin. A struct without parameters can leave them out:
+
+```burn
+def struct Stack {
+    [int] items = []
+
+    fun push(n: int) {
+        items.push(n)
+    }
+}
+
+var s = new Stack()
+s.push(3)
+```
+
+- More fields are declared in the body like variables. A body field needs a default value unless its type has a
+  zero value: `int`, `float`, `bool`, `string`, arrays, maps, optionals and enums. Anything else is an error that
+  suggests making the field a constructor parameter.
+- Defaults can use the constructor parameters: `string tag = "animal:" + name`.
+- Inside methods, fields and methods can be used directly (`x`, `plus(...)`) or through `self` (`self.y`).
+- `priv` fields and methods can only be used inside the struct.
+- A normal method can also be called as `Point.plus(p, other)`.
+
+## Creating objects
+
+Objects of a struct are created only with `new`:
+
+```burn
+Point p = new Point(1, 2)
+var q = new Point(3, 4)
+```
+
+`Point(1, 2)` and `Point { x: 1, y: 2 }` are compile errors for a struct ("`Point` is a struct, so its objects are
+created with `new`"). Plain records defined with [`def type`](./types.mdx#def-type) keep both forms,
+`Pair(1, "x")` and `Pair { first: 1, second: "x" }`, and `new Pair(1, "x")` works for them too.
+
+## `init`
+
+`fun init()` runs after all fields are set. It takes no parameters; values it needs come from the constructor
+parameters, which are already fields by then.
+
+```burn
+def struct Counter(label: string) {
+    priv int value = 0
+    static var made = 0
+
+    fun init() {
+        made += 1
+    }
+
+    fun increment(): Counter {
+        value += 1
+        return self
+    }
+
+    fun get(): int {
+        return value
+    }
+}
+
+var c = new Counter("clicks")
+var other = new Counter("other")
+c.increment().increment()
+print(c.label, c.get(), Counter.made)
+```
+
+An `init` with parameters is an error. When structs extend each other, the `init` functions run from the top
+parent down to the struct being created.
+
+## Static members
+
+- `static fun` belongs to the struct and is called as `Point.origin()`.
+- `static var` and `static const` values live on the struct, not on its objects: `static var made = 0` is read and
+  written as `Counter.made`, and inside the struct's own methods as `made`. Assigning to a `static const` is an
+  error.
+
+## Interfaces
+
+```burn
+def interface Shape {
+    fun area(): float
+    fun name(): string
+}
+
+def struct Rect(w: float, h: float) :: Shape {
+    fun area(): float {
+        return w * h
+    }
+
+    fun name(): string {
+        return "rect"
+    }
+}
+
+fun total(shapes: [Shape]): float {
+    var sum = 0.0
+    for s in shapes {
+        sum += s.area()
+    }
+    return sum
+}
+```
+
+A struct lists the interfaces it implements after `::`, separated by commas:
+`def struct Circle(radius: float) :: Shape, Named { ... }`. The compiler checks that every method exists with the
+same signature. Interface calls are dispatched through a table indexed by the struct, so they are as cheap as a
+normal indirect call.
+
+## Extending structs
+
+A struct can extend one other struct and implement any number of interfaces. Which operator you use depends on
+what comes after it:
+
+| Operator | Used for | Example |
+| --- | --- | --- |
+| `:` | a regular struct | `def struct Puppy(name: string) : Dog(name, "mixed") { ... }` |
+| `::` | interfaces and abstract structs | `def struct Dog(name: string, breed: string) :: Animal(name) { ... }` |
+
+Both can be combined, with the `:` part first: `def struct Puppy(name: string) : Dog(name, "mixed") :: Named`.
+Using the wrong operator is an error with the fix, for example "`Shape` is an interface, so it is used with
+`::`". A struct extends at most one struct. Static structs and `def type` records cannot be extended.
+
+### Abstract structs
+
+```burn
+def abstract struct Animal(name: string) {
+    int legs = 4
+    string tag = "animal:" + name
+
+    abstract fun sound(): string
+
+    fun describe(): string {
+        return "${name} says ${sound()}"
+    }
+}
+
+def struct Dog(name: string, breed: string) :: Animal(name) {
+    fun sound(): string {
+        return "woof"
+    }
+}
+
+def struct Bird(name: string) :: Animal(name) {
+    fun init() {
+        legs = 2
+    }
+
+    fun sound(): string {
+        return "tweet"
+    }
+
+    fun describe(): string {
+        return "a bird called ${name}"
+    }
+}
+
+Dog rex = new Dog("Rex", "lab")
+Animal tweety = new Bird("Tweety")
+var zoo: [Animal] = [rex, tweety]
+for a in zoo {
+    print(a.describe(), a.legs)
+}
+if (tweety is Bird) {
+    print("a bird with", tweety.legs, "legs")
+}
+print(rex)
+```
+
+An abstract struct cannot be created with `new` ("cannot create an object of abstract struct `Animal`"). It can
+declare `abstract fun` methods without a body, and every struct that is not abstract must implement all of them
+("struct `Dog` does not implement abstract method `Animal.sound`"). An abstract struct can extend another
+abstract struct.
+
+### Extending a regular struct
+
+A regular struct is extended with `:`:
+
+```burn
+def struct Puppy(name: string) : Dog(name, "mixed") {
+    fun sound(): string {
+        return "yip"
+    }
+}
+
+Dog d = new Puppy("Bit")
+print(d.describe(), d.breed)
+```
+
+`Puppy` is also an `Animal`, because `Dog` is one. `d.describe()` calls `Puppy.sound`, because calls through a
+`Dog` value run the method of the object's real struct.
+
+### Rules for extending
+
+- The parent's constructor arguments go in parentheses after its name. If the parent has parameters, they must be
+  passed.
+- A child parameter with the same name and type as an inherited field, like `name` above, fills that field
+  instead of adding a new one.
+- The child inherits the parent's fields, methods, interfaces and static members.
+- A child can override a method. The signature must match exactly, otherwise it is an error
+  ("`Dog.sound` does not match `Animal.sound`").
+- A child object can be used wherever the parent type is expected, and `rex is Animal` is always true.
+- `a is Dog` checks for a child struct and smart-casts `a` to it.
+- Calls through a parent-typed value run the method of the object's real struct. When only one implementation
+  exists, the compiler turns the call into a direct call.
+- Printing an object prints its real struct, with the parent's fields first:
+  `Dog { name: "Rex", legs: 4, tag: "animal:Rex", breed: "lab" }`.
+
+## Static structs
+
+A static struct has no objects. It groups functions and values under one name:
+
+```burn
+def static struct Geometry {
+    const unit = 1.0
+    var calls = 0
+
+    fun square(x: float): float {
+        calls += 1
+        return x * x * unit
+    }
+}
+
+print(Geometry.square(3), Geometry.calls)
+Geometry.calls = 10
+```
+
+Every function in a static struct is static, and its values are used as `Geometry.calls`. `var` values can be
+assigned, `const` values cannot. `new Geometry()` is an error ("`Geometry` is a static struct and has no
+objects"). The standard library's `Math`, `JSON` and `HTTP` are static structs.
+
+## Functions on a single object
+
+A function can be added to one object, without changing its struct:
+
+```burn
+def struct Robot(name: string) {
+    int battery = 100
+
+    fun status(): string {
+        return "${name}: ${battery}%"
+    }
+}
+
+Robot rex = new Robot("Rex")
+Robot bolt = new Robot("Bolt")
+
+rex.fetch(thing: string): string {
+    battery -= 10
+    return "${name} fetches the ${thing}, ${status()}"
+}
+
+print(rex.fetch("ball"))
+print(bolt.status())
+```
+
+- Inside the function, `self`, the object's fields and the struct's methods are available. The local variables
+  of the surrounding function are not, the same as in lambdas, and neither are private members.
+- The compiler tracks the function from that line on, like a smart cast. It can be called on that variable
+  afterwards, but not on other objects of the same struct (`bolt.fetch(...)` is an error: "Robot has no method
+  `fetch`").
+- It is not available on paths where it might not have been added. If it is only added inside an `if`, calling
+  it after the `if` is an error ("`fetch` is not available here").
+- Assigning another object to the variable forgets the function.
+- The name must not clash with a field or method of the struct.
+
+## Destroying objects
+
+`destroy name()` destroys the object in a variable. If the struct, or a struct it extends, defines
+`fun destroy(...)`, that function runs first and gets the arguments:
+
+```burn
+def struct File(path: string) {
+    bool open = true
+
+    fun destroy(reason: string) {
+        open = false
+        print("closing", path, "because", reason)
+    }
+}
+
+File f = new File("data.txt")
+destroy f("done")
+f = new File("next.txt")
+print(f.path)
+```
+
+- Without a `destroy` function, `destroy f()` takes no arguments; passing some is an error.
+- A destructor cannot be called directly: `f.destroy()` is an error.
+- After `destroy f(...)`, using `f` is a compile error ("`f` was destroyed on line 11 and can no longer be used")
+  until a new object is assigned to it.
+- When the compiler can't see it, for example through another variable that points to the same object or after
+  the object was destroyed inside another function, using the object is a runtime error: "this object was
+  destroyed and can no longer be used". This works the same on bvm, in native executables and in JavaScript.
+  Printing such an object shows `<destroyed Session>`, with its struct name.
+- Destroying an object twice is a runtime error: "this object was already destroyed".
+- Only struct objects stored in variables can be destroyed.
+
+The runtime check only exists in programs that use `destroy`, so other programs don't pay for it.
+
+## Classes
+
+`def class` no longer exists. It is a compile error ("classes are now structs") that suggests
+`def struct Name(...)` and `new Name(...)`. See [migrating classes](../migration.mdx#classes-to-structs).

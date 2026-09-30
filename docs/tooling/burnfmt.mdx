@@ -40,7 +40,8 @@ burni tools/burnfmt/burnfmt.bn -w file.bn
   own line.
 - A blank line separates a closing `}` from the declaration that follows it.
 - Consecutive blank lines become one; leading blank lines are removed.
-- One space around binary operators and after `,`, `:` and `;`, none before them.
+- One space around binary operators and after `,`, `:` and `;`, none before them. In a struct header the `:` and `::` that name what the struct extends get a space on both sides: `def struct Puppy(name: string) : Dog(name) :: Named`.
+- Doc comments (`/** ... */`) are indented with the code they document, with ` * ` lines aligned under the opening `/**`.
 - No space inside `(` `)` and `[` `]`, after unary `-` and `!`, around `.` and ranges (`0..10`), or before `?`
   and `!!`.
 - A space after keywords such as `if`, `while`, `for` and `return`, and before `{`.
@@ -52,10 +53,7 @@ fun area(w: float, h: float): float {
     return w * h
 }
 
-def class Rect {
-    float w
-    float h
-
+def struct Rect(w: float, h: float) {
     fun scale(k: float) {
         w *= k
         h *= k

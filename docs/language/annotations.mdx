@@ -16,9 +16,7 @@ def annotation Route {
 }
 
 @Route("/users", method: "POST")
-def class CreateUser {
-    string name
-}
+def struct CreateUser(name: string) {}
 ```
 
 ## Declaring annotations
@@ -41,9 +39,9 @@ Every field without a default needs a value. Values must be literals: numbers, s
 
 | Place | Example |
 | --- | --- |
-| type, class, interface, enum and annotation definitions | `@Route("/x") def class Handler { ... }` |
+| type, struct, interface, enum and annotation definitions | `@Route("/x") def struct Handler { ... }` |
 | functions and methods | `@Deprecated fun old() { ... }` |
-| fields of types and classes | `@Getter string name` |
+| fields of types and structs, including constructor parameters | `@Getter string name`, `def struct Gadget(@Getter model: string)` |
 
 An annotation must be on the line before, or on the same line as, the thing it annotates.
 `burn fmt` keeps them attached, with no space after the `@`.
@@ -52,8 +50,8 @@ An annotation must be on the line before, or on the same line as, the thing it a
 
 | Annotation | On | What it does |
 | --- | --- | --- |
-| `@Getter` | classes, fields | generates `getName()`, or `isName()` for `bool` fields |
-| `@Setter` | classes, fields | generates `setName(value)` |
+| `@Getter` | structs, fields, constructor parameters | generates `getName()`, or `isName()` for `bool` fields |
+| `@Setter` | structs, fields, constructor parameters | generates `setName(value)` |
 | `@Deprecated("message")` | functions, methods, types | every use produces a warning with the message |
 | `@Export` or `@Export("name")` | top-level functions | lets bytecode libraries call the function (see [native interop](../bvm/native-interop.mdx)) |
 | `@Native` or `@Native("name")` | top-level functions without a body | declares a function that the host program provides |
@@ -62,21 +60,22 @@ An annotation must be on the line before, or on the same line as, the thing it a
 | `@Overwrite(target: "f")` | top-level functions | a mixin that replaces the body of `f` |
 | `@Redirect(target: "f", call: "g")` | top-level functions | a mixin that replaces calls to `g` inside `f` |
 
-`@Getter` and `@Setter` on a class apply to all of its fields. On a single field they apply only to that field.
+`@Getter` and `@Setter` on a struct apply to all of its fields, including the ones from constructor parameters.
+On a single field or constructor parameter they apply only to that field.
 A method you write yourself with the same name takes precedence:
 
 ```burn
 @Getter
 @Setter
-def class Account {
-    string owner
-    int balance
-    bool frozen
+def struct Account(owner: string, balance: int) {
+    bool frozen = false
 }
 
-var a = Account { owner: "Ada", balance: 10, frozen: false }
+def struct Gadget(@Getter model: string, price: int) {}
+
+var a = new Account("Ada", 10)
 a.setBalance(a.getBalance() + 5)
-print(a.getOwner(), a.isFrozen())
+print(a.getOwner(), a.isFrozen(), new Gadget("X1", 99).getModel())
 ```
 
 ## Reading annotations at runtime
@@ -95,7 +94,7 @@ fun routeOf(handler: any): string {
 }
 ```
 
-When the static type is a class or a type, the list is built at compile time. For `any` and interface values
+When the static type is a struct or a type, the list is built at compile time. For `any` and interface values
 the runtime type is checked. The result lists your own annotations (declared with `def annotation`), not the
 built-in ones. `annotationsOf` works on every backend.
 

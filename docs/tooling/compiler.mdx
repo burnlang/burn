@@ -35,8 +35,8 @@ into native executables, so both behave identically.
 ## bvm
 
 `burn run` compiles the IR to a [bvm](../bvm/overview.mdx) module and runs it right away. bvm is a
-general-purpose stack VM with its own assembly language, bytecode format and verifier. Burn classes become
-`class` types, interface methods become dispatch tables, `async` calls become `spawn`, and every operation that
+general-purpose stack VM with its own assembly language, bytecode format and verifier. Burn structs become
+`struct` types, interface methods become dispatch tables, `async` calls become `spawn`, and every operation that
 can fail carries its source location. When the module is loaded, the verifier computes each function's frame
 size and common sequences are fused into superinstructions for loops, comparisons and field access. Checking and
 compiling a typical program takes a few milliseconds, so running a file feels like using an interpreter.

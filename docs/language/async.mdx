@@ -25,7 +25,7 @@ fun main() {
 
 Both downloads run at the same time, so the program takes about 200ms instead of 400ms.
 
-- `async fun` can be a top level function or a class method.
+- `async fun` can be a top level function or a struct method.
 - Futures can be stored in variables and arrays (`[Future<int>]`) and awaited later.
 - A program waits for all running tasks before it exits.
 - In the native and VM backends every task runs on its own thread. The JavaScript backend runs tasks when they

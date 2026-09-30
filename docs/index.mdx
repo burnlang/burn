@@ -16,9 +16,7 @@ def interface Shape {
     fun area(): float
 }
 
-def class Circle: Shape {
-    float radius
-
+def struct Circle(radius: float) :: Shape {
     fun area(): float {
         return 3.14159 * radius * radius
     }
@@ -31,7 +29,7 @@ fun describe(value: any): string {
     return "something else"
 }
 
-print(describe(Circle { radius: 2 }))
+print(describe(new Circle(2)))
 ```
 
 ## Ways to run the same program
@@ -55,7 +53,7 @@ format, verifier and Rust API, and other languages can compile to it.
 - [Syntax tour](./language/syntax.mdx)
 - [Types and definitions](./language/types.mdx)
 - [Smart casts and null safety](./language/smart-casts.mdx)
-- [Classes and interfaces](./language/classes-and-interfaces.mdx)
+- [Structs and interfaces](./language/structs-and-interfaces.mdx)
 - [Modules, `pub` and `priv`](./language/modules.mdx)
 - [Async](./language/async.mdx)
 - [Annotations](./language/annotations.mdx)

@@ -74,7 +74,7 @@ bvm app.bvmc
 burn dump --bytecode app.bn      # print the module as assembly
 ```
 
-A Burn class becomes a `class` type, an interface method becomes a dispatch table, `async` calls become
+A Burn struct becomes a `struct` type, an interface method becomes a dispatch table, `async` calls become
 `spawn`, and every place that can fail at runtime carries a source location. Running a `.bvmc` file skips
 parsing and type checking.
 
