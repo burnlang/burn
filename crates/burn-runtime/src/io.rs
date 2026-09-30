@@ -136,6 +136,8 @@ pub fn error_help(msg: &str) -> Option<String> {
         "each object can be destroyed only once".into()
     } else if msg == "function ended without returning a value" {
         "make sure every path through the function ends with `return`".into()
+    } else if msg.starts_with("out of memory") {
+        "the limit keeps the computer responsive; it is 3/4 of the memory by default, set BURN_MAX_HEAP_MB to change it (0 turns it off)".into()
     } else if msg.starts_with("stack overflow") {
         "a function probably calls itself without ever stopping; check its base case".into()
     } else {

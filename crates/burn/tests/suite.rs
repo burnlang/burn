@@ -520,3 +520,93 @@ fn init_creates_projects_that_build_and_import_packages() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn runaway_programs_stop_at_the_heap_limit() {
+    let dir = temp_dir("heap");
+    let file = dir.join("grow.bn");
+    std::fs::write(
+        &file,
+        "var all: [[int]] = []\nwhile (true) {\n    var chunk: [int] = []\n    for (i in 0..50000) {\n        chunk.push(i)\n    }\n    all.push(chunk)\n}\n",
+    )
+    .unwrap();
+    let (out, code) = output(burn().env("BURN_MAX_HEAP_MB", "64").arg(&file));
+    assert_eq!(code, 1, "{}", out);
+    assert!(out.contains("out of memory") && out.contains("BURN_MAX_HEAP_MB"), "{}", out);
+    if native_supported() {
+        let (out, code) = output(burn().env("BURN_MAX_HEAP_MB", "64").args(["run", "--native"]).arg(&file));
+        assert_eq!(code, 1, "{}", out);
+        assert!(out.contains("out of memory"), "{}", out);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn language_server_completes_imports_and_reports_ambiguity_once() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let dir = temp_dir("lsp-imports");
+    std::fs::create_dir_all(dir.join("util")).unwrap();
+    std::fs::write(dir.join("util/helpers.bn"), "pub fun greet(): int {\n    return 1\n}\n").unwrap();
+    std::fs::write(dir.join("other.bn"), "pub fun greet(): int {\n    return 2\n}\n").unwrap();
+    let main = dir.join("main.bn");
+    let uri = format!("file://{}", main.display());
+    let mut child = burn()
+        .arg("lsp")
+        .current_dir(&dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let mut send = |body: String| {
+        write!(stdin, "Content-Length: {}\r\n\r\n{}", body.len(), body).unwrap();
+        stdin.flush().unwrap();
+    };
+    let mut read = || -> String {
+        let mut len = 0usize;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if line.trim().is_empty() {
+                break;
+            }
+            if let Some(v) = line.trim().strip_prefix("Content-Length:") {
+                len = v.trim().parse().unwrap();
+            }
+        }
+        let mut buf = vec![0u8; len];
+        reader.read_exact(&mut buf).unwrap();
+        String::from_utf8(buf).unwrap()
+    };
+    send(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}"#.to_string());
+    read();
+    let text = "import \"util/helpers\"\nimport \"other\"\nprint(greet())\nimport \"u";
+    send(format!(
+        r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{}","languageId":"burn","version":1,"text":{:?}}}}}}}"#,
+        uri, text
+    ));
+    let diags = loop {
+        let m = read();
+        if m.contains("publishDiagnostics") && m.contains("main.bn") {
+            break m;
+        }
+    };
+    assert!(diags.contains("is ambiguous"), "{}", diags);
+    assert!(!diags.contains("cannot find `greet`"), "{}", diags);
+    send(format!(
+        r#"{{"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{{"textDocument":{{"uri":"{}"}},"position":{{"line":3,"character":9}}}}}}"#,
+        uri
+    ));
+    let items = loop {
+        let m = read();
+        if m.contains("\"id\":2") {
+            break m;
+        }
+    };
+    assert!(items.contains("\"util/\""), "{}", items);
+    assert!(!items.contains("\"print\""), "{}", items);
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&dir);
+}

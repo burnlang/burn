@@ -489,7 +489,8 @@ impl<'a> Checker<'a> {
                 Expr::new(ExprKind::FuncRef(f), t)
             }
             None => {
-                if self.lookup_type_name(m, name, span).is_some() {
+                if self.visible(m, name, |s| &s.values).is_err() {
+                } else if self.lookup_type_name(m, name, span).is_some() {
                     self.error(span, format!("`{}` is a type, not a value", name));
                 } else if name == "self" {
                     self.error(span, "`self` can only be used inside struct methods");

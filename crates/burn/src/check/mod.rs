@@ -527,7 +527,7 @@ impl<'a> Checker<'a> {
         None
     }
 
-    fn visible<T: Clone>(&self, module: usize, name: &str, get: impl Fn(&ModScope) -> &HashMap<String, Entry<T>>) -> Result<Option<Entry<T>>, Vec<String>> {
+    pub fn visible<T: Clone>(&self, module: usize, name: &str, get: impl Fn(&ModScope) -> &HashMap<String, Entry<T>>) -> Result<Option<Entry<T>>, Vec<String>> {
         if let Some(e) = get(&self.mods[module]).get(name) {
             return Ok(Some(e.clone()));
         }

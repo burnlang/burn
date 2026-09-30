@@ -74,7 +74,7 @@
         "burn.path": {
           "type": "string",
           "default": "burn",
-          "description": "Path to the burn executable used for the language server and commands."
+          "description": "Path to the burn executable used for the language server and commands. By default ~/.burn/bin/burn (installed by burnup) is used when it exists, otherwise burn from PATH."
         },
         "burn.trace.server": {
           "type": "string",
