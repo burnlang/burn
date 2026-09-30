@@ -1,18 +1,40 @@
 "use strict";
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 const vscode = require("vscode");
 const { LanguageClient } = require("vscode-languageclient/node");
 
 let client;
 
+function burnHome() {
+  return process.env.BURN_HOME || path.join(os.homedir(), ".burn");
+}
+
 function burnPath() {
-  return vscode.workspace.getConfiguration("burn").get("path") || "burn";
+  const configured = vscode.workspace.getConfiguration("burn").get("path");
+  if (configured && configured !== "burn") {
+    return configured;
+  }
+  const installed = path.join(burnHome(), "bin", process.platform === "win32" ? "burn.exe" : "burn");
+  return fs.existsSync(installed) ? installed : "burn";
+}
+
+function serverEnv() {
+  const bin = path.join(burnHome(), "bin");
+  const parts = (process.env.PATH || "").split(path.delimiter);
+  const env = { ...process.env };
+  env.PATH = parts.includes(bin) ? process.env.PATH : [bin, ...parts].join(path.delimiter);
+  return env;
 }
 
 function startClient(context) {
   const command = burnPath();
+  const folders = vscode.workspace.workspaceFolders;
+  const options = { env: serverEnv(), cwd: folders && folders.length > 0 ? folders[0].uri.fsPath : undefined };
   const serverOptions = {
-    run: { command, args: ["lsp"] },
-    debug: { command, args: ["lsp"] },
+    run: { command, args: ["lsp"], options },
+    debug: { command, args: ["lsp"], options },
   };
   const clientOptions = {
     documentSelector: [{ scheme: "file", language: "burn" }, { scheme: "untitled", language: "burn" }],

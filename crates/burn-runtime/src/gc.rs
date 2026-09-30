@@ -18,6 +18,36 @@ fn min_threshold() -> usize {
     })
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn physical_memory() -> Option<usize> {
+    extern "C" {
+        fn sysconf(name: i32) -> i64;
+    }
+    #[cfg(target_os = "linux")]
+    let (pages, size) = (85, 30);
+    #[cfg(target_os = "macos")]
+    let (pages, size) = (200, 29);
+    let (n, sz) = unsafe { (sysconf(pages), sysconf(size)) };
+    if n <= 0 || sz <= 0 {
+        return None;
+    }
+    Some((n as usize).saturating_mul(sz as usize))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn physical_memory() -> Option<usize> {
+    None
+}
+
+pub fn max_heap() -> usize {
+    static M: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *M.get_or_init(|| match std::env::var("BURN_MAX_HEAP_MB").ok().and_then(|v| v.trim().parse::<usize>().ok()) {
+        Some(0) => usize::MAX,
+        Some(mb) => mb.saturating_mul(1 << 20),
+        None => physical_memory().map(|m| m / 4 * 3).unwrap_or(usize::MAX),
+    })
+}
+
 struct Heap {
     objs: HashSet<usize, FxBuild>,
     live: usize,
@@ -269,11 +299,26 @@ fn collect(h: &mut Heap) {
         }
     });
     h.live = live;
-    h.threshold = min_threshold().max(live);
+    let max = max_heap();
+    let mut threshold = min_threshold().max(live);
+    if max != usize::MAX {
+        threshold = threshold.min(max.saturating_sub(live).max(1 << 20));
+    }
+    h.threshold = threshold;
     h.collections += 1;
     SINCE.store(0, Ordering::Relaxed);
     if std::env::var_os("BURN_GC_STATS").is_some() {
         eprintln!("[gc] collection {} live objects {} live bytes {}", h.collections, h.objs.len(), live);
+    }
+    if live > max {
+        crate::io::rt_error(
+            &format!(
+                "out of memory: the program keeps {} MB of data alive, more than its limit of {} MB",
+                live >> 20,
+                max >> 20
+            ),
+            u64::MAX,
+        );
     }
 }
 

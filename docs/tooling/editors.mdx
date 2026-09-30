@@ -19,11 +19,38 @@ the errors the compiler reports. It supports:
 - document outline
 - formatting (the same as `burn fmt`)
 
-Any editor with LSP support can use it. For Neovim:
+Any editor with LSP support can use it. Import paths complete too: standard modules, the project's packages and
+local files inside `import "..."`.
+
+## Neovim
+
+With Neovim 0.11 or newer (and LazyVim, as `~/.config/nvim/lua/plugins/burn.lua`):
 
 ```lua
-vim.lsp.start({ name = "burn", cmd = { "burn", "lsp" }, root_dir = vim.fn.getcwd() })
+return {
+  "neovim/nvim-lspconfig",
+  init = function()
+    vim.filetype.add({ extension = { bn = "burn" } })
+    vim.api.nvim_create_autocmd("FileType", {
+      pattern = "burn",
+      callback = function()
+        vim.bo.commentstring = "// %s"
+      end,
+    })
+    vim.lsp.config("burn", {
+      cmd = { "burn", "lsp" },
+      filetypes = { "burn" },
+      root_markers = { "burn.toml", ".git" },
+    })
+    vim.lsp.enable("burn")
+  end,
+}
 ```
+
+Without LazyVim, put the body of `init` into `init.lua`. On older versions of Neovim start the server from a
+`FileType` autocommand with `vim.lsp.start({ name = "burn", cmd = { "burn", "lsp" }, root_dir =
+vim.fs.root(0, { "burn.toml", ".git" }) })`. `burn` must be on the `PATH` Neovim sees; burnup puts it in
+`~/.burn/bin`.
 
 ## VS Code
 

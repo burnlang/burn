@@ -47,6 +47,8 @@ The older flags still work: `-r`, `-e`, `-exe <file> [name]` and `-d`.
 | `BURN_HOME` | where packages are found (default `~/.burn`, packages in `packages/`) |
 | `BURN_GC_THRESHOLD` | bytes allocated between garbage collections (default 32 MB) |
 | `BURN_GC_STATS` | print a line after every collection |
+| `BURN_MAX_HEAP_MB` | stop a program with an out of memory error when it keeps more data alive than this (default: 3/4 of the computer's memory, `0` turns the limit off) |
+| `BURN_LSP_MEMORY_MB` | the most memory `burn lsp` may use on Linux; past it the server stops instead of slowing the computer down (default 4096, `0` turns the limit off) |
 
 ## Exit codes
 

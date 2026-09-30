@@ -97,6 +97,98 @@ fn hex(c: u8) -> Option<u8> {
     }
 }
 
+fn import_prefix(before: &str) -> Option<String> {
+    let line = before.rsplit('\n').next().unwrap_or("");
+    let quote = line.rfind('"')?;
+    if line[..quote].matches('"').count() % 2 != 0 {
+        return None;
+    }
+    let head = line[..quote].trim();
+    let in_block = head.is_empty() && {
+        let prior = &before[..before.len() - line.len()];
+        match (prior.rfind("import ("), prior.rfind(')')) {
+            (Some(open), Some(close)) => open > close,
+            (Some(_), None) => true,
+            _ => false,
+        }
+    };
+    if head == "import" || in_block {
+        Some(line[quote + 1..].to_string())
+    } else {
+        None
+    }
+}
+
+fn import_items(file: &Path, typed: &str) -> Vec<Json> {
+    let mut out: Vec<Json> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut add = |label: String, kind: i32, detail: &str, out: &mut Vec<Json>| {
+        if label.starts_with(typed) && seen.insert(label.clone()) {
+            out.push(Json::obj(vec![
+                ("label", Json::str(&label)),
+                ("kind", Json::num(kind)),
+                ("detail", Json::str(detail)),
+            ]));
+        }
+    };
+    for s in crate::loader::STDLIB {
+        add(s.name.to_string(), 9, "standard library", &mut out);
+    }
+    if let Some(root) = crate::project::find_root(file) {
+        if let Ok(p) = crate::project::load(&root) {
+            add(p.manifest.name.clone(), 9, "this project", &mut out);
+            for (d, _) in &p.manifest.dependencies {
+                add(d.clone(), 9, "dependency", &mut out);
+            }
+            for l in &p.lock {
+                add(l.name.clone(), 9, "installed package", &mut out);
+            }
+            if let Some((name, _)) = crate::project::split_package_path(typed.trim_end_matches('/')) {
+                if let Ok(dir) = p.resolve(&name) {
+                    let sub = typed[name.len()..].trim_start_matches('/');
+                    let (folder, _) = sub.rsplit_once('/').unwrap_or(("", sub));
+                    let base = if folder.is_empty() { name.clone() } else { format!("{}/{}", name, folder) };
+                    list_sources(&dir.join(folder), &base, &mut |l, k| add(l, k, "package file", &mut out));
+                }
+            }
+        }
+    }
+    if let Some(dir) = file.parent() {
+        let (folder, _) = typed.rsplit_once('/').unwrap_or(("", typed));
+        let base = folder.to_string();
+        let target = if folder.is_empty() { dir.to_path_buf() } else { dir.join(folder) };
+        let own = file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        list_sources(&target, &base, &mut |l, k| {
+            if !(folder.is_empty() && l == own) {
+                add(l, k, "file", &mut out)
+            }
+        });
+    }
+    out
+}
+
+fn list_sources(dir: &Path, base: &str, add: &mut dyn FnMut(String, i32)) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut names: Vec<(String, bool)> = rd
+        .filter_map(|e| e.ok())
+        .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path().is_dir()))
+        .filter(|(n, _)| !n.starts_with('.') && n != "build" && n != "target" && n != "node_modules")
+        .collect();
+    names.sort();
+    for (n, is_dir) in names.into_iter().take(200) {
+        let full = if base.is_empty() { n.clone() } else { format!("{}/{}", base, n) };
+        if is_dir {
+            add(format!("{}/", full), 19);
+        } else if let Some(stem) = full.strip_suffix(".bn") {
+            add(stem.to_string(), 17);
+        } else if full.ends_with(".bvmc") || full.ends_with(".bar") {
+            add(full, 17);
+        }
+    }
+}
+
 pub fn uri_to_path(uri: &str) -> PathBuf {
     let rest = uri.strip_prefix("file://").unwrap_or(uri);
     let bytes = rest.as_bytes();
@@ -541,6 +633,9 @@ impl Server {
         let tmp = crate::source::SourceFile::new(String::new(), None, text.clone());
         let off = tmp.offset_of_utf16(line, ch);
         let before = &text[..off];
+        if let Some(typed) = import_prefix(before) {
+            return Json::Arr(import_items(&uri_to_path(uri), &typed));
+        }
         let mut start = before.len();
         for (i, c) in before.char_indices().rev() {
             if c.is_alphanumeric() || c == '_' {
@@ -698,7 +793,38 @@ fn word_at(src: &str, off: usize) -> String {
     src[s..e].to_string()
 }
 
+#[cfg(target_os = "linux")]
+fn cap_memory() {
+    #[repr(C)]
+    struct Rlimit {
+        cur: u64,
+        max: u64,
+    }
+    extern "C" {
+        fn getrlimit(resource: i32, rlim: *mut Rlimit) -> i32;
+        fn setrlimit(resource: i32, rlim: *const Rlimit) -> i32;
+    }
+    const RLIMIT_AS: i32 = 9;
+    let mb: u64 = std::env::var("BURN_LSP_MEMORY_MB").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(4096);
+    if mb == 0 {
+        return;
+    }
+    let want = mb.saturating_mul(1 << 20);
+    let mut cur = Rlimit { cur: 0, max: 0 };
+    unsafe {
+        if getrlimit(RLIMIT_AS, &mut cur) != 0 || cur.cur <= want {
+            return;
+        }
+        let next = Rlimit { cur: want, max: cur.max };
+        setrlimit(RLIMIT_AS, &next);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn cap_memory() {}
+
 pub fn run() -> ExitCode {
+    cap_memory();
     burn_runtime::io::set_panic_mode(true);
     crate::repl::install_quiet_hook();
     let stdin = std::io::stdin();
