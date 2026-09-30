@@ -55,7 +55,7 @@ var bag = Bag { items: [1, 2, 3], counts: {} }
 bag.items[1] += 40
 bag.counts["x"] = 1
 bag.counts["x"] += 5
-bag.counts["y"] = bag.counts["x"] * 2
+bag.counts["y"] = bag.counts["x"]!! * 2
 print(bag)
 
 var ops: {string: Op} = {"add": new Add(2), "mul": new Mul(10)}

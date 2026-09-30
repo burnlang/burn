@@ -701,7 +701,17 @@ impl<'a> Checker<'a> {
             if h.ty == T_VOID {
                 self.error(sv.init.span, "cannot assign the result of a function that returns nothing");
             }
-            let target = declared.unwrap_or(if h.ty == T_NULL { T_ANY } else { h.ty });
+            let target = match declared {
+                Some(d) => d,
+                None if h.ty == T_NULL => {
+                    self.emit(
+                        Diagnostic::error(sv.name.span, format!("cannot tell the type of `{}` from `null`", sv.name.name))
+                            .help(format!("give it a type, for example `static var {}: string? = null`", sv.name.name)),
+                    );
+                    T_ERROR
+                }
+                None => h.ty,
+            };
             let v = self.coerce(h, target, sv.init.span);
             self.globals[g as usize].ty = Some(target);
             let ts = self.show(target);

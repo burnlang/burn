@@ -36,7 +36,7 @@ print("")
 
 {string: [int]} scores = {}
 scores["math"] = [90, 80]
-push(scores["math"], 70)
+push(scores["math"]!!, 70)
 print(scores)
 
 var counts: {string: int} = {}

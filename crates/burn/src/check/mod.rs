@@ -1,7 +1,9 @@
 pub mod annot;
 pub mod builtins;
 pub mod expr;
+pub mod init_order;
 pub mod libs;
+pub mod nullsafe;
 pub mod stmt;
 pub mod structs;
 
@@ -182,6 +184,7 @@ pub struct Checker<'a> {
     pub has_destroy: bool,
     pub ext_funcs: HashSet<FuncId>,
     pub static_private: HashSet<u32>,
+    pub init_spans: Vec<(usize, usize, usize, Span)>,
 }
 
 pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
@@ -216,6 +219,7 @@ pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
         has_destroy: loaded.modules.iter().any(|m| m.ast.has_destroy),
         ext_funcs: HashSet::new(),
         static_private: HashSet::new(),
+        init_spans: Vec::new(),
     };
     c.run(loaded);
     let has_errors = loaded.diags.iter().chain(c.diags.iter()).any(|d| d.severity == Severity::Error);
@@ -801,6 +805,7 @@ impl<'a> Checker<'a> {
             }
             i += 1;
         }
+        self.check_init_order(loaded);
         let root = loaded.root;
         if let Some(Entry {
             sym: ValSym::Func(f), span, ..
@@ -1215,7 +1220,7 @@ impl<'a> Checker<'a> {
             self.fx.push(ctx);
             self.block_stmts(&decl.body.stmts);
             let ctx = self.fx.pop().unwrap();
-            let ret = self.join_returns(&ctx.returns);
+            let ret = self.join_returns(&ctx.returns, decl.name.span);
             self.funcs[fid as usize].ret = Some(ret);
         }
         let mut ctx = self.new_ctx(fid, module, false);
@@ -1287,7 +1292,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    pub fn join_returns(&mut self, rs: &[TyId]) -> TyId {
+    pub fn join_returns(&mut self, rs: &[TyId], span: Span) -> TyId {
         let mut cur: Option<TyId> = None;
         let mut nullable = false;
         for r in rs {
@@ -1309,8 +1314,17 @@ impl<'a> Checker<'a> {
                         c
                     } else if self.types.unwrap_optional(r) == c {
                         r
+                    } else if let Some(t) = self.common_type(c, r) {
+                        t
                     } else {
-                        T_ANY
+                        let (a, b) = (self.show(c), self.show(r));
+                        let fname = self.sm.file(span.file).text(span).to_string();
+                        let mut d = Diagnostic::error(span, format!("`{}` returns {} on one path and {} on another", fname, a, b));
+                        if let Some(at) = self.params_close(span) {
+                            d = d.maybe_fix("declare what it returns, `any` if both are intended", at, ": any");
+                        }
+                        self.emit(d);
+                        T_ERROR
                     }
                 }
             });
@@ -1318,7 +1332,12 @@ impl<'a> Checker<'a> {
         match cur {
             None => {
                 if nullable {
-                    T_ANY
+                    let fname = self.sm.file(span.file).text(span).to_string();
+                    self.emit(
+                        Diagnostic::error(span, format!("cannot tell what `{}` returns: it only returns `null`", fname))
+                            .help("declare the return type, for example `fun find(): string?`"),
+                    );
+                    T_ERROR
                 } else {
                     T_VOID
                 }
@@ -1354,7 +1373,9 @@ impl<'a> Checker<'a> {
                     if skipped {
                         self.ctx().dry = false;
                     } else {
+                        let start = body.len();
                         body.extend(out);
+                        self.init_spans.push((mi, start, body.len(), item.span));
                     }
                 }
             }
@@ -1376,7 +1397,9 @@ impl<'a> Checker<'a> {
                 if skipped {
                     self.ctx().dry = false;
                 } else {
+                    let start = body.len();
                     body.extend(out);
+                    self.init_spans.push((mi, start, body.len(), item.span));
                 }
             }
         }

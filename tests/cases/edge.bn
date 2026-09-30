@@ -90,7 +90,7 @@ var x = 1
 print("outer", x)
 var fns: {string: fun(int): int} = {}
 fns["inc"] = fun(n: int): int { return n + 1 }
-print(fns["inc"](41))
+print(fns["inc"]!!(41))
 print(Level.High > Level.Low, Level.Low)
 var arr = [3, 1, 2]
 var sorted = copy(arr)

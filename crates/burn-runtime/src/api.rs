@@ -440,6 +440,16 @@ pub fn map_get_or(m: u64, k: u64, dflt: u64) -> u64 {
     }
 }
 
+pub fn map_find(m: u64, k: u64, vt: u64) -> u64 {
+    let key = map_key(m, k);
+    let d = map_data(m);
+    match d.index.get(&key) {
+        Some(i) if meta::is_unboxed(vt as u32) => box_value(d.vals[*i], vt),
+        Some(i) => d.vals[*i],
+        None => 0,
+    }
+}
+
 pub fn map_has(m: u64, k: u64) -> u64 {
     let key = map_key(m, k);
     b(map_data(m).index.contains_key(&key))

@@ -99,7 +99,17 @@ fn collect_expr(e: &ast::Expr, out: &mut HashSet<String>) {
             }
             collect_expr(value, out);
         }
-        A::Unary(_, x) | A::Await(x) | A::NotNull(x) | A::Is(x, _) | A::As(x, _) => collect_expr(x, out),
+        A::Unary(_, x) | A::Await(x) | A::NotNull(x) | A::Is(x, _) | A::As(x, _) | A::SafeAs(x, _) => collect_expr(x, out),
+        A::Coalesce(a, b) => {
+            collect_expr(a, out);
+            collect_expr(b, out);
+        }
+        A::SafeGet { obj, args, .. } => {
+            collect_expr(obj, out);
+            for a in args.iter().flatten() {
+                collect_expr(a, out);
+            }
+        }
         A::Binary(_, a, b) => {
             collect_expr(a, out);
             collect_expr(b, out);

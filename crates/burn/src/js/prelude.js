@@ -275,6 +275,7 @@ const $R = {
   MapSet: (m, k, v) => { m.m.set($mk(m, k), [k, v]); return v; },
   MapGet: (m, k, l) => { const e = m.m.get($mk(m, k)); if (!e) $err("key " + $fmt(k, $d(m.t)[1], true, 0) + " not found in map", l); return e[1]; },
   MapGetOr: (m, k, d) => { const e = m.m.get($mk(m, k)); return e ? e[1] : d; },
+  MapFind: (m, k, t) => { const e = m.m.get($mk(m, k)); return e ? ($unboxed(t) ? $box(e[1], t) : e[1]) : null; },
   MapHas: (m, k) => m.m.has($mk(m, k)),
   MapRemove: (m, k) => m.m.delete($mk(m, k)),
   MapKeys: (m) => Array.from(m.m.values()).map(e => e[0]),

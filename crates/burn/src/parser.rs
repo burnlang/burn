@@ -1403,7 +1403,7 @@ impl Parser {
     }
 
     fn equality(&mut self) -> PResult<Expr> {
-        let mut e = self.comparison()?;
+        let mut e = self.coalesce()?;
         loop {
             let op = match self.peek().kind {
                 Tok::EqEq => BinOp::Eq,
@@ -1411,9 +1411,23 @@ impl Parser {
                 _ => return Ok(e),
             };
             self.advance();
-            let r = self.comparison()?;
+            let r = self.coalesce()?;
             e = self.bin(e, op, r);
         }
+    }
+
+    fn coalesce(&mut self) -> PResult<Expr> {
+        let e = self.comparison()?;
+        if !self.at(&Tok::QuestionQuestion) {
+            return Ok(e);
+        }
+        self.advance();
+        let r = self.coalesce()?;
+        let span = e.span.to(r.span);
+        Ok(Expr {
+            kind: ExprKind::Coalesce(Box::new(e), Box::new(r)),
+            span,
+        })
     }
 
     fn comparison(&mut self) -> PResult<Expr> {
@@ -1490,10 +1504,18 @@ impl Parser {
         let mut e = self.unary()?;
         while self.at(&Tok::As) {
             self.advance();
+            let safe = self.at(&Tok::Question) && !self.peek().nl_before;
+            if safe {
+                self.advance();
+            }
             let t = self.ty()?;
             let span = e.span.to(t.span);
             e = Expr {
-                kind: ExprKind::As(Box::new(e), t),
+                kind: if safe {
+                    ExprKind::SafeAs(Box::new(e), t)
+                } else {
+                    ExprKind::As(Box::new(e), t)
+                },
                 span,
             };
         }
@@ -1610,6 +1632,20 @@ impl Parser {
                     let span = e.span.to(name.span);
                     e = Expr {
                         kind: ExprKind::Field { obj: Box::new(e), name },
+                        span,
+                    };
+                }
+                Tok::QuestionDot => {
+                    self.advance();
+                    let name = self.ident("field or method name")?;
+                    let args = if self.at(&Tok::LParen) && !self.peek().nl_before {
+                        Some(self.call_args()?)
+                    } else {
+                        None
+                    };
+                    let span = e.span.to(self.prev_span());
+                    e = Expr {
+                        kind: ExprKind::SafeGet { obj: Box::new(e), name, args },
                         span,
                     };
                 }
