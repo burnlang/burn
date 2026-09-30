@@ -17,6 +17,7 @@ pub enum Vis {
 #[derive(Clone, Debug)]
 pub struct Module {
     pub items: Vec<Item>,
+    pub has_destroy: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -59,6 +60,7 @@ pub struct FunDecl {
     pub span: Span,
     pub annotations: Vec<Annotation>,
     pub bodyless: bool,
+    pub is_abstract: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -78,6 +80,22 @@ pub struct Field {
     pub annotations: Vec<Annotation>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StructKind {
+    Normal,
+    Abstract,
+    Static,
+}
+
+#[derive(Clone, Debug)]
+pub struct StaticVal {
+    pub name: Ident,
+    pub ty: Option<TypeExpr>,
+    pub init: Expr,
+    pub is_const: bool,
+    pub vis: Vis,
+}
+
 #[derive(Clone, Debug)]
 pub enum Def {
     Type {
@@ -92,11 +110,15 @@ pub enum Def {
         name: Ident,
         methods: Vec<FunSig>,
     },
-    Class {
+    Struct {
         name: Ident,
-        implements: Vec<Ident>,
+        kind: StructKind,
+        params: Vec<Param>,
+        param_anns: Vec<Vec<Annotation>>,
+        supers: Vec<(Ident, Option<Vec<Expr>>)>,
         fields: Vec<Field>,
         methods: Vec<(Vis, FunDecl)>,
+        statics: Vec<StaticVal>,
     },
     Enum {
         name: Ident,
@@ -114,7 +136,7 @@ impl Def {
             Def::Type { name, .. }
             | Def::Alias { name, .. }
             | Def::Interface { name, .. }
-            | Def::Class { name, .. }
+            | Def::Struct { name, .. }
             | Def::Enum { name, .. }
             | Def::Annotation { name, .. } => name,
         }
@@ -188,6 +210,14 @@ pub enum StmtKind {
     Break,
     Continue,
     Block(Block),
+    Extend {
+        target: Ident,
+        func: Box<FunDecl>,
+    },
+    Destroy {
+        target: Ident,
+        args: Vec<Expr>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -262,6 +292,7 @@ pub enum ExprKind {
     Await(Box<Expr>),
     Lambda(Box<FunDecl>),
     NotNull(Box<Expr>),
+    New { ty: Ident, args: Vec<Expr> },
 }
 
 #[derive(Clone, Debug)]

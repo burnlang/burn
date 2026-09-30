@@ -1,0 +1,19 @@
+def struct Session(user: string) {
+    int hits = 0
+
+    fun hit() {
+        hits += 1
+    }
+}
+
+fun close(s: Session) {
+    destroy s()
+}
+
+var a = new Session("ann")
+var b = a
+b.hit()
+close(a)
+print("closed", b)
+b.hit()
+print("never")

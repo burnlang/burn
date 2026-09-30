@@ -282,6 +282,9 @@ fn bad_record(o: u64, i: u32) -> ! {
     if o == 0 {
         api::err_null(NO_LOC as u64);
     }
+    if kind_of(o) == K_DEAD {
+        io::rt_error("this object was destroyed and can no longer be used", u64::MAX);
+    }
     io::rt_error(
         &format!("field {} does not exist on a value of type {}", i, meta::type_name(tid_of(o))),
         u64::MAX,

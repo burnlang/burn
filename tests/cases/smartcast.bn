@@ -39,8 +39,7 @@ def interface Animal {
     fun sound(): string
 }
 
-def class Dog: Animal {
-    string name
+def struct Dog(name: string): Animal {
     fun sound(): string {
         return "woof"
     }
@@ -50,7 +49,7 @@ def class Dog: Animal {
     }
 }
 
-def class Cat: Animal {
+def struct Cat: Animal {
     fun sound(): string {
         return "meow"
     }
@@ -67,7 +66,7 @@ print(describe(21), describe("burn"), describe([1, 2, 3]), describe(null), descr
 print(lengthOf("hello"), lengthOf(null))
 print(firstChar("xyz"), firstChar(""), firstChar(null))
 print(safe(41), safe(null))
-print(play(Dog { name: "Rex" }), play(Cat {}))
+print(play(new Dog("Rex")), play(new Cat()))
 
 any value = 10
 value = "now a string"

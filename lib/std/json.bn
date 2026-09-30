@@ -1,4 +1,4 @@
-pub def class JSON {
+pub def static struct JSON {
     static fun parse(text: string): any {
         return parseJSON(text)
     }

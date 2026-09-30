@@ -2,7 +2,7 @@ pub const PI = 3.141592653589793
 pub const E = 2.718281828459045
 pub const TAU = 6.283185307179586
 
-pub def class Math {
+pub def static struct Math {
     static fun clamp(x: float, low: float, high: float): float {
         return max(low, min(high, x))
     }

@@ -143,16 +143,18 @@ impl<'a> Checker<'a> {
         for n in names {
             if let Some(l) = self.lookup_local(n) {
                 self.ctx().narrow.remove(&l.slot);
+                self.clear_facts(l.slot);
             } else {
                 let m = self.cur_module();
                 if let Some(Entry { sym: ValSym::Global(g), .. }) = self.lookup_value_entry(m, n) {
                     self.ctx().narrow.remove(&(GLOBAL_KEY + g));
+                    self.clear_facts(GLOBAL_KEY + g);
                 }
             }
         }
     }
 
-    fn local_of(&self, e: &ast::Expr) -> Option<u32> {
+    pub fn local_of(&self, e: &ast::Expr) -> Option<u32> {
         if let A::Ident(n) = &e.kind {
             if let Some(l) = self.lookup_local(n) {
                 return Some(l.slot);
@@ -418,6 +420,8 @@ impl<'a> Checker<'a> {
                 vec![if matches!(s.kind, S::Break) { Stmt::Break } else { Stmt::Continue }]
             }
             S::Block(b) => self.block_stmts(&b.stmts),
+            S::Extend { target, func } => self.extend_stmt(target, func),
+            S::Destroy { target, args } => self.destroy_stmt(target, args, s.span),
         }
     }
 

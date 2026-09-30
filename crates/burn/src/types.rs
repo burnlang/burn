@@ -46,11 +46,16 @@ pub struct FieldDef {
     pub span: Span,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct RecordDef {
     pub name: String,
     pub fields: Vec<FieldDef>,
     pub is_class: bool,
+    pub is_abstract: bool,
+    pub is_static: bool,
+    pub parent: Option<u32>,
+    pub ctor: Option<u32>,
+    pub static_vals: HashMap<String, u32>,
     pub anon: bool,
     pub implements: Vec<u32>,
     pub methods: HashMap<String, u32>,
@@ -225,8 +230,38 @@ impl Types {
     pub fn implements(&self, class: TyId, iface: TyId) -> bool {
         match (self.get(class), self.get(iface)) {
             (Ty::Record(r), Ty::Interface(i)) => self.records[*r as usize].implements.contains(i),
+            (Ty::Record(r), Ty::Record(p)) => self.extends(*r, *p),
             _ => false,
         }
+    }
+
+    pub fn extends(&self, child: u32, ancestor: u32) -> bool {
+        let mut cur = self.records[child as usize].parent;
+        let mut steps = 0;
+        while let Some(c) = cur {
+            if c == ancestor {
+                return true;
+            }
+            steps += 1;
+            if steps > self.records.len() {
+                return false;
+            }
+            cur = self.records[c as usize].parent;
+        }
+        false
+    }
+
+    pub fn ancestors(&self, r: u32) -> Vec<u32> {
+        let mut out = Vec::new();
+        let mut cur = self.records[r as usize].parent;
+        while let Some(c) = cur {
+            if out.contains(&c) || c == r {
+                break;
+            }
+            out.push(c);
+            cur = self.records[c as usize].parent;
+        }
+        out
     }
 
     pub fn display(&self, t: TyId) -> String {
@@ -294,7 +329,12 @@ impl Types {
                         name: if r.anon { String::new() } else { r.name.clone() },
                         fields: r.fields.iter().map(|f| (f.name.clone(), f.ty)).collect(),
                         class: r.is_class,
-                        implements: r.implements.iter().map(|i| self.ifaces[*i as usize].ty).collect(),
+                        implements: r
+                            .implements
+                            .iter()
+                            .map(|i| self.ifaces[*i as usize].ty)
+                            .chain(self.ancestors(*i).into_iter().map(|a| self.records[a as usize].ty))
+                            .collect(),
                     }
                 }
                 Ty::Interface(i) => Desc::Interface {

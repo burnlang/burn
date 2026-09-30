@@ -17,22 +17,14 @@ def interface Named {
 @Table("users", version: 3)
 @Getter
 @Setter
-def class User: Named {
-    string name
-    int age
-    bool admin
-
+def struct User(name: string, age: int, admin: bool): Named {
     fun label(): string {
         return "user " + name
     }
 }
 
 @Tag("gadget", weight: 2, note: "shiny")
-def class Gadget: Named {
-    @Getter
-    string model
-    int price
-
+def struct Gadget(@Getter model: string, price: int): Named {
     fun label(): string {
         return "gadget " + model
     }
@@ -55,11 +47,11 @@ fun show(x: any) {
 }
 
 fun main() {
-    var u = User { name: "Ann", age: 30, admin: false }
+    var u = new User("Ann", 30, false)
     u.setAge(u.getAge() + 1)
     u.setAdmin(true)
     print(u.getName(), u.getAge(), u.isAdmin())
-    var g = Gadget { model: "X1", price: 99 }
+    var g = new Gadget("X1", 99)
     print(g.getModel())
     show(u)
     show(g)

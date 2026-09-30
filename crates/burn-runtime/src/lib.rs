@@ -118,6 +118,8 @@ runtime_fns! {
     IsType => burn_is_type = crate::api::is_type [a, b, c];
     Cast => burn_cast = crate::api::cast [a, b, c, d];
     Unwrap => burn_unwrap = crate::api::unwrap [a, b, c];
+    Destroy => burn_destroy = crate::api::destroy [a, b];
+    Alive => burn_alive = crate::api::alive [a, b];
     Eq => burn_eq = crate::api::eq [a, b, c];
     Cmp => burn_cmp = crate::api::cmp [a, b, c];
     TypeName => burn_type_name = crate::api::type_name [a, b];

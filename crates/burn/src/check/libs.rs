@@ -241,13 +241,9 @@ impl<'a> Checker<'a> {
                     fields: Vec::new(),
                     is_class: class,
                     anon: name.is_empty(),
-                    implements: Vec::new(),
-                    methods: HashMap::new(),
-                    statics: HashMap::new(),
-                    init: None,
                     module: lt.module as u32,
                     span: lt.span,
-                    ty: 0,
+                    ..Default::default()
                 });
                 let ty = self.types.records[ri as usize].ty;
                 lt.map.insert(t, ty);

@@ -6,19 +6,14 @@ priv fun pad(n: int, width: int): string {
     return s
 }
 
-pub def class Time {
-    int hours
-    int minutes
-    int seconds
-    int milliseconds
-
+pub def struct Time(hours: int, minutes: int, seconds: int, milliseconds: int) {
     static fun create(hours: int, minutes: int, seconds: int, milliseconds: int): Time {
-        return Time { hours: hours, minutes: minutes, seconds: seconds, milliseconds: milliseconds }
+        return new Time(hours, minutes, seconds, milliseconds)
     }
 
     static fun now(): Time {
         var t = __localTime()
-        return Time { hours: t[3], minutes: t[4], seconds: t[5], milliseconds: t[6] }
+        return new Time(t[3], t[4], t[5], t[6])
     }
 
     static fun fromMilliseconds(ms: int): Time {
@@ -29,7 +24,7 @@ pub def class Time {
         rest -= m * 60000
         var s = rest / 1000
         rest -= s * 1000
-        return Time { hours: h, minutes: m, seconds: s, milliseconds: rest }
+        return new Time(h, m, s, rest)
     }
 
     static fun fromSeconds(seconds: float): Time {
@@ -63,7 +58,7 @@ pub def class Time {
         if (len(parts) >= 3) {
             s = toInt(parts[2])
         }
-        return Time { hours: h, minutes: m, seconds: s, milliseconds: ms }
+        return new Time(h, m, s, ms)
     }
 
     fun toMilliseconds(): int {

@@ -3,6 +3,13 @@ use bvm::binary::{decode, encode};
 use bvm::runtime::io;
 use bvm::{verify, Cmp, Desc, FuncBuilder, Host, ModuleBuilder, Op, RtFn, Runner};
 use std::process::Command;
+use std::sync::{Mutex, MutexGuard};
+
+static CAPTURE: Mutex<()> = Mutex::new(());
+
+fn capture_lock() -> MutexGuard<'static, ()> {
+    CAPTURE.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 const SAMPLE: &str = r#"
 ; every section and most instructions
@@ -276,6 +283,7 @@ end
     assert!(matches!(bvm::load(&m, &host), Err(bvm::LoadError::ImportArity { .. })));
     host.register("add3", 3, |a| a[0] + a[1] + a[2]);
     let prog = bvm::load(&m, &host).unwrap();
+    let _guard = capture_lock();
     io::start_capture();
     let mut r = Runner::new(prog.clone(), Vec::new());
     r.call(prog.entry.unwrap());
@@ -390,6 +398,7 @@ fn linker_resolves_externs_and_merges_types() {
 
 fn run_capture(m: &bvm::Module, host: &Host) -> String {
     let prog = bvm::load(m, host).unwrap_or_else(|e| panic!("{}", e));
+    let _guard = capture_lock();
     io::start_capture();
     let mut r = Runner::new(prog.clone(), Vec::new());
     r.call(prog.entry.unwrap());

@@ -3,6 +3,7 @@ pub mod builtins;
 pub mod expr;
 pub mod libs;
 pub mod stmt;
+pub mod structs;
 
 use crate::ast::{self, Def, ItemKind, TypeExpr, TypeExprKind, Vis};
 use crate::diag::{Diagnostic, Severity};
@@ -15,6 +16,32 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 pub const GLOBAL_KEY: u32 = 1 << 31;
+pub const FACT_KEY: u32 = 1 << 30;
+
+#[derive(Clone, Debug)]
+pub enum Fact {
+    Ext { var: u32, name: String, fid: FuncId },
+    Dead { var: u32, span: Span },
+}
+
+#[derive(Clone, Debug)]
+pub struct StructDecl {
+    pub module: usize,
+    pub params: Vec<(String, TyId, Span)>,
+    pub super_args: Option<Vec<ast::Expr>>,
+    pub super_span: Span,
+    pub own_start: usize,
+    pub param_fields: Vec<bool>,
+    pub statics: Vec<ast::StaticVal>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AbstractSig {
+    pub params: Vec<TyId>,
+    pub ret: TyId,
+    pub is_async: bool,
+    pub span: Span,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ValSym {
@@ -146,6 +173,15 @@ pub struct Checker<'a> {
     pub type_anns: HashMap<TyId, Vec<hir::Annotation>>,
     pub deprecated_types: HashMap<TyId, String>,
     pub libs: Vec<hir::Library>,
+    pub struct_decls: HashMap<u32, StructDecl>,
+    pub abstract_sigs: HashMap<(u32, String), AbstractSig>,
+    pub vslots: HashMap<(u32, String), u32>,
+    pub vslot_set: HashSet<u32>,
+    pub facts: Vec<Fact>,
+    pub any_dead: bool,
+    pub has_destroy: bool,
+    pub ext_funcs: HashSet<FuncId>,
+    pub static_private: HashSet<u32>,
 }
 
 pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
@@ -171,6 +207,15 @@ pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
         type_anns: HashMap::new(),
         deprecated_types: HashMap::new(),
         libs: Vec::new(),
+        struct_decls: HashMap::new(),
+        abstract_sigs: HashMap::new(),
+        vslots: HashMap::new(),
+        vslot_set: HashSet::new(),
+        facts: Vec::new(),
+        any_dead: false,
+        has_destroy: loaded.modules.iter().any(|m| m.ast.has_destroy),
+        ext_funcs: HashSet::new(),
+        static_private: HashSet::new(),
     };
     c.run(loaded);
     let has_errors = loaded.diags.iter().chain(c.diags.iter()).any(|d| d.severity == Severity::Error);
@@ -584,6 +629,7 @@ impl<'a> Checker<'a> {
                 }
             }
         }
+        self.link_structs();
         for (mi, m) in loaded.modules.iter().enumerate() {
             for item in &m.ast.items {
                 if let ItemKind::Def(d) = &item.kind {
@@ -608,34 +654,13 @@ impl<'a> Checker<'a> {
                         }
                         self.add_value(mi, &f.name.name, ValSym::Func(fid), item.vis, f.name.span);
                     }
-                    ItemKind::Def(Def::Class { name, methods, .. }) => {
+                    ItemKind::Def(Def::Struct { name, methods, statics, .. }) => {
                         let t = self.mods[mi].types.get(&name.name).map(|e| e.sym).unwrap_or(T_ERROR);
                         if let Ty::Record(ri) = self.types.get(t).clone() {
                             if self.types.records[ri as usize].span != name.span {
                                 continue;
                             }
-                            for (vis, mdecl) in methods {
-                                let self_ty = if mdecl.is_static { None } else { Some(t) };
-                                let fid = self.declare_fun(mi, mdecl, self_ty, *vis == Vis::Priv, true);
-                                self.funcs[fid as usize].name = format!("{}.{}", name.name, mdecl.name.name);
-                                self.funcs[fid as usize].is_static = mdecl.is_static;
-                                let rec = &mut self.types.records[ri as usize];
-                                let dup = rec.methods.contains_key(&mdecl.name.name)
-                                    || rec.statics.contains_key(&mdecl.name.name)
-                                    || rec.field_index(&mdecl.name.name).is_some();
-                                if mdecl.is_static {
-                                    rec.statics.insert(mdecl.name.name.clone(), fid);
-                                } else {
-                                    if mdecl.name.name == "init" {
-                                        rec.init = Some(fid);
-                                        self.funcs[fid as usize].ret = Some(T_VOID);
-                                    }
-                                    rec.methods.insert(mdecl.name.name.clone(), fid);
-                                }
-                                if dup {
-                                    self.error(mdecl.name.span, format!("`{}` is already defined in class `{}`", mdecl.name.name, name.name));
-                                }
-                            }
+                            self.declare_struct_members(mi, ri, name, methods, statics);
                         }
                     }
                     ItemKind::Stmt(s) => {
@@ -655,8 +680,10 @@ impl<'a> Checker<'a> {
                 }
             }
         }
+        self.check_structs();
         self.check_conformance(loaded);
         self.check_mixins();
+        self.build_ctors();
         for &mi in &loaded.order {
             self.check_init(mi, &loaded.modules[mi].ast);
         }
@@ -702,20 +729,19 @@ impl<'a> Checker<'a> {
 
     fn declare_def(&mut self, mi: usize, d: &Def, vis: Vis, aliases: &mut Vec<(usize, String, TypeExpr, Span)>) {
         match d {
-            Def::Type { name, .. } | Def::Class { name, .. } | Def::Annotation { name, .. } => {
-                let is_class = matches!(d, Def::Class { .. });
+            Def::Type { name, .. } | Def::Struct { name, .. } | Def::Annotation { name, .. } => {
+                let kind = match d {
+                    Def::Struct { kind, .. } => Some(*kind),
+                    _ => None,
+                };
                 let ri = self.types.new_record(RecordDef {
                     name: name.name.clone(),
-                    fields: Vec::new(),
-                    is_class,
-                    anon: false,
-                    implements: Vec::new(),
-                    methods: HashMap::new(),
-                    statics: HashMap::new(),
-                    init: None,
+                    is_class: kind.is_some(),
+                    is_abstract: kind == Some(ast::StructKind::Abstract),
+                    is_static: kind == Some(ast::StructKind::Static),
                     module: mi as u32,
                     span: name.span,
-                    ty: 0,
+                    ..Default::default()
                 });
                 let t = self.types.records[ri as usize].ty;
                 self.add_type(mi, name, t, vis);
@@ -768,12 +794,33 @@ impl<'a> Checker<'a> {
             _ => return,
         };
         match d {
-            Def::Type { fields, .. } | Def::Class { fields, .. } | Def::Annotation { fields, .. } => {
+            Def::Type { fields, .. } | Def::Struct { fields, .. } | Def::Annotation { fields, .. } => {
                 let ri = match self.types.get(t) {
                     Ty::Record(r) => *r,
                     _ => return,
                 };
                 let mut out = Vec::new();
+                let mut pdecl = Vec::new();
+                if let Def::Struct { params, .. } = d {
+                    for p in params {
+                        let pt = self.resolve_type_in(&p.ty, mi);
+                        if pt == T_VOID {
+                            self.error(p.ty.span, "parameters cannot have type void");
+                        }
+                        if out.iter().any(|x: &FieldDef| x.name == p.name.name) {
+                            self.error(p.name.span, format!("duplicate parameter `{}`", p.name.name));
+                            continue;
+                        }
+                        out.push(FieldDef {
+                            name: p.name.name.clone(),
+                            ty: pt,
+                            default: None,
+                            private: false,
+                            span: p.name.span,
+                        });
+                        pdecl.push((p.name.name.clone(), pt, p.name.span));
+                    }
+                }
                 for f in fields {
                     let ft = self.resolve_type_in(&f.ty, mi);
                     if ft == T_VOID {
@@ -792,22 +839,16 @@ impl<'a> Checker<'a> {
                     });
                 }
                 self.types.records[ri as usize].fields = out;
-                if let Def::Class { implements, .. } = d {
-                    let mut impls = Vec::new();
-                    for i in implements {
-                        match self.lookup_type_name(mi, &i.name, i.span) {
-                            Some(it) => match self.types.get(it) {
-                                Ty::Interface(ii) => impls.push(*ii),
-                                Ty::Error => {}
-                                _ => {
-                                    let s = self.show(it);
-                                    self.error(i.span, format!("`{}` is not an interface", s));
-                                }
-                            },
-                            None => self.error(i.span, format!("unknown interface `{}`", i.name)),
-                        }
-                    }
-                    self.types.records[ri as usize].implements = impls;
+                if let Def::Struct {
+                    name,
+                    kind,
+                    params,
+                    supers,
+                    statics,
+                    ..
+                } = d
+                {
+                    self.fill_struct(mi, ri, name, *kind, params, supers, statics, pdecl);
                 }
             }
             Def::Interface { methods, .. } => {
@@ -852,7 +893,7 @@ impl<'a> Checker<'a> {
             _ => return,
         };
         let site = annot::Site::Type {
-            class: matches!(d, Def::Class { .. }),
+            class: matches!(d, Def::Struct { .. }),
         };
         let resolved = self.resolve_annotations(mi, anns, site);
         if let Some(msg) = Self::deprecation_note(&resolved) {
@@ -862,12 +903,19 @@ impl<'a> Checker<'a> {
             self.type_anns.insert(t, resolved);
         }
         let fields: &[ast::Field] = match d {
-            Def::Type { fields, .. } | Def::Class { fields, .. } | Def::Annotation { fields, .. } => fields,
+            Def::Type { fields, .. } | Def::Struct { fields, .. } | Def::Annotation { fields, .. } => fields,
             _ => &[],
         };
         for f in fields {
             if !f.annotations.is_empty() {
                 self.resolve_annotations(mi, &f.annotations, annot::Site::Field);
+            }
+        }
+        if let Def::Struct { param_anns, .. } = d {
+            for a in param_anns {
+                if !a.is_empty() {
+                    self.resolve_annotations(mi, a, annot::Site::Field);
+                }
             }
         }
     }
@@ -931,6 +979,9 @@ impl<'a> Checker<'a> {
     fn check_conformance(&mut self, _loaded: &Loaded) {
         for ri in 0..self.types.records.len() {
             let rec = self.types.records[ri].clone();
+            if rec.is_abstract {
+                continue;
+            }
             for ii in rec.implements.iter() {
                 let iface = self.types.ifaces[*ii as usize].clone();
                 for m in &iface.methods {
@@ -957,7 +1008,7 @@ impl<'a> Checker<'a> {
                             let want = self.method_sig_str(&m.params, m.ret, m.is_async);
                             self.error_note(
                                 rec.span,
-                                format!("class `{}` does not implement `{}.{}`", rec.name, iface.name, m.name),
+                                format!("struct `{}` does not implement `{}.{}`", rec.name, iface.name, m.name),
                                 format!("add `{}`", want.replacen("fun(", &format!("fun {}(", m.name), 1)),
                             );
                         }
@@ -1182,6 +1233,20 @@ impl<'a> Checker<'a> {
         let file = self.mods[mi].file;
         let n = ast.items.len();
         for (idx, item) in ast.items.iter().enumerate() {
+            if let ItemKind::Def(Def::Struct { name, statics, .. }) = &item.kind {
+                if !statics.is_empty() {
+                    let skipped = matches!(skip, Some((f, off)) if f == file && item.span.start < off);
+                    if skipped {
+                        self.ctx().dry = true;
+                    }
+                    let out = self.static_inits(name);
+                    if skipped {
+                        self.ctx().dry = false;
+                    } else {
+                        body.extend(out);
+                    }
+                }
+            }
             if let ItemKind::Stmt(s) = &item.kind {
                 let skipped = matches!(skip, Some((f, off)) if f == file && item.span.start < off);
                 let echo = self.opts.repl_echo && idx + 1 == n && !skipped && matches!(skip, Some((f, _)) if f == file);
@@ -1231,6 +1296,7 @@ impl<'a> Checker<'a> {
     }
 
     fn build_program(&mut self, loaded: &Loaded) -> hir::Program {
+        self.devirtualize();
         let entry = self.funcs.len() as FuncId;
         let mut body = Vec::new();
         for &mi in &loaded.order {

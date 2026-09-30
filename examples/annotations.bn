@@ -5,20 +5,16 @@ def annotation Route {
 
 @Getter
 @Setter
-def class Account {
-    string owner
-    int balance
-    bool frozen
-}
+def struct Account(owner: string, balance: int, frozen: bool) {}
 
 @Route("/accounts")
-def class AccountHandler {
-    int calls
+def struct AccountHandler {
+    int calls = 0
 }
 
 @Route("/health", method: "HEAD")
-def class HealthHandler {
-    int calls
+def struct HealthHandler {
+    int calls = 0
 }
 
 @Deprecated("use describe instead")
@@ -44,10 +40,10 @@ fun routeOf(handler: any): string {
 }
 
 fun main() {
-    var acc = Account { owner: "Ada", balance: 100, frozen: false }
+    var acc = new Account("Ada", 100, false)
     acc.setBalance(acc.getBalance() + 50)
     print(describe(acc))
-    print(routeOf(AccountHandler { calls: 0 }))
-    print(routeOf(HealthHandler { calls: 0 }))
+    print(routeOf(new AccountHandler()))
+    print(routeOf(new HealthHandler()))
     print(routeOf(acc))
 }

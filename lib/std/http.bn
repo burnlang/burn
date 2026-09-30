@@ -8,7 +8,7 @@ pub def type HTTPResponse {
 
 priv var defaultHeaders: [string] = ["User-Agent: BurnLang/2.0", "Accept: */*"]
 
-pub def class HTTP {
+pub def static struct HTTP {
     static fun request(method: string, url: string, body: string): HTTPResponse {
         var raw = __httpRequest(method, url, body, defaultHeaders)
         var headers: [string] = []

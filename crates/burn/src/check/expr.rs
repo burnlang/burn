@@ -94,6 +94,7 @@ impl<'a> Checker<'a> {
                     Ok(Self::retype(h2, to))
                 }
             }
+            (Ty::Record(_), Ty::Interface(_)) | (Ty::Record(_), Ty::Record(_)) if self.types.implements(from, to) => Ok(Self::retype(h, to)),
             (Ty::Record(_), Ty::Interface(_)) => {
                 if self.types.implements(from, to) {
                     Ok(Self::retype(h, to))
@@ -220,7 +221,7 @@ impl<'a> Checker<'a> {
             return false;
         }
         let dk = self.types.get(declared);
-        if !matches!(dk, Ty::Any | Ty::Optional(_) | Ty::Interface(_)) {
+        if !matches!(dk, Ty::Any | Ty::Optional(_) | Ty::Interface(_) | Ty::Record(_)) {
             return false;
         }
         if matches!(self.types.get(value), Ty::Null | Ty::Any | Ty::Optional(_) | Ty::Error | Ty::Void) {
@@ -229,7 +230,7 @@ impl<'a> Checker<'a> {
         match dk {
             Ty::Any => true,
             Ty::Optional(x) => *x == value || self.types.implements(value, *x),
-            Ty::Interface(_) => self.types.implements(value, declared),
+            Ty::Interface(_) | Ty::Record(_) => self.types.implements(value, declared),
             _ => false,
         }
     }
@@ -242,8 +243,19 @@ impl<'a> Checker<'a> {
     }
 
     pub fn invalidate_globals(&mut self) {
+        let facts = &self.facts;
         if let Some(c) = self.fx.last_mut() {
-            c.narrow.retain(|k, _| *k < GLOBAL_KEY);
+            c.narrow.retain(|k, _| {
+                if *k >= GLOBAL_KEY {
+                    return false;
+                }
+                if *k >= FACT_KEY {
+                    if let Fact::Dead { var, .. } = &facts[(*k - FACT_KEY) as usize] {
+                        return *var < GLOBAL_KEY;
+                    }
+                }
+                true
+            });
         }
     }
 
@@ -256,6 +268,7 @@ impl<'a> Checker<'a> {
     }
 
     pub fn narrow_after_assign(&mut self, slot: u32, value: TyId) {
+        self.clear_facts(slot);
         let declared = self.declared_of(slot);
         if self.narrowable(declared, value) {
             self.ctx().narrow.insert(slot, value);
@@ -353,6 +366,7 @@ impl<'a> Checker<'a> {
                 }
             }
             A::Lambda(f) => self.lambda(f),
+            A::New { ty, args } => self.new_expr(ty, args, e.span),
             A::NotNull(x) => {
                 let h = self.expr_raw(x);
                 match self.types.get(h.ty).clone() {
@@ -394,6 +408,7 @@ impl<'a> Checker<'a> {
     pub fn ident_expr(&mut self, name: &str, span: Span) -> Expr {
         if let Some(l) = self.lookup_local(name) {
             self.def_link(span, l.span);
+            self.check_alive(l.slot, name, span);
             let h = self.read_local(l.slot);
             let t = self.show(h.ty);
             self.hover(span, format!("{}: {}", name, t));
@@ -407,6 +422,15 @@ impl<'a> Checker<'a> {
             let s = Expr::new(ExprKind::Local(0), st);
             return Expr::new(ExprKind::GetField(Box::new(s), i as u32), ft);
         }
+        if let Some(owner) = self.static_owner_rec() {
+            if let Some(rec) = self.types.record_of(owner).cloned() {
+                if rec.static_vals.contains_key(name) {
+                    if let Some((g, t)) = self.static_value(&rec, name, span) {
+                        return if t == T_ERROR { Self::err_expr() } else { self.read_global(g, t) };
+                    }
+                }
+            }
+        }
         let m = self.cur_module();
         match self.lookup_value(name, span) {
             Some(ValSym::Global(g)) => {
@@ -414,6 +438,7 @@ impl<'a> Checker<'a> {
                 let (gspan, gty, gconst) = (gi.span, gi.ty, gi.is_const);
                 match gty {
                     Some(t) => {
+                        self.check_alive(GLOBAL_KEY + g, name, span);
                         self.def_link(span, gspan);
                         let ts = self.show(t);
                         self.hover(span, format!("{} {}: {}", if gconst { "const" } else { "var" }, name, ts));
@@ -438,7 +463,7 @@ impl<'a> Checker<'a> {
                 if self.lookup_type_name(m, name, span).is_some() {
                     self.error(span, format!("`{}` is a type, not a value", name));
                 } else if name == "self" {
-                    self.error(span, "`self` can only be used inside class methods");
+                    self.error(span, "`self` can only be used inside struct methods");
                 } else if self.outer_local_exists(name) {
                     self.error(
                         span,
@@ -671,6 +696,13 @@ impl<'a> Checker<'a> {
                 if let Some((st, i, ft)) = self.self_field(name) {
                     return Place::Field(Expr::new(ExprKind::Local(0), st), i as u32, ft);
                 }
+                if let Some(owner) = self.static_owner_rec() {
+                    if let Some(rec) = self.types.record_of(owner).cloned() {
+                        if rec.static_vals.contains_key(name) {
+                            return self.static_place(&rec, name, target.span);
+                        }
+                    }
+                }
                 match self.lookup_value(name, target.span) {
                     Some(ValSym::Global(g)) => {
                         let gi = &self.globals[g as usize];
@@ -698,6 +730,21 @@ impl<'a> Checker<'a> {
                 }
             }
             A::Field { obj, name } => {
+                if let Some(t) = self.type_ident(obj) {
+                    if let Ty::Record(ri) = self.types.get(t).clone() {
+                        let rec = self.types.records[ri as usize].clone();
+                        if rec.static_vals.contains_key(&name.name) {
+                            return self.static_place(&rec, &name.name, name.span);
+                        }
+                        self.error(name.span, format!("{} has no static value `{}`", rec.name, name.name));
+                        return Place::Error;
+                    }
+                    if t != T_ERROR {
+                        let s = self.show(t);
+                        self.error(target.span, format!("cannot assign `{}` on type {}", name.name, s));
+                    }
+                    return Place::Error;
+                }
                 let o = self.expr(obj, None);
                 let o = if hoist { self.hoist(o, pre) } else { o };
                 match self.types.get(o.ty).clone() {
@@ -707,6 +754,7 @@ impl<'a> Checker<'a> {
                             Some(i) => {
                                 self.check_field_access(&rec, i, name.span);
                                 self.def_link(name.span, rec.fields[i].span);
+                                let o = if rec.is_class { self.alive_wrap(o, name.span) } else { o };
                                 Place::Field(o, i as u32, rec.fields[i].ty)
                             }
                             None => {
@@ -763,6 +811,18 @@ impl<'a> Checker<'a> {
                 self.error(target.span, "invalid assignment target");
                 Place::Error
             }
+        }
+    }
+
+    fn static_place(&mut self, rec: &RecordDef, name: &str, span: Span) -> Place {
+        match self.static_value(rec, name, span) {
+            Some((g, t)) if t != T_ERROR => {
+                if self.globals[g as usize].is_const {
+                    self.error(span, format!("cannot assign to constant `{}.{}`", rec.name, name));
+                }
+                Place::Global(g, t)
+            }
+            _ => Place::Error,
         }
     }
 
@@ -904,7 +964,7 @@ impl<'a> Checker<'a> {
             }
         });
         let fspan = info.span;
-        if private && owner.is_some() && self.fx.last().and_then(|c| c.self_ty).or_else(|| self.static_owner()) != owner {
+        if private && owner.is_some() && self.static_owner_rec() != owner {
             self.error(name_span, format!("method `{}` is private", name));
         }
         self.def_link(name_span, fspan);
@@ -924,6 +984,10 @@ impl<'a> Checker<'a> {
             format!("{}fun {}({}){}", if is_async { "async " } else { "" }, name, ps.join(", "), r)
         };
         self.hover(name_span, sig);
+        let recv = match recv {
+            Some(r) if self.has_destroy && self.types.record_of(r.ty).map(|x| x.is_class).unwrap_or(false) => Some(self.alive_wrap(r, name_span)),
+            r => r,
+        };
         let hargs = self.check_args(&params, args, recv, span, &format!("`{}`", name));
         self.invalidate_globals();
         if is_async {
@@ -934,7 +998,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn static_owner(&self) -> Option<TyId> {
+    pub fn static_owner(&self) -> Option<TyId> {
         let c = self.fx.last()?;
         let info = &self.funcs[c.func as usize];
         if info.name.contains('.') {
@@ -993,10 +1057,30 @@ impl<'a> Checker<'a> {
                 }
                 if let Some(st) = self.fx.last().and_then(|c| c.self_ty) {
                     if let Some(rec) = self.types.record_of(st) {
+                        let ri = match self.types.get(st) {
+                            Ty::Record(r) => *r,
+                            _ => 0,
+                        };
                         let method = rec.methods.get(name).copied();
+                        let vslot = if rec.is_abstract {
+                            self.vslots.get(&(ri, name.clone())).copied()
+                        } else {
+                            None
+                        };
                         let stat = rec.statics.get(name).copied();
                         let m = self.cur_module();
                         let has_outer = builtins::is_builtin(name) || self.lookup_value_entry(m, name).is_some();
+                        if let Some(slot) = vslot {
+                            let argc = self.slots[slot as usize].argc as usize;
+                            if !has_outer || argc == args.len() + 1 {
+                                let s = Expr::new(ExprKind::Local(0), st);
+                                let id = ast::Ident {
+                                    name: name.clone(),
+                                    span: callee.span,
+                                };
+                                return self.virtual_call(ri, slot, &id, s, args, span);
+                            }
+                        }
                         if let Some(fid) = method {
                             if !has_outer || self.funcs[fid as usize].params.len() == args.len() + 1 {
                                 let s = Expr::new(ExprKind::Local(0), st);
@@ -1052,6 +1136,36 @@ impl<'a> Checker<'a> {
     }
 
     fn construct(&mut self, t: TyId, args: &[ast::Expr], span: Span, name_span: Span) -> Expr {
+        if let Some(rec) = self.types.record_of(t) {
+            if rec.is_class {
+                let rec = rec.clone();
+                return self.struct_call_error(&rec, args, name_span);
+            }
+        }
+        self.construct_record(t, args, span, name_span)
+    }
+
+    fn struct_call_error(&mut self, rec: &RecordDef, args: &[ast::Expr], name_span: Span) -> Expr {
+        if rec.is_static {
+            self.error_note(
+                name_span,
+                format!("`{}` is a static struct and has no objects", rec.name),
+                format!("use its members directly, e.g. `{}.name`", rec.name),
+            );
+        } else {
+            self.error_note(
+                name_span,
+                format!("`{}` is a struct, so its objects are created with `new`", rec.name),
+                format!("write `new {}(...)`", rec.name),
+            );
+        }
+        for a in args {
+            self.expr(a, None);
+        }
+        Self::err_expr()
+    }
+
+    pub fn construct_record(&mut self, t: TyId, args: &[ast::Expr], span: Span, name_span: Span) -> Expr {
         let ri = match self.types.get(t) {
             Ty::Record(r) => *r,
             Ty::Error => return Self::err_expr(),
@@ -1062,24 +1176,7 @@ impl<'a> Checker<'a> {
             }
         };
         let rec = self.types.records[ri as usize].clone();
-        self.hover(name_span, format!("{} {}", if rec.is_class { "class" } else { "type" }, rec.name));
-        if let Some(init) = rec.init {
-            let mut fields = Vec::new();
-            for f in &rec.fields {
-                let v = match &f.default {
-                    Some(d) => self.default_expr(d, f.ty, rec.module as usize),
-                    None => self.zero(f.ty).unwrap_or(Expr::new(ExprKind::Null, f.ty)),
-                };
-                fields.push(v);
-            }
-            let slot = self.new_local(t);
-            let alloc = Expr::new(ExprKind::SetLocal(slot, Box::new(Expr::new(ExprKind::NewStruct(t, fields), t))), t);
-            let call = self.direct_call(init, Some(Expr::new(ExprKind::Local(slot), t)), args, span, name_span);
-            return Expr::new(
-                ExprKind::Seq(vec![Stmt::Expr(alloc), Stmt::Expr(call)], Box::new(Expr::new(ExprKind::Local(slot), t))),
-                t,
-            );
-        }
+        self.hover(name_span, format!("{} {}", if rec.is_class { "struct" } else { "type" }, rec.name));
         if args.len() > rec.fields.len() {
             self.error(
                 span,
@@ -1159,12 +1256,50 @@ impl<'a> Checker<'a> {
         match self.types.get(t).clone() {
             Ty::Record(ri) => {
                 let rec = self.types.records[ri as usize].clone();
-                if let Some(fid) = rec.methods.get(&name.name) {
-                    return self.direct_call(*fid, Some(o), args, span, name.span);
+                if rec.is_class && name.name == "destroy" && (rec.methods.contains_key("destroy") || self.vslots.contains_key(&(ri, name.name.clone()))) {
+                    let what = match &obj.kind {
+                        A::Ident(n) => n.clone(),
+                        _ => "x".into(),
+                    };
+                    self.error_note(
+                        name.span,
+                        "a destructor cannot be called directly",
+                        format!("write `destroy {}()` to run it and destroy the object", what),
+                    );
+                    for a in args {
+                        self.expr(a, None);
+                    }
+                    return Self::err_expr();
+                }
+                if let Some(e) = self.struct_method(ri, name, o.clone(), args, span) {
+                    return e;
+                }
+                if rec.is_class {
+                    if let Some(key) = self.local_of(obj) {
+                        if let Some(fid) = self.ext_method(key, &name.name) {
+                            return self.direct_call(fid, Some(o), args, span, name.span);
+                        }
+                        let added_elsewhere = self
+                            .facts
+                            .iter()
+                            .any(|f| matches!(f, Fact::Ext { var, name: n, .. } if *var == key && *n == name.name));
+                        if added_elsewhere {
+                            self.error_note(
+                                name.span,
+                                format!("`{}` is not available here", name.name),
+                                "a function added with `x.name() { ... }` only exists after that line, and only on paths that always add it",
+                            );
+                            for a in args {
+                                self.expr(a, None);
+                            }
+                            return Self::err_expr();
+                        }
+                    }
                 }
                 if let Some(i) = rec.field_index(&name.name) {
                     if matches!(self.types.get(rec.fields[i].ty), Ty::Func(..)) {
                         self.check_field_access(&rec, i, name.span);
+                        let o = if rec.is_class { self.alive_wrap(o, name.span) } else { o };
                         let f = Expr::new(ExprKind::GetField(Box::new(o), i as u32), rec.fields[i].ty);
                         return self.indirect_call(f, args, span);
                     }
@@ -1188,6 +1323,7 @@ impl<'a> Checker<'a> {
                     self.def_link(name.span, m.span);
                     let sig = self.method_sig_str(&m.params, m.ret, m.is_async);
                     self.hover(name.span, format!("{}.{}: {}", iface.name, m.name, sig));
+                    let o = self.alive_wrap(o, name.span);
                     let hargs = self.check_args(&ps, args, Some(o), span, &format!("`{}`", m.name));
                     self.invalidate_globals();
                     return Expr::new(ExprKind::CallIface(m.slot, hargs), m.ret);
@@ -1245,7 +1381,7 @@ impl<'a> Checker<'a> {
 
     pub fn check_field_access(&mut self, rec: &RecordDef, i: usize, span: Span) {
         if rec.fields[i].private {
-            let inside = self.fx.last().and_then(|c| c.self_ty) == Some(rec.ty) || self.static_owner() == Some(rec.ty);
+            let inside = self.static_owner_rec() == Some(rec.ty);
             if !inside {
                 self.error(span, format!("field `{}` of {} is private", rec.fields[i].name, rec.name));
             }
@@ -1275,11 +1411,25 @@ impl<'a> Checker<'a> {
                 }
                 Ty::Record(ri) => {
                     let rec = self.types.records[ri as usize].clone();
+                    if rec.static_vals.contains_key(&name.name) {
+                        return match self.static_value(&rec, &name.name, name.span) {
+                            Some((g, t)) if t != T_ERROR => self.read_global(g, t),
+                            _ => Self::err_expr(),
+                        };
+                    }
                     if let Some(fid) = rec.statics.get(&name.name) {
                         let ft = self.func_type(*fid);
                         return Expr::new(ExprKind::FuncRef(*fid), ft);
                     }
-                    self.error(name.span, format!("{} has no static member `{}`", rec.name, name.name));
+                    let cands: Vec<&str> = rec.static_vals.keys().chain(rec.statics.keys()).map(|s| s.as_str()).collect();
+                    match suggest(&name.name, cands.into_iter()) {
+                        Some(s) => self.error_note(
+                            name.span,
+                            format!("{} has no static member `{}`", rec.name, name.name),
+                            format!("did you mean `{}`?", s),
+                        ),
+                        None => self.error(name.span, format!("{} has no static member `{}`", rec.name, name.name)),
+                    }
                     return Self::err_expr();
                 }
                 Ty::Error => return Self::err_expr(),
@@ -1301,7 +1451,12 @@ impl<'a> Checker<'a> {
                     self.def_link(name.span, rec.fields[i].span);
                     let ts = self.show(rec.fields[i].ty);
                     self.hover(name.span, format!("(field) {}.{}: {}", rec.name, n, ts));
+                    let o = if rec.is_class { self.alive_wrap(o, name.span) } else { o };
                     return Expr::new(ExprKind::GetField(Box::new(o), i as u32), rec.fields[i].ty);
+                }
+                if rec.static_vals.contains_key(n) {
+                    self.error(name.span, format!("`{}` is static; use `{}.{}`", n, rec.name, n));
+                    return Self::err_expr();
                 }
                 if rec.methods.contains_key(n) {
                     self.error(name.span, format!("`{}` is a method; call it with `{}()`", n, n));
@@ -1400,6 +1555,7 @@ impl<'a> Checker<'a> {
                 None => t,
                 Some(c) if c == t => c,
                 Some(c) if self.types.is_numeric(c) && self.types.is_numeric(t) => T_FLOAT,
+                Some(c) if self.common_ancestor(c, t).is_some() => self.common_ancestor(c, t).unwrap(),
                 Some(c) => {
                     let common = self.common_iface(c, t);
                     match common {
@@ -1422,6 +1578,18 @@ impl<'a> Checker<'a> {
             Some(t) if nullable => self.types.optional(t),
             Some(t) => t,
         }
+    }
+
+    fn common_ancestor(&self, a: TyId, b: TyId) -> Option<TyId> {
+        let (ra, rb) = match (self.types.get(a), self.types.get(b)) {
+            (Ty::Record(x), Ty::Record(y)) => (*x, *y),
+            _ => return None,
+        };
+        let mut xa = vec![ra];
+        xa.extend(self.types.ancestors(ra));
+        let mut xb = vec![rb];
+        xb.extend(self.types.ancestors(rb));
+        xa.into_iter().find(|r| xb.contains(r)).map(|r| self.types.records[r as usize].ty)
     }
 
     fn common_iface(&self, a: TyId, b: TyId) -> Option<TyId> {
@@ -1516,6 +1684,18 @@ impl<'a> Checker<'a> {
         };
         if let Some(t) = target {
             match self.types.get(t).clone() {
+                Ty::Record(ri) if self.types.records[ri as usize].is_class => {
+                    let n = self.types.records[ri as usize].name.clone();
+                    self.error_note(
+                        span,
+                        format!("`{}` is a struct, so its objects are created with `new`", n),
+                        format!("write `new {}(...)`", n),
+                    );
+                    for (_, e) in fields {
+                        self.expr(e, None);
+                    }
+                    return Self::err_expr();
+                }
                 Ty::Record(ri) => return self.build_record(ri, fields, span),
                 Ty::Map(k, v) if ty.is_none() => {
                     if k != T_STR && k != T_ANY {
@@ -1619,7 +1799,6 @@ impl<'a> Checker<'a> {
                             span,
                         })
                         .collect(),
-                    is_class: false,
                     anon: true,
                     implements: vec![],
                     methods: HashMap::new(),
@@ -1627,7 +1806,7 @@ impl<'a> Checker<'a> {
                     init: None,
                     module: m as u32,
                     span,
-                    ty: 0,
+                    ..Default::default()
                 });
                 let t = self.types.records[ri as usize].ty;
                 self.anon.insert(key, t);
@@ -1748,7 +1927,7 @@ impl<'a> Checker<'a> {
                 T_BOOL,
             );
         }
-        if from == t {
+        if from == t || (matches!(self.types.get(from), Ty::Record(_)) && self.types.implements(from, t)) {
             return if h.has_side_effects() {
                 Expr::new(ExprKind::Seq(vec![Stmt::Expr(h)], Box::new(Expr::new(ExprKind::Bool(true), T_BOOL))), T_BOOL)
             } else {
@@ -1758,7 +1937,7 @@ impl<'a> Checker<'a> {
         let ok = match self.types.get(from).clone() {
             Ty::Any => true,
             Ty::Optional(x) => x == t || self.types.implements(t, x),
-            Ty::Interface(_) => self.types.implements(t, from),
+            Ty::Interface(_) | Ty::Record(_) => self.types.implements(t, from),
             _ => false,
         };
         if !ok {
@@ -1830,7 +2009,7 @@ impl<'a> Checker<'a> {
         let down = match &fk {
             Ty::Any => true,
             Ty::Optional(x) => *x == t || self.types.implements(t, *x),
-            Ty::Interface(_) => self.types.implements(t, from),
+            Ty::Interface(_) | Ty::Record(_) => self.types.implements(t, from),
             _ => false,
         };
         if down {

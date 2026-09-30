@@ -1,0 +1,1 @@
+3:9 `Point` is a struct, so its objects are created with `new`

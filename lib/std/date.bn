@@ -43,17 +43,13 @@ priv fun civilFromDays(days: int): Date {
     if (m <= 2) {
         y += 1
     }
-    return Date { year: y, month: m, day: d }
+    return new Date(y, m, d)
 }
 
-pub def class Date {
-    int year
-    int month
-    int day
-
+pub def struct Date(year: int, month: int, day: int) {
     static fun now(): Date {
         var t = __localTime()
-        return Date { year: t[0], month: t[1], day: t[2] }
+        return new Date(t[0], t[1], t[2])
     }
 
     static fun today(): string {
@@ -61,11 +57,11 @@ pub def class Date {
     }
 
     static fun createDate(year: int, month: int, day: int): Date {
-        return Date { year: year, month: month, day: day }
+        return new Date(year, month, day)
     }
 
     static fun create(year: int, month: int, day: int): Date {
-        return Date { year: year, month: month, day: day }
+        return new Date(year, month, day)
     }
 
     static fun formatDate(date: Date): string {
@@ -77,7 +73,7 @@ pub def class Date {
         if (len(parts) != 3) {
             panic("invalid date \"${text}\", expected YYYY-MM-DD")
         }
-        return Date { year: toInt(parts[0]), month: toInt(parts[1]), day: toInt(parts[2]) }
+        return new Date(toInt(parts[0]), toInt(parts[1]), toInt(parts[2]))
     }
 
     static fun currentYear(): int {

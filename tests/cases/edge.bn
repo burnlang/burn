@@ -17,8 +17,8 @@ def type Pair {
     second: any
 }
 
-def class Stack {
-    [int] items
+def struct Stack {
+    [int] items = []
 
     fun push(v: int) {
         items.push(v)
@@ -71,7 +71,7 @@ print(same(3, 3.0), same(3, "3"), same("3", "3"), same(null, null), same([1, 2],
 var p = Pair { first: 1, second: "x" }
 print(p, p.first is int, p.second is int)
 
-var st = Stack { items: [] }
+var st = new Stack()
 st.push(1)
 st.push(2)
 print(st.pop(), st.pop(), st.pop(), st.size())

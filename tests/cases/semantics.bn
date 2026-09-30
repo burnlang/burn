@@ -16,23 +16,19 @@ def interface Op {
     fun apply(x: int): int
 }
 
-def class Add: Op {
-    int n
+def struct Add(n: int): Op {
     fun apply(x: int): int {
         return x + n
     }
 }
 
-def class Mul: Op {
-    int n
+def struct Mul(n: int): Op {
     fun apply(x: int): int {
         return x * n
     }
 }
 
-def class Worker {
-    string name
-
+def struct Worker(name: string) {
     async fun work(ms: int): string {
         sleep(ms)
         return name + " worked"
@@ -62,7 +58,7 @@ bag.counts["x"] += 5
 bag.counts["y"] = bag.counts["x"] * 2
 print(bag)
 
-var ops: {string: Op} = {"add": Add { n: 2 }, "mul": Mul { n: 10 }}
+var ops: {string: Op} = {"add": new Add(2), "mul": new Mul(10)}
 var v = 1
 for name, op in ops {
     v = op.apply(v)
@@ -77,7 +73,7 @@ for i in 0..3 {
 }
 print("total", total)
 
-var w = Worker { name: "bob" }
+var w = new Worker("bob")
 var fut = w.work(10)
 print(await fut)
 

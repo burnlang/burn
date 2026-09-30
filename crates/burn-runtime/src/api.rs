@@ -512,7 +512,7 @@ fn dyn_matches(actual: u32, to: u32) -> bool {
         return true;
     }
     match desc(to) {
-        Desc::Interface { .. } => meta::implements(actual, to),
+        Desc::Interface { .. } | Desc::Record { .. } => meta::implements(actual, to),
         Desc::Any => true,
         Desc::Optional(inner) => dyn_matches(actual, *inner),
         _ => false,
@@ -592,6 +592,30 @@ pub fn unwrap(v: u64, opt_tid: u64, loc: u64) -> u64 {
         Desc::Optional(inner) if meta::is_unboxed(*inner) => box_val(v),
         _ => v,
     }
+}
+
+pub fn destroy(v: u64, loc: u64) -> u64 {
+    if v == 0 {
+        rt_error("cannot destroy null", loc);
+    }
+    match kind_of(v) {
+        K_STRUCT => unsafe {
+            for i in 0..struct_len(v) {
+                set_word(v, HDR + 8 * i, 0);
+            }
+            hdr(v).kind = K_DEAD;
+            0
+        },
+        K_DEAD => rt_error("this object was already destroyed", loc),
+        _ => rt_error("only struct objects can be destroyed", loc),
+    }
+}
+
+pub fn alive(v: u64, loc: u64) -> u64 {
+    if v != 0 && kind_of(v) == K_DEAD {
+        rt_error("this object was destroyed and can no longer be used", loc);
+    }
+    v
 }
 
 pub fn eq(a: u64, c: u64, tid: u64) -> u64 {

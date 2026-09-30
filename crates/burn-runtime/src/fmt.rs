@@ -110,6 +110,12 @@ pub fn write(v: u64, tid: u32, out: &mut String, nested: bool, depth: usize) {
             }
         }
         Desc::Record { name, fields, .. } => {
+            if v != 0 && kind_of(v) == K_DEAD {
+                out.push_str("<destroyed ");
+                out.push_str(&crate::meta::type_name(tid_of(v)));
+                out.push('>');
+                return;
+            }
             let real = tid_of(v);
             if real != tid {
                 if let Desc::Record { .. } = desc(real) {
