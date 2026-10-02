@@ -116,6 +116,8 @@ pub fn error_help(msg: &str) -> Option<String> {
         }
     } else if msg == "integer overflow" {
         "the result does not fit in `int` (-9223372036854775808 to 9223372036854775807); use `float` for larger numbers".into()
+    } else if msg.starts_with("cannot shift by ") {
+        "the shift amount must be from 0 to 63".into()
     } else if msg == "division by zero" {
         "check that the divisor is not 0 before dividing".into()
     } else if msg == "unexpected null value" {

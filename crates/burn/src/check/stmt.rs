@@ -138,6 +138,30 @@ fn collect_expr(e: &ast::Expr, out: &mut HashSet<String>) {
                 }
             }
         }
+        A::Match { subject, arms } => {
+            if let Some(x) = subject {
+                collect_expr(x, out);
+            }
+            for arm in arms {
+                for p in &arm.patterns {
+                    match p {
+                        ast::Pattern::Value(x) => collect_expr(x, out),
+                        ast::Pattern::Range(a, b, _) => {
+                            collect_expr(a, out);
+                            collect_expr(b, out);
+                        }
+                        ast::Pattern::Is(..) => {}
+                    }
+                }
+                if let Some(g) = &arm.guard {
+                    collect_expr(g, out);
+                }
+                match &arm.body {
+                    ast::ArmBody::Expr(x) => collect_expr(x, out),
+                    ast::ArmBody::Block(b) => collect_assigned(&b.stmts, out),
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -145,13 +169,16 @@ fn collect_expr(e: &ast::Expr, out: &mut HashSet<String>) {
 impl<'a> Checker<'a> {
     pub fn apply(&mut self, facts: &[(u32, TyId)]) {
         for (s, t) in facts {
+            if *s < GLOBAL_KEY && self.ctx().cells.contains_key(s) {
+                continue;
+            }
             self.ctx().narrow.insert(*s, *t);
         }
     }
 
     fn forget_assigned(&mut self, names: &HashSet<String>) {
         for n in names {
-            if let Some(l) = self.lookup_local(n) {
+            if let Some(l) = self.peek_local(n) {
                 self.ctx().narrow.remove(&l.slot);
                 self.clear_facts(l.slot);
             } else {
@@ -164,7 +191,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    pub fn local_of(&self, e: &ast::Expr) -> Option<u32> {
+    pub fn local_of(&mut self, e: &ast::Expr) -> Option<u32> {
         if let A::Ident(n) = &e.kind {
             if let Some(l) = self.lookup_local(n) {
                 return Some(l.slot);
@@ -284,6 +311,10 @@ impl<'a> Checker<'a> {
     pub fn stmt(&mut self, s: &ast::Stmt) -> Vec<Stmt> {
         match &s.kind {
             S::Var { name, ty, init, is_const } => self.var_decl(name, ty.as_ref(), init.as_ref(), *is_const, s.span),
+            S::Expr(ast::Expr {
+                kind: A::Match { subject, arms },
+                span,
+            }) => self.match_stmt(subject.as_deref(), arms, *span),
             S::Expr(e) => {
                 let h = self.expr(e, None);
                 if let ExprKind::Binary(BinOp::ICmp(Cmp::Eq), ..) | ExprKind::Rt(RtFn::StrEq | RtFn::Eq, _) = h.kind {
@@ -524,6 +555,11 @@ impl<'a> Checker<'a> {
             end: u32::MAX,
         };
         let slot = self.declare_local(&name.name, t, name.span, is_const, scope);
+        if self.ctx().cell_names.contains(&name.name) {
+            let ct = self.make_cell_local(slot);
+            let cell = Expr::new(ExprKind::NewStruct(ct, vec![value]), ct);
+            return vec![Stmt::Expr(Expr::new(ExprKind::SetLocal(slot, Box::new(cell)), t))];
+        }
         if self.narrowable(t, vty) {
             self.ctx().narrow.insert(slot, vty);
         }

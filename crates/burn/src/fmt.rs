@@ -14,18 +14,60 @@ enum T {
     Semi,
     Colon,
     Dot,
+    GOpen,
+    GClose,
+}
+
+fn generic_close(chars: &[char], open: usize) -> Option<Vec<usize>> {
+    if open == 0 || !(chars[open - 1].is_alphanumeric() || chars[open - 1] == '_') {
+        return None;
+    }
+    let mut depth = 0;
+    let mut marks = Vec::new();
+    for (j, c) in chars.iter().enumerate().skip(open) {
+        match c {
+            '<' => {
+                depth += 1;
+                marks.push(j);
+            }
+            '>' => {
+                depth -= 1;
+                marks.push(j);
+                if depth == 0 {
+                    return Some(marks);
+                }
+            }
+            c if c.is_alphanumeric() || matches!(c, '_' | ' ' | ',' | '[' | ']' | '{' | '}' | ':' | '?' | '(' | ')') => {}
+            _ => return None,
+        }
+    }
+    None
 }
 
 const KEYWORDS_SPACE: &[&str] = &[
-    "if", "while", "for", "return", "else", "import", "fun", "var", "const", "def", "pub", "priv", "async", "await", "in", "is", "as", "static",
+    "if", "while", "for", "return", "else", "import", "fun", "var", "const", "def", "pub", "priv", "async", "await", "in", "is", "as", "static", "match",
 ];
 
 fn lex_line(line: &str) -> Vec<T> {
     let chars: Vec<char> = line.chars().collect();
     let mut i = 0;
     let mut out = Vec::new();
+    let mut generic: Vec<usize> = Vec::new();
     while i < chars.len() {
         let c = chars[i];
+        if generic.contains(&i) {
+            out.push(if c == '<' { T::GOpen } else { T::GClose });
+            i += 1;
+            continue;
+        }
+        if c == '<' {
+            if let Some(marks) = generic_close(&chars, i) {
+                generic = marks;
+                out.push(T::GOpen);
+                i += 1;
+                continue;
+            }
+        }
         if c == ' ' || c == '\t' {
             i += 1;
             continue;
@@ -85,12 +127,22 @@ fn lex_line(line: &str) -> Vec<T> {
         }
         let two: String = chars[i..(i + 2).min(chars.len())].iter().collect();
         let three: String = chars[i..(i + 3).min(chars.len())].iter().collect();
-        if three == "..=" {
+        let four: String = chars[i..(i + 4).min(chars.len())].iter().collect();
+        if four == ">>>=" {
+            out.push(T::Op(four));
+            i += 4;
+            continue;
+        }
+        if ["..=", ">>>", "<<=", ">>="].contains(&three.as_str()) {
             out.push(T::Op(three));
             i += 3;
             continue;
         }
-        if ["==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "..", "->", "!!", "::", "??"].contains(&two.as_str()) {
+        if [
+            "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>", "=>", "..", "->", "!!", "::", "??",
+        ]
+        .contains(&two.as_str())
+        {
             out.push(T::Op(two));
             i += 2;
             continue;
@@ -113,7 +165,7 @@ fn is_operand_end(t: &T) -> bool {
     match t {
         T::Word(w) => !KEYWORDS_SPACE.contains(&w.as_str()) || w == "self",
         T::Num(_) | T::Str(_) => true,
-        T::Close(..) => true,
+        T::Close(..) | T::GClose => true,
         T::Op(o) => o == "?" || o == "!!",
         _ => false,
     }
@@ -141,6 +193,8 @@ fn render_line(toks: &[T]) -> String {
     for (idx, t) in toks.iter().enumerate() {
         let space = match (prev, t) {
             (None, _) => false,
+            (_, T::GOpen) | (Some(T::GOpen), _) | (_, T::GClose) => false,
+            (Some(T::GClose), T::Open('(', _)) | (Some(T::GClose), T::Open('[', _)) => false,
             (_, T::Colon) if head && parens == 0 => true,
             (_, T::Comment(_)) => true,
             (Some(T::Op(o)), _) if o == "@" => false,
@@ -155,7 +209,7 @@ fn render_line(toks: &[T]) -> String {
             (_, T::Op(o)) if o == ".." || o == "..=" => false,
             (Some(T::Op(o)), _) if o == "!!" => !matches!(t, T::Dot | T::Open('(', _) | T::Open('[', _)),
             (_, T::Op(o)) if o == "!!" || o == "?" => false,
-            (Some(T::Op(o)), T::Open('(', _)) if o == "!" => false,
+            (Some(T::Op(o)), T::Open('(', _)) if o == "!" || o == "~" => false,
             (Some(T::Word(w)), T::Open('(', _)) => KEYWORDS_SPACE.contains(&w.as_str()) && w != "fun",
             (Some(T::Word(w)), T::Op(o)) if o == "<" && (w == "Future" || w == "Task" || w == "Map" || w == "Array") => {
                 generic_depth += 1;
@@ -166,11 +220,16 @@ fn render_line(toks: &[T]) -> String {
                 generic_depth -= 1;
                 false
             }
+            (_, T::Op(o)) if o == ">>" && generic_depth > 1 => {
+                generic_depth -= 2;
+                false
+            }
             (Some(_), T::Open('{', _)) => true,
             (Some(_), T::Open('(', _)) | (Some(_), T::Open('[', _)) => match prev {
                 Some(p) => !is_operand_end(p) || matches!(p, T::Word(w) if KEYWORDS_SPACE.contains(&w.as_str())),
                 None => false,
             },
+            (Some(T::Op(o)), _) if o == "~" => false,
             (Some(T::Op(o)), _) if (o == "-" || o == "!") => {
                 let before = if idx >= 2 { Some(&toks[idx - 2]) } else { None };
                 matches!(before, Some(b) if is_operand_end(b)) && o == "-"
@@ -188,6 +247,8 @@ fn render_line(toks: &[T]) -> String {
             T::Semi => out.push(';'),
             T::Colon => out.push(':'),
             T::Dot => out.push('.'),
+            T::GOpen => out.push('<'),
+            T::GClose => out.push('>'),
         }
         match t {
             T::Open('(', _) => parens += 1,
@@ -245,9 +306,53 @@ fn split_segments(toks: Vec<T>) -> Vec<Vec<T>> {
     merged
 }
 
+fn indent_for(seg: &[T], levels: &mut Vec<i32>) -> usize {
+    let before = levels.len();
+    let mut touched = 0;
+    let mut partial = false;
+    let mut i = 0;
+    while i < seg.len() && matches!(seg[i], T::Close(..)) {
+        if let Some(top) = levels.last_mut() {
+            *top -= 1;
+            partial = *top > 0;
+            if !partial {
+                levels.pop();
+                touched += 1;
+            }
+        }
+        i += 1;
+    }
+    let indent = if i > 0 && partial { before - touched - 1 } else { before - touched };
+    let mut new = 0;
+    for t in &seg[i..] {
+        match t {
+            T::Open(..) => new += 1,
+            T::Close(..) => {
+                if new > 0 {
+                    new -= 1;
+                } else if let Some(top) = levels.last_mut() {
+                    *top -= 1;
+                    if *top <= 0 {
+                        levels.pop();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if new > 0 {
+        match levels.last_mut() {
+            Some(top) if i > 0 && partial => *top += new,
+            _ => levels.push(new),
+        }
+    }
+    indent
+}
+
 pub fn format(src: &str) -> String {
     let mut out = String::new();
-    let mut depth: i32 = 0;
+    let mut levels: Vec<i32> = Vec::new();
+    let depth = |levels: &Vec<i32>| levels.len() as i32;
     let mut blank = 0;
     let mut in_block_comment = false;
     let mut started = false;
@@ -256,7 +361,7 @@ pub fn format(src: &str) -> String {
         let line = raw.trim();
         if in_block_comment {
             if line.starts_with('*') {
-                out.push_str(&"    ".repeat(depth.max(0) as usize));
+                out.push_str(&"    ".repeat(depth(&levels) as usize));
                 out.push(' ');
                 out.push_str(line);
             } else {
@@ -275,7 +380,7 @@ pub fn format(src: &str) -> String {
             blank = 0;
             last_was_close = false;
             started = true;
-            out.push_str(&"    ".repeat(depth.max(0) as usize));
+            out.push_str(&"    ".repeat(depth(&levels) as usize));
             out.push_str(line);
             out.push('\n');
             in_block_comment = !line.contains("*/");
@@ -290,25 +395,16 @@ pub fn format(src: &str) -> String {
         blank = 0;
         for (si, seg) in split_segments(toks).into_iter().enumerate() {
             let leading_close = seg.iter().take_while(|t| matches!(t, T::Close(..))).count() as i32;
-            let mut delta = 0;
-            for t in &seg {
-                match t {
-                    T::Open(..) => delta += 1,
-                    T::Close(..) => delta -= 1,
-                    _ => {}
-                }
-            }
             let is_decl = matches!(seg.first(), Some(T::Word(w)) if matches!(w.as_str(), "fun" | "static" | "def" | "async" | "pub" | "priv"))
                 || matches!(seg.first(), Some(T::Op(o)) if o == "@");
             if (si == 0 && first && !(leading_close > 0 && seg.len() == 1)) || (is_decl && last_was_close) {
                 out.push('\n');
             }
             last_was_close = seg.len() == 1 && matches!(seg[0], T::Close('}', _));
-            let indent = (depth - leading_close).max(0) as usize;
+            let indent = indent_for(&seg, &mut levels);
             out.push_str(&"    ".repeat(indent));
             out.push_str(&render_line(&seg));
             out.push('\n');
-            depth += delta;
         }
         started = true;
     }

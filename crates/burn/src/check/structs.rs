@@ -219,7 +219,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn link_struct(&mut self, ri: u32, state: &mut Vec<u8>) {
+    pub fn link_struct(&mut self, ri: u32, state: &mut Vec<u8>) {
         match state[ri as usize] {
             2 => return,
             1 => {
@@ -392,6 +392,7 @@ impl<'a> Checker<'a> {
                 annotations: Vec::new(),
                 deprecated: None,
                 external: None,
+                tenv: None,
             });
             self.types.records[ri as usize].ctor = Some(fid);
         }
@@ -553,7 +554,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn build_ctor(&mut self, ri: u32) {
+    pub fn build_ctor(&mut self, ri: u32) {
         let rec = self.types.records[ri as usize].clone();
         let fid = rec.ctor.unwrap();
         let t = rec.ty;
@@ -764,9 +765,17 @@ impl<'a> Checker<'a> {
         }
     }
 
-    pub fn new_expr(&mut self, ty: &ast::Ident, args: &[ast::Expr], span: Span) -> Expr {
+    pub fn new_expr(&mut self, ty: &ast::Ident, targs: &[TypeExpr], args: &[ast::Expr], span: Span, expected: Option<TyId>) -> Expr {
         let m = self.cur_module();
-        let t = match self.lookup_type_name(m, &ty.name, ty.span) {
+        let generic = self.generic_target(ty, targs, expected, super::generics::Inputs::Positional(args));
+        if generic.is_none() && !targs.is_empty() {
+            self.error(ty.span, format!("`{}` has no type parameters", ty.name));
+        }
+        let found = match generic {
+            Some(t) => Some(t),
+            None => self.lookup_type_name(m, &ty.name, ty.span),
+        };
+        let t = match found {
             Some(t) => t,
             None => {
                 self.error(ty.span, format!("unknown struct `{}`", ty.name));
@@ -986,7 +995,7 @@ impl<'a> Checker<'a> {
             );
             return Vec::new();
         }
-        let k = (func.name.span.file, func.name.span.start);
+        let k = (func.name.span.file, func.name.span.start, self.fx.last().map(|c| c.func).unwrap_or(0));
         let fid = match self.lambdas.get(&k) {
             Some(f) => *f,
             None => {

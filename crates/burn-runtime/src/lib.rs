@@ -162,6 +162,8 @@ runtime_fns! {
     Assert => burn_assert = crate::api::assert [a, b, c];
     ErrIndex => burn_err_index = crate::api::err_index [a, b, c];
     ErrDivZero => burn_err_divzero = crate::api::err_divzero [a];
+    ShiftCheck => burn_shift_check = crate::api::shift_check [a, b];
+    ErrShift => burn_err_shift = crate::api::err_shift [a, b];
     ErrOverflow => burn_err_overflow = crate::api::err_overflow [a];
     ErrNull => burn_err_null = crate::api::err_null [a];
     ErrReturn => burn_err_return = crate::api::err_return [a];

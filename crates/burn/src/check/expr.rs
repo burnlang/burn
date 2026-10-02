@@ -276,6 +276,9 @@ impl<'a> Checker<'a> {
 
     pub fn narrow_after_assign(&mut self, slot: u32, value: TyId) {
         self.clear_facts(slot);
+        if slot < GLOBAL_KEY && self.ctx().cells.contains_key(&slot) {
+            return;
+        }
         let declared = self.declared_of(slot);
         if self.narrowable(declared, value) {
             self.ctx().narrow.insert(slot, value);
@@ -357,6 +360,32 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
+            A::Unary(AUn::BitNot, x) => {
+                let h = self.expr(x, Some(T_INT));
+                match self.types.get(h.ty) {
+                    Ty::Int => {
+                        if let ExprKind::Int(v) = h.kind {
+                            return Expr::int(!v);
+                        }
+                        Expr::new(ExprKind::Unary(UnOp::BitNot, Box::new(h)), T_INT)
+                    }
+                    Ty::Error => h,
+                    Ty::Bool => {
+                        let inner = self.src_text(x.span);
+                        self.emit(Diagnostic::error(e.span, "`~` flips the bits of an int; use `!` to negate a bool").fix(
+                            "use `!`",
+                            e.span,
+                            format!("!{}", inner),
+                        ));
+                        Self::err_expr()
+                    }
+                    _ => {
+                        let s = self.show(h.ty);
+                        self.error(e.span, format!("cannot apply `~` to a value of type {}", s));
+                        Self::err_expr()
+                    }
+                }
+            }
             A::Unary(AUn::Not, _) | A::Binary(AOp::And | AOp::Or, _, _) => self.cond(e).0,
             A::Binary(op, l, r) => self.binary(*op, l, r, e.span, expected),
             A::Assign { target, op, value } => self.assign(target, *op, value, e.span),
@@ -385,9 +414,10 @@ impl<'a> Checker<'a> {
                 }
             }
             A::Lambda(f) => self.lambda(f),
-            A::New { ty, args } => self.new_expr(ty, args, e.span),
+            A::New { ty, targs, args } => self.new_expr(ty, targs, args, e.span, expected),
             A::SafeGet { obj, name, args } => self.safe_get(obj, name, args.as_deref(), e.span),
             A::Coalesce(a, b) => self.coalesce(a, b, e.span, expected),
+            A::Match { subject, arms } => self.match_value(subject.as_deref(), arms, e.span, expected),
             A::SafeAs(x, te) => self.safe_as(x, te, e.span),
             A::NotNull(x) => {
                 let h = self.expr_raw(x);
@@ -424,7 +454,7 @@ impl<'a> Checker<'a> {
     }
 
     pub fn self_field(&self, name: &str) -> Option<(TyId, usize, TyId)> {
-        let st = self.fx.last()?.self_ty?;
+        let st = self.enclosing_self()?;
         let rec = self.types.record_of(st)?;
         let i = rec.field_index(name)?;
         Some((st, i, rec.fields[i].ty))
@@ -447,7 +477,7 @@ impl<'a> Checker<'a> {
             let t = self.show(ft);
             let text = self.with_doc(format!("(field) {}: {}", name, t), sp);
             self.hover(span, text);
-            let s = Expr::new(ExprKind::Local(0), st);
+            let s = self.self_expr(st);
             return Expr::new(ExprKind::GetField(Box::new(s), i as u32), ft);
         }
         if let Some(owner) = self.static_owner_rec() {
@@ -486,10 +516,17 @@ impl<'a> Checker<'a> {
                 if self.funcs[f as usize].is_async {
                     self.error(span, "async functions cannot be used as values yet; call them directly");
                 }
-                Expr::new(ExprKind::FuncRef(f), t)
+                let _ = t;
+                self.func_value(f)
             }
             None => {
                 if self.visible(m, name, |s| &s.values).is_err() {
+                } else if self.lookup_generic_fn(name).is_some() {
+                    self.error_note(
+                        span,
+                        format!("`{}` has type parameters, so it cannot be used as a value", name),
+                        "call it, or wrap the call in a lambda with concrete types",
+                    );
                 } else if self.lookup_type_name(m, name, span).is_some() {
                     self.error(span, format!("`{}` is a type, not a value", name));
                 } else if name == "self" {
@@ -529,6 +566,9 @@ impl<'a> Checker<'a> {
         let (lt, rt) = (l.ty, r.ty);
         if lt == T_ERROR || rt == T_ERROR {
             return Self::err_expr();
+        }
+        if matches!(op, AOp::BitAnd | AOp::BitOr | AOp::BitXor | AOp::Shl | AOp::Shr | AOp::UShr) {
+            return self.bitwise(op, l, r, span);
         }
         if op == AOp::Add && (lt == T_STR || rt == T_STR) {
             if lt == T_VOID || rt == T_VOID {
@@ -606,6 +646,55 @@ impl<'a> Checker<'a> {
         Expr::new(ExprKind::Binary(bop, Box::new(l), Box::new(r)), T_FLOAT)
     }
 
+    fn bitwise(&mut self, op: AOp, l: Expr, r: Expr, span: Span) -> Expr {
+        let (lt, rt) = (l.ty, r.ty);
+        if lt == T_INT && rt == T_INT {
+            let shift = matches!(op, AOp::Shl | AOp::Shr | AOp::UShr);
+            if let ExprKind::Int(b) = r.kind {
+                if shift && !(0..64).contains(&b) {
+                    self.emit(Diagnostic::error(span, format!("cannot shift by {}", b)).help("the shift amount must be from 0 to 63"));
+                    return Self::err_expr();
+                }
+                if let ExprKind::Int(a) = l.kind {
+                    return Expr::int(match op {
+                        AOp::BitAnd => a & b,
+                        AOp::BitOr => a | b,
+                        AOp::BitXor => a ^ b,
+                        AOp::Shl => a << b,
+                        AOp::Shr => a >> b,
+                        _ => ((a as u64) >> b) as i64,
+                    });
+                }
+            }
+            let loc = if matches!(r.kind, ExprKind::Int(_)) { u32::MAX } else { self.loc(span) };
+            let bop = match op {
+                AOp::BitAnd => BinOp::BitAnd,
+                AOp::BitOr => BinOp::BitOr,
+                AOp::BitXor => BinOp::BitXor,
+                AOp::Shl => BinOp::Shl(loc),
+                AOp::Shr => BinOp::Shr(loc),
+                _ => BinOp::UShr(loc),
+            };
+            return Expr::new(ExprKind::Binary(bop, Box::new(l), Box::new(r)), T_INT);
+        }
+        let (a, b) = (self.show(lt), self.show(rt));
+        let msg = format!("cannot apply `{}` to {} and {}", op.symbol(), a, b);
+        if lt == T_BOOL && rt == T_BOOL {
+            let hint = match op {
+                AOp::BitAnd => "`&` works on the bits of ints; use `&&` to combine bools",
+                AOp::BitOr => "`|` works on the bits of ints; use `||` to combine bools",
+                AOp::BitXor => "`^` works on the bits of ints; use `!=` to check that exactly one bool is true",
+                _ => "shifts work on ints",
+            };
+            self.error_note(span, msg, hint);
+        } else if lt == T_FLOAT || rt == T_FLOAT {
+            self.error_note(span, msg, "bit operations only work on ints; convert with `as int` first");
+        } else {
+            self.error(span, msg);
+        }
+        Self::err_expr()
+    }
+
     fn binary(&mut self, op: AOp, l: &ast::Expr, r: &ast::Expr, span: Span, expected: Option<TyId>) -> Expr {
         match op {
             AOp::Eq | AOp::Ne => {
@@ -628,6 +717,19 @@ impl<'a> Checker<'a> {
                 let a = self.expr(l, lexp);
                 let rexp = if self.types.is_numeric(a.ty) { Some(a.ty) } else { None };
                 let b = self.expr(r, rexp);
+                if matches!(op, AOp::BitAnd | AOp::BitOr) && (a.ty == T_BOOL || b.ty == T_BOOL) {
+                    let between = Span::new(span.file, l.span.end as usize, r.span.start as usize);
+                    let text = self.src_text(between);
+                    let sym = op.symbol();
+                    let logical = if op == AOp::BitAnd { "&&" } else { "||" };
+                    let mut d = Diagnostic::error(span, format!("`{}` works on the bits of ints; use `{}` to combine bools", sym, logical));
+                    if let Some(i) = text.find(sym) {
+                        let at = Span::new(span.file, between.start as usize + i, between.start as usize + i + 1);
+                        d = d.fix(format!("use `{}`", logical), at, logical);
+                    }
+                    self.emit(d);
+                    return Self::err_expr();
+                }
                 self.arith(op, a, b, span)
             }
         }
@@ -659,7 +761,7 @@ impl<'a> Checker<'a> {
             let b = self.coerce(b, T_FLOAT, span);
             return Expr::new(ExprKind::Binary(BinOp::FCmp(cmp), Box::new(a), Box::new(b)), T_BOOL);
         }
-        if at == bt && matches!(ak, Ty::Bool | Ty::Enum(_) | Ty::Func(..)) {
+        if at == bt && matches!(ak, Ty::Bool | Ty::Enum(_)) {
             return Expr::new(ExprKind::Binary(BinOp::ICmp(cmp), Box::new(a), Box::new(b)), T_BOOL);
         }
         if at == T_STR && bt == T_STR {
@@ -690,7 +792,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn comparison(&mut self, op: AOp, a: Expr, b: Expr, span: Span) -> Expr {
+    pub fn comparison(&mut self, op: AOp, a: Expr, b: Expr, span: Span) -> Expr {
         let cmp = match op {
             AOp::Lt => Cmp::Lt,
             AOp::Gt => Cmp::Gt,
@@ -739,7 +841,8 @@ impl<'a> Checker<'a> {
                 if let Some((st, i, ft)) = self.self_field(name) {
                     let rec = self.types.record_of(st).unwrap().clone();
                     self.check_field_access(&rec, i, target.span);
-                    return Place::Field(Expr::new(ExprKind::Local(0), st), i as u32, ft);
+                    let s = self.self_expr(st);
+                    return Place::Field(s, i as u32, ft);
                 }
                 if let Some(owner) = self.static_owner_rec() {
                     if let Some(rec) = self.types.record_of(owner).cloned() {
@@ -1068,7 +1171,7 @@ impl<'a> Checker<'a> {
             Ty::Func(ps, r) => {
                 let hargs = self.check_args(&ps, args, None, span, "this function");
                 self.invalidate_globals();
-                Expr::new(ExprKind::CallIndirect(Box::new(callee), hargs), r)
+                self.call_value(callee, hargs, r)
             }
             Ty::Error => {
                 for a in args {
@@ -1090,7 +1193,7 @@ impl<'a> Checker<'a> {
 
     fn type_ident(&mut self, e: &ast::Expr) -> Option<TyId> {
         if let A::Ident(n) = &e.kind {
-            if self.lookup_local(n).is_some() || self.self_field(n).is_some() {
+            if self.peek_local(n).is_some() || self.self_field(n).is_some() {
                 return None;
             }
             let m = self.cur_module();
@@ -1110,7 +1213,7 @@ impl<'a> Checker<'a> {
                     let c = self.read_local(l.slot);
                     return self.indirect_call(c, args, span);
                 }
-                if let Some(st) = self.fx.last().and_then(|c| c.self_ty) {
+                if let Some(st) = self.enclosing_self() {
                     if let Some(rec) = self.types.record_of(st) {
                         let ri = match self.types.get(st) {
                             Ty::Record(r) => *r,
@@ -1124,7 +1227,7 @@ impl<'a> Checker<'a> {
                         if let Some(slot) = vslot {
                             let argc = self.slots[slot as usize].argc as usize;
                             if !has_outer || argc == args.len() + 1 {
-                                let s = Expr::new(ExprKind::Local(0), st);
+                                let s = self.self_expr(st);
                                 let id = ast::Ident {
                                     name: name.clone(),
                                     span: callee.span,
@@ -1134,7 +1237,7 @@ impl<'a> Checker<'a> {
                         }
                         if let Some(fid) = method {
                             if !has_outer || self.funcs[fid as usize].params.len() == args.len() + 1 {
-                                let s = Expr::new(ExprKind::Local(0), st);
+                                let s = self.self_expr(st);
                                 return self.direct_call(fid, Some(s), args, span, callee.span);
                             }
                         }
@@ -1157,6 +1260,23 @@ impl<'a> Checker<'a> {
                     }
                 }
                 let m = self.cur_module();
+                if let Some(gid) = self.lookup_generic_fn(name) {
+                    return self.generic_call(gid, None, args, span, callee.span, expected);
+                }
+                if let Some(t) = self.generic_target(
+                    &ast::Ident {
+                        name: name.clone(),
+                        span: callee.span,
+                    },
+                    &[],
+                    expected,
+                    generics::Inputs::Positional(args),
+                ) {
+                    if t == T_ERROR {
+                        return Self::err_expr();
+                    }
+                    return self.construct(t, args, span, callee.span);
+                }
                 match self.lookup_value_entry(m, name).map(|e| e.sym) {
                     Some(ValSym::Func(f)) => return self.direct_call(f, None, args, span, callee.span),
                     Some(ValSym::Global(_)) => {
@@ -1419,6 +1539,11 @@ impl<'a> Checker<'a> {
             return e;
         }
         let m = self.cur_module();
+        if let Some(gid) = self.lookup_generic_fn(&name.name) {
+            if !self.generic_fns[gid as usize].decl.params.is_empty() {
+                return self.generic_call(gid, Some(o), args, span, name.span, expected);
+            }
+        }
         if let Some(Entry { sym: ValSym::Func(f), .. }) = self.lookup_value_entry(m, &name.name) {
             let first = self.funcs[f as usize].params.first().map(|p| p.1);
             if let Some(pt) = first {
@@ -1478,8 +1603,7 @@ impl<'a> Checker<'a> {
                         };
                     }
                     if let Some(fid) = rec.statics.get(&name.name) {
-                        let ft = self.func_type(*fid);
-                        return Expr::new(ExprKind::FuncRef(*fid), ft);
+                        return self.func_value(*fid);
                     }
                     let cands: Vec<&str> = rec.static_vals.keys().chain(rec.statics.keys()).map(|s| s.as_str()).collect();
                     match suggest(&name.name, cands.into_iter()) {
@@ -1790,7 +1914,9 @@ impl<'a> Checker<'a> {
                 self.error(n.span, format!("field `{}` is given twice", n.name));
             }
         }
-        let target = if let Some(tn) = ty {
+        let target = if let Some(t) = ty.and_then(|tn| self.generic_target(tn, &[], expected, generics::Inputs::Named(fields))) {
+            Some(t)
+        } else if let Some(tn) = ty {
             let m = self.cur_module();
             match self.lookup_type_name(m, &tn.name, tn.span) {
                 Some(t) => Some(t),
@@ -1829,7 +1955,7 @@ impl<'a> Checker<'a> {
                 }
                 Ty::Record(ri) => return self.build_record(ri, fields, span),
                 Ty::Map(k, v) if ty.is_none() => {
-                    if k != T_STR && k != T_ANY {
+                    if k != T_STR && k != T_ANY && !fields.is_empty() {
                         let s = self.show(t);
                         self.error(span, format!("cannot use field syntax for a map of type {}", s));
                     }
@@ -2173,10 +2299,10 @@ impl<'a> Checker<'a> {
     }
 
     fn lambda(&mut self, f: &ast::FunDecl) -> Expr {
-        let key = (f.span.file, f.span.start);
+        let key = (f.span.file, f.span.start, self.fx.last().map(|c| c.func).unwrap_or(0));
         if let Some(fid) = self.lambdas.get(&key).copied() {
             let t = self.func_type(fid);
-            return Expr::new(ExprKind::FuncRef(fid), t);
+            return self.closure_value(fid, t);
         }
         if f.is_async {
             self.error(f.span, "async lambdas are not supported yet");
@@ -2184,7 +2310,11 @@ impl<'a> Checker<'a> {
         let m = self.cur_module();
         if self.is_dry() {
             let ps: Vec<TyId> = f.params.iter().map(|p| self.resolve_type_in(&p.ty, m)).collect();
-            let r = f.ret.as_ref().map(|r| self.resolve_type_in(r, m)).unwrap_or(T_ANY);
+            let r = f
+                .ret
+                .as_ref()
+                .map(|r| self.resolve_type_in(r, m))
+                .unwrap_or(if self.inferring > 0 { T_ERROR } else { T_ANY });
             let t = self.types.func(ps, r);
             return Expr::new(ExprKind::Int(0), t);
         }
@@ -2192,8 +2322,15 @@ impl<'a> Checker<'a> {
         let (line, _) = self.sm.file(f.span.file).line_col(f.span.start as usize);
         self.funcs[fid as usize].name = format!("<lambda:{}>", line);
         self.lambdas.insert(key, fid);
+        self.closures.insert(
+            fid,
+            closures::ClosureInfo {
+                ty: T_INT,
+                captures: Vec::new(),
+            },
+        );
         self.check_func(fid);
         let t = self.func_type(fid);
-        Expr::new(ExprKind::FuncRef(fid), t)
+        self.closure_value(fid, t)
     }
 }

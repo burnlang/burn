@@ -120,6 +120,7 @@ impl<'a> Checker<'a> {
                 annotations: Vec::new(),
                 deprecated: None,
                 external,
+                tenv: None,
             });
             if let Some(prev) = self.mods[mi].values.get(&name) {
                 let ps = prev.span;

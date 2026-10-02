@@ -1,0 +1,109 @@
+priv var passed = 0
+priv var failed = 0
+priv var running = ""
+priv var currentFailed = false
+
+priv fun fail(message: string) {
+    currentFailed = true
+    if running == "" {
+        failed += 1
+        print("FAIL " + message)
+    } else {
+        print("     " + message)
+    }
+}
+
+/**
+ * Runs one named test and prints whether it passed.
+ *
+ * A test fails when one of the `expect` functions fails inside it. The
+ * other tests still run; call `finish` at the end to get the exit code.
+ *
+ * @param name what the test checks
+ * @param body the test
+ * @see finish
+ * @since 26.1
+ * @example
+ *     test("adds", fun() {
+ *         expectEqual(1 + 2, 3)
+ *     })
+ */
+pub fun test(name: string, body: fun()) {
+    running = name
+    currentFailed = false
+    body()
+    if currentFailed {
+        failed += 1
+        print("FAIL " + name)
+    } else {
+        passed += 1
+        print("ok   " + name)
+    }
+    running = ""
+}
+
+/**
+ * Checks that a condition is true.
+ *
+ * @param condition the condition
+ * @param message what went wrong if it is false
+ * @since 26.1
+ */
+pub fun expect(condition: bool, message: string) {
+    if !condition {
+        fail(message)
+    }
+}
+
+/**
+ * Checks that two values are equal, comparing them like `==`.
+ *
+ * @param actual the value the code produced
+ * @param expected the value it should be
+ * @since 26.1
+ */
+pub fun expectEqual<T>(actual: T, expected: T) {
+    if actual != expected {
+        fail("expected ${expected} but got ${actual}")
+    }
+}
+
+/**
+ * Checks that two values are different.
+ *
+ * @param actual the value the code produced
+ * @param unwanted the value it must not be
+ * @since 26.1
+ */
+pub fun expectNotEqual<T>(actual: T, unwanted: T) {
+    if actual == unwanted {
+        fail("did not expect ${unwanted}")
+    }
+}
+
+/**
+ * Checks that two numbers are close to each other.
+ *
+ * @param actual the number the code produced
+ * @param expected the number it should be
+ * @param tolerance how far apart they may be
+ * @since 26.1
+ */
+pub fun expectNear(actual: float, expected: float, tolerance: float) {
+    if abs(actual - expected) > tolerance {
+        fail("expected ${expected} (within ${tolerance}) but got ${actual}")
+    }
+}
+
+/**
+ * Prints how many tests passed and ends the program with exit code 1 if
+ * any failed.
+ *
+ * @since 26.1
+ */
+pub fun finish() {
+    print("${passed} passed, ${failed} failed")
+    if failed > 0 {
+        exit(1)
+    }
+}

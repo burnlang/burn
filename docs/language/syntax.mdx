@@ -56,6 +56,29 @@ the expression, and when both sides are constants the compiler reports it before
 
 For nullable values there are `?.`, `??` and `as?`, see [null safety](./smart-casts.mdx#safe-calls-with-).
 
+### Bit operations
+
+```burn
+var flags = 0b0101
+print(flags & 0b0100, flags | 0b1000, flags ^ 0xFF, ~flags)
+print(1 << 10, -16 >> 2, -16 >>> 60)
+flags |= 1 << 3
+flags &= ~1
+```
+
+| Operator | Meaning |
+| --- | --- |
+| `a & b`, `a \| b`, `a ^ b` | bitwise and, or, exclusive or |
+| `~a` | flips every bit |
+| `a << n` | shifts left, filling with zeros |
+| `a >> n` | shifts right, keeping the sign |
+| `a >>> n` | shifts right, filling with zeros |
+
+They work on `int` and have compound forms (`&=`, `|=`, `^=`, `<<=`, `>>=`, `>>>=`). Bits shifted out are dropped,
+which is not an overflow. The shift amount must be from 0 to 63: other amounts are a compile error for constants and
+a runtime error otherwise. Bit operators bind tighter than comparisons, so `x & 1 == 0` means `(x & 1) == 0`; from
+tightest to loosest: `* / %`, `+ -`, `<< >> >>>`, `&`, `^`, `|`, comparisons, `&&`, `||`.
+
 ## Strings
 
 ```burn
@@ -99,6 +122,35 @@ var triple = fun(x: int): int {
 
 print(apply(triple, 5))
 ```
+
+A lambda can use the variables around it. It keeps them alive after the function that created it returns, and
+changes go both ways, so a lambda can count:
+
+```burn
+fun makeCounter(): fun(): int {
+    var count = 0
+    return fun(): int {
+        count += 1
+        return count
+    }
+}
+
+var next = makeCounter()
+print(next(), next(), next())
+```
+
+Each loop iteration has its own loop variable, so lambdas created in a loop each see their own value:
+
+```burn
+[fun(): int] fns = []
+for i in 0..3 {
+    fns.push(fun(): int {
+        return i * 10
+    })
+}
+```
+
+Inside a struct method, a lambda can use the struct's fields and methods like the method itself.
 
 Any function can be called with method syntax when its first parameter matches:
 
@@ -149,3 +201,76 @@ for name, age in {"ada": 36, "alan": 41} {
 ```
 
 `break` and `continue` work in every loop.
+
+## match
+
+`match` compares a value against patterns, top to bottom, and runs the first arm that fits:
+
+```burn
+def enum Day { Mon, Tue, Wed, Thu, Fri, Sat, Sun }
+
+fun kind(d: Day): string {
+    return match d {
+        Sat, Sun => "weekend"
+        else => "weekday"
+    }
+}
+
+fun size(n: int): string {
+    return match n {
+        0 => "zero"
+        1..=9 => "small"
+        10..100 => "medium"
+        else => "large"
+    }
+}
+```
+
+| Pattern | Matches |
+| --- | --- |
+| `3`, `"stop"`, `true`, `Color.Red` | an equal value |
+| `Red` | an enum variant, when matching an enum |
+| `1..10`, `1..=9` | a number (or string) in the range |
+| `null` | null |
+| `is string`, `is Circle c` | a value of that type; `c` is the value as a `Circle` |
+| `a, b, c` | any of the patterns |
+| `else` | everything else |
+
+An arm can add a condition with `if`, and inside an arm the matched variable is narrowed like after `is`:
+
+```burn
+fun describe(v: any): string {
+    return match v {
+        null => "nothing"
+        is int n if n > 100 => "a big int"
+        is int => "the int ${v + 1}"
+        is string s => "a string of ${len(s)}"
+        else => "something else"
+    }
+}
+```
+
+Without a value after `match`, each arm is a condition, like a chain of `if`/`else if`:
+
+```burn
+var grade = match {
+    score >= 90 => "A"
+    score >= 80 => "B"
+    else => "C"
+}
+```
+
+When a `match` produces a value it must handle every case: either with `else`, or by listing every variant of an
+enum (or `true` and `false`). Used as a statement it can leave cases out, and its arms can be blocks:
+
+```burn
+match command {
+    "go", "start" => start()
+    "stop" => {
+        save()
+        stop()
+    }
+}
+```
+
+The compiler warns when a statement `match` on an enum misses variants and when a case is handled twice.

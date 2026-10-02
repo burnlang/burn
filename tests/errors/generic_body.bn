@@ -1,0 +1,10 @@
+fun largest<T>(items: [T]): T {
+    var best = items[0]
+    for x in items {
+        if x > best {
+            best = x
+        }
+    }
+    return best
+}
+var b = largest([true, false])

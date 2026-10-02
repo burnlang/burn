@@ -1,0 +1,100 @@
+fun makeCounter(): fun(): int {
+    var count = 0
+    return fun(): int {
+        count += 1
+        return count
+    }
+}
+
+var c1 = makeCounter()
+var c2 = makeCounter()
+print(c1(), c1(), c1(), c2())
+
+fun adder(n: int): fun(int): int {
+    return fun(x: int): int {
+        return x + n
+    }
+}
+var add5 = adder(5)
+print(add5(10), adder(1)(1))
+
+fun apply(f: fun(int): int, v: int): int {
+    return f(v)
+}
+
+fun double(x: int): int {
+    return x * 2
+}
+
+print(apply(double, 21), apply(add5, 1))
+
+[fun(): int] fns = []
+for i in 0..3 {
+    fns.push(fun(): int {
+        return i * 10
+    })
+}
+for f in fns {
+    print(f())
+}
+
+fun run() {
+    var total = 0
+    var items = [1, 2, 3, 4]
+    var add = fun(x: int) {
+        total += x
+    }
+    for x in items {
+        add(x)
+    }
+    print("total", total)
+    var label = "sum"
+    var show = fun(): string {
+        return "${label}=${total}"
+    }
+    total = 100
+    print(show())
+    var outer = 1
+    var nest = fun(): fun(): int {
+        return fun(): int {
+            outer += 1
+            return outer
+        }
+    }
+    var inner = nest()
+    print(inner(), inner(), outer)
+}
+run()
+
+def struct Button(label: string) {
+    int clicks = 0
+
+    fun handler(): fun() {
+        return fun() {
+            clicks += 1
+            print(label, "clicked", clicks)
+        }
+    }
+}
+
+var b = new Button("ok")
+var h = b.handler()
+h()
+h()
+print(b.clicks)
+
+var f1 = double
+var f2 = double
+print(f1 == f2, f1(4))
+
+fun compose(f: fun(int): int, g: fun(int): int): fun(int): int {
+    return fun(x: int): int {
+        return g(f(x))
+    }
+}
+print(compose(double, add5)(3))
+
+any boxed = add5
+if boxed is fun(int): int {
+    print(boxed(2))
+}

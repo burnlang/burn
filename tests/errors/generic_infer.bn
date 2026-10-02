@@ -1,0 +1,4 @@
+fun first<T>(items: [T]): T? {
+    return items[0]
+}
+var a = first([])

@@ -13,6 +13,7 @@ pub struct Parser {
     speculative: usize,
     no_struct: bool,
     has_destroy: bool,
+    splits: Vec<usize>,
 }
 
 pub fn parse_module(toks: Vec<Token>, file: FileId) -> (Module, Vec<Diagnostic>) {
@@ -55,6 +56,54 @@ impl Parser {
             speculative: 0,
             no_struct: false,
             has_destroy: false,
+            splits: Vec::new(),
+        }
+    }
+
+    fn expect_gt(&mut self) -> PResult<Span> {
+        let rest = match self.peek().kind {
+            Tok::Shr => Tok::Gt,
+            Tok::UShr => Tok::Shr,
+            Tok::Ge => Tok::Assign,
+            Tok::ShrEq => Tok::Ge,
+            Tok::UShrEq => Tok::ShrEq,
+            _ => return self.expect(Tok::Gt, "`>`"),
+        };
+        let t = self.peek().clone();
+        let pos = self.pos.min(self.toks.len() - 1);
+        let first = Span::new(t.span.file, t.span.start as usize, t.span.start as usize + 1);
+        let second = Span::new(t.span.file, t.span.start as usize + 1, t.span.end as usize);
+        self.toks[pos] = Token {
+            kind: Tok::Gt,
+            span: first,
+            nl_before: t.nl_before,
+        };
+        self.toks.insert(
+            pos + 1,
+            Token {
+                kind: rest,
+                span: second,
+                nl_before: false,
+            },
+        );
+        self.splits.push(pos);
+        Ok(self.advance().span)
+    }
+
+    fn unsplit(&mut self, mark: usize) {
+        while self.splits.len() > mark {
+            let pos = self.splits.pop().unwrap();
+            let rest = self.toks.remove(pos + 1);
+            let kind = match rest.kind {
+                Tok::Gt => Tok::Shr,
+                Tok::Shr => Tok::UShr,
+                Tok::Assign => Tok::Ge,
+                Tok::Ge => Tok::ShrEq,
+                _ => Tok::UShrEq,
+            };
+            let t = &mut self.toks[pos];
+            t.kind = kind;
+            t.span = Span::new(t.span.file, t.span.start as usize, rest.span.end as usize);
         }
     }
 
@@ -380,6 +429,7 @@ impl Parser {
                                     annotations: Vec::new(),
                                     bodyless: false,
                                     is_abstract: false,
+                                    tparams: Vec::new(),
                                 },
                             ));
                         }
@@ -423,6 +473,7 @@ impl Parser {
                                     annotations: Vec::new(),
                                     bodyless: false,
                                     is_abstract: false,
+                                    tparams: Vec::new(),
                                 },
                             ));
                         }
@@ -501,6 +552,7 @@ impl Parser {
         let is_async = self.eat(&Tok::Async);
         self.expect(Tok::Fun, "`fun`")?;
         let name = self.ident("function name")?;
+        let tparams = self.type_params()?;
         let (params, ret) = self.signature()?;
         let bodyless = !self.at(&Tok::LBrace) && (self.peek().nl_before || matches!(self.peek().kind, Tok::Eof | Tok::Semi | Tok::RBrace));
         let body = if bodyless {
@@ -522,7 +574,24 @@ impl Parser {
             annotations: Vec::new(),
             bodyless,
             is_abstract: false,
+            tparams,
         })
+    }
+
+    fn type_params(&mut self) -> PResult<Vec<Ident>> {
+        let mut out = Vec::new();
+        if !self.at(&Tok::Lt) || self.peek().nl_before {
+            return Ok(out);
+        }
+        self.advance();
+        loop {
+            out.push(self.ident("type parameter name")?);
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        self.expect_gt()?;
+        Ok(out)
     }
 
     fn signature(&mut self) -> PResult<(Vec<Param>, Option<TypeExpr>)> {
@@ -584,6 +653,11 @@ impl Parser {
         };
         let kw_span = self.advance().span;
         let name = self.ident("a name")?;
+        let tparams = if matches!(kw.as_str(), "struct" | "class" | "type" | "record") {
+            self.type_params()?
+        } else {
+            Vec::new()
+        };
         match kw.as_str() {
             "struct" | "class" => {
                 if kw == "class" {
@@ -596,10 +670,14 @@ impl Parser {
                         ));
                     }
                 }
-                self.struct_def(name, kind)
+                self.struct_def(name, kind, tparams)
             }
             "type" | "record" | "annotation" => {
-                if kw != "annotation" && self.eat(&Tok::Assign) {
+                if kw != "annotation" && self.at(&Tok::Assign) {
+                    if let Some(t) = tparams.first() {
+                        self.err(t.span, "type aliases cannot have type parameters");
+                    }
+                    self.advance();
                     let ty = self.ty()?;
                     self.end_stmt();
                     return Ok(Def::Alias { name, ty });
@@ -630,7 +708,7 @@ impl Parser {
                 if kw == "annotation" {
                     return Ok(Def::Annotation { name, fields });
                 }
-                Ok(Def::Type { name, fields })
+                Ok(Def::Type { name, fields, tparams })
             }
             "interface" | "trait" => {
                 self.expect(Tok::LBrace, "`{`")?;
@@ -689,7 +767,7 @@ impl Parser {
         }
     }
 
-    fn struct_def(&mut self, name: Ident, kind: StructKind) -> PResult<Def> {
+    fn struct_def(&mut self, name: Ident, kind: StructKind, tparams: Vec<Ident>) -> PResult<Def> {
         let mut params = Vec::new();
         let mut param_anns = Vec::new();
         if self.at(&Tok::LParen) && !self.peek().nl_before {
@@ -833,6 +911,7 @@ impl Parser {
             fields,
             methods,
             statics,
+            tparams,
         })
     }
 
@@ -925,7 +1004,7 @@ impl Parser {
                             break;
                         }
                     }
-                    self.expect(Tok::Gt, "`>`")?;
+                    self.expect_gt()?;
                 }
                 TypeExpr {
                     kind: TypeExprKind::Named(name, args),
@@ -1035,6 +1114,9 @@ impl Parser {
     }
 
     fn looks_like_typed_decl(&mut self) -> bool {
+        if self.at_ident("match") && !self.peek_at(1).nl_before && self.looks_like_match() {
+            return false;
+        }
         match self.peek().kind {
             Tok::Ident(_) | Tok::LBracket | Tok::Fun | Tok::LBrace => {}
             _ => return false,
@@ -1054,6 +1136,7 @@ impl Parser {
             return false;
         }
         let save = self.pos;
+        let mark = self.splits.len();
         self.speculative += 1;
         let ok = self.ty().is_ok() && matches!(self.peek().kind, Tok::Ident(_)) && !self.peek().nl_before && {
             let n = self.peek_at(1);
@@ -1061,6 +1144,7 @@ impl Parser {
         };
         self.speculative -= 1;
         self.pos = save;
+        self.unsplit(mark);
         ok
     }
 
@@ -1142,6 +1226,7 @@ impl Parser {
                         annotations: Vec::new(),
                         bodyless: false,
                         is_abstract: false,
+                        tparams: Vec::new(),
                     }),
                 }
             }
@@ -1356,6 +1441,12 @@ impl Parser {
             Tok::StarEq => Some(BinOp::Mul),
             Tok::SlashEq => Some(BinOp::Div),
             Tok::PercentEq => Some(BinOp::Mod),
+            Tok::AmpEq => Some(BinOp::BitAnd),
+            Tok::PipeEq => Some(BinOp::BitOr),
+            Tok::CaretEq => Some(BinOp::BitXor),
+            Tok::ShlEq => Some(BinOp::Shl),
+            Tok::ShrEq => Some(BinOp::Shr),
+            Tok::UShrEq => Some(BinOp::UShr),
             _ => return Ok(lhs),
         };
         let op_span = self.advance().span;
@@ -1431,14 +1522,14 @@ impl Parser {
     }
 
     fn comparison(&mut self) -> PResult<Expr> {
-        let mut e = self.term()?;
+        let mut e = self.bit_or()?;
         loop {
             let op = match self.peek().kind {
                 Tok::Lt => BinOp::Lt,
                 Tok::Gt => BinOp::Gt,
                 Tok::Le => BinOp::Le,
                 Tok::Ge => BinOp::Ge,
-                Tok::Is => {
+                Tok::Is if !self.peek().nl_before => {
                     self.advance();
                     let t = self.ty()?;
                     let span = e.span.to(t.span);
@@ -1463,6 +1554,51 @@ impl Parser {
                     };
                     continue;
                 }
+                _ => return Ok(e),
+            };
+            self.advance();
+            let r = self.bit_or()?;
+            e = self.bin(e, op, r);
+        }
+    }
+
+    fn bit_or(&mut self) -> PResult<Expr> {
+        let mut e = self.bit_xor()?;
+        while self.at(&Tok::Pipe) {
+            self.advance();
+            let r = self.bit_xor()?;
+            e = self.bin(e, BinOp::BitOr, r);
+        }
+        Ok(e)
+    }
+
+    fn bit_xor(&mut self) -> PResult<Expr> {
+        let mut e = self.bit_and()?;
+        while self.at(&Tok::Caret) {
+            self.advance();
+            let r = self.bit_and()?;
+            e = self.bin(e, BinOp::BitXor, r);
+        }
+        Ok(e)
+    }
+
+    fn bit_and(&mut self) -> PResult<Expr> {
+        let mut e = self.shift()?;
+        while self.at(&Tok::Amp) {
+            self.advance();
+            let r = self.shift()?;
+            e = self.bin(e, BinOp::BitAnd, r);
+        }
+        Ok(e)
+    }
+
+    fn shift(&mut self) -> PResult<Expr> {
+        let mut e = self.term()?;
+        loop {
+            let op = match self.peek().kind {
+                Tok::Shl => BinOp::Shl,
+                Tok::Shr => BinOp::Shr,
+                Tok::UShr => BinOp::UShr,
                 _ => return Ok(e),
             };
             self.advance();
@@ -1502,7 +1638,7 @@ impl Parser {
 
     fn cast(&mut self) -> PResult<Expr> {
         let mut e = self.unary()?;
-        while self.at(&Tok::As) {
+        while self.at(&Tok::As) && !self.peek().nl_before {
             self.advance();
             let safe = self.at(&Tok::Question) && !self.peek().nl_before;
             if safe {
@@ -1552,6 +1688,15 @@ impl Parser {
                 let span = start.to(e.span);
                 Ok(Expr {
                     kind: ExprKind::Unary(UnOp::Not, Box::new(e)),
+                    span,
+                })
+            }
+            Tok::Tilde => {
+                self.advance();
+                let e = self.unary()?;
+                let span = start.to(e.span);
+                Ok(Expr {
+                    kind: ExprKind::Unary(UnOp::BitNot, Box::new(e)),
                     span,
                 })
             }
@@ -1711,6 +1856,17 @@ impl Parser {
             Tok::Ident(name) if name == "new" && matches!(self.peek_at(1).kind, Tok::Ident(_)) && !self.peek_at(1).nl_before => {
                 self.advance();
                 let ty = self.ident("struct name")?;
+                let mut targs = Vec::new();
+                if self.at(&Tok::Lt) && !self.peek().nl_before {
+                    self.advance();
+                    loop {
+                        targs.push(self.ty()?);
+                        if !self.eat(&Tok::Comma) {
+                            break;
+                        }
+                    }
+                    self.expect_gt()?;
+                }
                 let args = if self.at(&Tok::LParen) && !self.peek().nl_before {
                     self.call_args()?
                 } else {
@@ -1719,9 +1875,12 @@ impl Parser {
                     return Err(());
                 };
                 return Ok(Expr {
-                    kind: ExprKind::New { ty, args },
+                    kind: ExprKind::New { ty, targs, args },
                     span: span.to(self.prev_span()),
                 });
+            }
+            Tok::Ident(name) if name == "match" && !self.peek_at(1).nl_before && self.looks_like_match() => {
+                return self.match_expr();
             }
             Tok::Ident(name) => {
                 self.advance();
@@ -1812,6 +1971,7 @@ impl Parser {
                     bodyless: false,
                     is_abstract: false,
                     span,
+                    tparams: Vec::new(),
                 };
                 ExprKind::Lambda(Box::new(f))
             }
@@ -1825,6 +1985,112 @@ impl Parser {
             kind,
             span: span.to(self.prev_span()),
         })
+    }
+
+    fn looks_like_match(&mut self) -> bool {
+        if self.peek_at(1).kind == Tok::LBrace {
+            return true;
+        }
+        let save = self.pos;
+        let mark = self.splits.len();
+        let saved = self.no_struct;
+        self.speculative += 1;
+        self.advance();
+        self.no_struct = true;
+        let ok = self.expr().is_ok() && self.at(&Tok::LBrace) && !self.peek().nl_before;
+        self.no_struct = saved;
+        self.speculative -= 1;
+        self.pos = save;
+        self.unsplit(mark);
+        ok
+    }
+
+    fn match_expr(&mut self) -> PResult<Expr> {
+        let start = self.advance().span;
+        let subject = if self.at(&Tok::LBrace) {
+            None
+        } else {
+            let saved = self.no_struct;
+            self.no_struct = true;
+            let e = self.expr();
+            self.no_struct = saved;
+            Some(Box::new(e?))
+        };
+        self.expect(Tok::LBrace, "`{` to start the match arms")?;
+        let saved = self.no_struct;
+        self.no_struct = false;
+        let arms = self.match_arms(subject.is_some());
+        self.no_struct = saved;
+        let arms = arms?;
+        self.expect(Tok::RBrace, "`}` to close the match")?;
+        Ok(Expr {
+            kind: ExprKind::Match { subject, arms },
+            span: start.to(self.prev_span()),
+        })
+    }
+
+    fn match_arms(&mut self, has_subject: bool) -> PResult<Vec<MatchArm>> {
+        let mut arms = Vec::new();
+        loop {
+            while self.eat(&Tok::Semi) {}
+            if self.at(&Tok::RBrace) || self.at(&Tok::Eof) {
+                return Ok(arms);
+            }
+            let start = self.peek().span;
+            let mut patterns = Vec::new();
+            if !self.eat(&Tok::Else) {
+                loop {
+                    patterns.push(self.pattern(has_subject)?);
+                    if !self.eat(&Tok::Comma) {
+                        break;
+                    }
+                }
+            }
+            let guard = if self.eat(&Tok::If) { Some(self.expr()?) } else { None };
+            self.expect(Tok::FatArrow, "`=>` after the pattern")?;
+            let body = if self.at(&Tok::LBrace) {
+                ArmBody::Block(self.block()?)
+            } else {
+                ArmBody::Expr(self.expr()?)
+            };
+            let span = start.to(self.prev_span());
+            arms.push(MatchArm { patterns, guard, body, span });
+            if self.eat(&Tok::Comma) || self.at(&Tok::RBrace) || self.at(&Tok::Semi) || self.peek().nl_before {
+                continue;
+            }
+            let t = self.peek().clone();
+            self.err(
+                t.span,
+                format!("expected a new line or `,` after the match arm but found {}", describe(&t.kind)),
+            );
+            return Err(());
+        }
+    }
+
+    fn pattern(&mut self, has_subject: bool) -> PResult<Pattern> {
+        if !has_subject {
+            return Ok(Pattern::Value(self.or()?));
+        }
+        if self.eat(&Tok::Is) {
+            let t = self.ty()?;
+            let bind = match self.peek().kind.clone() {
+                Tok::Ident(name) if !self.peek().nl_before => {
+                    let span = self.advance().span;
+                    Some(Ident { name, span })
+                }
+                _ => None,
+            };
+            return Ok(Pattern::Is(t, bind));
+        }
+        let e = self.bit_or()?;
+        let inclusive = match self.peek().kind {
+            Tok::DotDot => false,
+            Tok::DotDotEq => true,
+            _ => return Ok(Pattern::Value(e)),
+        };
+        self.advance();
+        let end = self.bit_or()?;
+        Ok(Pattern::Range(e, end, inclusive))
     }
 
     fn brace_is_struct_lit(&self) -> bool {

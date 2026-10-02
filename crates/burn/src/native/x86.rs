@@ -726,6 +726,7 @@ impl<'p> Gen<'p> {
                         self.overflow(*l);
                     }
                     UnOp::FNeg => self.e("btc rax, 63"),
+                    UnOp::BitNot => self.e("not rax"),
                     UnOp::Not => {
                         self.e("test rax, rax");
                         self.e("sete al");
@@ -747,6 +748,29 @@ impl<'p> Gen<'p> {
                     BinOp::IMul(l) => {
                         self.e("imul rax, rcx");
                         self.overflow(*l);
+                    }
+                    BinOp::BitAnd => self.e("and rax, rcx"),
+                    BinOp::BitOr => self.e("or rax, rcx"),
+                    BinOp::BitXor => self.e("xor rax, rcx"),
+                    BinOp::Shl(l) | BinOp::Shr(l) | BinOp::UShr(l) => {
+                        if *l != u32::MAX {
+                            let bad = self.l();
+                            self.e("cmp rcx, 63");
+                            self.e(&format!("ja {}", bad));
+                            let sym = self.sym(RtFn::ErrShift.symbol());
+                            let call = if self.t.macos { format!("call {}", sym) } else { format!("call {}@PLT", sym) };
+                            writeln!(
+                                self.cold,
+                                "{}:\n    mov rsi, rcx\n    mov edi, {}\n    and rsp, -16\n    {}\n    ud2",
+                                bad, l, call
+                            )
+                            .unwrap();
+                        }
+                        self.e(match op {
+                            BinOp::Shl(_) => "shl rax, cl",
+                            BinOp::Shr(_) => "sar rax, cl",
+                            _ => "shr rax, cl",
+                        });
                     }
                     BinOp::IDiv(l) => self.div(false, *l),
                     BinOp::IMod(l) => self.div(true, *l),

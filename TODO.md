@@ -18,13 +18,15 @@
 - Annotations: `def annotation`, `@Getter`, `@Setter`, `@Deprecated`, `@Export`, `@Native`, `annotationsOf`
 - Bytecode libraries in Burn (`import "lib.bvmc"`) on bvm, in archives and in native executables
 - Package manager: ash, `burn init`, `burn.toml`, `burn.lock` and package imports; burnup installs the toolchain
+- Closures that capture local variables
+- Generics for functions, `def type` and `def struct`
+- `match` expressions and statements
+- Bit operators (`& | ^ ~ << >> >>>`)
 
 ## Next
 
 - Native backends for Windows (PE/COFF) and ARM64
-- Closures that capture local variables
-- Generics for user-defined types and functions
-- `when`/`match` expressions
+- Generic methods, generic interfaces, and generic structs that extend other structs
 - Precise (non-conservative) garbage collection and generational allocation
 - Self-hosting (the formatter is the first tool written in Burn)
 - Windows installer

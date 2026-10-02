@@ -1,0 +1,15 @@
+8 14 6 -13
+48 -4 15 4611686018427387904
+15 255 0
+8 31 true
+3
+true 6 10
+8 10 0
+2087744782 2088818926
+1
+runtime error: cannot shift by 64
+  --> tests/cases/bits.bn:43:7
+   |
+43 | print(1 << big)
+   |       ^
+   = help: the shift amount must be from 0 to 63

@@ -61,6 +61,7 @@ pub struct FunDecl {
     pub annotations: Vec<Annotation>,
     pub bodyless: bool,
     pub is_abstract: bool,
+    pub tparams: Vec<Ident>,
 }
 
 #[derive(Clone, Debug)]
@@ -103,6 +104,7 @@ pub enum Def {
     Type {
         name: Ident,
         fields: Vec<Field>,
+        tparams: Vec<Ident>,
     },
     Alias {
         name: Ident,
@@ -123,6 +125,7 @@ pub enum Def {
         fields: Vec<Field>,
         methods: Vec<(Vis, FunDecl)>,
         statics: Vec<StaticVal>,
+        tparams: Vec<Ident>,
     },
     Enum {
         name: Ident,
@@ -135,6 +138,13 @@ pub enum Def {
 }
 
 impl Def {
+    pub fn tparams(&self) -> &[Ident] {
+        match self {
+            Def::Type { tparams, .. } | Def::Struct { tparams, .. } => tparams,
+            _ => &[],
+        }
+    }
+
     pub fn name(&self) -> &Ident {
         match self {
             Def::Type { name, .. }
@@ -239,6 +249,12 @@ pub enum BinOp {
     Ge,
     And,
     Or,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
+    UShr,
 }
 
 impl BinOp {
@@ -257,6 +273,12 @@ impl BinOp {
             BinOp::Ge => ">=",
             BinOp::And => "&&",
             BinOp::Or => "||",
+            BinOp::BitAnd => "&",
+            BinOp::BitOr => "|",
+            BinOp::BitXor => "^",
+            BinOp::Shl => "<<",
+            BinOp::Shr => ">>",
+            BinOp::UShr => ">>>",
         }
     }
 }
@@ -265,6 +287,7 @@ impl BinOp {
 pub enum UnOp {
     Neg,
     Not,
+    BitNot,
 }
 
 #[derive(Clone, Debug)]
@@ -296,10 +319,32 @@ pub enum ExprKind {
     Await(Box<Expr>),
     Lambda(Box<FunDecl>),
     NotNull(Box<Expr>),
-    New { ty: Ident, args: Vec<Expr> },
+    New { ty: Ident, targs: Vec<TypeExpr>, args: Vec<Expr> },
     SafeGet { obj: Box<Expr>, name: Ident, args: Option<Vec<Expr>> },
     Coalesce(Box<Expr>, Box<Expr>),
     SafeAs(Box<Expr>, TypeExpr),
+    Match { subject: Option<Box<Expr>>, arms: Vec<MatchArm> },
+}
+
+#[derive(Clone, Debug)]
+pub enum Pattern {
+    Value(Expr),
+    Range(Expr, Expr, bool),
+    Is(TypeExpr, Option<Ident>),
+}
+
+#[derive(Clone, Debug)]
+pub enum ArmBody {
+    Expr(Expr),
+    Block(Block),
+}
+
+#[derive(Clone, Debug)]
+pub struct MatchArm {
+    pub patterns: Vec<Pattern>,
+    pub guard: Option<Expr>,
+    pub body: ArmBody,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug)]

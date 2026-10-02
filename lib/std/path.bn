@@ -1,0 +1,167 @@
+/**
+ * Joins two parts of a file path with `/`.
+ *
+ * If `child` is absolute it is returned unchanged.
+ *
+ * @param base the first part
+ * @param child the part to add
+ * @return the joined path
+ * @since 26.1
+ * @example
+ *     joinPath("src", "main.bn")   // "src/main.bn"
+ *     joinPath("src/", "/etc")     // "/etc"
+ */
+pub fun joinPath(base: string, child: string): string {
+    if child.startsWith("/") || base == "" {
+        return child
+    }
+    if child == "" {
+        return base
+    }
+    if base.endsWith("/") {
+        return base + child
+    }
+    return base + "/" + child
+}
+
+/**
+ * Joins several parts of a file path with `/`.
+ *
+ * @param parts the parts
+ * @return the joined path
+ * @see joinPath
+ * @since 26.1
+ */
+pub fun joinAll(parts: [string]): string {
+    var out = ""
+    for p in parts {
+        out = joinPath(out, p)
+    }
+    return out
+}
+
+/**
+ * Removes `.` parts, resolves `..` parts and repeated slashes.
+ *
+ * @param path the path to clean
+ * @return the shortest equivalent path, `"."` for an empty result
+ * @since 26.1
+ * @example
+ *     normalize("a/./b/../c//d")  // "a/c/d"
+ */
+pub fun normalize(path: string): string {
+    var absolute = path.startsWith("/")
+    [string] parts = []
+    for p in split(path, "/") {
+        if p == "" || p == "." {
+            continue
+        }
+        if p == ".." {
+            if len(parts) > 0 && parts[len(parts) - 1] != ".." {
+                parts.pop()
+            } else if !absolute {
+                parts.push("..")
+            }
+            continue
+        }
+        parts.push(p)
+    }
+    var joined = join(parts, "/")
+    if absolute {
+        return "/" + joined
+    }
+    if joined == "" {
+        return "."
+    }
+    return joined
+}
+
+/**
+ * Returns the last part of a path.
+ *
+ * @param path the path
+ * @return the file or folder name, without the folders before it
+ * @since 26.1
+ * @example
+ *     baseName("src/lib/main.bn")  // "main.bn"
+ */
+pub fun baseName(path: string): string {
+    var p = path
+    while len(p) > 1 && p.endsWith("/") {
+        p = substring(p, 0, len(p) - 1)
+    }
+    var parts = split(p, "/")
+    return parts[len(parts) - 1]
+}
+
+/**
+ * Returns the folder part of a path.
+ *
+ * @param path the path
+ * @return everything before the last part, `"."` if there is none
+ * @since 26.1
+ * @example
+ *     dirName("src/lib/main.bn")  // "src/lib"
+ */
+pub fun dirName(path: string): string {
+    var p = path
+    while len(p) > 1 && p.endsWith("/") {
+        p = substring(p, 0, len(p) - 1)
+    }
+    var i = len(p) - 1
+    while i >= 0 && charAt(p, i) != "/" {
+        i -= 1
+    }
+    if i < 0 {
+        return "."
+    }
+    if i == 0 {
+        return "/"
+    }
+    return substring(p, 0, i)
+}
+
+/**
+ * Returns the extension of a file name, including the dot.
+ *
+ * @param path the path
+ * @return for example `".bn"`, or `""` when the name has no extension
+ * @since 26.1
+ */
+pub fun extension(path: string): string {
+    var name = baseName(path)
+    var i = len(name) - 1
+    while i > 0 && charAt(name, i) != "." {
+        i -= 1
+    }
+    if i <= 0 {
+        return ""
+    }
+    return substring(name, i, len(name))
+}
+
+/**
+ * Returns a file name without its extension.
+ *
+ * @param path the path
+ * @return the last part of the path, without the extension
+ * @since 26.1
+ * @example
+ *     stem("src/main.bn")  // "main"
+ */
+pub fun stem(path: string): string {
+    var name = baseName(path)
+    var ext = extension(name)
+    return substring(name, 0, len(name) - len(ext))
+}
+
+/**
+ * Tells whether a path starts at the root of the file system.
+ *
+ * @param path the path
+ * @return `true` if it starts with `/`
+ * @since 26.1
+ */
+pub fun isAbsolute(path: string): bool {
+    return path.startsWith("/")
+}

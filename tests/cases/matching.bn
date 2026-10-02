@@ -1,0 +1,101 @@
+def enum Day { Mon, Tue, Wed, Thu, Fri, Sat, Sun }
+
+fun kind(d: Day): string {
+    return match d {
+        Sat, Sun => "weekend"
+        else => "weekday"
+    }
+}
+
+fun short(d: Day): string {
+    return match d {
+        Day.Mon => "M"
+        Tue => "T"
+        Wed => "W"
+        Thu => "T"
+        Fri => "F"
+        Sat, Sun => "-"
+    }
+}
+
+fun size(n: int): string {
+    return match n {
+        0 => "zero"
+        1..=9 => "small"
+        10..100 => "medium"
+        else => match {
+            n < 0 => "negative"
+            else => "large"
+        }
+    }
+}
+
+for d in [Day.Mon, Day.Sat, Day.Wed] {
+    print(d, kind(d), short(d))
+}
+for n in [0, 5, 10, 99, 100, -3] {
+    print(n, size(n))
+}
+
+fun describe(v: any): string {
+    return match v {
+        null => "nothing"
+        is int i if i > 100 => "big int ${i}"
+        is int => "int ${v + 1}"
+        is string s => "string of ${len(s)}: ${s.upper()}"
+        is [int] => "list of ${len(v)}"
+        else => "something else"
+    }
+}
+
+print(describe(null), describe(5), describe(500), describe("hey"), describe([1, 2]), describe(1.5))
+
+fun grade(score: int): string {
+    return match {
+        score >= 90 => "A"
+        score >= 80 => "B"
+        score >= 70, score == 42 => "C"
+        else => "F"
+    }
+}
+print(grade(95), grade(85), grade(42), grade(10))
+
+var command = "stop"
+match command {
+    "go", "start" => print("starting")
+    "stop" => {
+        print("stopping")
+        print("stopped")
+    }
+}
+match command.upper() {
+    "STOP" => print("upper stop")
+}
+
+String? name = null
+var label = match name {
+    null => "anonymous"
+    else => name
+}
+print(label)
+
+var b = true
+print(match b {
+    true => 1
+    false => 0
+})
+
+var total = 0
+for i in 0..10 {
+    match i % 3 {
+        0 => total += 100
+        1 => {
+            if i > 5 {
+                continue
+            }
+            total += 10
+        }
+        else => total += 1
+    }
+}
+print(total)
