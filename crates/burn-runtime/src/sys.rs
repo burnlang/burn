@@ -1,22 +1,23 @@
 use crate::prelude::*;
 use core::alloc::{GlobalAlloc, Layout};
+use core::ffi::{c_char, c_void};
 
 extern "C" {
-    fn malloc(size: usize) -> *mut u8;
-    fn calloc(n: usize, size: usize) -> *mut u8;
-    fn realloc(p: *mut u8, size: usize) -> *mut u8;
-    fn free(p: *mut u8);
-    fn posix_memalign(out: *mut *mut u8, align: usize, size: usize) -> i32;
-    fn write(fd: i32, buf: *const u8, n: usize) -> isize;
-    fn read(fd: i32, buf: *mut u8, n: usize) -> isize;
-    fn open(path: *const u8, flags: i32, ...) -> i32;
+    fn malloc(size: usize) -> *mut c_void;
+    fn calloc(n: usize, size: usize) -> *mut c_void;
+    fn realloc(p: *mut c_void, size: usize) -> *mut c_void;
+    fn free(p: *mut c_void);
+    fn posix_memalign(out: *mut *mut c_void, align: usize, size: usize) -> i32;
+    fn write(fd: i32, buf: *const c_void, n: usize) -> isize;
+    fn read(fd: i32, buf: *mut c_void, n: usize) -> isize;
+    fn open(path: *const c_char, flags: i32, ...) -> i32;
     fn close(fd: i32) -> i32;
     fn exit(code: i32) -> !;
     fn abort() -> !;
-    fn getenv(name: *const u8) -> *const u8;
-    fn strlen(s: *const u8) -> usize;
+    fn getenv(name: *const c_char) -> *mut c_char;
+    fn strlen(s: *const c_char) -> usize;
     fn isatty(fd: i32) -> i32;
-    fn access(path: *const u8, mode: i32) -> i32;
+    fn access(path: *const c_char, mode: i32) -> i32;
     fn clock_gettime(clock: i32, ts: *mut Timespec) -> i32;
     fn nanosleep(req: *const Timespec, rem: *mut Timespec) -> i32;
 }
@@ -50,10 +51,10 @@ struct Malloc;
 unsafe impl GlobalAlloc for Malloc {
     unsafe fn alloc(&self, l: Layout) -> *mut u8 {
         if l.align() <= 16 {
-            malloc(l.size().max(1))
+            malloc(l.size().max(1)).cast()
         } else {
             let mut p = core::ptr::null_mut();
-            if posix_memalign(&mut p, l.align(), l.size()) != 0 {
+            if posix_memalign(&mut p as *mut *mut u8 as *mut *mut c_void, l.align(), l.size()) != 0 {
                 return core::ptr::null_mut();
             }
             p
@@ -61,7 +62,7 @@ unsafe impl GlobalAlloc for Malloc {
     }
     unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
         if l.align() <= 16 {
-            calloc(1, l.size().max(1))
+            calloc(1, l.size().max(1)).cast()
         } else {
             let p = self.alloc(l);
             if !p.is_null() {
@@ -71,16 +72,16 @@ unsafe impl GlobalAlloc for Malloc {
         }
     }
     unsafe fn dealloc(&self, p: *mut u8, _l: Layout) {
-        free(p)
+        free(p.cast())
     }
     unsafe fn realloc(&self, p: *mut u8, l: Layout, new: usize) -> *mut u8 {
         if l.align() <= 16 {
-            realloc(p, new.max(1))
+            realloc(p.cast(), new.max(1)).cast()
         } else {
             let q = self.alloc(Layout::from_size_align_unchecked(new, l.align()));
             if !q.is_null() {
                 core::ptr::copy_nonoverlapping(p, q, l.size().min(new));
-                free(p);
+                free(p.cast());
             }
             q
         }
@@ -94,14 +95,14 @@ static ALLOC: Malloc = Malloc;
 fn on_panic(_info: &core::panic::PanicInfo) -> ! {
     let msg = b"runtime error: internal error in the Burn runtime\n";
     unsafe {
-        write(2, msg.as_ptr(), msg.len());
+        write(2, msg.as_ptr().cast(), msg.len());
         abort()
     }
 }
 
 pub fn write_fd(fd: i32, mut b: &[u8]) {
     while !b.is_empty() {
-        let n = unsafe { write(fd, b.as_ptr(), b.len()) };
+        let n = unsafe { write(fd, b.as_ptr().cast(), b.len()) };
         if n <= 0 {
             return;
         }
@@ -118,11 +119,11 @@ pub fn env(name: &str) -> Option<String> {
     c.extend_from_slice(name.as_bytes());
     c.push(0);
     unsafe {
-        let p = getenv(c.as_ptr());
+        let p = getenv(c.as_ptr().cast());
         if p.is_null() {
             return None;
         }
-        let s = core::slice::from_raw_parts(p, strlen(p));
+        let s = core::slice::from_raw_parts(p as *const u8, strlen(p));
         Some(String::from_utf8_lossy(s).into_owned())
     }
 }
@@ -138,7 +139,7 @@ pub fn read_all(fd: i32) -> Vec<u8> {
     let mut out = Vec::new();
     let mut buf = [0u8; 4096];
     loop {
-        let n = unsafe { read(fd, buf.as_mut_ptr(), buf.len()) };
+        let n = unsafe { read(fd, buf.as_mut_ptr().cast(), buf.len()) };
         if n <= 0 {
             break;
         }
@@ -149,7 +150,7 @@ pub fn read_all(fd: i32) -> Vec<u8> {
 
 pub fn read_byte() -> Option<u8> {
     let mut b = 0u8;
-    if unsafe { read(0, &mut b, 1) } == 1 {
+    if unsafe { read(0, (&mut b as *mut u8).cast(), 1) } == 1 {
         Some(b)
     } else {
         None
@@ -158,7 +159,7 @@ pub fn read_byte() -> Option<u8> {
 
 pub fn read_file(path: &str) -> Option<Vec<u8>> {
     let c = c_path(path);
-    let fd = unsafe { open(c.as_ptr(), 0) };
+    let fd = unsafe { open(c.as_ptr().cast(), 0) };
     if fd < 0 {
         return None;
     }
@@ -174,14 +175,14 @@ pub fn read_text(path: &str) -> Option<String> {
 pub fn write_file(path: &str, data: &[u8], append: bool) -> bool {
     let c = c_path(path);
     let flags = O_WRONLY_CREAT | if append { O_APPEND } else { O_TRUNC };
-    let fd = unsafe { open(c.as_ptr(), flags, 0o644) };
+    let fd = unsafe { open(c.as_ptr().cast(), flags, 0o644) };
     if fd < 0 {
         return false;
     }
     let mut rest = data;
     let mut ok = true;
     while !rest.is_empty() {
-        let n = unsafe { write(fd, rest.as_ptr(), rest.len()) };
+        let n = unsafe { write(fd, rest.as_ptr().cast(), rest.len()) };
         if n <= 0 {
             ok = false;
             break;
@@ -194,7 +195,7 @@ pub fn write_file(path: &str, data: &[u8], append: bool) -> bool {
 
 pub fn exists(path: &str) -> bool {
     let c = c_path(path);
-    unsafe { access(c.as_ptr(), 0) == 0 }
+    unsafe { access(c.as_ptr().cast(), 0) == 0 }
 }
 
 fn clock(id: i32) -> u64 {
