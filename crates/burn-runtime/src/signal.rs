@@ -20,7 +20,7 @@ mod imp {
     extern "C" {
         fn sigaction(sig: i32, act: *const SigAction, old: *mut SigAction) -> i32;
         fn sigaltstack(ss: *const StackT, old: *mut StackT) -> i32;
-        fn write(fd: i32, buf: *const u8, n: usize) -> isize;
+        fn write(fd: i32, buf: *const core::ffi::c_void, n: usize) -> isize;
         fn _exit(code: i32) -> !;
     }
 
@@ -42,7 +42,7 @@ mod imp {
             b"runtime error: segmentation fault (this is a bug in Burn, please report it)\n"
         };
         crate::io::flush_for_signal();
-        write(2, msg.as_ptr(), msg.len());
+        write(2, msg.as_ptr().cast(), msg.len());
         _exit(1);
     }
 
