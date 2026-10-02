@@ -1,5 +1,7 @@
 use crate::meta::{desc, Desc};
+use crate::num;
 use crate::obj::*;
+use crate::prelude::*;
 
 pub fn float_str(f: f64) -> String {
     if f.is_nan() {
@@ -8,10 +10,10 @@ pub fn float_str(f: f64) -> String {
     if f.is_infinite() {
         return if f > 0.0 { "Infinity".into() } else { "-Infinity".into() };
     }
-    if f.fract() == 0.0 && f.abs() < 1e16 {
+    if num::fract(f) == 0.0 && num::abs(f) < 1e16 {
         return format!("{:.1}", f);
     }
-    if f.abs() >= 1e16 || (f != 0.0 && f.abs() < 1e-6) {
+    if num::abs(f) >= 1e16 || (f != 0.0 && num::abs(f) < 1e-6) {
         return format!("{:e}", f);
     }
     format!("{}", f)
@@ -232,8 +234,8 @@ pub fn as_f64(v: u64, tid: u32) -> f64 {
     }
 }
 
-pub fn compare(a: u64, b: u64, tid: u32) -> std::cmp::Ordering {
-    use std::cmp::Ordering::*;
+pub fn compare(a: u64, b: u64, tid: u32) -> core::cmp::Ordering {
+    use core::cmp::Ordering::*;
     match desc(tid) {
         Desc::Int | Desc::Enum { .. } => (a as i64).cmp(&(b as i64)),
         Desc::Float => f64::from_bits(a).partial_cmp(&f64::from_bits(b)).unwrap_or(Equal),

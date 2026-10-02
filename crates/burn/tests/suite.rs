@@ -690,3 +690,73 @@ fn apps_can_be_imported_as_bytecode_and_changed_with_mixins() {
     assert!(out.contains("cannot import its own bytecode"), "{}", out);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn programs_without_the_standard_runtime_are_small_and_behave_the_same() {
+    if !native_supported() {
+        return;
+    }
+    let root = root();
+    let tmp = temp_dir("nostd");
+    let mut failures = Vec::new();
+    let mut built = 0;
+    for (file, expected) in cases() {
+        let rel = file.strip_prefix(&root).unwrap();
+        let (_, code) = output(burn().current_dir(&root).args(["check", "--no-std"]).arg(rel));
+        if code != 0 {
+            continue;
+        }
+        let exe = tmp.join(file.file_stem().unwrap());
+        let (build_out, code) = output(burn().current_dir(&root).args(["build", "--no-std"]).arg(rel).arg("-o").arg(&exe));
+        if code != 0 {
+            failures.push(format!("{}: build failed\n{}", rel.display(), build_out));
+            continue;
+        }
+        built += 1;
+        let (out, _) = output(Command::new(&exe).current_dir(&root).env("BURN_RC_CHECK", "1").env("BURN_GC_THRESHOLD", "4096"));
+        if out != expected {
+            failures.push(format!("{}:\n--- expected\n{}\n--- got\n{}", rel.display(), expected, out));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert!(built >= 15, "only {} cases built without the standard runtime", built);
+
+    let hello = tmp.join("hello.bn");
+    std::fs::write(&hello, "fun main() {\n    print(\"hello\")\n}\n").unwrap();
+    let size = |no_std: bool| {
+        let exe = tmp.join(if no_std { "small" } else { "full" });
+        let mut cmd = burn();
+        cmd.arg("build").arg(&hello).arg("-o").arg(&exe);
+        if no_std {
+            cmd.arg("--no-std");
+        }
+        let (out, code) = output(&mut cmd);
+        assert_eq!(code, 0, "{}", out);
+        assert_eq!(output(&mut Command::new(&exe)).0, "hello\n");
+        std::fs::metadata(&exe).unwrap().len()
+    };
+    let (small, full) = (size(true), size(false));
+    assert!(small * 4 < full, "no-std hello is {} bytes, the full one {}", small, full);
+
+    let project = tmp.join("app");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(project.join("burn.toml"), "[package]\nname = \"example.com/ada/app\"\nstd = false\n").unwrap();
+    std::fs::write(
+        project.join("src/main.bn"),
+        "import \"std/http\"\nimport \"std/strings\"\n\nasync fun later(): int {\n    return 1\n}\n\nfun main() {\n    print(toJSON([1]), await later())\n}\n",
+    )
+    .unwrap();
+    let (out, code) = output(burn().current_dir(&project).arg("check"));
+    assert_eq!(code, 1, "{}", out);
+    for msg in [
+        "`std/http` needs the standard runtime for making HTTP requests",
+        "an `async fun` needs the standard runtime",
+        "working with JSON needs the standard runtime",
+        "`await` needs the standard runtime",
+        "std = false",
+    ] {
+        assert!(out.contains(msg), "missing `{}` in\n{}", msg, out);
+    }
+    assert!(!out.contains("std/strings"), "{}", out);
+    let _ = std::fs::remove_dir_all(&tmp);
+}

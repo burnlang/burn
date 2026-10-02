@@ -1,6 +1,9 @@
 use crate::meta::{TID_ARR_STR, TID_STR};
+#[allow(unused_imports)]
+use crate::prelude::*;
 use crate::rc;
-use std::alloc::{alloc_zeroed, dealloc, realloc, Layout};
+use alloc::alloc::{alloc_zeroed, dealloc, realloc, Layout};
+#[cfg(not(burn_core))]
 use std::sync::{Arc, Condvar, Mutex};
 
 pub const K_STR: u8 = 1;
@@ -66,7 +69,7 @@ pub fn str_new(s: &[u8]) -> u64 {
     let p = rc::alloc(K_STR, TID_STR, size);
     unsafe {
         set_word(p, STR_LEN, s.len() as u64);
-        std::ptr::copy_nonoverlapping(s.as_ptr(), (p as usize + STR_BYTES) as *mut u8, s.len());
+        core::ptr::copy_nonoverlapping(s.as_ptr(), (p as usize + STR_BYTES) as *mut u8, s.len());
         if s.is_ascii() {
             hdr(p).flags |= F_ASCII;
         }
@@ -84,7 +87,7 @@ pub fn str_static(s: &[u8]) -> u64 {
         let layout = Layout::from_size_align(size, 16).unwrap();
         let p = alloc_zeroed(layout) as u64;
         if p == 0 {
-            std::alloc::handle_alloc_error(layout);
+            alloc::alloc::handle_alloc_error(layout);
         }
         let h = hdr(p);
         h.kind = K_STR;
@@ -92,19 +95,19 @@ pub fn str_static(s: &[u8]) -> u64 {
         h.tid = TID_STR;
         h.size = size as u32;
         set_word(p, STR_LEN, s.len() as u64);
-        std::ptr::copy_nonoverlapping(s.as_ptr(), (p as usize + STR_BYTES) as *mut u8, s.len());
+        core::ptr::copy_nonoverlapping(s.as_ptr(), (p as usize + STR_BYTES) as *mut u8, s.len());
         p
     }
 }
 
 #[inline]
 pub fn str_bytes<'a>(p: u64) -> &'a [u8] {
-    unsafe { std::slice::from_raw_parts((p as usize + STR_BYTES) as *const u8, word(p, STR_LEN) as usize) }
+    unsafe { core::slice::from_raw_parts((p as usize + STR_BYTES) as *const u8, word(p, STR_LEN) as usize) }
 }
 
 #[inline]
 pub fn str_ref<'a>(p: u64) -> &'a str {
-    unsafe { std::str::from_utf8_unchecked(str_bytes(p)) }
+    unsafe { core::str::from_utf8_unchecked(str_bytes(p)) }
 }
 
 #[inline]
@@ -128,7 +131,7 @@ pub fn array_new(tid: u32, len: usize) -> u64 {
 pub fn array_from(tid: u32, items: &[u64]) -> u64 {
     let p = array_new(tid, items.len());
     unsafe {
-        std::ptr::copy_nonoverlapping(items.as_ptr(), array_data(p), items.len());
+        core::ptr::copy_nonoverlapping(items.as_ptr(), array_data(p), items.len());
     }
     p
 }
@@ -154,12 +157,12 @@ pub fn array_data(p: u64) -> *mut u64 {
 
 #[inline]
 pub fn array_slice<'a>(p: u64) -> &'a [u64] {
-    unsafe { std::slice::from_raw_parts(array_data(p), array_len(p)) }
+    unsafe { core::slice::from_raw_parts(array_data(p), array_len(p)) }
 }
 
 #[inline]
 pub fn array_slice_mut<'a>(p: u64) -> &'a mut [u64] {
-    unsafe { std::slice::from_raw_parts_mut(array_data(p), array_len(p)) }
+    unsafe { core::slice::from_raw_parts_mut(array_data(p), array_len(p)) }
 }
 
 pub fn array_reserve(p: u64, need: usize) {
@@ -172,9 +175,9 @@ pub fn array_reserve(p: u64, need: usize) {
         let old = Layout::array::<u64>(cap).unwrap();
         let data = realloc(array_data(p) as *mut u8, old, new_cap * 8) as u64;
         if data == 0 {
-            std::alloc::handle_alloc_error(Layout::array::<u64>(new_cap).unwrap());
+            alloc::alloc::handle_alloc_error(Layout::array::<u64>(new_cap).unwrap());
         }
-        std::ptr::write_bytes((data as usize + cap * 8) as *mut u8, 0, (new_cap - cap) * 8);
+        core::ptr::write_bytes((data as usize + cap * 8) as *mut u8, 0, (new_cap - cap) * 8);
         set_word(p, ARR_DATA, data);
         set_word(p, ARR_CAP, new_cap as u64);
         rc::account((new_cap - cap) * 8);
@@ -232,17 +235,22 @@ pub fn box_val(p: u64) -> u64 {
     unsafe { word(p, BOX_VAL) }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum MapKey {
     I(u64),
     S(Box<[u8]>),
 }
 
+#[cfg(not(burn_core))]
+pub type MapIndex = std::collections::HashMap<MapKey, usize, crate::fx::FxBuild>;
+#[cfg(burn_core)]
+pub type MapIndex = alloc::collections::BTreeMap<MapKey, usize>;
+
 #[derive(Default)]
 pub struct MapData {
     pub keys: Vec<u64>,
     pub vals: Vec<u64>,
-    pub index: std::collections::HashMap<MapKey, usize, crate::fx::FxBuild>,
+    pub index: MapIndex,
 }
 
 pub fn map_new(tid: u32) -> u64 {
@@ -264,11 +272,14 @@ pub unsafe fn map_free(p: u64) {
     }
 }
 
+#[cfg(not(burn_core))]
+#[cfg(not(burn_core))]
 pub struct FutureState {
     pub value: Mutex<Option<u64>>,
     pub cv: Condvar,
 }
 
+#[cfg(not(burn_core))]
 pub fn future_new(tid: u32) -> u64 {
     let p = rc::alloc(K_FUTURE, tid, HDR + 8);
     let st = Arc::new(FutureState {
@@ -279,6 +290,7 @@ pub fn future_new(tid: u32) -> u64 {
     p
 }
 
+#[cfg(not(burn_core))]
 pub fn future_state(p: u64) -> Arc<FutureState> {
     unsafe {
         let raw = word(p, HDR) as usize as *const FutureState;
@@ -287,6 +299,7 @@ pub fn future_state(p: u64) -> Arc<FutureState> {
     }
 }
 
+#[cfg(not(burn_core))]
 pub unsafe fn future_free(p: u64) {
     let raw = word(p, HDR) as usize as *const FutureState;
     if !raw.is_null() {

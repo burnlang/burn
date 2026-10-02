@@ -1,9 +1,10 @@
 use crate::meta::{self, desc, Desc, I_BOX_TRACK, I_TRACK};
 use crate::obj::*;
-use std::alloc::{alloc_zeroed, dealloc, Layout};
-use std::cell::{Cell, RefCell};
-use std::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering};
-use std::sync::Mutex;
+use crate::prelude::*;
+use crate::sync::{cached, env, Global};
+use alloc::alloc::{alloc_zeroed, dealloc, Layout};
+use core::cell::{Cell, RefCell};
+use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering};
 
 const DEFAULT_THRESHOLD: usize = 32 * 1024 * 1024;
 const ROOTS_LIMIT: usize = 20_000;
@@ -20,29 +21,32 @@ pub static TASKS: AtomicUsize = AtomicUsize::new(0);
 static LIVE: AtomicUsize = AtomicUsize::new(0);
 static SINCE: AtomicUsize = AtomicUsize::new(0);
 static COLLECTIONS: AtomicUsize = AtomicUsize::new(0);
-static ZOMBIES: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+static ZOMBIES: Global<Vec<usize>> = Global::new(Vec::new());
 
+#[cfg(not(burn_core))]
 thread_local! {
     static ROOTS: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
     static IS_MAIN: Cell<bool> = const { Cell::new(false) };
     static COLLECTING: Cell<bool> = const { Cell::new(false) };
 }
 
+#[cfg(burn_core)]
+static ROOTS: crate::sync::Local<RefCell<Vec<u64>>> = crate::sync::Local::new(RefCell::new(Vec::new()));
+#[cfg(burn_core)]
+static IS_MAIN: crate::sync::Local<Cell<bool>> = crate::sync::Local::new(Cell::new(false));
+#[cfg(burn_core)]
+static COLLECTING: crate::sync::Local<Cell<bool>> = crate::sync::Local::new(Cell::new(false));
+
 fn threshold() -> usize {
-    static T: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *T.get_or_init(|| {
-        std::env::var("BURN_GC_THRESHOLD")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(DEFAULT_THRESHOLD)
-    })
+    static T: AtomicUsize = AtomicUsize::new(0);
+    cached(&T, || env("BURN_GC_THRESHOLD").and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_THRESHOLD))
 }
 
 pub const K_FREED: u8 = 0xEE;
 
 fn checking() -> bool {
-    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *C.get_or_init(|| std::env::var_os("BURN_RC_CHECK").is_some())
+    static C: AtomicUsize = AtomicUsize::new(0);
+    cached(&C, || env("BURN_RC_CHECK").is_some() as usize) == 1
 }
 
 #[cold]
@@ -51,8 +55,8 @@ fn bad_object(p: u64, what: &str) -> ! {
 }
 
 fn stats() -> bool {
-    static S: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *S.get_or_init(|| std::env::var_os("BURN_GC_STATS").is_some())
+    static S: AtomicUsize = AtomicUsize::new(0);
+    cached(&S, || env("BURN_GC_STATS").is_some() as usize) == 1
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -77,8 +81,8 @@ fn physical_memory() -> Option<usize> {
 }
 
 pub fn max_heap() -> usize {
-    static M: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *M.get_or_init(|| match std::env::var("BURN_MAX_HEAP_MB").ok().and_then(|v| v.trim().parse::<usize>().ok()) {
+    static M: AtomicUsize = AtomicUsize::new(0);
+    cached(&M, || match env("BURN_MAX_HEAP_MB").and_then(|v| v.trim().parse::<usize>().ok()) {
         Some(0) => usize::MAX,
         Some(mb) => mb.saturating_mul(1 << 20),
         None => physical_memory().map(|m| m / 4 * 3).unwrap_or(usize::MAX),
@@ -135,7 +139,7 @@ pub fn alloc(kind: u8, tid: u32, size: usize) -> u64 {
     let layout = Layout::from_size_align(size, 16).unwrap();
     let p = unsafe { alloc_zeroed(layout) };
     if p.is_null() {
-        std::alloc::handle_alloc_error(layout);
+        alloc::alloc::handle_alloc_error(layout);
     }
     let track = match kind {
         K_STR => 0,
@@ -268,18 +272,19 @@ pub fn possible_root(p: u64) {
 
 fn zombie(p: u64) {
     let h = unsafe { hdr(p) };
-    let mut z = ZOMBIES.lock().unwrap_or_else(|e| e.into_inner());
-    if h.flags & F_ZOMBIE == 0 {
-        h.flags |= F_ZOMBIE;
-        z.push(p as usize);
-    }
+    ZOMBIES.with(|z| {
+        if h.flags & F_ZOMBIE == 0 {
+            h.flags |= F_ZOMBIE;
+            z.push(p as usize);
+        }
+    })
 }
 
 pub fn drain_zombies() {
     if multi() {
         return;
     }
-    let list = std::mem::take(&mut *ZOMBIES.lock().unwrap_or_else(|e| e.into_inner()));
+    let list = ZOMBIES.with(core::mem::take);
     for p in list {
         let h = unsafe { hdr(p as u64) };
         h.flags &= !F_ZOMBIE;
@@ -343,6 +348,7 @@ pub fn for_children(p: u64, mut f: impl FnMut(u64)) {
                 }
             }
         }
+        #[cfg(not(burn_core))]
         K_FUTURE => {
             if let Desc::Future(t) = desc(h.tid) {
                 if meta::managed(*t) {
@@ -398,6 +404,7 @@ pub unsafe fn free_obj(p: u64) {
             array_free_data(p);
         }
         K_MAP => map_free(p),
+        #[cfg(not(burn_core))]
         K_FUTURE => future_free(p),
         _ => {}
     }
@@ -407,7 +414,7 @@ pub unsafe fn free_obj(p: u64) {
         let h = hdr(p);
         h.kind = K_FREED;
         h.rc = 0xDEAD;
-        std::ptr::write_bytes((p as usize + HDR) as *mut u8, 0xEE, size - HDR);
+        core::ptr::write_bytes((p as usize + HDR) as *mut u8, 0xEE, size - HDR);
         return;
     }
     dealloc(p as usize as *mut u8, Layout::from_size_align(size, 16).unwrap());
@@ -507,7 +514,7 @@ pub fn collect_cycles() {
     if COLLECTING.with(|c| c.replace(true)) {
         return;
     }
-    let roots = ROOTS.with(|r| std::mem::take(&mut *r.borrow_mut()));
+    let roots = ROOTS.with(|r| core::mem::take(&mut *r.borrow_mut()));
     let mut kept = Vec::with_capacity(roots.len());
     for s in roots {
         let h = unsafe { hdr(s) };
@@ -535,7 +542,7 @@ pub fn collect_cycles() {
     }
     COLLECTIONS.fetch_add(1, Ordering::Relaxed);
     if stats() {
-        eprintln!("[gc] cycle collection {} freed {} objects, {} bytes live", collections(), freed, live_bytes());
+        crate::io::write_err(format!("[gc] cycle collection {} freed {} objects, {} bytes live\n", collections(), freed, live_bytes()).as_bytes());
     }
     COLLECTING.with(|c| c.set(false));
 }

@@ -62,6 +62,10 @@ async tasks are hand-written assembly (`entry_x86_64.s`). The assembly is linked
 runtime that is embedded in the `burn` binary, so the result is a standalone executable. Compiling and linking
 usually takes around 100ms.
 
+The runtime is embedded twice: the full one, and a `no_std` build of the same crate that uses only `core`, `alloc`
+and a few C library calls. Programs built with `--no-std` or `std = false` link the second one, and the checker
+rejects the features it leaves out ([details](./no-std.mdx)).
+
 ## JavaScript
 
 `--target js` writes a single self-contained script for Node.js. Records become arrays tagged with their type id,

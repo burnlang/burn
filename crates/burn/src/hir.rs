@@ -179,6 +179,7 @@ pub struct Program {
     pub type_annotations: Vec<(TyId, Vec<Annotation>)>,
     pub libs: Vec<Library>,
     pub name: String,
+    pub no_std: bool,
 }
 
 impl Program {

@@ -86,4 +86,23 @@ fn main() {
         let _ = Command::new("strip").arg(flag).arg(&lib).output();
     }
     fs::write(&libs_file, libs).unwrap();
+    let core = out.join("libburn_core.a");
+    let built = Command::new(&rustc)
+        .args(["--crate-name", "burn_runtime", "--crate-type", "staticlib", "--cfg", "burn_core"])
+        .args(flags)
+        .args(["--target", &target])
+        .arg("-o")
+        .arg(&core)
+        .arg(runtime_src.join("lib.rs"))
+        .output();
+    match built {
+        Ok(o) if o.status.success() => {
+            let flag = if target.contains("apple") { "-S" } else { "--strip-debug" };
+            let _ = Command::new("strip").arg(flag).arg(&core).output();
+        }
+        _ => {
+            println!("cargo:warning=could not build the no-std runtime");
+            let _ = fs::write(&core, b"");
+        }
+    }
 }

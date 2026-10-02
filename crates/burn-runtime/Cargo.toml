@@ -9,3 +9,6 @@ rust-version.workspace = true
 name = "burn_runtime"
 path = "src/lib.rs"
 crate-type = ["rlib"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(burn_core)"] }
