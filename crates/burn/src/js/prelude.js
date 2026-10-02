@@ -97,7 +97,8 @@ function $fmt(v, t, nested, depth) {
 function $eq(a, b, t) {
   const d = $d(t);
   switch (d[0]) {
-    case "int": case "float": case "bool": case "enum": case "fun": case "str": case "void": case "null": return a === b;
+    case "int": case "float": case "bool": case "enum": case "str": case "void": case "null": return a === b;
+    case "fun": return a === b || (a !== null && b !== null && a.length === b.length && a.every((x, i) => x === b[i]));
     case "any":
       if (a === null || b === null) return a === b;
       if (a.b !== b.b) { const n = x => { const k = $d(x.b)[0]; return k === "int" || k === "float"; }; return n(a) && n(b) && a.v === b.v; }

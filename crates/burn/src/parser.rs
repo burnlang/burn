@@ -2016,7 +2016,10 @@ impl Parser {
                 continue;
             }
             let t = self.peek().clone();
-            self.err(t.span, format!("expected a new line or `,` after the match arm but found {}", describe(&t.kind)));
+            self.err(
+                t.span,
+                format!("expected a new line or `,` after the match arm but found {}", describe(&t.kind)),
+            );
             return Err(());
         }
     }

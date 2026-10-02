@@ -2,9 +2,11 @@ use super::stmt::{diverges, Facts};
 use super::*;
 use crate::ast::{ArmBody, BinOp as AOp, ExprKind as A, MatchArm, Pattern};
 
+type Arm = (Option<Expr>, Vec<Stmt>, Option<(Expr, Span)>);
+
 struct Prepared {
     pre: Vec<Stmt>,
-    arms: Vec<(Option<Expr>, Vec<Stmt>, Option<(Expr, Span)>)>,
+    arms: Vec<Arm>,
     exhaustive: bool,
     missing: Vec<String>,
 }
@@ -29,8 +31,7 @@ impl<'a> Checker<'a> {
         if !p.exhaustive && !p.missing.is_empty() {
             let list = p.missing.join(", ");
             self.emit(
-                Diagnostic::warning(span, format!("`match` does not handle {}", list))
-                    .help("add an arm for each, or an `else` arm if nothing should happen"),
+                Diagnostic::warning(span, format!("`match` does not handle {}", list)).help("add an arm for each, or an `else` arm if nothing should happen"),
             );
         }
         let mut chain: Vec<Stmt> = Vec::new();
@@ -162,7 +163,10 @@ impl<'a> Checker<'a> {
         for arm in arms {
             if let Some(es) = else_span {
                 let (l, _) = self.sm.file(es.file).line_col(es.start as usize);
-                self.emit(Diagnostic::warning(arm.span, format!("unreachable arm: the `else` on line {} already handles everything", l)));
+                self.emit(Diagnostic::warning(
+                    arm.span,
+                    format!("unreachable arm: the `else` on line {} already handles everything", l),
+                ));
             }
             let start = self.ctx().narrow.clone();
             self.ctx().scopes.push(HashMap::new());
@@ -309,7 +313,9 @@ impl<'a> Checker<'a> {
         }
         self.ctx().narrow = before.clone();
         if let Some(first) = ends.pop() {
-            let merged = ends.into_iter().fold(first, |a, b| a.into_iter().filter(|(k, v)| b.get(k) == Some(v)).collect());
+            let merged = ends
+                .into_iter()
+                .fold(first, |a, b| a.into_iter().filter(|(k, v)| b.get(k) == Some(v)).collect());
             self.ctx().narrow = merged;
         }
         if exhaustive && !has_else {
@@ -319,7 +325,12 @@ impl<'a> Checker<'a> {
                 }
             }
         }
-        Prepared { pre, arms: out, exhaustive, missing }
+        Prepared {
+            pre,
+            arms: out,
+            exhaustive,
+            missing,
+        }
     }
 
     fn pattern_cond(
@@ -336,7 +347,7 @@ impl<'a> Checker<'a> {
         match pat {
             Pattern::Value(e) => {
                 if let (A::Ident(n), Some((_, vs))) = (&e.kind, variants) {
-                    if self.lookup_local(n).is_none() {
+                    if self.peek_local(n).is_none() {
                         if let Some(i) = vs.iter().position(|v| v == n) {
                             let lit = Expr::new(ExprKind::Int(i as i64), base);
                             let c = self.equality(true, val, lit, e.span);
@@ -362,7 +373,12 @@ impl<'a> Checker<'a> {
                     (ExprKind::Str(i), _) => Some(Key::Str(self.strings[*i as usize].clone())),
                     _ => None,
                 };
-                if h.ty != T_ERROR && sty != T_ERROR && self.types.get(base) != self.types.get(h.ty) && !(self.types.is_numeric(base) && self.types.is_numeric(h.ty)) && base != T_ANY {
+                if h.ty != T_ERROR
+                    && sty != T_ERROR
+                    && self.types.get(base) != self.types.get(h.ty)
+                    && !(self.types.is_numeric(base) && self.types.is_numeric(h.ty))
+                    && base != T_ANY
+                {
                     let (a, b) = (self.show(sty), self.show(h.ty));
                     self.error(e.span, format!("this pattern is {} but the value being matched is {}", b, a));
                     return (Expr::new(ExprKind::Bool(false), T_BOOL), facts, None, None);

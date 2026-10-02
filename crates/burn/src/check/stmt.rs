@@ -169,13 +169,16 @@ fn collect_expr(e: &ast::Expr, out: &mut HashSet<String>) {
 impl<'a> Checker<'a> {
     pub fn apply(&mut self, facts: &[(u32, TyId)]) {
         for (s, t) in facts {
+            if *s < GLOBAL_KEY && self.ctx().cells.contains_key(s) {
+                continue;
+            }
             self.ctx().narrow.insert(*s, *t);
         }
     }
 
     fn forget_assigned(&mut self, names: &HashSet<String>) {
         for n in names {
-            if let Some(l) = self.lookup_local(n) {
+            if let Some(l) = self.peek_local(n) {
                 self.ctx().narrow.remove(&l.slot);
                 self.clear_facts(l.slot);
             } else {
@@ -188,7 +191,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    pub fn local_of(&self, e: &ast::Expr) -> Option<u32> {
+    pub fn local_of(&mut self, e: &ast::Expr) -> Option<u32> {
         if let A::Ident(n) = &e.kind {
             if let Some(l) = self.lookup_local(n) {
                 return Some(l.slot);
@@ -552,6 +555,11 @@ impl<'a> Checker<'a> {
             end: u32::MAX,
         };
         let slot = self.declare_local(&name.name, t, name.span, is_const, scope);
+        if self.ctx().cell_names.contains(&name.name) {
+            let ct = self.make_cell_local(slot);
+            let cell = Expr::new(ExprKind::NewStruct(ct, vec![value]), ct);
+            return vec![Stmt::Expr(Expr::new(ExprKind::SetLocal(slot, Box::new(cell)), t))];
+        }
         if self.narrowable(t, vty) {
             self.ctx().narrow.insert(slot, vty);
         }

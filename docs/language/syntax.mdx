@@ -123,6 +123,35 @@ var triple = fun(x: int): int {
 print(apply(triple, 5))
 ```
 
+A lambda can use the variables around it. It keeps them alive after the function that created it returns, and
+changes go both ways, so a lambda can count:
+
+```burn
+fun makeCounter(): fun(): int {
+    var count = 0
+    return fun(): int {
+        count += 1
+        return count
+    }
+}
+
+var next = makeCounter()
+print(next(), next(), next())
+```
+
+Each loop iteration has its own loop variable, so lambdas created in a loop each see their own value:
+
+```burn
+[fun(): int] fns = []
+for i in 0..3 {
+    fns.push(fun(): int {
+        return i * 10
+    })
+}
+```
+
+Inside a struct method, a lambda can use the struct's fields and methods like the method itself.
+
 Any function can be called with method syntax when its first parameter matches:
 
 ```burn

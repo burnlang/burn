@@ -276,6 +276,9 @@ impl<'a> Checker<'a> {
 
     pub fn narrow_after_assign(&mut self, slot: u32, value: TyId) {
         self.clear_facts(slot);
+        if slot < GLOBAL_KEY && self.ctx().cells.contains_key(&slot) {
+            return;
+        }
         let declared = self.declared_of(slot);
         if self.narrowable(declared, value) {
             self.ctx().narrow.insert(slot, value);
@@ -451,7 +454,7 @@ impl<'a> Checker<'a> {
     }
 
     pub fn self_field(&self, name: &str) -> Option<(TyId, usize, TyId)> {
-        let st = self.fx.last()?.self_ty?;
+        let st = self.enclosing_self()?;
         let rec = self.types.record_of(st)?;
         let i = rec.field_index(name)?;
         Some((st, i, rec.fields[i].ty))
@@ -474,7 +477,7 @@ impl<'a> Checker<'a> {
             let t = self.show(ft);
             let text = self.with_doc(format!("(field) {}: {}", name, t), sp);
             self.hover(span, text);
-            let s = Expr::new(ExprKind::Local(0), st);
+            let s = self.self_expr(st);
             return Expr::new(ExprKind::GetField(Box::new(s), i as u32), ft);
         }
         if let Some(owner) = self.static_owner_rec() {
@@ -513,7 +516,8 @@ impl<'a> Checker<'a> {
                 if self.funcs[f as usize].is_async {
                     self.error(span, "async functions cannot be used as values yet; call them directly");
                 }
-                Expr::new(ExprKind::FuncRef(f), t)
+                let _ = t;
+                self.func_value(f)
             }
             None => {
                 if self.visible(m, name, |s| &s.values).is_err() {
@@ -707,6 +711,19 @@ impl<'a> Checker<'a> {
                 let a = self.expr(l, lexp);
                 let rexp = if self.types.is_numeric(a.ty) { Some(a.ty) } else { None };
                 let b = self.expr(r, rexp);
+                if matches!(op, AOp::BitAnd | AOp::BitOr) && (a.ty == T_BOOL || b.ty == T_BOOL) {
+                    let between = Span::new(span.file, l.span.end as usize, r.span.start as usize);
+                    let text = self.src_text(between);
+                    let sym = op.symbol();
+                    let logical = if op == AOp::BitAnd { "&&" } else { "||" };
+                    let mut d = Diagnostic::error(span, format!("`{}` works on the bits of ints; use `{}` to combine bools", sym, logical));
+                    if let Some(i) = text.find(sym) {
+                        let at = Span::new(span.file, between.start as usize + i, between.start as usize + i + 1);
+                        d = d.fix(format!("use `{}`", logical), at, logical);
+                    }
+                    self.emit(d);
+                    return Self::err_expr();
+                }
                 self.arith(op, a, b, span)
             }
         }
@@ -738,7 +755,7 @@ impl<'a> Checker<'a> {
             let b = self.coerce(b, T_FLOAT, span);
             return Expr::new(ExprKind::Binary(BinOp::FCmp(cmp), Box::new(a), Box::new(b)), T_BOOL);
         }
-        if at == bt && matches!(ak, Ty::Bool | Ty::Enum(_) | Ty::Func(..)) {
+        if at == bt && matches!(ak, Ty::Bool | Ty::Enum(_)) {
             return Expr::new(ExprKind::Binary(BinOp::ICmp(cmp), Box::new(a), Box::new(b)), T_BOOL);
         }
         if at == T_STR && bt == T_STR {
@@ -818,7 +835,8 @@ impl<'a> Checker<'a> {
                 if let Some((st, i, ft)) = self.self_field(name) {
                     let rec = self.types.record_of(st).unwrap().clone();
                     self.check_field_access(&rec, i, target.span);
-                    return Place::Field(Expr::new(ExprKind::Local(0), st), i as u32, ft);
+                    let s = self.self_expr(st);
+                    return Place::Field(s, i as u32, ft);
                 }
                 if let Some(owner) = self.static_owner_rec() {
                     if let Some(rec) = self.types.record_of(owner).cloned() {
@@ -1147,7 +1165,7 @@ impl<'a> Checker<'a> {
             Ty::Func(ps, r) => {
                 let hargs = self.check_args(&ps, args, None, span, "this function");
                 self.invalidate_globals();
-                Expr::new(ExprKind::CallIndirect(Box::new(callee), hargs), r)
+                self.call_value(callee, hargs, r)
             }
             Ty::Error => {
                 for a in args {
@@ -1169,7 +1187,7 @@ impl<'a> Checker<'a> {
 
     fn type_ident(&mut self, e: &ast::Expr) -> Option<TyId> {
         if let A::Ident(n) = &e.kind {
-            if self.lookup_local(n).is_some() || self.self_field(n).is_some() {
+            if self.peek_local(n).is_some() || self.self_field(n).is_some() {
                 return None;
             }
             let m = self.cur_module();
@@ -1189,7 +1207,7 @@ impl<'a> Checker<'a> {
                     let c = self.read_local(l.slot);
                     return self.indirect_call(c, args, span);
                 }
-                if let Some(st) = self.fx.last().and_then(|c| c.self_ty) {
+                if let Some(st) = self.enclosing_self() {
                     if let Some(rec) = self.types.record_of(st) {
                         let ri = match self.types.get(st) {
                             Ty::Record(r) => *r,
@@ -1203,7 +1221,7 @@ impl<'a> Checker<'a> {
                         if let Some(slot) = vslot {
                             let argc = self.slots[slot as usize].argc as usize;
                             if !has_outer || argc == args.len() + 1 {
-                                let s = Expr::new(ExprKind::Local(0), st);
+                                let s = self.self_expr(st);
                                 let id = ast::Ident {
                                     name: name.clone(),
                                     span: callee.span,
@@ -1213,7 +1231,7 @@ impl<'a> Checker<'a> {
                         }
                         if let Some(fid) = method {
                             if !has_outer || self.funcs[fid as usize].params.len() == args.len() + 1 {
-                                let s = Expr::new(ExprKind::Local(0), st);
+                                let s = self.self_expr(st);
                                 return self.direct_call(fid, Some(s), args, span, callee.span);
                             }
                         }
@@ -1557,8 +1575,7 @@ impl<'a> Checker<'a> {
                         };
                     }
                     if let Some(fid) = rec.statics.get(&name.name) {
-                        let ft = self.func_type(*fid);
-                        return Expr::new(ExprKind::FuncRef(*fid), ft);
+                        return self.func_value(*fid);
                     }
                     let cands: Vec<&str> = rec.static_vals.keys().chain(rec.statics.keys()).map(|s| s.as_str()).collect();
                     match suggest(&name.name, cands.into_iter()) {
@@ -2255,7 +2272,7 @@ impl<'a> Checker<'a> {
         let key = (f.span.file, f.span.start);
         if let Some(fid) = self.lambdas.get(&key).copied() {
             let t = self.func_type(fid);
-            return Expr::new(ExprKind::FuncRef(fid), t);
+            return self.closure_value(fid, t);
         }
         if f.is_async {
             self.error(f.span, "async lambdas are not supported yet");
@@ -2271,8 +2288,15 @@ impl<'a> Checker<'a> {
         let (line, _) = self.sm.file(f.span.file).line_col(f.span.start as usize);
         self.funcs[fid as usize].name = format!("<lambda:{}>", line);
         self.lambdas.insert(key, fid);
+        self.closures.insert(
+            fid,
+            closures::ClosureInfo {
+                ty: T_INT,
+                captures: Vec::new(),
+            },
+        );
         self.check_func(fid);
         let t = self.func_type(fid);
-        Expr::new(ExprKind::FuncRef(fid), t)
+        self.closure_value(fid, t)
     }
 }

@@ -1,1 +1,1 @@
-2:12 cannot apply `&` to bool and bool
+2:12 `&` works on the bits of ints; use `&&` to combine bools

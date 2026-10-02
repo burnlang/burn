@@ -153,7 +153,15 @@ pub fn equals(a: u64, b: u64, tid: u32) -> bool {
     }
     match desc(tid) {
         Desc::Float => f64::from_bits(a) == f64::from_bits(b),
-        Desc::Int | Desc::Bool | Desc::Enum { .. } | Desc::Func | Desc::Void | Desc::Null => false,
+        Desc::Func => {
+            a != 0
+                && b != 0
+                && kind_of(a) == K_STRUCT
+                && kind_of(b) == K_STRUCT
+                && struct_len(a) == struct_len(b)
+                && (0..struct_len(a)).all(|i| field(a, i) == field(b, i))
+        }
+        Desc::Int | Desc::Bool | Desc::Enum { .. } | Desc::Void | Desc::Null => false,
         Desc::Str => str_bytes(a) == str_bytes(b),
         Desc::Any => {
             if a == 0 || b == 0 {
