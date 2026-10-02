@@ -1,0 +1,116 @@
+---
+title: std/list, std/collections, std/path, std/random and std/testing
+description: Array helpers, sets, queues, stacks and counters, file paths, randomness and tests.
+order: 15
+---
+
+# `std/list`
+
+Helpers for arrays that take functions. They are generic, so they work for arrays of any type, and they can be
+called as methods:
+
+```burn
+import "list"
+
+var nums = [5, 3, 8, 1]
+var doubled = nums.map(fun(x: int): int {
+    return x * 2
+})
+var odd = nums.filter(fun(x: int): bool {
+    return x % 2 == 1
+})
+var sum = nums.reduce(0, fun(acc: int, x: int): int {
+    return acc + x
+})
+var byLength = ["pear", "fig", "apple"].sortBy(fun(s: string): int {
+    return len(s)
+})
+```
+
+| Function | Result |
+| --- | --- |
+| `map(items, f)` | `f` applied to every item |
+| `filter(items, keep)` | the items for which `keep` returns true |
+| `reduce(items, start, f)` | one value combined from left to right |
+| `each(items, f)` | calls `f` for every item |
+| `find(items, test)`, `findIndex(items, test)` | the first match (or `null`) / its index (or `-1`) |
+| `any`, `all`, `countWhere` | whether some / every item passes, how many pass |
+| `total(items, zero)` | the items added with `+` (numbers or strings) |
+| `first`, `last` | the first / last item, or `null` |
+| `take(items, n)`, `drop(items, n)` | the first `n` items / the rest |
+| `chunk(items, size)`, `flatten(lists)` | groups of `size` / one array from many |
+| `unique(items)` | the items without repeats |
+| `sortBy(items, key)`, `sortWith(items, less)` | a sorted copy, by a key or a comparison (stable) |
+| `groupBy(items, key)` | a map from each key to its items |
+| `partition(items, test)` | `[passed, others]` |
+| `zipWith(a, b, f)` | `f` applied to pairs of items |
+| `maxBy(items, key)`, `minBy(items, key)` | the item with the largest / smallest key |
+| `range(start, end)`, `fill(value, n)` | `[start, ..., end - 1]` / `n` copies of a value |
+
+# `std/collections`
+
+Generic data structures:
+
+```burn
+import "collections"
+
+var seen = new Set<string>()
+seen.add("burn")
+print(seen.includes("burn"), seen.size())
+
+var jobs = new Queue<string>()
+jobs.enqueue("build")
+jobs.enqueue("test")
+print(jobs.dequeue())
+
+var words = new Counter<string>()
+words.addAll(["a", "b", "a"])
+print(words.count("a"), words.mostCommon(1))
+```
+
+| Type | Methods |
+| --- | --- |
+| `Set<T>` | `add`, `addAll`, `delete`, `includes`, `size`, `items`, `clearAll`, `union`, `intersect`, `difference`; `setOf(values)` makes one |
+| `Queue<T>` | `enqueue`, `dequeue`, `peek`, `size`, `isEmpty` (first in, first out) |
+| `Stack<T>` | `push`, `pop`, `peek`, `size`, `isEmpty` (last in, first out) |
+| `Counter<T>` | `add`, `addAll`, `count`, `mostCommon(n)`, `size` |
+
+`Set` and `Counter` keep values as map keys, so their values must be strings, ints, bools or enums.
+
+# `std/path`
+
+`joinPath(a, b)`, `joinAll(parts)`, `normalize(path)` (removes `.` and resolves `..`), `baseName`, `dirName`,
+`extension` (with the dot), `stem` (the name without the extension) and `isAbsolute`. Paths use `/`.
+
+```burn
+import "path"
+
+print(joinPath("src", "main.bn"), normalize("a/./b/../c"), extension("notes.txt"))
+```
+
+# `std/random`
+
+`shuffled(items)` (a shuffled copy), `pick(items)` (one random item or `null`), `sample(items, n)` (`n` different
+items), `chance(probability)` and `randomString(length, alphabet)`. They use the built-in random number generator,
+so `seed(n)` makes them repeatable.
+
+# `std/testing`
+
+Small tests that keep running after a failure:
+
+```burn
+import "testing"
+
+test("adds numbers", fun() {
+    expectEqual(1 + 2, 3)
+})
+test("rounds", fun() {
+    expectNear(0.1 + 0.2, 0.3, 0.0001)
+})
+finish()
+```
+
+`test(name, body)` prints `ok` or `FAIL` for each test. Inside it, `expect(condition, message)`,
+`expectEqual(actual, expected)`, `expectNotEqual` and `expectNear(actual, expected, tolerance)` record failures
+with what was expected. `finish()` prints the totals and ends the program with exit code 1 if any test failed, which
+is what `ash test` and CI look at.

@@ -44,6 +44,26 @@ pub const STDLIB: &[Stdlib] = &[
         name: "fs",
         src: include_str!("../../../lib/std/fs.bn"),
     },
+    Stdlib {
+        name: "list",
+        src: include_str!("../../../lib/std/list.bn"),
+    },
+    Stdlib {
+        name: "collections",
+        src: include_str!("../../../lib/std/collections.bn"),
+    },
+    Stdlib {
+        name: "path",
+        src: include_str!("../../../lib/std/path.bn"),
+    },
+    Stdlib {
+        name: "random",
+        src: include_str!("../../../lib/std/random.bn"),
+    },
+    Stdlib {
+        name: "testing",
+        src: include_str!("../../../lib/std/testing.bn"),
+    },
 ];
 
 pub fn stdlib_name(path: &str) -> Option<&'static Stdlib> {

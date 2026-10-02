@@ -1955,7 +1955,7 @@ impl<'a> Checker<'a> {
                 }
                 Ty::Record(ri) => return self.build_record(ri, fields, span),
                 Ty::Map(k, v) if ty.is_none() => {
-                    if k != T_STR && k != T_ANY {
+                    if k != T_STR && k != T_ANY && !fields.is_empty() {
                         let s = self.show(t);
                         self.error(span, format!("cannot use field syntax for a map of type {}", s));
                     }

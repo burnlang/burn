@@ -1,0 +1,27 @@
+[50, 30, 80, 10, 90, 20]
+[5, 3, 1, 9]
+28 28 ab
+8 -1
+true true 3
+5 2 [5, 3] [9, 2] [[5, 3, 8, 1], [9, 2]]
+[1, 2, 3] [1, 2, 3]
+["fig", "pear", "kiwi", "apple"] ["pear", "kiwi", "fig", "apple"] ["pear", "fig", "apple", "kiwi"]
+{4: ["pear", "kiwi"], 3: ["fig"], 5: ["apple"]}
+[[5, 8, 9], [3, 1, 2]] ["a1", "b2"]
+apple fig [2, 3, 4] ["x", "x", "x"]
+true true false 2 true ["a", "b"]
+["a", "b", "c"] ["b"] ["a"]
+true false ["b"]
+4950 null 0
+y y 1 false
+3 0 ["a", "b"] 3
+src/main.bn /etc a/b/c.txt
+a/c/d /y ..
+main.bn src/lib . /
+.gz  main true
+10 true true 3 6
+ok   math works
+ok   strings
+     expected [1, 3] but got [1, 2]
+FAIL this one fails
+2 passed, 1 failed

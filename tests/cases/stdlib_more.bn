@@ -1,0 +1,100 @@
+import "list"
+import "collections"
+import "path"
+import "random"
+import "testing"
+
+var nums = [5, 3, 8, 1, 9, 2]
+print(nums.map(fun(x: int): int {
+    return x * 10
+}))
+print(nums.filter(fun(x: int): bool {
+    return x % 2 == 1
+}))
+print(nums.reduce(0, fun(acc: int, x: int): int {
+    return acc + x
+}), nums.total(0), ["a", "b"].total(""))
+print(nums.find(fun(x: int): bool {
+    return x > 6
+}), nums.findIndex(fun(x: int): bool {
+    return x > 100
+}))
+print(nums.any(fun(x: int): bool {
+    return x > 8
+}), nums.all(fun(x: int): bool {
+    return x > 0
+}), nums.countWhere(fun(x: int): bool {
+    return x < 5
+}))
+print(nums.first(), nums.last(), nums.take(2), nums.drop(4), nums.chunk(4))
+print([[1, 2], [3]].flatten(), [1, 2, 1, 3, 2].unique())
+var words = ["pear", "fig", "apple", "kiwi"]
+print(words.sortBy(fun(s: string): int {
+    return len(s)
+}), words.sortWith(fun(a: string, b: string): bool {
+    return a > b
+}), words)
+print(words.groupBy(fun(s: string): int {
+    return len(s)
+}))
+print(nums.partition(fun(x: int): bool {
+    return x > 4
+}), zipWith([1, 2, 3], ["a", "b"], fun(n: int, s: string): string {
+    return s + n
+}))
+print(words.maxBy(fun(s: string): int {
+    return len(s)
+}), words.minBy(fun(s: string): int {
+    return len(s)
+}), range(2, 5), fill("x", 3))
+
+var seen = new Set<string>()
+print(seen.add("a"), seen.add("b"), seen.add("a"), seen.size(), seen.includes("b"), seen.items())
+var other = setOf(["b", "c"])
+print(seen.union(other).items(), seen.intersect(other).items(), seen.difference(other).items())
+print(seen.delete("a"), seen.delete("zz"), seen.items())
+
+var q = new Queue<int>()
+for i in 0..100 {
+    q.enqueue(i)
+}
+var sum = 0
+while !q.isEmpty() {
+    sum += q.dequeue()!!
+}
+print(sum, q.dequeue(), q.size())
+
+var st = new Stack<string>()
+st.push("x")
+st.push("y")
+print(st.peek(), st.pop(), st.size(), st.isEmpty())
+
+var counter = new Counter<string>()
+counter.addAll(["a", "b", "a", "c", "b", "a"])
+print(counter.count("a"), counter.count("z"), counter.mostCommon(2), counter.size())
+
+print(joinPath("src", "main.bn"), joinPath("src/", "/etc"), joinAll(["a", "b", "c.txt"]))
+print(normalize("a/./b/../c//d"), normalize("/x/../../y"), normalize("../a/.."))
+print(baseName("src/lib/main.bn"), dirName("src/lib/main.bn"), dirName("main.bn"), dirName("/main.bn"))
+print(extension("archive.tar.gz"), extension(".hidden"), stem("src/main.bn"), isAbsolute("/usr"))
+
+seed(42)
+var deck = range(0, 10)
+var mixed = deck.shuffled()
+print(len(mixed), mixed.sortBy(fun(x: int): int {
+    return x
+}) == deck, deck.pick() != null, len(sample(deck, 3)), len(randomString(6, "ab")))
+
+test("math works", fun() {
+    expectEqual(1 + 2, 3)
+    expectNear(0.1 + 0.2, 0.3, 0.0001)
+})
+test("strings", fun() {
+    expectEqual("a" + "b", "ab")
+    expectNotEqual("a", "b")
+    expect(len("abc") == 3, "length")
+})
+test("this one fails", fun() {
+    expectEqual([1, 2], [1, 3])
+})
+finish()

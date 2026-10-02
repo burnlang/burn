@@ -1,0 +1,361 @@
+/**
+ * A collection of unique values, kept in the order they were first added.
+ *
+ * The values must be strings, ints, bools or enums.
+ *
+ * @since 26.1
+ * @example
+ *     var seen = new Set<string>()
+ *     seen.add("a")
+ *     seen.add("a")
+ *     print(seen.size())  // 1
+ */
+pub def struct Set<T>() {
+    {T: bool} entries = {}
+
+    /**
+     * Adds a value.
+     *
+     * @param value the value to add
+     * @return `true` if it was not in the set yet
+     */
+    fun add(value: T): bool {
+        if has(entries, value) {
+            return false
+        }
+        entries[value] = true
+        return true
+    }
+
+    /**
+     * Adds every value of an array.
+     *
+     * @param values the values to add
+     */
+    fun addAll(values: [T]) {
+        for v in values {
+            entries[v] = true
+        }
+    }
+
+    /**
+     * Removes a value.
+     *
+     * @param value the value to remove
+     * @return `true` if it was in the set
+     */
+    fun delete(value: T): bool {
+        if !has(entries, value) {
+            return false
+        }
+        remove(entries, value)
+        return true
+    }
+
+    /**
+     * Tells whether a value is in the set.
+     *
+     * @param value the value to look for
+     * @return `true` if it is in the set
+     */
+    fun includes(value: T): bool {
+        return has(entries, value)
+    }
+
+    /**
+     * Counts the values.
+     *
+     * @return the number of values
+     */
+    fun size(): int {
+        return len(entries)
+    }
+
+    /**
+     * Lists the values.
+     *
+     * @return the values, in the order they were added
+     */
+    fun items(): [T] {
+        return keys(entries)
+    }
+
+    /**
+     * Removes every value.
+     */
+    fun clearAll() {
+        entries = {}
+    }
+
+    /**
+     * Makes a set with the values of this set and another one.
+     *
+     * @param other the other set
+     * @return a new set
+     */
+    fun union(other: Set<T>): Set<T> {
+        var out = new Set<T>()
+        out.addAll(items())
+        out.addAll(other.items())
+        return out
+    }
+
+    /**
+     * Makes a set with the values that are in both sets.
+     *
+     * @param other the other set
+     * @return a new set
+     */
+    fun intersect(other: Set<T>): Set<T> {
+        var out = new Set<T>()
+        for v in items() {
+            if other.includes(v) {
+                out.add(v)
+            }
+        }
+        return out
+    }
+
+    /**
+     * Makes a set with the values of this set that are not in another one.
+     *
+     * @param other the other set
+     * @return a new set
+     */
+    fun difference(other: Set<T>): Set<T> {
+        var out = new Set<T>()
+        for v in items() {
+            if !other.includes(v) {
+                out.add(v)
+            }
+        }
+        return out
+    }
+}
+
+/**
+ * Makes a set from the values of an array.
+ *
+ * @param values the values
+ * @return a set with each value once
+ * @since 26.1
+ */
+pub fun setOf<T>(values: [T]): Set<T> {
+    var s = new Set<T>()
+    s.addAll(values)
+    return s
+}
+
+/**
+ * A first-in, first-out queue: values come out in the order they went in.
+ *
+ * Adding and taking values are fast, even for long queues.
+ *
+ * @since 26.1
+ * @example
+ *     var q = new Queue<int>()
+ *     q.enqueue(1)
+ *     q.enqueue(2)
+ *     print(q.dequeue())  // 1
+ */
+pub def struct Queue<T>() {
+    [T] items = []
+    int head = 0
+
+    /**
+     * Adds a value at the back.
+     *
+     * @param value the value to add
+     */
+    fun enqueue(value: T) {
+        items.push(value)
+    }
+
+    /**
+     * Takes the value at the front.
+     *
+     * @return the oldest value, or `null` if the queue is empty
+     */
+    fun dequeue(): T? {
+        if head >= len(items) {
+            return null
+        }
+        var v = items[head]
+        head += 1
+        if head > 32 && head * 2 > len(items) {
+            items = slice(items, head, len(items))
+            head = 0
+        }
+        return v
+    }
+
+    /**
+     * Looks at the value at the front without taking it.
+     *
+     * @return the oldest value, or `null` if the queue is empty
+     */
+    fun peek(): T? {
+        if head >= len(items) {
+            return null
+        }
+        return items[head]
+    }
+
+    /**
+     * Counts the values.
+     *
+     * @return the number of values waiting
+     */
+    fun size(): int {
+        return len(items) - head
+    }
+
+    /**
+     * Tells whether the queue has no values.
+     *
+     * @return `true` if it is empty
+     */
+    fun isEmpty(): bool {
+        return head >= len(items)
+    }
+}
+
+/**
+ * A last-in, first-out stack: the value added last comes out first.
+ *
+ * @since 26.1
+ */
+pub def struct Stack<T>() {
+    [T] items = []
+
+    /**
+     * Adds a value on top.
+     *
+     * @param value the value to add
+     */
+    fun push(value: T) {
+        items.push(value)
+    }
+
+    /**
+     * Takes the value on top.
+     *
+     * @return the newest value, or `null` if the stack is empty
+     */
+    fun pop(): T? {
+        if len(items) == 0 {
+            return null
+        }
+        return items.pop()
+    }
+
+    /**
+     * Looks at the value on top without taking it.
+     *
+     * @return the newest value, or `null` if the stack is empty
+     */
+    fun peek(): T? {
+        if len(items) == 0 {
+            return null
+        }
+        return items[len(items) - 1]
+    }
+
+    /**
+     * Counts the values.
+     *
+     * @return the number of values
+     */
+    fun size(): int {
+        return len(items)
+    }
+
+    /**
+     * Tells whether the stack has no values.
+     *
+     * @return `true` if it is empty
+     */
+    fun isEmpty(): bool {
+        return len(items) == 0
+    }
+}
+
+/**
+ * Counts how often each value appears.
+ *
+ * The values must be strings, ints, bools or enums.
+ *
+ * @since 26.1
+ * @example
+ *     var c = new Counter<string>()
+ *     c.addAll(["a", "b", "a"])
+ *     print(c.count("a"))  // 2
+ */
+pub def struct Counter<T>() {
+    {T: int} counts = {}
+
+    /**
+     * Counts one more of a value.
+     *
+     * @param value the value
+     */
+    fun add(value: T) {
+        counts[value] = (counts[value] ?? 0) + 1
+    }
+
+    /**
+     * Counts every value of an array.
+     *
+     * @param values the values
+     */
+    fun addAll(values: [T]) {
+        for v in values {
+            add(v)
+        }
+    }
+
+    /**
+     * Tells how often a value was counted.
+     *
+     * @param value the value
+     * @return its count, `0` if it never appeared
+     */
+    fun count(value: T): int {
+        return counts[value] ?? 0
+    }
+
+    /**
+     * Lists the values that appear most often.
+     *
+     * @param n how many values to return
+     * @return at most `n` values, the most frequent first; ties keep the order they first appeared in
+     */
+    fun mostCommon(n: int): [T] {
+        [T] out = []
+        var vs: [T] = keys(counts)
+        var used: {T: bool} = {}
+        while len(out) < n && len(out) < len(vs) {
+            var best = vs[0]
+            var bestCount = -1
+            for v in vs {
+                var c = counts[v]!!
+                if !has(used, v) && c > bestCount {
+                    best = v
+                    bestCount = c
+                }
+            }
+            used[best] = true
+            out.push(best)
+        }
+        return out
+    }
+
+    /**
+     * Counts the different values.
+     *
+     * @return the number of distinct values
+     */
+    fun size(): int {
+        return len(counts)
+    }
+}

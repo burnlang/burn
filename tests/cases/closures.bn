@@ -31,7 +31,7 @@ print(apply(double, 21), apply(add5, 1))
 [fun(): int] fns = []
 for i in 0..3 {
     fns.push(fun(): int {
-            return i * 10
+        return i * 10
     })
 }
 for f in fns {

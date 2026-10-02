@@ -32,7 +32,7 @@ print(first([3, 4]), first(["a"]), first([1.5]))
 print(first(none))
 print(swap(1, "x"))
 print(mapList([1, 2, 3], fun(x: int): string {
-            return "#${x}"
+    return "#${x}"
 }))
 print(largest([3, 9, 2]), largest(["pear", "apple"]), [1, 2].largest())
 

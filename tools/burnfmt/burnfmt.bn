@@ -397,9 +397,57 @@ fun trimEnd(text: string): string {
     return join(slice(cs, 0, end), "")
 }
 
+fun indentFor(seg: [Tok], levels: [int]): int {
+    var before = len(levels)
+    var touched = 0
+    var partial = false
+    var i = 0
+    while (i < len(seg) && seg[i].kind == Kind.Close) {
+        if (len(levels) > 0) {
+            var top = len(levels) - 1
+            levels[top] = levels[top] - 1
+            partial = levels[top] > 0
+            if (!partial) {
+                levels.pop()
+                touched += 1
+            }
+        }
+        i += 1
+    }
+    var indent = before - touched
+    if (i > 0 && partial) {
+        indent = before - touched - 1
+    }
+    var fresh = 0
+    for j in i..len(seg) {
+        var t = seg[j]
+        if (t.kind == Kind.Open) {
+            fresh += 1
+        } else if (t.kind == Kind.Close) {
+            if (fresh > 0) {
+                fresh -= 1
+            } else if (len(levels) > 0) {
+                var top = len(levels) - 1
+                levels[top] = levels[top] - 1
+                if (levels[top] <= 0) {
+                    levels.pop()
+                }
+            }
+        }
+    }
+    if (fresh > 0) {
+        if (i > 0 && partial && len(levels) > 0) {
+            levels[len(levels) - 1] = levels[len(levels) - 1] + fresh
+        } else {
+            levels.push(fresh)
+        }
+    }
+    return indent
+}
+
 pub fun format(src: string): string {
     [string] out = []
-    var depth = 0
+    [int] levels = []
     var blank = 0
     var inBlockComment = false
     var started = false
@@ -408,7 +456,7 @@ pub fun format(src: string): string {
         var line = trim(raw)
         if (inBlockComment) {
             if (startsWith(line, "*")) {
-                out.push(repeat("    ", max(depth, 0)) + " " + line + "\n")
+                out.push(repeat("    ", len(levels)) + " " + line + "\n")
             } else {
                 out.push(trimEnd(raw) + "\n")
             }
@@ -424,7 +472,7 @@ pub fun format(src: string): string {
             blank = 0
             lastWasClose = false
             started = true
-            out.push(repeat("    ", max(depth, 0)) + line + "\n")
+            out.push(repeat("    ", len(levels)) + line + "\n")
             inBlockComment = !contains(line, "*/")
             continue
         }
@@ -439,21 +487,12 @@ pub fun format(src: string): string {
             while (leadingClose < len(seg) && seg[leadingClose].kind == Kind.Close) {
                 leadingClose += 1
             }
-            var delta = 0
-            for t in seg {
-                if (t.kind == Kind.Open) {
-                    delta += 1
-                } else if (t.kind == Kind.Close) {
-                    delta -= 1
-                }
-            }
             var isDecl = (seg[0].kind == Kind.Word && contains(DECL_WORDS, seg[0].text)) || (seg[0].kind == Kind.Op && seg[0].text == "@")
             if ((si == 0 && first && !(leadingClose > 0 && len(seg) == 1)) || (isDecl && lastWasClose)) {
                 out.push("\n")
             }
             lastWasClose = len(seg) == 1 && isClose(seg[0], "}")
-            out.push(repeat("    ", max(depth - leadingClose, 0)) + renderLine(seg) + "\n")
-            depth += delta
+            out.push(repeat("    ", indentFor(seg, levels)) + renderLine(seg) + "\n")
         }
         started = true
     }

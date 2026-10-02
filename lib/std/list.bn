@@ -1,0 +1,502 @@
+/**
+ * Makes a new array with the result of a function for every item.
+ *
+ * @param items the items to transform
+ * @param f the function to call for each item
+ * @return the results, in the same order
+ * @since 26.1
+ * @example
+ *     [1, 2, 3].map(fun(x: int): int { return x * 2 })  // [2, 4, 6]
+ */
+pub fun map<T, U>(items: [T], f: fun(T): U): [U] {
+    [U] out = []
+    for x in items {
+        out.push(f(x))
+    }
+    return out
+}
+
+/**
+ * Makes a new array with the items for which a test returns true.
+ *
+ * @param items the items to test
+ * @param keep the test
+ * @return the items that passed, in the same order
+ * @since 26.1
+ * @example
+ *     [1, 2, 3, 4].filter(fun(x: int): bool { return x % 2 == 0 })  // [2, 4]
+ */
+pub fun filter<T>(items: [T], keep: fun(T): bool): [T] {
+    [T] out = []
+    for x in items {
+        if keep(x) {
+            out.push(x)
+        }
+    }
+    return out
+}
+
+/**
+ * Combines all items into one value, from left to right.
+ *
+ * @param items the items to combine
+ * @param start the value to start with
+ * @param f gets the value so far and the next item, and returns the new value
+ * @return the final value, or `start` for an empty array
+ * @since 26.1
+ * @example
+ *     [1, 2, 3].reduce(0, fun(sum: int, x: int): int { return sum + x })  // 6
+ */
+pub fun reduce<T, R>(items: [T], start: R, f: fun(R, T): R): R {
+    var acc = start
+    for x in items {
+        acc = f(acc, x)
+    }
+    return acc
+}
+
+/**
+ * Calls a function for every item.
+ *
+ * @param items the items
+ * @param f the function to call
+ * @since 26.1
+ */
+pub fun each<T>(items: [T], f: fun(T)) {
+    for x in items {
+        f(x)
+    }
+}
+
+/**
+ * Finds the first item for which a test returns true.
+ *
+ * @param items the items to search
+ * @param test the test
+ * @return the first matching item, or `null`
+ * @see findIndex
+ * @since 26.1
+ */
+pub fun find<T>(items: [T], test: fun(T): bool): T? {
+    for x in items {
+        if test(x) {
+            return x
+        }
+    }
+    return null
+}
+
+/**
+ * Finds the position of the first item for which a test returns true.
+ *
+ * @param items the items to search
+ * @param test the test
+ * @return the index of the first matching item, or `-1`
+ * @see find
+ * @since 26.1
+ */
+pub fun findIndex<T>(items: [T], test: fun(T): bool): int {
+    for i, x in items {
+        if test(x) {
+            return i
+        }
+    }
+    return -1
+}
+
+/**
+ * Tells whether a test returns true for at least one item.
+ *
+ * @param items the items to test
+ * @param test the test
+ * @return `true` if any item passes; `false` for an empty array
+ * @since 26.1
+ */
+pub fun any<T>(items: [T], test: fun(T): bool): bool {
+    for x in items {
+        if test(x) {
+            return true
+        }
+    }
+    return false
+}
+
+/**
+ * Tells whether a test returns true for every item.
+ *
+ * @param items the items to test
+ * @param test the test
+ * @return `true` if every item passes; `true` for an empty array
+ * @since 26.1
+ */
+pub fun all<T>(items: [T], test: fun(T): bool): bool {
+    for x in items {
+        if !test(x) {
+            return false
+        }
+    }
+    return true
+}
+
+/**
+ * Counts the items for which a test returns true.
+ *
+ * @param items the items to test
+ * @param test the test
+ * @return the number of items that passed
+ * @since 26.1
+ */
+pub fun countWhere<T>(items: [T], test: fun(T): bool): int {
+    var n = 0
+    for x in items {
+        if test(x) {
+            n += 1
+        }
+    }
+    return n
+}
+
+/**
+ * Adds up all items with `+`.
+ *
+ * Works for any item type that supports `+`, such as `int`, `float` and
+ * `string`.
+ *
+ * @param items the items to add
+ * @param zero the value for an empty array
+ * @return the sum
+ * @since 26.1
+ * @example
+ *     [1, 2, 3].total(0)        // 6
+ *     ["a", "b"].total("")      // "ab"
+ */
+pub fun total<T>(items: [T], zero: T): T {
+    var acc = zero
+    for x in items {
+        acc = acc + x
+    }
+    return acc
+}
+
+/**
+ * Returns the first item.
+ *
+ * @param items the items
+ * @return the first item, or `null` for an empty array
+ * @since 26.1
+ */
+pub fun first<T>(items: [T]): T? {
+    if len(items) == 0 {
+        return null
+    }
+    return items[0]
+}
+
+/**
+ * Returns the last item.
+ *
+ * @param items the items
+ * @return the last item, or `null` for an empty array
+ * @since 26.1
+ */
+pub fun last<T>(items: [T]): T? {
+    if len(items) == 0 {
+        return null
+    }
+    return items[len(items) - 1]
+}
+
+/**
+ * Returns the first items.
+ *
+ * @param items the items
+ * @param n how many to take
+ * @return at most `n` items from the start
+ * @since 26.1
+ */
+pub fun take<T>(items: [T], n: int): [T] {
+    if n <= 0 {
+        [T] none = []
+        return none
+    }
+    return slice(items, 0, min(n, len(items)))
+}
+
+/**
+ * Returns the items after the first ones.
+ *
+ * @param items the items
+ * @param n how many to skip
+ * @return the items from position `n` on
+ * @since 26.1
+ */
+pub fun drop<T>(items: [T], n: int): [T] {
+    if n >= len(items) {
+        [T] none = []
+        return none
+    }
+    return slice(items, max(n, 0), len(items))
+}
+
+/**
+ * Splits the items into groups of a fixed size. The last group can be
+ * smaller.
+ *
+ * @param items the items
+ * @param size the size of each group, at least 1
+ * @return the groups, in order
+ * @since 26.1
+ * @example
+ *     [1, 2, 3, 4, 5].chunk(2)  // [[1, 2], [3, 4], [5]]
+ */
+pub fun chunk<T>(items: [T], size: int): [[T]] {
+    [[T]] out = []
+    var step = max(size, 1)
+    var i = 0
+    while i < len(items) {
+        out.push(slice(items, i, min(i + step, len(items))))
+        i += step
+    }
+    return out
+}
+
+/**
+ * Joins a list of arrays into one array.
+ *
+ * @param lists the arrays
+ * @return all items, in order
+ * @since 26.1
+ */
+pub fun flatten<T>(lists: [[T]]): [T] {
+    [T] out = []
+    for l in lists {
+        for x in l {
+            out.push(x)
+        }
+    }
+    return out
+}
+
+/**
+ * Removes repeated items, keeping the first of each.
+ *
+ * @param items the items
+ * @return the items without repeats, in order
+ * @since 26.1
+ */
+pub fun unique<T>(items: [T]): [T] {
+    [T] out = []
+    for x in items {
+        if !out.contains(x) {
+            out.push(x)
+        }
+    }
+    return out
+}
+
+/**
+ * Sorts items by a key, without changing the original array.
+ *
+ * The sort is stable: items with equal keys keep their order. Keys are
+ * compared with `<`, so they can be numbers or strings.
+ *
+ * @param items the items to sort
+ * @param key gives the value to sort by
+ * @return a new, sorted array
+ * @see sortWith
+ * @since 26.1
+ * @example
+ *     ["pear", "fig", "apple"].sortBy(fun(s: string): int { return len(s) })  // ["fig", "pear", "apple"]
+ */
+pub fun sortBy<T, K>(items: [T], key: fun(T): K): [T] {
+    var keys = items.map(key)
+    var order = range(0, len(items))
+    var sorted = order.sortWith(fun(a: int, b: int): bool {
+        return keys[a] < keys[b]
+    })
+    return sorted.map(fun(i: int): T {
+        return items[i]
+    })
+}
+
+/**
+ * Sorts items with a comparison, without changing the original array.
+ *
+ * The sort is stable: items that are not less than each other keep their
+ * order.
+ *
+ * @param items the items to sort
+ * @param less tells whether the first item belongs before the second
+ * @return a new, sorted array
+ * @see sortBy
+ * @since 26.1
+ */
+pub fun sortWith<T>(items: [T], less: fun(T, T): bool): [T] {
+    if len(items) <= 1 {
+        return copy(items)
+    }
+    var mid = len(items) / 2
+    var left = sortWith(slice(items, 0, mid), less)
+    var right = sortWith(slice(items, mid, len(items)), less)
+    [T] out = []
+    var i = 0
+    var j = 0
+    while i < len(left) && j < len(right) {
+        if less(right[j], left[i]) {
+            out.push(right[j])
+            j += 1
+        } else {
+            out.push(left[i])
+            i += 1
+        }
+    }
+    while i < len(left) {
+        out.push(left[i])
+        i += 1
+    }
+    while j < len(right) {
+        out.push(right[j])
+        j += 1
+    }
+    return out
+}
+
+/**
+ * Groups items by a key.
+ *
+ * @param items the items
+ * @param key gives the group of each item; it must be a string, int, bool or enum
+ * @return a map from each key to its items, in order
+ * @since 26.1
+ */
+pub fun groupBy<T, K>(items: [T], key: fun(T): K): {K: [T]} {
+    {K: [T]} out = {}
+    for x in items {
+        var k = key(x)
+        var group = out[k]
+        if group == null {
+            out[k] = [x]
+        } else {
+            group.push(x)
+        }
+    }
+    return out
+}
+
+/**
+ * Splits items into those that pass a test and those that do not.
+ *
+ * @param items the items
+ * @param test the test
+ * @return two arrays: the items that passed, then the others
+ * @since 26.1
+ */
+pub fun partition<T>(items: [T], test: fun(T): bool): [[T]] {
+    [T] yes = []
+    [T] no = []
+    for x in items {
+        if test(x) {
+            yes.push(x)
+        } else {
+            no.push(x)
+        }
+    }
+    return [yes, no]
+}
+
+/**
+ * Combines two arrays item by item.
+ *
+ * @param a the first array
+ * @param b the second array
+ * @param f gets one item of each and returns the combined value
+ * @return one result per pair; as long as the shorter array
+ * @since 26.1
+ */
+pub fun zipWith<A, B, R>(a: [A], b: [B], f: fun(A, B): R): [R] {
+    [R] out = []
+    for i in 0..min(len(a), len(b)) {
+        out.push(f(a[i], b[i]))
+    }
+    return out
+}
+
+/**
+ * Finds the item with the largest key.
+ *
+ * @param items the items
+ * @param key gives the value to compare, with `>`
+ * @return the first item with the largest key, or `null` for an empty array
+ * @since 26.1
+ */
+pub fun maxBy<T, K>(items: [T], key: fun(T): K): T? {
+    if len(items) == 0 {
+        return null
+    }
+    var best = items[0]
+    var bestKey = key(best)
+    for x in items {
+        var k = key(x)
+        if k > bestKey {
+            best = x
+            bestKey = k
+        }
+    }
+    return best
+}
+
+/**
+ * Finds the item with the smallest key.
+ *
+ * @param items the items
+ * @param key gives the value to compare, with `<`
+ * @return the first item with the smallest key, or `null` for an empty array
+ * @since 26.1
+ */
+pub fun minBy<T, K>(items: [T], key: fun(T): K): T? {
+    if len(items) == 0 {
+        return null
+    }
+    var best = items[0]
+    var bestKey = key(best)
+    for x in items {
+        var k = key(x)
+        if k < bestKey {
+            best = x
+            bestKey = k
+        }
+    }
+    return best
+}
+
+/**
+ * Makes an array of whole numbers.
+ *
+ * @param start the first number
+ * @param end the number to stop before
+ * @return `start`, `start + 1`, ... up to `end - 1`; empty when `end <= start`
+ * @since 26.1
+ */
+pub fun range(start: int, end: int): [int] {
+    [int] out = []
+    for i in start..end {
+        out.push(i)
+    }
+    return out
+}
+
+/**
+ * Makes an array with the same value several times.
+ *
+ * @param value the value
+ * @param n how many times
+ * @return `n` copies of `value`
+ * @since 26.1
+ */
+pub fun fill<T>(value: T, n: int): [T] {
+    [T] out = []
+    for i in 0..n {
+        out.push(value)
+    }
+    return out
+}

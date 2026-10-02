@@ -1,0 +1,86 @@
+/**
+ * Makes a shuffled copy of an array.
+ *
+ * Every order is equally likely. Use `seed` first to get the same order
+ * every time.
+ *
+ * @param items the items to shuffle
+ * @return a new array with the same items in random order
+ * @since 26.1
+ */
+pub fun shuffled<T>(items: [T]): [T] {
+    var out = copy(items)
+    var i = len(out) - 1
+    while i > 0 {
+        var j = randomInt(0, i)
+        var tmp = out[i]
+        out[i] = out[j]
+        out[j] = tmp
+        i -= 1
+    }
+    return out
+}
+
+/**
+ * Picks a random item.
+ *
+ * @param items the items to pick from
+ * @return one of the items, or `null` for an empty array
+ * @since 26.1
+ */
+pub fun pick<T>(items: [T]): T? {
+    if len(items) == 0 {
+        return null
+    }
+    return items[randomInt(0, len(items) - 1)]
+}
+
+/**
+ * Picks several different items at random.
+ *
+ * @param items the items to pick from
+ * @param n how many to pick
+ * @return at most `n` items, each from a different position
+ * @since 26.1
+ */
+pub fun sample<T>(items: [T], n: int): [T] {
+    var all = shuffled(items)
+    return slice(all, 0, max(0, min(n, len(all))))
+}
+
+/**
+ * Returns `true` with a given probability.
+ *
+ * @param probability a number from 0 (never) to 1 (always)
+ * @return `true` in about `probability` of the calls
+ * @since 26.1
+ * @example
+ *     if chance(0.25) {
+ *         print("rare")
+ *     }
+ */
+pub fun chance(probability: float): bool {
+    return random() < probability
+}
+
+/**
+ * Makes a random string.
+ *
+ * @param length how many characters
+ * @param alphabet the characters to choose from
+ * @return a string of `length` characters taken from `alphabet`
+ * @since 26.1
+ * @example
+ *     randomString(8, "abcdef0123456789")  // for example "3fa09c1e"
+ */
+pub fun randomString(length: int, alphabet: string): string {
+    var cs = chars(alphabet)
+    if len(cs) == 0 {
+        return ""
+    }
+    [string] parts = []
+    for i in 0..length {
+        parts.push(cs[randomInt(0, len(cs) - 1)])
+    }
+    return join(parts, "")
+}

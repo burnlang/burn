@@ -81,8 +81,8 @@ print(label)
 
 var b = true
 print(match b {
-        true => 1
-        false => 0
+    true => 1
+    false => 0
 })
 
 var total = 0
