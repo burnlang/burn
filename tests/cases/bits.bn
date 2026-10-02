@@ -1,0 +1,43 @@
+var x = 12
+var y = 10
+print(x & y, x | y, x ^ y, ~x)
+print(x << 2, -16 >> 2, -16 >>> 60, 1 << 62)
+print(0xFF & 0x0F, 0x0F | 0xF0, 255 ^ 0xFF)
+var s = 3
+print(1 << s, 255 >> s, -1 >>> s == 2305843009213693951)
+var flags = 0
+flags |= 4
+flags |= 1
+flags &= ~1
+flags ^= 8
+flags <<= 1
+flags >>= 1
+flags >>>= 2
+print(flags)
+print(x & 3 == 0, 1 + 2 << 1, 6 & 3 | 8)
+
+fun popcount(n: int): int {
+    var count = 0
+    var v = n
+    while v != 0 {
+        count += v & 1
+        v = v >>> 1
+    }
+    return count
+}
+
+fun hash(text: string): int {
+    var h = 5381
+    for c in text.chars() {
+        h = ((h << 5) + h) ^ charCode(c)
+        h = h & 0xFFFFFFFF
+    }
+    return h
+}
+
+print(popcount(255), popcount(1023), popcount(0))
+print(hash("burn"), hash("Burn"))
+Map<string, Map<string, int>> nested = {"a": {"b": 1}}
+print(nested["a"]!!["b"])
+var big = 64
+print(1 << big)

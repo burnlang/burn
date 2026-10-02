@@ -85,12 +85,22 @@ fn lex_line(line: &str) -> Vec<T> {
         }
         let two: String = chars[i..(i + 2).min(chars.len())].iter().collect();
         let three: String = chars[i..(i + 3).min(chars.len())].iter().collect();
-        if three == "..=" {
+        let four: String = chars[i..(i + 4).min(chars.len())].iter().collect();
+        if four == ">>>=" {
+            out.push(T::Op(four));
+            i += 4;
+            continue;
+        }
+        if ["..=", ">>>", "<<=", ">>="].contains(&three.as_str()) {
             out.push(T::Op(three));
             i += 3;
             continue;
         }
-        if ["==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "..", "->", "!!", "::", "??"].contains(&two.as_str()) {
+        if [
+            "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>", "..", "->", "!!", "::", "??",
+        ]
+        .contains(&two.as_str())
+        {
             out.push(T::Op(two));
             i += 2;
             continue;
@@ -155,7 +165,7 @@ fn render_line(toks: &[T]) -> String {
             (_, T::Op(o)) if o == ".." || o == "..=" => false,
             (Some(T::Op(o)), _) if o == "!!" => !matches!(t, T::Dot | T::Open('(', _) | T::Open('[', _)),
             (_, T::Op(o)) if o == "!!" || o == "?" => false,
-            (Some(T::Op(o)), T::Open('(', _)) if o == "!" => false,
+            (Some(T::Op(o)), T::Open('(', _)) if o == "!" || o == "~" => false,
             (Some(T::Word(w)), T::Open('(', _)) => KEYWORDS_SPACE.contains(&w.as_str()) && w != "fun",
             (Some(T::Word(w)), T::Op(o)) if o == "<" && (w == "Future" || w == "Task" || w == "Map" || w == "Array") => {
                 generic_depth += 1;
@@ -166,11 +176,16 @@ fn render_line(toks: &[T]) -> String {
                 generic_depth -= 1;
                 false
             }
+            (_, T::Op(o)) if o == ">>" && generic_depth > 1 => {
+                generic_depth -= 2;
+                false
+            }
             (Some(_), T::Open('{', _)) => true,
             (Some(_), T::Open('(', _)) | (Some(_), T::Open('[', _)) => match prev {
                 Some(p) => !is_operand_end(p) || matches!(p, T::Word(w) if KEYWORDS_SPACE.contains(&w.as_str())),
                 None => false,
             },
+            (Some(T::Op(o)), _) if o == "~" => false,
             (Some(T::Op(o)), _) if (o == "-" || o == "!") => {
                 let before = if idx >= 2 { Some(&toks[idx - 2]) } else { None };
                 matches!(before, Some(b) if is_operand_end(b)) && o == "-"

@@ -226,15 +226,25 @@ impl Compiler {
             }
             ExprKind::Unary(op, x) => {
                 self.expr(x);
-                self.emit(match op {
-                    UnOp::INeg(l) => Op::INegOv(*l),
-                    UnOp::FNeg => Op::FNeg,
-                    UnOp::Not => Op::Not,
-                });
+                match op {
+                    UnOp::INeg(l) => self.emit(Op::INegOv(*l)),
+                    UnOp::FNeg => self.emit(Op::FNeg),
+                    UnOp::Not => self.emit(Op::Not),
+                    UnOp::BitNot => {
+                        self.emit(Op::Const(u64::MAX));
+                        self.emit(Op::Xor);
+                    }
+                }
             }
             ExprKind::Binary(op, a, b) => {
                 self.expr(a);
                 self.expr(b);
+                if let BinOp::Shl(l) | BinOp::Shr(l) | BinOp::UShr(l) = op {
+                    if *l != u32::MAX {
+                        self.emit(Op::LocConst(*l));
+                        self.emit(Op::Rt(burn_runtime::RtFn::ShiftCheck));
+                    }
+                }
                 self.emit(match op {
                     BinOp::IAdd(u32::MAX) => Op::IAdd,
                     BinOp::IAdd(l) => Op::IAddOv(*l),
@@ -248,6 +258,12 @@ impl Compiler {
                     BinOp::FDiv => Op::FDiv,
                     BinOp::ICmp(c) => Op::ICmp(*c),
                     BinOp::FCmp(c) => Op::FCmp(*c),
+                    BinOp::BitAnd => Op::And,
+                    BinOp::BitOr => Op::Or,
+                    BinOp::BitXor => Op::Xor,
+                    BinOp::Shl(_) => Op::Shl,
+                    BinOp::Shr(_) => Op::Shr,
+                    BinOp::UShr(_) => Op::UShr,
                 });
             }
             ExprKind::And(a, b) => {

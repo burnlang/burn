@@ -18,6 +18,7 @@ function $errHelp(msg) {
     const n = Number(m[1]);
     return n === 0 ? "it is empty, so there is nothing to read; check `len(...) > 0` first" : "valid indexes go from 0 to " + (n - 1) + "; check the index against `len(...)` first";
   }
+  if (msg.startsWith("cannot shift by ")) return "the shift amount must be from 0 to 63";
   if (msg === "integer overflow") return "the result does not fit in `int` (-9223372036854775808 to 9223372036854775807); use `float` for larger numbers";
   if (msg === "division by zero") return "check that the divisor is not 0 before dividing";
   if (msg === "unexpected null value") return "the value was null; check it with `if (x != null)` instead of using `!!`";
@@ -168,6 +169,22 @@ function $payload(v, from, to) {
 }
 function $f2i(x) { if (Number.isNaN(x) || !Number.isFinite(x)) return -9223372036854775808; return Math.trunc(x); }
 function $ov(r, l) { if (r > 9223372036854775807 || r < -9223372036854775808) $err("integer overflow", l); return r; }
+function $bit(op, a, b, l) {
+  const x = BigInt.asIntN(64, BigInt(a));
+  let r;
+  switch (op) {
+    case "&": r = x & BigInt(b); break;
+    case "|": r = x | BigInt(b); break;
+    case "^": r = x ^ BigInt(b); break;
+    case "~": r = ~x; break;
+    default:
+      if (b < 0 || b > 63) $err("cannot shift by " + b, l);
+      if (op === "<<") r = x << BigInt(b);
+      else if (op === ">>") r = x >> BigInt(b);
+      else r = BigInt.asUintN(64, x) >> BigInt(b);
+  }
+  return Number(BigInt.asIntN(64, r));
+}
 function $idiv(a, b, l) { if (b === 0) $err("division by zero", l); return $ov(Math.trunc(a / b), l); }
 function $imod(a, b, l) { if (b === 0) $err("division by zero", l); return a % b; }
 function $idx(a, i, l) { if (i < 0 || i >= a.length || !Number.isInteger(i)) $err("index " + i + " out of bounds (length " + a.length + ")", l); return a[i]; }
@@ -373,6 +390,8 @@ const $R = {
   ErrIndex: (l, i, n) => $err("index " + i + " out of bounds (length " + n + ")", l),
   ErrDivZero: l => $err("division by zero", l),
   ErrOverflow: l => $err("integer overflow", l),
+  ShiftCheck: (b, l) => { if (b < 0 || b > 63) $err("cannot shift by " + b, l); return b; },
+  ErrShift: (l, b) => $err("cannot shift by " + b, l),
   ErrNull: l => $err("unexpected null value", l),
   ErrReturn: l => $err("function ended without returning a value", l),
   Await: f => f.v,

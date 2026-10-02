@@ -987,6 +987,17 @@ pub fn err_overflow(loc: u64) -> u64 {
     rt_error("integer overflow", loc)
 }
 
+pub fn shift_check(amount: u64, loc: u64) -> u64 {
+    if amount >= 64 {
+        rt_error(&format!("cannot shift by {}", amount as i64), loc);
+    }
+    amount
+}
+
+pub fn err_shift(loc: u64, amount: u64) -> u64 {
+    rt_error(&format!("cannot shift by {}", amount as i64), loc)
+}
+
 pub fn err_divzero(loc: u64) -> u64 {
     rt_error("division by zero", loc)
 }

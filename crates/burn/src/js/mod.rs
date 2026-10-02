@@ -276,6 +276,7 @@ impl<'p> Gen<'p> {
                     UnOp::INeg(l) => format!("$ov(-{}, {})", x, l),
                     UnOp::FNeg => format!("(-{})", x),
                     UnOp::Not => format!("(!{})", x),
+                    UnOp::BitNot => format!("$bit(\"~\", {}, 0, 0)", x),
                 }
             }
             ExprKind::Binary(op, a, b) => {
@@ -292,6 +293,12 @@ impl<'p> Gen<'p> {
                     BinOp::IDiv(l) => format!("$idiv({}, {}, {})", a, b, l),
                     BinOp::IMod(l) => format!("$imod({}, {}, {})", a, b, l),
                     BinOp::ICmp(c) | BinOp::FCmp(c) => format!("({} {} {})", a, cmp_op(*c), b),
+                    BinOp::BitAnd => format!("$bit(\"&\", {}, {}, 0)", a, b),
+                    BinOp::BitOr => format!("$bit(\"|\", {}, {}, 0)", a, b),
+                    BinOp::BitXor => format!("$bit(\"^\", {}, {}, 0)", a, b),
+                    BinOp::Shl(l) => format!("$bit(\"<<\", {}, {}, {})", a, b, *l as i64),
+                    BinOp::Shr(l) => format!("$bit(\">>\", {}, {}, {})", a, b, *l as i64),
+                    BinOp::UShr(l) => format!("$bit(\">>>\", {}, {}, {})", a, b, *l as i64),
                 }
             }
             ExprKind::And(a, b) => format!("({} && {})", self.expr(a), self.expr(b)),

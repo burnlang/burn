@@ -19,6 +19,12 @@ pub enum BinOp {
     FDiv,
     ICmp(Cmp),
     FCmp(Cmp),
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl(u32),
+    Shr(u32),
+    UShr(u32),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,6 +32,7 @@ pub enum UnOp {
     INeg(u32),
     FNeg,
     Not,
+    BitNot,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

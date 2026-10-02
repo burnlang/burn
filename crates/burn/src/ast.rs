@@ -239,6 +239,12 @@ pub enum BinOp {
     Ge,
     And,
     Or,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
+    UShr,
 }
 
 impl BinOp {
@@ -257,6 +263,12 @@ impl BinOp {
             BinOp::Ge => ">=",
             BinOp::And => "&&",
             BinOp::Or => "||",
+            BinOp::BitAnd => "&",
+            BinOp::BitOr => "|",
+            BinOp::BitXor => "^",
+            BinOp::Shl => "<<",
+            BinOp::Shr => ">>",
+            BinOp::UShr => ">>>",
         }
     }
 }
@@ -265,6 +277,7 @@ impl BinOp {
 pub enum UnOp {
     Neg,
     Not,
+    BitNot,
 }
 
 #[derive(Clone, Debug)]

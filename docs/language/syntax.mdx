@@ -56,6 +56,29 @@ the expression, and when both sides are constants the compiler reports it before
 
 For nullable values there are `?.`, `??` and `as?`, see [null safety](./smart-casts.mdx#safe-calls-with-).
 
+### Bit operations
+
+```burn
+var flags = 0b0101
+print(flags & 0b0100, flags | 0b1000, flags ^ 0xFF, ~flags)
+print(1 << 10, -16 >> 2, -16 >>> 60)
+flags |= 1 << 3
+flags &= ~1
+```
+
+| Operator | Meaning |
+| --- | --- |
+| `a & b`, `a \| b`, `a ^ b` | bitwise and, or, exclusive or |
+| `~a` | flips every bit |
+| `a << n` | shifts left, filling with zeros |
+| `a >> n` | shifts right, keeping the sign |
+| `a >>> n` | shifts right, filling with zeros |
+
+They work on `int` and have compound forms (`&=`, `|=`, `^=`, `<<=`, `>>=`, `>>>=`). Bits shifted out are dropped,
+which is not an overflow. The shift amount must be from 0 to 63: other amounts are a compile error for constants and
+a runtime error otherwise. Bit operators bind tighter than comparisons, so `x & 1 == 0` means `(x & 1) == 0`; from
+tightest to loosest: `* / %`, `+ -`, `<< >> >>>`, `&`, `^`, `|`, comparisons, `&&`, `||`.
+
 ## Strings
 
 ```burn

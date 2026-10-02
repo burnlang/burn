@@ -13,6 +13,7 @@ pub struct Parser {
     speculative: usize,
     no_struct: bool,
     has_destroy: bool,
+    splits: Vec<usize>,
 }
 
 pub fn parse_module(toks: Vec<Token>, file: FileId) -> (Module, Vec<Diagnostic>) {
@@ -55,6 +56,54 @@ impl Parser {
             speculative: 0,
             no_struct: false,
             has_destroy: false,
+            splits: Vec::new(),
+        }
+    }
+
+    fn expect_gt(&mut self) -> PResult<Span> {
+        let rest = match self.peek().kind {
+            Tok::Shr => Tok::Gt,
+            Tok::UShr => Tok::Shr,
+            Tok::Ge => Tok::Assign,
+            Tok::ShrEq => Tok::Ge,
+            Tok::UShrEq => Tok::ShrEq,
+            _ => return self.expect(Tok::Gt, "`>`"),
+        };
+        let t = self.peek().clone();
+        let pos = self.pos.min(self.toks.len() - 1);
+        let first = Span::new(t.span.file, t.span.start as usize, t.span.start as usize + 1);
+        let second = Span::new(t.span.file, t.span.start as usize + 1, t.span.end as usize);
+        self.toks[pos] = Token {
+            kind: Tok::Gt,
+            span: first,
+            nl_before: t.nl_before,
+        };
+        self.toks.insert(
+            pos + 1,
+            Token {
+                kind: rest,
+                span: second,
+                nl_before: false,
+            },
+        );
+        self.splits.push(pos);
+        Ok(self.advance().span)
+    }
+
+    fn unsplit(&mut self, mark: usize) {
+        while self.splits.len() > mark {
+            let pos = self.splits.pop().unwrap();
+            let rest = self.toks.remove(pos + 1);
+            let kind = match rest.kind {
+                Tok::Gt => Tok::Shr,
+                Tok::Shr => Tok::UShr,
+                Tok::Assign => Tok::Ge,
+                Tok::Ge => Tok::ShrEq,
+                _ => Tok::UShrEq,
+            };
+            let t = &mut self.toks[pos];
+            t.kind = kind;
+            t.span = Span::new(t.span.file, t.span.start as usize, rest.span.end as usize);
         }
     }
 
@@ -925,7 +974,7 @@ impl Parser {
                             break;
                         }
                     }
-                    self.expect(Tok::Gt, "`>`")?;
+                    self.expect_gt()?;
                 }
                 TypeExpr {
                     kind: TypeExprKind::Named(name, args),
@@ -1054,6 +1103,7 @@ impl Parser {
             return false;
         }
         let save = self.pos;
+        let mark = self.splits.len();
         self.speculative += 1;
         let ok = self.ty().is_ok() && matches!(self.peek().kind, Tok::Ident(_)) && !self.peek().nl_before && {
             let n = self.peek_at(1);
@@ -1061,6 +1111,7 @@ impl Parser {
         };
         self.speculative -= 1;
         self.pos = save;
+        self.unsplit(mark);
         ok
     }
 
@@ -1356,6 +1407,12 @@ impl Parser {
             Tok::StarEq => Some(BinOp::Mul),
             Tok::SlashEq => Some(BinOp::Div),
             Tok::PercentEq => Some(BinOp::Mod),
+            Tok::AmpEq => Some(BinOp::BitAnd),
+            Tok::PipeEq => Some(BinOp::BitOr),
+            Tok::CaretEq => Some(BinOp::BitXor),
+            Tok::ShlEq => Some(BinOp::Shl),
+            Tok::ShrEq => Some(BinOp::Shr),
+            Tok::UShrEq => Some(BinOp::UShr),
             _ => return Ok(lhs),
         };
         let op_span = self.advance().span;
@@ -1431,7 +1488,7 @@ impl Parser {
     }
 
     fn comparison(&mut self) -> PResult<Expr> {
-        let mut e = self.term()?;
+        let mut e = self.bit_or()?;
         loop {
             let op = match self.peek().kind {
                 Tok::Lt => BinOp::Lt,
@@ -1463,6 +1520,51 @@ impl Parser {
                     };
                     continue;
                 }
+                _ => return Ok(e),
+            };
+            self.advance();
+            let r = self.bit_or()?;
+            e = self.bin(e, op, r);
+        }
+    }
+
+    fn bit_or(&mut self) -> PResult<Expr> {
+        let mut e = self.bit_xor()?;
+        while self.at(&Tok::Pipe) {
+            self.advance();
+            let r = self.bit_xor()?;
+            e = self.bin(e, BinOp::BitOr, r);
+        }
+        Ok(e)
+    }
+
+    fn bit_xor(&mut self) -> PResult<Expr> {
+        let mut e = self.bit_and()?;
+        while self.at(&Tok::Caret) {
+            self.advance();
+            let r = self.bit_and()?;
+            e = self.bin(e, BinOp::BitXor, r);
+        }
+        Ok(e)
+    }
+
+    fn bit_and(&mut self) -> PResult<Expr> {
+        let mut e = self.shift()?;
+        while self.at(&Tok::Amp) {
+            self.advance();
+            let r = self.shift()?;
+            e = self.bin(e, BinOp::BitAnd, r);
+        }
+        Ok(e)
+    }
+
+    fn shift(&mut self) -> PResult<Expr> {
+        let mut e = self.term()?;
+        loop {
+            let op = match self.peek().kind {
+                Tok::Shl => BinOp::Shl,
+                Tok::Shr => BinOp::Shr,
+                Tok::UShr => BinOp::UShr,
                 _ => return Ok(e),
             };
             self.advance();
@@ -1552,6 +1654,15 @@ impl Parser {
                 let span = start.to(e.span);
                 Ok(Expr {
                     kind: ExprKind::Unary(UnOp::Not, Box::new(e)),
+                    span,
+                })
+            }
+            Tok::Tilde => {
+                self.advance();
+                let e = self.unary()?;
+                let span = start.to(e.span);
+                Ok(Expr {
+                    kind: ExprKind::Unary(UnOp::BitNot, Box::new(e)),
                     span,
                 })
             }

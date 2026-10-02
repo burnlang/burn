@@ -12,7 +12,8 @@ var KEYWORDS_SPACE = [
     "if", "while", "for", "return", "else", "import", "fun", "var", "const", "def", "pub", "priv", "async", "await", "in", "is", "as", "static"
 ]
 
-var TWO_CHAR_OPS = ["==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "..", "->", "!!", "::", "??"]
+var TWO_CHAR_OPS = ["==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>", "..", "->", "!!", "::", "??"]
+var THREE_CHAR_OPS = ["..=", ">>>", "<<=", ">>="]
 
 var GENERIC_TYPES = ["Future", "Task", "Map", "Array"]
 
@@ -113,7 +114,13 @@ fun lexLine(line: string): [Tok] {
         }
         var two = join(slice(cs, i, min(i + 2, n)), "")
         var three = join(slice(cs, i, min(i + 3, n)), "")
-        if (three == "..=") {
+        var four = join(slice(cs, i, min(i + 4, n)), "")
+        if (four == ">>>=") {
+            out.push(tok(Kind.Op, four))
+            i += 4
+            continue
+        }
+        if (contains(THREE_CHAR_OPS, three)) {
             out.push(tok(Kind.Op, three))
             i += 3
             continue
@@ -236,7 +243,7 @@ fun renderLine(toks: [Tok]): string {
                 space = !(t.kind == Kind.Dot || isOpen(t, "(") || isOpen(t, "["))
             } else if (t.kind == Kind.Op && (t.text == "!!" || t.text == "?")) {
                 space = false
-            } else if (p.kind == Kind.Op && p.text == "!" && isOpen(t, "(")) {
+            } else if (p.kind == Kind.Op && (p.text == "!" || p.text == "~") && isOpen(t, "(")) {
                 space = false
             } else if (p.kind == Kind.Word && isOpen(t, "(")) {
                 space = contains(KEYWORDS_SPACE, p.text) && p.text != "fun"
@@ -248,10 +255,15 @@ fun renderLine(toks: [Tok]): string {
             } else if (t.kind == Kind.Op && t.text == ">" && genericDepth > 0) {
                 genericDepth -= 1
                 space = false
+            } else if (t.kind == Kind.Op && t.text == ">>" && genericDepth > 1) {
+                genericDepth -= 2
+                space = false
             } else if (isOpen(t, "{")) {
                 space = true
             } else if (isOpen(t, "(") || isOpen(t, "[")) {
                 space = !isOperandEnd(p) || (p.kind == Kind.Word && contains(KEYWORDS_SPACE, p.text))
+            } else if (p.kind == Kind.Op && p.text == "~") {
+                space = false
             } else if (p.kind == Kind.Op && (p.text == "-" || p.text == "!")) {
                 space = idx >= 2 && isOperandEnd(toks[idx - 2]) && p.text == "-"
             } else {

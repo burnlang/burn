@@ -139,8 +139,11 @@
       "patterns": [
         { "name": "keyword.operator.null-safe.burn", "match": "\\?\\.|\\?\\?|!!" },
         { "name": "keyword.operator.range.burn", "match": "\\.\\.=?" },
+        { "name": "keyword.operator.assignment.burn", "match": ">>>=|<<=|>>=|&=|\\|=|\\^=" },
+        { "name": "keyword.operator.bitwise.burn", "match": ">>>|<<|>>" },
         { "name": "keyword.operator.comparison.burn", "match": "==|!=|<=|>=|<|>" },
         { "name": "keyword.operator.logical.burn", "match": "&&|\\|\\||!" },
+        { "name": "keyword.operator.bitwise.burn", "match": "&|\\||\\^|~" },
         { "name": "keyword.operator.assignment.burn", "match": "\\+=|-=|\\*=|/=|%=|=" },
         { "name": "keyword.operator.arithmetic.burn", "match": "\\+|-|\\*|/|%" },
         { "name": "keyword.operator.nullable.burn", "match": "\\?" }

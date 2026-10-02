@@ -357,6 +357,32 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
+            A::Unary(AUn::BitNot, x) => {
+                let h = self.expr(x, Some(T_INT));
+                match self.types.get(h.ty) {
+                    Ty::Int => {
+                        if let ExprKind::Int(v) = h.kind {
+                            return Expr::int(!v);
+                        }
+                        Expr::new(ExprKind::Unary(UnOp::BitNot, Box::new(h)), T_INT)
+                    }
+                    Ty::Error => h,
+                    Ty::Bool => {
+                        let inner = self.src_text(x.span);
+                        self.emit(Diagnostic::error(e.span, "`~` flips the bits of an int; use `!` to negate a bool").fix(
+                            "use `!`",
+                            e.span,
+                            format!("!{}", inner),
+                        ));
+                        Self::err_expr()
+                    }
+                    _ => {
+                        let s = self.show(h.ty);
+                        self.error(e.span, format!("cannot apply `~` to a value of type {}", s));
+                        Self::err_expr()
+                    }
+                }
+            }
             A::Unary(AUn::Not, _) | A::Binary(AOp::And | AOp::Or, _, _) => self.cond(e).0,
             A::Binary(op, l, r) => self.binary(*op, l, r, e.span, expected),
             A::Assign { target, op, value } => self.assign(target, *op, value, e.span),
@@ -530,6 +556,9 @@ impl<'a> Checker<'a> {
         if lt == T_ERROR || rt == T_ERROR {
             return Self::err_expr();
         }
+        if matches!(op, AOp::BitAnd | AOp::BitOr | AOp::BitXor | AOp::Shl | AOp::Shr | AOp::UShr) {
+            return self.bitwise(op, l, r, span);
+        }
         if op == AOp::Add && (lt == T_STR || rt == T_STR) {
             if lt == T_VOID || rt == T_VOID {
                 self.error(span, "cannot concatenate a value of type void");
@@ -604,6 +633,55 @@ impl<'a> Checker<'a> {
             _ => return Expr::new(ExprKind::Rt(RtFn::FMod, vec![l, r]), T_FLOAT),
         };
         Expr::new(ExprKind::Binary(bop, Box::new(l), Box::new(r)), T_FLOAT)
+    }
+
+    fn bitwise(&mut self, op: AOp, l: Expr, r: Expr, span: Span) -> Expr {
+        let (lt, rt) = (l.ty, r.ty);
+        if lt == T_INT && rt == T_INT {
+            let shift = matches!(op, AOp::Shl | AOp::Shr | AOp::UShr);
+            if let ExprKind::Int(b) = r.kind {
+                if shift && !(0..64).contains(&b) {
+                    self.emit(Diagnostic::error(span, format!("cannot shift by {}", b)).help("the shift amount must be from 0 to 63"));
+                    return Self::err_expr();
+                }
+                if let ExprKind::Int(a) = l.kind {
+                    return Expr::int(match op {
+                        AOp::BitAnd => a & b,
+                        AOp::BitOr => a | b,
+                        AOp::BitXor => a ^ b,
+                        AOp::Shl => a << b,
+                        AOp::Shr => a >> b,
+                        _ => ((a as u64) >> b) as i64,
+                    });
+                }
+            }
+            let loc = if matches!(r.kind, ExprKind::Int(_)) { u32::MAX } else { self.loc(span) };
+            let bop = match op {
+                AOp::BitAnd => BinOp::BitAnd,
+                AOp::BitOr => BinOp::BitOr,
+                AOp::BitXor => BinOp::BitXor,
+                AOp::Shl => BinOp::Shl(loc),
+                AOp::Shr => BinOp::Shr(loc),
+                _ => BinOp::UShr(loc),
+            };
+            return Expr::new(ExprKind::Binary(bop, Box::new(l), Box::new(r)), T_INT);
+        }
+        let (a, b) = (self.show(lt), self.show(rt));
+        let msg = format!("cannot apply `{}` to {} and {}", op.symbol(), a, b);
+        if lt == T_BOOL && rt == T_BOOL {
+            let hint = match op {
+                AOp::BitAnd => "`&` works on the bits of ints; use `&&` to combine bools",
+                AOp::BitOr => "`|` works on the bits of ints; use `||` to combine bools",
+                AOp::BitXor => "`^` works on the bits of ints; use `!=` to check that exactly one bool is true",
+                _ => "shifts work on ints",
+            };
+            self.error_note(span, msg, hint);
+        } else if lt == T_FLOAT || rt == T_FLOAT {
+            self.error_note(span, msg, "bit operations only work on ints; convert with `as int` first");
+        } else {
+            self.error(span, msg);
+        }
+        Self::err_expr()
     }
 
     fn binary(&mut self, op: AOp, l: &ast::Expr, r: &ast::Expr, span: Span, expected: Option<TyId>) -> Expr {

@@ -68,6 +68,19 @@ pub enum Tok {
     QuestionQuestion,
     Arrow,
     At,
+    Amp,
+    Pipe,
+    Caret,
+    Tilde,
+    Shl,
+    Shr,
+    UShr,
+    AmpEq,
+    PipeEq,
+    CaretEq,
+    ShlEq,
+    ShrEq,
+    UShrEq,
     Eof,
 }
 
@@ -185,6 +198,19 @@ pub fn symbol(t: &Tok) -> &'static str {
         Tok::QuestionQuestion => "??",
         Tok::Arrow => "->",
         Tok::At => "@",
+        Tok::Amp => "&",
+        Tok::Pipe => "|",
+        Tok::Caret => "^",
+        Tok::Tilde => "~",
+        Tok::Shl => "<<",
+        Tok::Shr => ">>",
+        Tok::UShr => ">>>",
+        Tok::AmpEq => "&=",
+        Tok::PipeEq => "|=",
+        Tok::CaretEq => "^=",
+        Tok::ShlEq => "<<=",
+        Tok::ShrEq => ">>=",
+        Tok::UShrEq => ">>>=",
         _ => "?",
     }
 }
@@ -278,8 +304,26 @@ impl<'a> Lexer<'a> {
                 self.string(start, c);
                 continue;
             }
+            let four = [c, self.peek(1), self.peek(2), self.peek(3)];
+            let shift = match &four {
+                b">>>=" => Some((Tok::UShrEq, 4)),
+                [b'>', b'>', b'>', _] => Some((Tok::UShr, 3)),
+                [b'>', b'>', b'=', _] => Some((Tok::ShrEq, 3)),
+                [b'<', b'<', b'=', _] => Some((Tok::ShlEq, 3)),
+                [b'>', b'>', _, _] => Some((Tok::Shr, 2)),
+                [b'<', b'<', _, _] => Some((Tok::Shl, 2)),
+                _ => None,
+            };
+            if let Some((tok, len)) = shift {
+                self.pos += len;
+                self.push(tok, start);
+                continue;
+            }
             let two = [c, self.peek(1)];
             let (tok, len) = match &two {
+                b"&=" => (Tok::AmpEq, 2),
+                b"|=" => (Tok::PipeEq, 2),
+                b"^=" => (Tok::CaretEq, 2),
                 b"+=" => (Tok::PlusEq, 2),
                 b"-=" => (Tok::MinusEq, 2),
                 b"*=" => (Tok::StarEq, 2),
@@ -324,19 +368,15 @@ impl<'a> Lexer<'a> {
                     b'?' if self.src.as_bytes().get(self.pos + 1) == Some(&b'?') => (Tok::QuestionQuestion, 2),
                     b'?' => (Tok::Question, 1),
                     b'@' => (Tok::At, 1),
+                    b'&' => (Tok::Amp, 1),
+                    b'|' => (Tok::Pipe, 1),
+                    b'^' => (Tok::Caret, 1),
+                    b'~' => (Tok::Tilde, 1),
                     _ => {
                         let ch = self.src[self.pos..].chars().next().unwrap_or('?');
                         self.pos += ch.len_utf8();
                         let span = Span::new(self.file, start, self.pos);
-                        let mut d = Diagnostic::error(span, format!("unexpected character `{}`", ch));
-                        if ch == '&' || ch == '|' {
-                            let op = format!("{}{}", ch, ch);
-                            d = d.fix(format!("use `{}` for logical {}", op, if ch == '&' { "and" } else { "or" }), span, op);
-                            self.diags.push(d);
-                            self.push(if ch == '&' { Tok::AndAnd } else { Tok::OrOr }, start);
-                            continue;
-                        }
-                        self.diags.push(d);
+                        self.diags.push(Diagnostic::error(span, format!("unexpected character `{}`", ch)));
                         continue;
                     }
                 },
