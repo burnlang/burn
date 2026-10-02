@@ -145,7 +145,15 @@ fn stale(dir: &Path, out: &Path) -> bool {
     };
     let mut newest = std::time::SystemTime::UNIX_EPOCH;
     newest_source(dir, &mut newest);
-    newest > built
+    if newest > built {
+        return true;
+    }
+    match std::fs::read(out) {
+        Ok(bytes) => !crate::check::libs::library_modules(&bytes)
+            .map(|ms| ms.iter().all(crate::check::libs::ref_counted))
+            .unwrap_or(false),
+        Err(_) => true,
+    }
 }
 
 fn build_package(name: &str, dir: &Path, project: crate::project::Project, out: &Path) -> Result<(), String> {

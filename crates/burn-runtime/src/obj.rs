@@ -1,5 +1,5 @@
-use crate::gc;
 use crate::meta::{TID_ARR_STR, TID_STR};
+use crate::rc;
 use std::alloc::{alloc_zeroed, dealloc, realloc, Layout};
 use std::sync::{Arc, Condvar, Mutex};
 
@@ -13,6 +13,9 @@ pub const K_DEAD: u8 = 7;
 
 pub const F_STATIC: u8 = 1;
 pub const F_ASCII: u8 = 2;
+pub const F_TRACK: u8 = 4;
+pub const F_BUFFERED: u8 = 8;
+pub const F_ZOMBIE: u8 = 16;
 
 pub const HDR: usize = 16;
 pub const ARR_LEN: usize = 16;
@@ -29,7 +32,8 @@ pub struct Header {
     pub flags: u8,
     pub pad: u8,
     pub tid: u32,
-    pub size: u64,
+    pub size: u32,
+    pub rc: u32,
 }
 
 #[inline(always)]
@@ -59,7 +63,7 @@ pub fn kind_of(p: u64) -> u8 {
 
 pub fn str_new(s: &[u8]) -> u64 {
     let size = HDR + 8 + s.len() + 1;
-    let p = gc::alloc(K_STR, TID_STR, size);
+    let p = rc::alloc(K_STR, TID_STR, size);
     unsafe {
         set_word(p, STR_LEN, s.len() as u64);
         std::ptr::copy_nonoverlapping(s.as_ptr(), (p as usize + STR_BYTES) as *mut u8, s.len());
@@ -86,7 +90,7 @@ pub fn str_static(s: &[u8]) -> u64 {
         h.kind = K_STR;
         h.flags = F_STATIC | if s.is_ascii() { F_ASCII } else { 0 };
         h.tid = TID_STR;
-        h.size = size as u64;
+        h.size = size as u32;
         set_word(p, STR_LEN, s.len() as u64);
         std::ptr::copy_nonoverlapping(s.as_ptr(), (p as usize + STR_BYTES) as *mut u8, s.len());
         p
@@ -109,7 +113,7 @@ pub fn str_is_ascii(p: u64) -> bool {
 }
 
 pub fn array_new(tid: u32, len: usize) -> u64 {
-    let p = gc::alloc(K_ARRAY, tid, HDR + 24);
+    let p = rc::alloc(K_ARRAY, tid, HDR + 24);
     let cap = len.max(4);
     unsafe {
         let data = alloc_zeroed(Layout::array::<u64>(cap).unwrap()) as u64;
@@ -117,7 +121,7 @@ pub fn array_new(tid: u32, len: usize) -> u64 {
         set_word(p, ARR_CAP, cap as u64);
         set_word(p, ARR_DATA, data);
     }
-    gc::account(cap * 8);
+    rc::account(cap * 8);
     p
 }
 
@@ -131,7 +135,6 @@ pub fn array_from(tid: u32, items: &[u64]) -> u64 {
 
 pub fn array_of_strings(items: &[String]) -> u64 {
     let arr = array_new(TID_ARR_STR, 0);
-    let _g = gc::root(arr);
     for s in items {
         let v = string(s);
         array_push(arr, v);
@@ -174,7 +177,7 @@ pub fn array_reserve(p: u64, need: usize) {
         std::ptr::write_bytes((data as usize + cap * 8) as *mut u8, 0, (new_cap - cap) * 8);
         set_word(p, ARR_DATA, data);
         set_word(p, ARR_CAP, new_cap as u64);
-        gc::account((new_cap - cap) * 8);
+        rc::account((new_cap - cap) * 8);
     }
 }
 
@@ -201,7 +204,7 @@ pub unsafe fn array_free_data(p: u64) {
 }
 
 pub fn struct_new(tid: u32, n: usize) -> u64 {
-    gc::alloc(K_STRUCT, tid, HDR + 8 * n.max(1))
+    rc::alloc(K_STRUCT, tid, HDR + 8 * n.max(1))
 }
 
 pub fn struct_len(p: u64) -> usize {
@@ -219,7 +222,7 @@ pub fn set_field(p: u64, i: usize, v: u64) {
 }
 
 pub fn box_raw(tid: u32, v: u64) -> u64 {
-    let p = gc::alloc(K_BOX, tid, HDR + 8);
+    let p = rc::alloc(K_BOX, tid, HDR + 8);
     unsafe { set_word(p, BOX_VAL, v) }
     p
 }
@@ -243,7 +246,7 @@ pub struct MapData {
 }
 
 pub fn map_new(tid: u32) -> u64 {
-    let p = gc::alloc(K_MAP, tid, HDR + 8);
+    let p = rc::alloc(K_MAP, tid, HDR + 8);
     let data = Box::into_raw(Box::new(MapData::default()));
     unsafe { set_word(p, HDR, data as u64) }
     p
@@ -267,7 +270,7 @@ pub struct FutureState {
 }
 
 pub fn future_new(tid: u32) -> u64 {
-    let p = gc::alloc(K_FUTURE, tid, HDR + 8);
+    let p = rc::alloc(K_FUTURE, tid, HDR + 8);
     let st = Arc::new(FutureState {
         value: Mutex::new(None),
         cv: Condvar::new(),

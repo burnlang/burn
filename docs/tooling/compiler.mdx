@@ -28,9 +28,20 @@ knows the static type of its arguments.
 
 All values are 64 bit words. Ints, floats, bools and enums are stored directly, everything else is a pointer to a
 heap object with a 16 byte header (kind, flags, type id, size). The runtime crate (Rust) implements strings,
-arrays, maps, boxing for `any`, formatting, JSON, HTTP, files and async tasks, plus a conservative mark-and-sweep
-garbage collector that scans the stack, the globals and the VM stack. The same runtime is used by bvm and linked
+arrays, maps, boxing for `any`, formatting, JSON, HTTP, files and async tasks, plus reference counting with a
+cycle collector. The same runtime is used by bvm and linked
 into native executables, so both behave identically.
+
+## Ownership
+
+After type checking, an ownership pass makes memory management explicit in the IR. Every local variable, field,
+array slot and map entry owns the object in it; parameters are borrowed from the caller. The pass inserts
+`retain` where a borrowed value becomes owned (stored in a variable or field, returned), `release` where an owner
+lets go (a variable is overwritten, a temporary has been used, the function returns), and moves instead of
+copies when a local is returned. Temporaries are released at the end of the statement that created them, and
+arguments read from fields or globals are kept alive for the duration of the call. Native code inlines the common
+case of both operations. Cycles are found by trial deletion over the objects whose type can form a cycle, which is
+computed once from the type graph.
 
 ## bvm
 

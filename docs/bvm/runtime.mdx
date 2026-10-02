@@ -1,6 +1,6 @@
 ---
 title: Values and the runtime library
-description: Heap objects, type ids, garbage collection and the functions available through `rt`.
+description: Heap objects, type ids, reference counting and the functions available through `rt`.
 order: 35
 ---
 
@@ -25,8 +25,8 @@ an `[int]` array.
 
 ## Heap objects
 
-Heap objects start with a 16-byte header: kind (1 byte), GC mark, flags, padding, type id (4 bytes) and size in
-bytes (8 bytes). After the header:
+Heap objects start with a 16-byte header: kind (1 byte), cycle collector color, flags, padding, type id (4 bytes),
+size in bytes (4 bytes) and reference count (4 bytes). After the header:
 
 | Kind | Layout |
 | --- | --- |
@@ -39,13 +39,21 @@ bytes (8 bytes). After the header:
 Values of type `any` are boxes (or the object itself when it is already on the heap). `rt box v tid` creates one
 and `unbox` reads it. `rt is_type`, `rt cast` and `rt type_name` inspect it.
 
-## Garbage collection
+## Reference counting
 
-The collector is a conservative mark and sweep. It treats every word that looks like a pointer to a heap object
-as a reference: on the VM's operand stacks, on the native stack, in the globals and in registers. You don't need
-to declare roots or pointer maps. It runs after a number of bytes have been allocated (`BURN_GC_THRESHOLD`, 32 MB by default;
-`BURN_GC_STATS=1` prints a line after every collection) and never while spawned threads are running. Strings
-from the module's string pool are static and never collected.
+Objects are reference counted. A new object has a count of 1, owned by whoever created it: the result of `rt`
+functions, `newarr`, `new` and calls is owned by the code that receives it. `rt retain v` adds an owner and returns
+`v`, `rt release v` removes one and frees the object when none is left, releasing what it holds. Both ignore `null`
+and strings from the module's string pool, which are static.
+
+Containers own their contents: `newarr` and `new` take ownership of the values they are built from, and `rt`
+functions that store a value (`arr_push`, `arr_set`, `map_set`, `box`, ...) add their own owner, so the caller
+still releases its copy. `index`, `getfield` and `unbox` read without adding an owner. Burn generates these
+instructions itself; another language on bvm must do the same, or its objects are never freed.
+
+Objects that only refer to each other are found by a cycle collector, which runs when enough memory has been
+allocated (`BURN_GC_THRESHOLD`, 32 MB by default; `BURN_GC_STATS=1` prints a line each time) and never while spawned
+threads are running. While threads run, counts are updated atomically.
 
 ## Runtime functions
 

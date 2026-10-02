@@ -14,12 +14,12 @@ their backend. Burn is one front end among many that could target it.
  your language ─┐
  Burn ──────────┼─▶ bvm module ──▶ verifier ──▶ linker + fusion ──▶ interpreter
  hand-written   │   (.bvm text or                                      │
- assembly ──────┘    .bvmc bytecode)                runtime library ◀──┘ (GC, strings, arrays, maps, I/O, threads)
+ assembly ──────┘    .bvmc bytecode)                runtime library ◀──┘ (memory, strings, arrays, maps, I/O, threads)
 ```
 
 What a language gets by targeting bvm:
 
-- **A garbage-collected heap** with strings, growable arrays, hash maps, records and boxed values, plus a
+- **A reference-counted heap** with strings, growable arrays, hash maps, records and boxed values, plus a
   library of about 100 runtime functions for text, collections, math, time, files, JSON, HTTP and threads.
 - **A verifier** that rejects malformed code before it runs: stack underflow, stack height mismatches between
   paths, jumps outside the function, bad local, global, function, type and table references, and code that can

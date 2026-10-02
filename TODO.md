@@ -22,12 +22,12 @@
 - Generics for functions, `def type` and `def struct`
 - `match` expressions and statements
 - Bit operators (`& | ^ ~ << >> >>>`)
+- Automatic memory management without a garbage collector: compiler-inserted reference counting with a cycle collector
 
 ## Next
 
 - Native backends for Windows (PE/COFF) and ARM64
 - Generic methods, generic interfaces, and generic structs that extend other structs
-- Precise (non-conservative) garbage collection and generational allocation
 - Self-hosting (the formatter is the first tool written in Burn)
 - Windows installer
 - bvm: a JIT or threaded-code dispatch and a debugger

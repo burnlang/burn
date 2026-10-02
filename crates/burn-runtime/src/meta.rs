@@ -47,6 +47,83 @@ pub enum Desc {
 pub struct Meta {
     pub types: Vec<Desc>,
     pub locs: Vec<String>,
+    pub info: Vec<u8>,
+}
+
+pub const I_MANAGED: u8 = 1;
+pub const I_TRACK: u8 = 2;
+pub const I_BOX_TRACK: u8 = 4;
+
+fn is_managed(d: &Desc) -> bool {
+    matches!(
+        d,
+        Desc::Str
+            | Desc::Any
+            | Desc::Array(_)
+            | Desc::Map(..)
+            | Desc::Optional(_)
+            | Desc::Func
+            | Desc::Future(_)
+            | Desc::Record { .. }
+            | Desc::Interface { .. }
+    )
+}
+
+fn any_like(d: &Desc) -> bool {
+    matches!(d, Desc::Any | Desc::Interface { .. } | Desc::Func)
+}
+
+fn children(d: &Desc) -> Vec<u32> {
+    match d {
+        Desc::Array(e) | Desc::Optional(e) | Desc::Future(e) => vec![*e],
+        Desc::Map(k, v) => vec![*k, *v],
+        Desc::Record { fields, .. } => fields.iter().map(|f| f.1).collect(),
+        _ => Vec::new(),
+    }
+}
+
+pub fn type_info(types: &[Desc]) -> Vec<u8> {
+    let n = types.len();
+    let get = |t: u32| types.get(t as usize).unwrap_or(&Desc::Error);
+    let mut out = vec![0u8; n];
+    let mut seen = vec![0u32; n];
+    let mut stamp = 0u32;
+    for t in 0..n {
+        let d = &types[t];
+        if !is_managed(d) {
+            continue;
+        }
+        out[t] |= I_MANAGED;
+        stamp += 1;
+        let mut stack: Vec<u32> = children(d);
+        let mut reaches_any = any_like(d);
+        let mut reaches_self = false;
+        while let Some(c) = stack.pop() {
+            if c as usize >= n {
+                continue;
+            }
+            if c as usize == t {
+                reaches_self = true;
+            }
+            if seen[c as usize] == stamp {
+                continue;
+            }
+            seen[c as usize] = stamp;
+            let cd = get(c);
+            if any_like(cd) {
+                reaches_any = true;
+            }
+            stack.extend(children(cd));
+        }
+        let container = matches!(d, Desc::Array(_) | Desc::Map(..) | Desc::Record { .. } | Desc::Future(_));
+        if container && (reaches_any || reaches_self) {
+            out[t] |= I_TRACK;
+        }
+        if reaches_any {
+            out[t] |= I_BOX_TRACK;
+        }
+    }
+    out
 }
 
 pub fn builtin_descs() -> Vec<Desc> {
@@ -68,7 +145,8 @@ pub fn builtin_descs() -> Vec<Desc> {
 
 static META: AtomicPtr<Meta> = AtomicPtr::new(std::ptr::null_mut());
 
-pub fn set_meta(m: Meta) {
+pub fn set_meta(mut m: Meta) {
+    m.info = type_info(&m.types);
     let b = Box::into_raw(Box::new(m));
     META.store(b, Ordering::Release);
 }
@@ -79,6 +157,7 @@ pub fn meta() -> &'static Meta {
         set_meta(Meta {
             types: builtin_descs(),
             locs: Vec::new(),
+            info: Vec::new(),
         });
         return meta();
     }
@@ -89,6 +168,16 @@ pub fn meta() -> &'static Meta {
 pub fn desc(tid: u32) -> &'static Desc {
     static ERR: Desc = Desc::Error;
     meta().types.get(tid as usize).unwrap_or(&ERR)
+}
+
+#[inline]
+pub fn info(tid: u32) -> u8 {
+    meta().info.get(tid as usize).copied().unwrap_or(0)
+}
+
+#[inline]
+pub fn managed(tid: u32) -> bool {
+    info(tid) & I_MANAGED != 0
 }
 
 pub fn loc(i: u64) -> Option<&'static str> {
@@ -302,5 +391,5 @@ pub fn decode(b: &[u8]) -> Meta {
     for _ in 0..nl {
         locs.push(r.s());
     }
-    Meta { types, locs }
+    Meta { types, locs, info: Vec::new() }
 }

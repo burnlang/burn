@@ -154,7 +154,9 @@ fn visit(e: &Expr, f: &mut dyn FnMut(&Expr)) {
         | ExprKind::Conv(_, x)
         | ExprKind::GetField(x, _)
         | ExprKind::ArrLen(x)
-        | ExprKind::BoxVal(x) => visit(x, f),
+        | ExprKind::BoxVal(x)
+        | ExprKind::Retain(x)
+        | ExprKind::Release(x) => visit(x, f),
         ExprKind::Binary(_, a, b) | ExprKind::And(a, b) | ExprKind::Or(a, b) | ExprKind::Index(a, b, _) | ExprKind::SetField(a, _, b) => {
             visit(a, f);
             visit(b, f);
@@ -343,7 +345,7 @@ impl<'p> Gen<'p> {
             writeln!(self.out, "bs_{}:", i).unwrap();
             writeln!(self.out, "    .byte 1, 0, {}, 0", flags).unwrap();
             writeln!(self.out, "    .long {}", burn_runtime::meta::TID_STR).unwrap();
-            writeln!(self.out, "    .quad {}", 24 + b.len() + 1).unwrap();
+            writeln!(self.out, "    .long {}, 0", 24 + b.len() + 1).unwrap();
             writeln!(self.out, "    .quad {}", b.len()).unwrap();
             let mut bb = b.to_vec();
             bb.push(0);
@@ -967,8 +969,53 @@ impl<'p> Gen<'p> {
                 self.stmts(ss);
                 self.expr(x);
             }
+            ExprKind::Retain(x) => {
+                self.expr(x);
+                let done = self.l();
+                let slow = self.l();
+                let mt = self.sym("burn_rc_mt");
+                self.e("test rax, rax");
+                self.e(&format!("jz {}", done));
+                self.e("test byte ptr [rax + 2], 1");
+                self.e(&format!("jnz {}", done));
+                self.e(&format!("cmp byte ptr [rip + {}], 0", mt));
+                self.e(&format!("jne {}", slow));
+                self.e("inc dword ptr [rax + 12]");
+                self.lbl(&done);
+                let call = self.cold_call(RtFn::Retain.symbol());
+                writeln!(self.cold, "{}:\n    mov rdi, rax\n{}    jmp {}", slow, call, done).unwrap();
+            }
+            ExprKind::Release(x) => {
+                self.expr(x);
+                let done = self.l();
+                let mt_l = self.l();
+                let zero = self.l();
+                let root = self.l();
+                let mt = self.sym("burn_rc_mt");
+                self.e("test rax, rax");
+                self.e(&format!("jz {}", done));
+                self.e("test byte ptr [rax + 2], 1");
+                self.e(&format!("jnz {}", done));
+                self.e(&format!("cmp byte ptr [rip + {}], 0", mt));
+                self.e(&format!("jne {}", mt_l));
+                self.e("dec dword ptr [rax + 12]");
+                self.e(&format!("jz {}", zero));
+                self.e("test byte ptr [rax + 2], 4");
+                self.e(&format!("jnz {}", root));
+                self.lbl(&done);
+                for (l, f) in [(mt_l, RtFn::Release), (zero, RtFn::ReleaseZero), (root, RtFn::PossibleRoot)] {
+                    let call = self.cold_call(f.symbol());
+                    writeln!(self.cold, "{}:\n    mov rdi, rax\n{}    jmp {}", l, call, done).unwrap();
+                }
+            }
             _ => unreachable!(),
         }
+    }
+
+    fn cold_call(&self, name: &str) -> String {
+        let s = self.sym(name);
+        let target = if self.t.macos { s } else { format!("{}@PLT", s) };
+        format!("    mov r12, rsp\n    and rsp, -16\n    call {}\n    mov rsp, r12\n", target)
     }
 
     fn index_cold(&mut self, label: &str, arr: &str, loc: u32) {
