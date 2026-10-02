@@ -8,7 +8,7 @@ Burn is an easy-to-use, statically typed, general-purpose programming language w
 Burn is written in **Rust** and **x86-64 assembly**: programs run instantly on **bvm**, the Burn
 virtual machine, during development and compile to small **native executables** for shipping.
 
-Current version: **26.1.0-experimental-1**
+Current version: **26.1.0-experimental-2**
 
 > [!WARNING]
 > Burn is **not** ready for production. Syntax may still change. Please report bugs as issues.

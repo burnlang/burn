@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/burn", "crates/burn-runtime", "crates/bvm"]
 
 [workspace.package]
-version = "26.1.0-experimental-1"
+version = "26.1.0-experimental-2"
 edition = "2021"
 license = "GPL-3.0-only"
 rust-version = "1.85"
