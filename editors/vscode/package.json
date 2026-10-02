@@ -2,7 +2,7 @@
   "name": "burn-language-server",
   "displayName": "Burn Language Support",
   "description": "Syntax highlighting, diagnostics, completion, hover, go to definition and formatting for the Burn programming language",
-  "version": "26.1.0",
+  "version": "26.1.1",
   "publisher": "burn",
   "icon": "images/icon.png",
   "license": "GPL-3.0-only",
