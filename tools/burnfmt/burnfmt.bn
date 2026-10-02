@@ -1,6 +1,6 @@
 const VERSION = "2.0.0"
 
-def enum Kind { Word, Num, Str, Comment, Op, Open, Close, Comma, Semi, Colon, Dot }
+def enum Kind { Word, Num, Str, Comment, Op, Open, Close, Comma, Semi, Colon, Dot, GOpen, GClose }
 
 def type Tok {
     Kind kind
@@ -43,13 +43,61 @@ fun tok(kind: Kind, text: string): Tok {
     return Tok { kind: kind, text: text, tight: false }
 }
 
+var GENERIC_CHARS = [" ", ",", "[", "]", "{", "}", ":", "?", "(", ")"]
+
+fun genericMarks(cs: [string], open: int): [int] {
+    [int] none = []
+    if (open == 0 || !isWordChar(cs[open - 1])) {
+        return none
+    }
+    var depth = 0
+    [int] marks = []
+    var j = open
+    while (j < len(cs)) {
+        var c = cs[j]
+        if (c == "<") {
+            depth += 1
+            marks.push(j)
+        } else if (c == ">") {
+            depth -= 1
+            marks.push(j)
+            if (depth == 0) {
+                return marks
+            }
+        } else if (!(isWordChar(c) || contains(GENERIC_CHARS, c))) {
+            return none
+        }
+        j += 1
+    }
+    return none
+}
+
 fun lexLine(line: string): [Tok] {
     var cs = chars(line)
     var n = len(cs)
     var out: [Tok] = []
+    [int] generic = []
     var i = 0
     while (i < n) {
         var c = cs[i]
+        if (contains(generic, i)) {
+            if (c == "<") {
+                out.push(tok(Kind.GOpen, c))
+            } else {
+                out.push(tok(Kind.GClose, c))
+            }
+            i += 1
+            continue
+        }
+        if (c == "<") {
+            var marks = genericMarks(cs, i)
+            if (len(marks) > 0) {
+                generic = marks
+                out.push(tok(Kind.GOpen, c))
+                i += 1
+                continue
+            }
+        }
         if (c == " " || c == "\t") {
             i += 1
             continue
@@ -154,7 +202,7 @@ fun isOperandEnd(t: Tok): bool {
     if (t.kind == Kind.Word) {
         return !contains(KEYWORDS_SPACE, t.text) || t.text == "self"
     }
-    if (t.kind == Kind.Num || t.kind == Kind.Str || t.kind == Kind.Close) {
+    if (t.kind == Kind.Num || t.kind == Kind.Str || t.kind == Kind.Close || t.kind == Kind.GClose) {
         return true
     }
     if (t.kind == Kind.Op) {
@@ -217,7 +265,11 @@ fun renderLine(toks: [Tok]): string {
             space = false
         } else {
             var p = toks[idx - 1]
-            if (t.kind == Kind.Colon && head && parens == 0) {
+            if (t.kind == Kind.GOpen || p.kind == Kind.GOpen || t.kind == Kind.GClose) {
+                space = false
+            } else if (p.kind == Kind.GClose && (isOpen(t, "(") || isOpen(t, "["))) {
+                space = false
+            } else if (t.kind == Kind.Colon && head && parens == 0) {
                 space = true
             } else if (t.kind == Kind.Comment) {
                 space = true

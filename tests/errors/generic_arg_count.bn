@@ -1,0 +1,5 @@
+def type Pair<A, B> {
+    first: A
+    second: B
+}
+Pair<int> p = Pair { first: 1, second: 2 }

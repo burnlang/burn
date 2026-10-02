@@ -119,3 +119,70 @@ print(ages["ada"], has(ages, "bob"), keys(ages))
 Reading `map[key]` gives a nullable value, `int?` for the map above, because the key may be missing. Give it a
 fallback with `ages["bob"] ?? 0`, check it with `!= null`, or assert with `ages["ada"]!!`.
 `get(map, key, default)` still works as well.
+
+## Generics
+
+Functions and types can take type parameters in `<...>`. Burn works out the types from the arguments, so calls look
+like normal calls:
+
+```burn
+fun first<T>(items: [T]): T? {
+    if len(items) == 0 {
+        return null
+    }
+    return items[0]
+}
+
+fun mapList<T, U>(items: [T], f: fun(T): U): [U] {
+    [U] out = []
+    for x in items {
+        out.push(f(x))
+    }
+    return out
+}
+
+print(first([3, 4]), first(["a"]))
+print(mapList([1, 2, 3], fun(x: int): string {
+    return "#${x}"
+}))
+```
+
+`def type` and `def struct` take type parameters after the name:
+
+```burn
+def type Pair<A, B> {
+    first: A
+    second: B
+}
+
+def struct Stack<T>() {
+    [T] items = []
+
+    fun push(item: T) {
+        items.push(item)
+    }
+
+    fun pop(): T? {
+        if len(items) == 0 {
+            return null
+        }
+        return items.pop()
+    }
+}
+
+var p = Pair { first: 1, second: "one" }
+Pair<string, bool> q = Pair { first: "yes", second: true }
+var s = new Stack<int>()
+s.push(1)
+```
+
+Write the type arguments when Burn cannot work them out, for example `new Stack<int>()` for an empty stack.
+
+The compiler makes a separate version of the function or type for each set of types it is used with, so generic
+code runs as fast as code written for one type, and there is no boxing. A type parameter can be used in any way the
+types it is used with allow: `largest<T>` can compare with `>` and works for `int`, `float` and `string`. Using it
+with a type that has no `>` is a compile error that points at the comparison and names the version, for example
+`largest<bool>`.
+
+Generic structs can implement interfaces. They cannot extend other structs or have static members yet, and
+methods cannot have their own type parameters yet.

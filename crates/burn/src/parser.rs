@@ -429,6 +429,7 @@ impl Parser {
                                     annotations: Vec::new(),
                                     bodyless: false,
                                     is_abstract: false,
+                                    tparams: Vec::new(),
                                 },
                             ));
                         }
@@ -472,6 +473,7 @@ impl Parser {
                                     annotations: Vec::new(),
                                     bodyless: false,
                                     is_abstract: false,
+                                    tparams: Vec::new(),
                                 },
                             ));
                         }
@@ -550,6 +552,7 @@ impl Parser {
         let is_async = self.eat(&Tok::Async);
         self.expect(Tok::Fun, "`fun`")?;
         let name = self.ident("function name")?;
+        let tparams = self.type_params()?;
         let (params, ret) = self.signature()?;
         let bodyless = !self.at(&Tok::LBrace) && (self.peek().nl_before || matches!(self.peek().kind, Tok::Eof | Tok::Semi | Tok::RBrace));
         let body = if bodyless {
@@ -571,7 +574,24 @@ impl Parser {
             annotations: Vec::new(),
             bodyless,
             is_abstract: false,
+            tparams,
         })
+    }
+
+    fn type_params(&mut self) -> PResult<Vec<Ident>> {
+        let mut out = Vec::new();
+        if !self.at(&Tok::Lt) || self.peek().nl_before {
+            return Ok(out);
+        }
+        self.advance();
+        loop {
+            out.push(self.ident("type parameter name")?);
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        self.expect_gt()?;
+        Ok(out)
     }
 
     fn signature(&mut self) -> PResult<(Vec<Param>, Option<TypeExpr>)> {
@@ -633,6 +653,11 @@ impl Parser {
         };
         let kw_span = self.advance().span;
         let name = self.ident("a name")?;
+        let tparams = if matches!(kw.as_str(), "struct" | "class" | "type" | "record") {
+            self.type_params()?
+        } else {
+            Vec::new()
+        };
         match kw.as_str() {
             "struct" | "class" => {
                 if kw == "class" {
@@ -645,10 +670,14 @@ impl Parser {
                         ));
                     }
                 }
-                self.struct_def(name, kind)
+                self.struct_def(name, kind, tparams)
             }
             "type" | "record" | "annotation" => {
-                if kw != "annotation" && self.eat(&Tok::Assign) {
+                if kw != "annotation" && self.at(&Tok::Assign) {
+                    if let Some(t) = tparams.first() {
+                        self.err(t.span, "type aliases cannot have type parameters");
+                    }
+                    self.advance();
                     let ty = self.ty()?;
                     self.end_stmt();
                     return Ok(Def::Alias { name, ty });
@@ -679,7 +708,7 @@ impl Parser {
                 if kw == "annotation" {
                     return Ok(Def::Annotation { name, fields });
                 }
-                Ok(Def::Type { name, fields })
+                Ok(Def::Type { name, fields, tparams })
             }
             "interface" | "trait" => {
                 self.expect(Tok::LBrace, "`{`")?;
@@ -738,7 +767,7 @@ impl Parser {
         }
     }
 
-    fn struct_def(&mut self, name: Ident, kind: StructKind) -> PResult<Def> {
+    fn struct_def(&mut self, name: Ident, kind: StructKind, tparams: Vec<Ident>) -> PResult<Def> {
         let mut params = Vec::new();
         let mut param_anns = Vec::new();
         if self.at(&Tok::LParen) && !self.peek().nl_before {
@@ -882,6 +911,7 @@ impl Parser {
             fields,
             methods,
             statics,
+            tparams,
         })
     }
 
@@ -1196,6 +1226,7 @@ impl Parser {
                         annotations: Vec::new(),
                         bodyless: false,
                         is_abstract: false,
+                        tparams: Vec::new(),
                     }),
                 }
             }
@@ -1825,6 +1856,17 @@ impl Parser {
             Tok::Ident(name) if name == "new" && matches!(self.peek_at(1).kind, Tok::Ident(_)) && !self.peek_at(1).nl_before => {
                 self.advance();
                 let ty = self.ident("struct name")?;
+                let mut targs = Vec::new();
+                if self.at(&Tok::Lt) && !self.peek().nl_before {
+                    self.advance();
+                    loop {
+                        targs.push(self.ty()?);
+                        if !self.eat(&Tok::Comma) {
+                            break;
+                        }
+                    }
+                    self.expect_gt()?;
+                }
                 let args = if self.at(&Tok::LParen) && !self.peek().nl_before {
                     self.call_args()?
                 } else {
@@ -1833,7 +1875,7 @@ impl Parser {
                     return Err(());
                 };
                 return Ok(Expr {
-                    kind: ExprKind::New { ty, args },
+                    kind: ExprKind::New { ty, targs, args },
                     span: span.to(self.prev_span()),
                 });
             }
@@ -1929,6 +1971,7 @@ impl Parser {
                     bodyless: false,
                     is_abstract: false,
                     span,
+                    tparams: Vec::new(),
                 };
                 ExprKind::Lambda(Box::new(f))
             }

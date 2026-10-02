@@ -2,6 +2,7 @@ pub mod annot;
 pub mod builtins;
 pub mod closures;
 pub mod expr;
+pub mod generics;
 pub mod init_order;
 pub mod libs;
 pub mod matching;
@@ -64,6 +65,8 @@ pub struct ModScope {
     pub file: FileId,
     pub values: HashMap<String, Entry<ValSym>>,
     pub types: HashMap<String, Entry<TyId>>,
+    pub gfuncs: HashMap<String, Entry<u32>>,
+    pub gtypes: HashMap<String, Entry<u32>>,
     pub imports: Vec<usize>,
     pub init: FuncId,
 }
@@ -91,6 +94,7 @@ pub struct FuncInfo {
     pub annotations: Vec<hir::Annotation>,
     pub deprecated: Option<String>,
     pub external: Option<hir::External>,
+    pub tenv: Option<Rc<HashMap<String, TyId>>>,
 }
 
 pub struct GlobalInfo {
@@ -172,7 +176,7 @@ pub struct Checker<'a> {
     loc_ids: HashMap<(u32, u32), u32>,
     pub slots: Vec<IfaceSlot>,
     pub fx: Vec<FnCtx>,
-    lambdas: HashMap<(u32, u32), FuncId>,
+    lambdas: HashMap<(u32, u32, u32), FuncId>,
     anon: HashMap<Vec<(String, TyId)>, TyId>,
     pub index: Index,
     pub opts: CheckOptions,
@@ -194,6 +198,14 @@ pub struct Checker<'a> {
     pub closures: HashMap<FuncId, closures::ClosureInfo>,
     pub adapters: HashMap<FuncId, FuncId>,
     pub cell_types: HashMap<TyId, TyId>,
+    pub generic_fns: Vec<generics::GenericFn>,
+    pub generic_types: Vec<generics::GenericType>,
+    pub tenv: Vec<Rc<HashMap<String, TyId>>>,
+    pub pending_instances: Vec<(u32, u32, Vec<TyId>, Span)>,
+    pub structs_ready: bool,
+    pub inferring: u32,
+    pub instance_of: HashMap<TyId, (u32, Vec<TyId>)>,
+    pub inst_sites: HashMap<FuncId, (String, Span)>,
 }
 
 pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
@@ -232,6 +244,14 @@ pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
         closures: HashMap::new(),
         adapters: HashMap::new(),
         cell_types: HashMap::new(),
+        generic_fns: Vec::new(),
+        generic_types: Vec::new(),
+        tenv: Vec::new(),
+        pending_instances: Vec::new(),
+        structs_ready: false,
+        inferring: 0,
+        instance_of: HashMap::new(),
+        inst_sites: HashMap::new(),
     };
     c.run(loaded);
     let has_errors = loaded.diags.iter().chain(c.diags.iter()).any(|d| d.severity == Severity::Error);
@@ -240,9 +260,10 @@ pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
         program = Some(c.build_program(loaded));
     }
     let globals = c.globals.iter().map(|g| (g.name.clone(), g.ty.unwrap_or(T_ERROR), g.module)).collect();
-    let funcs = c
+    let mut funcs: Vec<(String, String, Span, usize)> = c
         .funcs
         .iter()
+        .filter(|f| !f.name.contains('<'))
         .map(|f| {
             let ps: Vec<String> = f
                 .params
@@ -258,14 +279,24 @@ pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
             (f.name.clone(), sig, f.span, f.module)
         })
         .collect();
+    for g in &c.generic_fns {
+        let d = &g.decl;
+        let head = Span::new(d.span.file, d.span.start as usize, d.body.span.start as usize);
+        let sig = c.src_text(head).trim().to_string();
+        funcs.push((d.name.name.clone(), sig, d.name.span, g.module));
+    }
     let mut type_names = Vec::new();
     for (mi, m) in c.mods.iter().enumerate() {
         for (n, e) in &m.types {
             type_names.push((n.clone(), e.sym, e.span, mi));
         }
+        for (n, e) in &m.gtypes {
+            type_names.push((n.clone(), T_ERROR, e.span, mi));
+        }
     }
     let mut diags = c.diags;
     diags.sort_by_key(|d| (d.span.file, d.span.start));
+    diags.dedup_by(|a, b| a.span == b.span && a.message == b.message);
     CheckResult {
         program,
         diags,
@@ -316,21 +347,32 @@ impl<'a> Checker<'a> {
     }
 
     pub fn error(&mut self, span: Span, msg: impl Into<String>) {
-        if !self.is_dry() {
-            self.diags.push(Diagnostic::error(span, msg));
-        }
+        self.emit(Diagnostic::error(span, msg));
     }
 
     pub fn error_note(&mut self, span: Span, msg: impl Into<String>, note: impl Into<String>) {
-        if !self.is_dry() {
-            self.diags.push(Diagnostic::error(span, msg).help(note));
-        }
+        self.emit(Diagnostic::error(span, msg).help(note));
     }
 
     pub fn error_detail(&mut self, span: Span, msg: impl Into<String>, note: impl Into<String>) {
-        if !self.is_dry() {
-            self.diags.push(Diagnostic::error(span, msg).note(note));
+        self.emit(Diagnostic::error(span, msg).note(note));
+    }
+
+    fn instance_note(&self) -> Option<String> {
+        for c in self.fx.iter().rev() {
+            if let Some((name, site)) = self.inst_sites.get(&c.func) {
+                if (site.file as usize) < self.sm.files.len() {
+                    let f = self.sm.file(site.file);
+                    let (l, _) = f.line_col(site.start as usize);
+                    return Some(format!("this is the version `{}`, used at {}:{}", name, f.name, l));
+                }
+                return Some(format!("this is the version `{}`", name));
+            }
+            if !c.lambda {
+                break;
+            }
         }
+        None
     }
 
     pub fn wrap_suffix(&self, span: Span, suffix: &str) -> String {
@@ -396,6 +438,10 @@ impl<'a> Checker<'a> {
 
     pub fn emit(&mut self, d: Diagnostic) {
         if !self.is_dry() {
+            let d = match self.instance_note() {
+                Some(n) => d.note(n),
+                None => d,
+            };
             self.diags.push(d);
         }
     }
@@ -409,9 +455,7 @@ impl<'a> Checker<'a> {
     }
 
     pub fn warn(&mut self, span: Span, msg: impl Into<String>) {
-        if !self.is_dry() {
-            self.diags.push(Diagnostic::warning(span, msg));
-        }
+        self.emit(Diagnostic::warning(span, msg));
     }
 
     pub fn with_doc(&self, text: String, decl: Span) -> String {
@@ -641,6 +685,9 @@ impl<'a> Checker<'a> {
     pub fn resolve_type_in(&mut self, te: &TypeExpr, module: usize) -> TyId {
         match &te.kind {
             TypeExprKind::Named(name, args) => {
+                if let Some(t) = self.resolve_generic_named(name, args, module, te.span) {
+                    return t;
+                }
                 if !args.is_empty() {
                     let a: Vec<TyId> = args.iter().map(|x| self.resolve_type_in(x, module)).collect();
                     return match (name.as_str(), a.len()) {
@@ -738,11 +785,14 @@ impl<'a> Checker<'a> {
                 annotations: Vec::new(),
                 deprecated: None,
                 external: None,
+                tenv: None,
             });
             self.mods.push(ModScope {
                 file: m.file,
                 values: HashMap::new(),
                 types: HashMap::new(),
+                gfuncs: HashMap::new(),
+                gtypes: HashMap::new(),
                 imports: m.imports.iter().map(|(i, _)| *i).collect(),
                 init,
             });
@@ -751,7 +801,11 @@ impl<'a> Checker<'a> {
         for (mi, m) in loaded.modules.iter().enumerate() {
             for item in &m.ast.items {
                 if let ItemKind::Def(d) = &item.kind {
-                    self.declare_def(mi, d, item.vis, &mut aliases);
+                    if d.tparams().is_empty() {
+                        self.declare_def(mi, d, item.vis, &mut aliases);
+                    } else {
+                        self.declare_generic_type(mi, d, item.vis);
+                    }
                 }
             }
         }
@@ -793,6 +847,7 @@ impl<'a> Checker<'a> {
         for (mi, m) in loaded.modules.iter().enumerate() {
             for item in &m.ast.items {
                 match &item.kind {
+                    ItemKind::Fun(f) if !f.tparams.is_empty() => self.declare_generic_fn(mi, f, item.vis),
                     ItemKind::Fun(f) => {
                         let fid = self.declare_fun(mi, f, None, item.vis == Vis::Priv, false);
                         let info = &mut self.funcs[fid as usize];
@@ -836,6 +891,8 @@ impl<'a> Checker<'a> {
         self.check_conformance(loaded);
         self.check_mixins();
         self.build_ctors();
+        self.structs_ready = true;
+        self.complete_instances();
         for &mi in &loaded.order {
             self.check_init(mi, &loaded.modules[mi].ast);
         }
@@ -946,6 +1003,11 @@ impl<'a> Checker<'a> {
             Some(e) if e.span == name.span => e.sym,
             _ => return,
         };
+        self.fill_def_for(mi, d, t);
+    }
+
+    pub fn fill_def_for(&mut self, mi: usize, d: &Def, t: TyId) {
+        let name = d.name();
         match d {
             Def::Type { fields, .. } | Def::Struct { fields, .. } | Def::Annotation { fields, .. } => {
                 let ri = match self.types.get(t) {
@@ -1128,15 +1190,22 @@ impl<'a> Checker<'a> {
             annotations,
             deprecated,
             external,
+            tenv: self.tenv.last().cloned(),
         });
         fid
     }
 
     fn check_conformance(&mut self, _loaded: &Loaded) {
         for ri in 0..self.types.records.len() {
+            self.check_record_conformance(ri);
+        }
+    }
+
+    pub fn check_record_conformance(&mut self, ri: usize) {
+        {
             let rec = self.types.records[ri].clone();
             if rec.is_abstract {
-                continue;
+                return;
             }
             for ii in rec.implements.iter() {
                 let iface = self.types.ifaces[*ii as usize].clone();
@@ -1234,6 +1303,13 @@ impl<'a> Checker<'a> {
     }
 
     pub fn check_func(&mut self, fid: FuncId) {
+        let env = self.funcs[fid as usize].tenv.clone().unwrap_or_default();
+        self.tenv.push(env);
+        self.check_func_inner(fid);
+        self.tenv.pop();
+    }
+
+    fn check_func_inner(&mut self, fid: FuncId) {
         let decl = match self.funcs[fid as usize].decl.clone() {
             Some(d) => d,
             None => return,

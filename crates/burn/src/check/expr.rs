@@ -414,7 +414,7 @@ impl<'a> Checker<'a> {
                 }
             }
             A::Lambda(f) => self.lambda(f),
-            A::New { ty, args } => self.new_expr(ty, args, e.span),
+            A::New { ty, targs, args } => self.new_expr(ty, targs, args, e.span, expected),
             A::SafeGet { obj, name, args } => self.safe_get(obj, name, args.as_deref(), e.span),
             A::Coalesce(a, b) => self.coalesce(a, b, e.span, expected),
             A::Match { subject, arms } => self.match_value(subject.as_deref(), arms, e.span, expected),
@@ -521,6 +521,12 @@ impl<'a> Checker<'a> {
             }
             None => {
                 if self.visible(m, name, |s| &s.values).is_err() {
+                } else if self.lookup_generic_fn(name).is_some() {
+                    self.error_note(
+                        span,
+                        format!("`{}` has type parameters, so it cannot be used as a value", name),
+                        "call it, or wrap the call in a lambda with concrete types",
+                    );
                 } else if self.lookup_type_name(m, name, span).is_some() {
                     self.error(span, format!("`{}` is a type, not a value", name));
                 } else if name == "self" {
@@ -1254,6 +1260,23 @@ impl<'a> Checker<'a> {
                     }
                 }
                 let m = self.cur_module();
+                if let Some(gid) = self.lookup_generic_fn(name) {
+                    return self.generic_call(gid, None, args, span, callee.span, expected);
+                }
+                if let Some(t) = self.generic_target(
+                    &ast::Ident {
+                        name: name.clone(),
+                        span: callee.span,
+                    },
+                    &[],
+                    expected,
+                    generics::Inputs::Positional(args),
+                ) {
+                    if t == T_ERROR {
+                        return Self::err_expr();
+                    }
+                    return self.construct(t, args, span, callee.span);
+                }
                 match self.lookup_value_entry(m, name).map(|e| e.sym) {
                     Some(ValSym::Func(f)) => return self.direct_call(f, None, args, span, callee.span),
                     Some(ValSym::Global(_)) => {
@@ -1516,6 +1539,11 @@ impl<'a> Checker<'a> {
             return e;
         }
         let m = self.cur_module();
+        if let Some(gid) = self.lookup_generic_fn(&name.name) {
+            if !self.generic_fns[gid as usize].decl.params.is_empty() {
+                return self.generic_call(gid, Some(o), args, span, name.span, expected);
+            }
+        }
         if let Some(Entry { sym: ValSym::Func(f), .. }) = self.lookup_value_entry(m, &name.name) {
             let first = self.funcs[f as usize].params.first().map(|p| p.1);
             if let Some(pt) = first {
@@ -1886,7 +1914,9 @@ impl<'a> Checker<'a> {
                 self.error(n.span, format!("field `{}` is given twice", n.name));
             }
         }
-        let target = if let Some(tn) = ty {
+        let target = if let Some(t) = ty.and_then(|tn| self.generic_target(tn, &[], expected, generics::Inputs::Named(fields))) {
+            Some(t)
+        } else if let Some(tn) = ty {
             let m = self.cur_module();
             match self.lookup_type_name(m, &tn.name, tn.span) {
                 Some(t) => Some(t),
@@ -2269,7 +2299,7 @@ impl<'a> Checker<'a> {
     }
 
     fn lambda(&mut self, f: &ast::FunDecl) -> Expr {
-        let key = (f.span.file, f.span.start);
+        let key = (f.span.file, f.span.start, self.fx.last().map(|c| c.func).unwrap_or(0));
         if let Some(fid) = self.lambdas.get(&key).copied() {
             let t = self.func_type(fid);
             return self.closure_value(fid, t);
@@ -2280,7 +2310,11 @@ impl<'a> Checker<'a> {
         let m = self.cur_module();
         if self.is_dry() {
             let ps: Vec<TyId> = f.params.iter().map(|p| self.resolve_type_in(&p.ty, m)).collect();
-            let r = f.ret.as_ref().map(|r| self.resolve_type_in(r, m)).unwrap_or(T_ANY);
+            let r = f
+                .ret
+                .as_ref()
+                .map(|r| self.resolve_type_in(r, m))
+                .unwrap_or(if self.inferring > 0 { T_ERROR } else { T_ANY });
             let t = self.types.func(ps, r);
             return Expr::new(ExprKind::Int(0), t);
         }

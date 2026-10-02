@@ -422,6 +422,7 @@ impl<'a> Checker<'a> {
                     annotations: Vec::new(),
                     deprecated: None,
                     external: None,
+                    tenv: None,
                 });
                 self.closures.insert(fid, ClosureInfo { ty: cty, captures: Vec::new() });
                 self.adapters.insert(f, fid);

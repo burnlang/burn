@@ -1,0 +1,136 @@
+fun first<T>(items: [T]): T? {
+    if len(items) == 0 {
+        return null
+    }
+    return items[0]
+}
+
+fun swap<A, B>(a: A, b: B): [any] {
+    return [b, a]
+}
+
+fun mapList<T, U>(items: [T], f: fun(T): U): [U] {
+    [U] out = []
+    for x in items {
+        out.push(f(x))
+    }
+    return out
+}
+
+fun largest<T>(items: [T]): T {
+    var best = items[0]
+    for x in items {
+        if x > best {
+            best = x
+        }
+    }
+    return best
+}
+
+print(first([3, 4]), first(["a"]), first([1.5]))
+[int] none = []
+print(first(none))
+print(swap(1, "x"))
+print(mapList([1, 2, 3], fun(x: int): string {
+            return "#${x}"
+}))
+print(largest([3, 9, 2]), largest(["pear", "apple"]), [1, 2].largest())
+
+def type Pair<A, B> {
+    first: A
+    second: B
+}
+
+var p = Pair { first: 1, second: "one" }
+Pair<string, bool> q = Pair { first: "yes", second: true }
+print(p, p.first + 1, q.second)
+var r = Pair(2.5, [1])
+print(r.first, len(r.second))
+
+def struct Stack<T>() {
+    [T] items = []
+
+    fun push(item: T) {
+        items.push(item)
+    }
+
+    fun pop(): T? {
+        if len(items) == 0 {
+            return null
+        }
+        return items.pop()
+    }
+
+    fun peek(): T? {
+        return first(items)
+    }
+
+    fun size(): int {
+        return len(items)
+    }
+}
+
+var s = new Stack<int>()
+s.push(1)
+s.push(2)
+print(s.size(), s.peek(), s.pop(), s.pop(), s.pop())
+var names = new Stack<string>()
+names.push("ada")
+print(names.peek()!!.upper())
+
+def struct Node<T>(value: T) {
+    Node<T>? next = null
+}
+
+def struct LinkedList<T>() {
+    Node<T>? head = null
+    int count = 0
+
+    fun add(v: T) {
+        var n = new Node<T>(v)
+        n.next = head
+        head = n
+        count += 1
+    }
+
+    fun toList(): [T] {
+        [T] out = []
+        var cur = head
+        while cur != null {
+            out.push(cur.value)
+            cur = cur.next
+        }
+        return out
+    }
+}
+
+var list = new LinkedList<string>()
+list.add("c")
+list.add("b")
+list.add("a")
+print(list.toList(), list.count)
+
+def interface Shape {
+    fun area(): float
+}
+
+def struct Box<T>(item: T) :: Shape {
+    fun area(): float {
+        return 1.0
+    }
+
+    fun get(): T {
+        return item
+    }
+}
+
+[Shape] shapes = [new Box<int>(1), new Box<string>("x")]
+for sh in shapes {
+    print(sh.area())
+}
+print(new Box(42).get() + 1)
+
+fun wrap<T>(v: T): Pair<T, T> {
+    return Pair { first: v, second: v }
+}
+print(wrap("w"), wrap(3).second)

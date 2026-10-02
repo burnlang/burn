@@ -14,6 +14,34 @@ enum T {
     Semi,
     Colon,
     Dot,
+    GOpen,
+    GClose,
+}
+
+fn generic_close(chars: &[char], open: usize) -> Option<Vec<usize>> {
+    if open == 0 || !(chars[open - 1].is_alphanumeric() || chars[open - 1] == '_') {
+        return None;
+    }
+    let mut depth = 0;
+    let mut marks = Vec::new();
+    for (j, c) in chars.iter().enumerate().skip(open) {
+        match c {
+            '<' => {
+                depth += 1;
+                marks.push(j);
+            }
+            '>' => {
+                depth -= 1;
+                marks.push(j);
+                if depth == 0 {
+                    return Some(marks);
+                }
+            }
+            c if c.is_alphanumeric() || matches!(c, '_' | ' ' | ',' | '[' | ']' | '{' | '}' | ':' | '?' | '(' | ')') => {}
+            _ => return None,
+        }
+    }
+    None
 }
 
 const KEYWORDS_SPACE: &[&str] = &[
@@ -24,8 +52,22 @@ fn lex_line(line: &str) -> Vec<T> {
     let chars: Vec<char> = line.chars().collect();
     let mut i = 0;
     let mut out = Vec::new();
+    let mut generic: Vec<usize> = Vec::new();
     while i < chars.len() {
         let c = chars[i];
+        if generic.contains(&i) {
+            out.push(if c == '<' { T::GOpen } else { T::GClose });
+            i += 1;
+            continue;
+        }
+        if c == '<' {
+            if let Some(marks) = generic_close(&chars, i) {
+                generic = marks;
+                out.push(T::GOpen);
+                i += 1;
+                continue;
+            }
+        }
         if c == ' ' || c == '\t' {
             i += 1;
             continue;
@@ -123,7 +165,7 @@ fn is_operand_end(t: &T) -> bool {
     match t {
         T::Word(w) => !KEYWORDS_SPACE.contains(&w.as_str()) || w == "self",
         T::Num(_) | T::Str(_) => true,
-        T::Close(..) => true,
+        T::Close(..) | T::GClose => true,
         T::Op(o) => o == "?" || o == "!!",
         _ => false,
     }
@@ -151,6 +193,8 @@ fn render_line(toks: &[T]) -> String {
     for (idx, t) in toks.iter().enumerate() {
         let space = match (prev, t) {
             (None, _) => false,
+            (_, T::GOpen) | (Some(T::GOpen), _) | (_, T::GClose) => false,
+            (Some(T::GClose), T::Open('(', _)) | (Some(T::GClose), T::Open('[', _)) => false,
             (_, T::Colon) if head && parens == 0 => true,
             (_, T::Comment(_)) => true,
             (Some(T::Op(o)), _) if o == "@" => false,
@@ -203,6 +247,8 @@ fn render_line(toks: &[T]) -> String {
             T::Semi => out.push(';'),
             T::Colon => out.push(':'),
             T::Dot => out.push('.'),
+            T::GOpen => out.push('<'),
+            T::GClose => out.push('>'),
         }
         match t {
             T::Open('(', _) => parens += 1,

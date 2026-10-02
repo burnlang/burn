@@ -4,7 +4,7 @@ use crate::check::{self, builtins, CheckOptions, Index};
 use crate::diag::Severity;
 use crate::loader::Loader;
 use crate::source::{FileId, SourceMap, Span};
-use crate::types::{Ty, TyId, Types, T_ARR_ANY, T_STR};
+use crate::types::{Ty, TyId, Types, T_ARR_ANY, T_ERROR, T_STR};
 use json::Json;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -705,7 +705,8 @@ impl Server {
                 Ty::Record(r) if a.types.records[*r as usize].is_class => 7,
                 _ => 22,
             };
-            push(&t.0, kind, a.types.display(t.1), &mut items);
+            let detail = if t.1 == T_ERROR { "generic type".to_string() } else { a.types.display(t.1) };
+            push(&t.0, kind, detail, &mut items);
         }
         for b in builtins::BUILTINS {
             if !b.starts_with("__") {
