@@ -274,6 +274,7 @@ const KEYWORDS: &[&str] = &[
     "while",
     "for",
     "in",
+    "match",
     "return",
     "break",
     "continue",
