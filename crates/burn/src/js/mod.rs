@@ -337,6 +337,8 @@ impl<'p> Gen<'p> {
             }
             ExprKind::ArrLen(a) => format!("{}.length", self.expr(a)),
             ExprKind::BoxVal(x) => format!("{}.v", self.expr(x)),
+            ExprKind::Retain(x) => self.expr(x),
+            ExprKind::Release(x) => format!("({}, 0)", self.expr(x)),
             ExprKind::Seq(ss, x) => {
                 if ss.iter().all(|s| matches!(s, Stmt::Expr(_))) {
                     let mut parts: Vec<String> = ss

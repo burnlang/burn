@@ -3,12 +3,12 @@
 pub mod api;
 pub mod fmt;
 pub mod fx;
-pub mod gc;
 pub mod http;
 pub mod io;
 pub mod json;
 pub mod meta;
 pub mod obj;
+pub mod rc;
 pub mod signal;
 pub mod task;
 pub mod time;
@@ -170,4 +170,8 @@ runtime_fns! {
     Spawn => burn_spawn = crate::api::spawn_native [a, b, c, d];
     Await => burn_await = crate::api::await_future [a];
     GcCollect => burn_gc_collect = crate::api::gc_collect [];
+    Retain => burn_retain = crate::api::rc_retain [a];
+    Release => burn_release = crate::api::rc_release [a];
+    ReleaseZero => burn_release_zero = crate::api::rc_release_zero [a];
+    PossibleRoot => burn_possible_root = crate::api::rc_possible_root [a];
 }

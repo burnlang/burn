@@ -1506,9 +1506,10 @@ fun panic(message: string = "explicit panic")
 fun assert(condition: bool, message: string = "")
 
 /**
- * Runs the garbage collector now.
+ * Frees values that only refer to each other, right now.
  *
- * Memory is collected automatically, so this is rarely needed. It can help when
+ * Memory is freed automatically as soon as a value is no longer used, and
+ * cycles are found on their own, so this is rarely needed. It can help when
  * measuring memory use.
  *
  * @group Program

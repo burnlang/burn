@@ -3,7 +3,7 @@ use crate::exec::{load_with, needs_link, Host, Program, Vm};
 use crate::link::{export_name, link, rebase};
 use crate::module::Module;
 use burn_runtime::meta::{self, Meta};
-use burn_runtime::{api, gc, io};
+use burn_runtime::{api, io};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::CStr;
@@ -21,12 +21,6 @@ static EXPORTS: Mutex<Vec<(String, u64, u32)>> = Mutex::new(Vec::new());
 static MIXINS: Mutex<String> = Mutex::new(String::new());
 
 struct PooledVm(Box<Vm>);
-
-impl Drop for PooledVm {
-    fn drop(&mut self) {
-        gc::remove_vm_stack(&self.0.stack as *const Vec<u64>);
-    }
-}
 
 thread_local! {
     static POOL: RefCell<HashMap<usize, Vec<PooledVm>>> = RefCell::new(HashMap::new());
@@ -117,11 +111,11 @@ fn load_lib(key: usize, bytes: &[u8]) -> Result<Arc<Lib>, String> {
     meta::set_meta(Meta {
         types: rebased.types.clone(),
         locs,
+        info: Vec::new(),
     });
     let host = native_host(extra);
     let prog = load_with(&rebased, &host, false).map_err(|e| e.to_string())?;
     let globals: &'static mut [u64] = Box::leak(vec![0u64; prog.nglobals.max(1)].into_boxed_slice());
-    gc::add_root_range(globals.as_ptr() as usize, globals.len());
     let mut funcs = HashMap::new();
     for (i, f) in rebased.funcs.iter().enumerate() {
         funcs.entry(f.name.clone()).or_insert(i as u32);
@@ -139,11 +133,7 @@ fn load_lib(key: usize, bytes: &[u8]) -> Result<Arc<Lib>, String> {
 
 fn with_vm<R>(lib: &Lib, f: impl FnOnce(&mut Vm) -> R) -> R {
     let pooled = POOL.with(|p| p.borrow_mut().get_mut(&lib.key).and_then(|v| v.pop()));
-    let mut vm = pooled.unwrap_or_else(|| {
-        let vm = Vm::new(lib.prog.clone(), lib.globals as *mut u64);
-        gc::add_vm_stack(&vm.stack as *const Vec<u64>);
-        PooledVm(vm)
-    });
+    let mut vm = pooled.unwrap_or_else(|| PooledVm(Vm::new(lib.prog.clone(), lib.globals as *mut u64)));
     let r = f(&mut vm.0);
     POOL.with(|p| p.borrow_mut().entry(lib.key).or_default().push(vm));
     r

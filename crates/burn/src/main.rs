@@ -12,6 +12,7 @@ mod lexer;
 mod loader;
 mod lsp;
 mod native;
+mod own;
 mod parser;
 mod project;
 mod repl;
