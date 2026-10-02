@@ -6,6 +6,7 @@ use std::process::Command;
 
 static RUNTIME: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/libburn_runtime.a"));
 static NATIVE_LIBS: &str = include_str!(concat!(env!("OUT_DIR"), "/native_libs.txt"));
+static CORE_RUNTIME: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/libburn_core.a"));
 
 pub struct BuildOptions {
     pub output: PathBuf,
@@ -94,9 +95,17 @@ pub fn build(p: &Program, opts: &BuildOptions) -> Result<(), String> {
         std::fs::write(path, &asm).map_err(|e| format!("cannot write {}: {}", path.display(), e))?;
     }
     supported()?;
+    let runtime = if p.no_std {
+        if CORE_RUNTIME.is_empty() {
+            return Err("this burn binary was built without the no-std runtime library".into());
+        }
+        (CORE_RUNTIME, "-lm")
+    } else {
+        (RUNTIME, NATIVE_LIBS)
+    };
     let dir = temp_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let result = link(&dir, &asm, &opts.output, opts.strip);
+    let result = link(&dir, &asm, &opts.output, opts.strip, runtime);
     let _ = std::fs::remove_dir_all(&dir);
     result
 }
@@ -138,20 +147,20 @@ pub fn build_launcher(bytes: &[u8], opts: &BuildOptions) -> Result<(), String> {
     supported()?;
     let dir = temp_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let result = link(&dir, &asm, &opts.output, opts.strip);
+    let result = link(&dir, &asm, &opts.output, opts.strip, (RUNTIME, NATIVE_LIBS));
     let _ = std::fs::remove_dir_all(&dir);
     result
 }
 
-fn link(dir: &Path, asm: &str, output: &Path, strip: bool) -> Result<(), String> {
+fn link(dir: &Path, asm: &str, output: &Path, strip: bool, runtime: (&[u8], &str)) -> Result<(), String> {
     let asm_path = dir.join("program.s");
     let lib_path = dir.join("libburn_runtime.a");
     std::fs::write(&asm_path, asm).map_err(|e| e.to_string())?;
-    std::fs::write(&lib_path, RUNTIME).map_err(|e| e.to_string())?;
+    std::fs::write(&lib_path, runtime.0).map_err(|e| e.to_string())?;
     let cc = std::env::var("BURN_CC").or_else(|_| std::env::var("CC")).unwrap_or_else(|_| "cc".into());
     let mut cmd = Command::new(&cc);
     cmd.arg(&asm_path).arg(&lib_path).arg("-o").arg(output);
-    for l in NATIVE_LIBS.split_whitespace() {
+    for l in runtime.1.split_whitespace() {
         cmd.arg(l);
     }
     if cfg!(target_os = "macos") {

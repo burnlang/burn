@@ -342,6 +342,7 @@ pub struct Manifest {
     pub target: String,
     pub main: String,
     pub output: Option<String>,
+    pub std: bool,
     pub dependencies: Vec<(String, Option<String>)>,
 }
 
@@ -416,6 +417,11 @@ pub fn parse_manifest(src: &str) -> Result<Manifest, String> {
         return Err(format!("unknown target `{}`; use \"native\", \"js\" or \"bvm\"", target));
     }
     let main = str_field(pkg, "main", "package")?.unwrap_or_else(|| if kind == Kind::Lib { "src/lib.bn".into() } else { "src/main.bn".into() });
+    let std = match get(pkg, "std") {
+        None => true,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err("`package.std` must be true or false".into()),
+    };
     let mut dependencies = Vec::new();
     if let Some(deps) = get(&root, "dependencies") {
         let deps = deps.as_table().ok_or("`dependencies` must be a table")?;
@@ -447,6 +453,7 @@ pub fn parse_manifest(src: &str) -> Result<Manifest, String> {
         target,
         main,
         output: str_field(pkg, "output", "package")?,
+        std,
         dependencies,
     })
 }

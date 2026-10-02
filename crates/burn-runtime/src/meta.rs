@@ -1,4 +1,5 @@
-use std::sync::atomic::{AtomicPtr, Ordering};
+use crate::prelude::*;
+use core::sync::atomic::{AtomicPtr, Ordering};
 
 pub const TID_ERROR: u32 = 0;
 pub const TID_VOID: u32 = 1;
@@ -143,7 +144,7 @@ pub fn builtin_descs() -> Vec<Desc> {
     ]
 }
 
-static META: AtomicPtr<Meta> = AtomicPtr::new(std::ptr::null_mut());
+static META: AtomicPtr<Meta> = AtomicPtr::new(core::ptr::null_mut());
 
 pub fn set_meta(mut m: Meta) {
     m.info = type_info(&m.types);

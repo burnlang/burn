@@ -1,0 +1,73 @@
+---
+title: Building without the standard runtime
+description: Small native executables that leave out threads, HTTP, JSON and the rest of the standard runtime.
+order: 22
+---
+
+# Building without the standard runtime
+
+A native Burn executable normally carries the full runtime: threads for `async fun`, an HTTP client, JSON, processes,
+time zones and bvm for bytecode libraries. A program that needs none of that can be built without it, which gives
+much smaller executables:
+
+```sh
+burn build app.bn --no-std
+```
+
+or, for a project, in `burn.toml`:
+
+```toml
+[package]
+name = "github.com/you/tool"
+std = false
+```
+
+| Program | With the standard runtime | Without |
+| --- | --- | --- |
+| `print("hello")` | 349 KB | 39 KB |
+
+The language does not change. Strings, arrays, maps, structs, interfaces, generics, closures, `match`, smart casts,
+templates and automatic memory all work the same way, and so do runtime errors, overflow checks and stack overflow
+detection. The executable only needs the C library and `libm`.
+
+## What stays available
+
+- printing and reading: `print`, `printErr`, `input`, `readStdin`
+- files: `readFile`, `writeFile`, `appendFile`, `fileExists`
+- the environment: `args`, `env`, `exit`
+- time: `now`, `nowMs`, `millis`, `clock`, `sleep`
+- numbers: everything in `math`, `random`, `randomInt` and `seed`
+- the standard modules written in plain Burn: `std/strings`, `std/math`, `std/list`, `std/collections`, `std/path`,
+  `std/random` and `std/testing`
+
+## What needs the standard runtime
+
+| Feature | Why |
+| --- | --- |
+| `async fun` and `await` | they run on threads |
+| `parseJSON`, `toJSON`, `std/json` | the JSON reader and writer |
+| `std/http` | the HTTP client |
+| `std/process`, `std/fs` | running processes, directories and file operations |
+| `std/date`, `std/time` | the local time zone |
+| bytecode libraries (`import "lib.bvmc"`) | they run on bvm |
+
+Using one of these is a compile error that points at the call or the import:
+
+```text
+error: `std/http` needs the standard runtime for making HTTP requests
+ --> src/main.bn:1:8
+  |
+1 | import "std/http"
+  |        ^^^^^^^^^^
+  = help: this program is built without the standard runtime (`std = false` in burn.toml, or `--no-std`); remove that setting to use it
+```
+
+The same checks run with `burn check`, `burn run` and in the editor, so a project with `std = false` reports these
+errors before it is built. `burn run` still runs the program on bvm, which makes no difference to what it prints.
+
+## How it works
+
+The runtime crate is compiled twice. The full build uses Rust's standard library. The other one is `no_std`: it uses
+only `core` and `alloc`, takes memory from `malloc` and talks to the system through a few C library calls (`write`,
+`read`, `open`, `getenv`, `clock_gettime`, `nanosleep`). Both are embedded in the `burn` binary, and `burn build`
+links the one the program needs. The generated machine code is the same either way.

@@ -239,6 +239,9 @@ impl<'a> Checker<'a> {
                 return None;
             }
         }
+        if let Some(what) = super::nostd::std_only(name) {
+            self.needs_std(span, what);
+        }
         let is_method = recv.is_some();
         let mut xs: Vec<Arg> = Vec::new();
         if let Some((r, s)) = recv {

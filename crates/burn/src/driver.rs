@@ -5,6 +5,13 @@ use crate::loader::{Loaded, Loader};
 use crate::source::SourceMap;
 use std::io::IsTerminal;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static NO_STD: AtomicBool = AtomicBool::new(false);
+
+pub fn set_no_std(on: bool) {
+    NO_STD.store(on, Ordering::Relaxed);
+}
 
 pub struct Compiled {
     pub program: Program,
@@ -38,13 +45,17 @@ pub fn report(sm: &SourceMap, diags: &[Diagnostic]) {
 pub fn load_path(path: &Path) -> Result<Loaded, String> {
     let mut loader = Loader::new();
     let root = loader.load_file(path)?;
-    Ok(loader.finish(root))
+    let mut l = loader.finish(root);
+    l.no_std |= NO_STD.load(Ordering::Relaxed);
+    Ok(l)
 }
 
 pub fn load_source(name: &str, src: &str) -> Loaded {
     let mut loader = Loader::new();
     let root = loader.load_source(name, src.to_string(), std::env::current_dir().ok());
-    loader.finish(root)
+    let mut l = loader.finish(root);
+    l.no_std |= NO_STD.load(Ordering::Relaxed);
+    l
 }
 
 pub fn check_loaded(loaded: Loaded, opts: CheckOptions) -> Result<Compiled, Failed> {

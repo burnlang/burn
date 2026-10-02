@@ -1,6 +1,6 @@
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod imp {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use core::sync::atomic::{AtomicUsize, Ordering};
 
     #[repr(C)]
     struct SigAction {
@@ -49,7 +49,7 @@ mod imp {
     pub fn install(stack_base: usize) {
         STACK_BASE.store(stack_base, Ordering::Relaxed);
         unsafe {
-            let mem = std::alloc::alloc(std::alloc::Layout::from_size_align(ALT_STACK, 16).unwrap());
+            let mem = alloc::alloc::alloc(alloc::alloc::Layout::from_size_align(ALT_STACK, 16).unwrap());
             if mem.is_null() {
                 return;
             }
@@ -58,7 +58,7 @@ mod imp {
                 flags: 0,
                 size: ALT_STACK,
             };
-            if sigaltstack(&ss, std::ptr::null_mut()) != 0 {
+            if sigaltstack(&ss, core::ptr::null_mut()) != 0 {
                 return;
             }
             let act = SigAction {
@@ -67,8 +67,8 @@ mod imp {
                 flags: SA_SIGINFO | SA_ONSTACK,
                 restorer: 0,
             };
-            sigaction(SIGSEGV, &act, std::ptr::null_mut());
-            sigaction(SIGBUS, &act, std::ptr::null_mut());
+            sigaction(SIGSEGV, &act, core::ptr::null_mut());
+            sigaction(SIGBUS, &act, core::ptr::null_mut());
         }
     }
 }
