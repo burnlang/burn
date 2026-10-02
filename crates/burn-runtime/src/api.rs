@@ -1,8 +1,8 @@
 use crate::fmt;
-use crate::gc;
 use crate::io::{self, rt_error};
 use crate::meta::{self, desc, Desc, TID_ARR_INT, TID_INT, TID_STR};
 use crate::obj::*;
+use crate::rc::{self, release, release_t, retain, retain_t};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 #[inline]
@@ -39,10 +39,10 @@ fn byte_offset(s: u64, ci: usize) -> usize {
 pub fn str_concat(a: u64, c: u64) -> u64 {
     let (x, y) = (str_bytes(a), str_bytes(c));
     if x.is_empty() {
-        return c;
+        return retain(c);
     }
     if y.is_empty() {
-        return a;
+        return retain(a);
     }
     let mut v = Vec::with_capacity(x.len() + y.len());
     v.extend_from_slice(x);
@@ -113,7 +113,7 @@ pub fn str_contains(s: u64, sub: u64) -> u64 {
 pub fn str_replace(s: u64, from: u64, to: u64) -> u64 {
     let fr = str_ref(from);
     if fr.is_empty() {
-        return s;
+        return retain(s);
     }
     string(&str_ref(s).replace(fr, str_ref(to)))
 }
@@ -187,7 +187,7 @@ pub fn str_from_code(n: u64) -> u64 {
 
 pub fn to_str(v: u64, tid: u64) -> u64 {
     if tid as u32 == TID_STR {
-        return v;
+        return retain(v);
     }
     string(&fmt::to_string(v, tid as u32))
 }
@@ -270,7 +270,33 @@ pub fn arr_get(a: u64, i: u64, loc: u64) -> u64 {
     if (i as usize) >= n {
         err_index(loc, i, n as u64);
     }
-    unsafe { *array_data(a).add(i as usize) }
+    retain_t(unsafe { *array_data(a).add(i as usize) }, elem_tid(a))
+}
+
+#[inline]
+fn elem_tid(a: u64) -> u32 {
+    match desc(tid_of(a)) {
+        Desc::Array(e) => *e,
+        _ => meta::TID_INT,
+    }
+}
+
+fn map_tids(m: u64) -> (u32, u32) {
+    match desc(tid_of(m)) {
+        Desc::Map(k, v) => (*k, *v),
+        _ => (TID_STR, meta::TID_INT),
+    }
+}
+
+fn array_shared(tid: u32, items: &[u64]) -> u64 {
+    if let Desc::Array(e) = desc(tid) {
+        if meta::managed(*e) {
+            for x in items {
+                retain(*x);
+            }
+        }
+    }
+    array_from(tid, items)
 }
 
 pub fn arr_set(a: u64, i: u64, v: u64, loc: u64) -> u64 {
@@ -278,11 +304,15 @@ pub fn arr_set(a: u64, i: u64, v: u64, loc: u64) -> u64 {
     if (i as usize) >= n {
         err_index(loc, i, n as u64);
     }
-    unsafe { *array_data(a).add(i as usize) = v }
-    v
+    let et = elem_tid(a);
+    retain_t(v, et);
+    let old = unsafe { std::mem::replace(&mut *array_data(a).add(i as usize), v) };
+    release_t(old, et);
+    retain_t(v, et)
 }
 
 pub fn arr_push(a: u64, v: u64) -> u64 {
+    retain_t(v, elem_tid(a));
     array_push(a, v);
     0
 }
@@ -303,6 +333,7 @@ pub fn arr_insert(a: u64, i: u64, v: u64, loc: u64) -> u64 {
     if idx < 0 || idx as usize > n {
         err_index(loc, i, n as u64);
     }
+    retain_t(v, elem_tid(a));
     array_set_len(a, n + 1);
     let s = array_slice_mut(a);
     s.copy_within(idx as usize..n, idx as usize + 1);
@@ -326,7 +357,7 @@ pub fn arr_concat(a: u64, c: u64) -> u64 {
     let mut v = Vec::with_capacity(array_len(a) + array_len(c));
     v.extend_from_slice(array_slice(a));
     v.extend_from_slice(array_slice(c));
-    array_from(tid_of(a), &v)
+    array_shared(tid_of(a), &v)
 }
 
 pub fn arr_slice(a: u64, s: u64, e: u64) -> u64 {
@@ -334,12 +365,12 @@ pub fn arr_slice(a: u64, s: u64, e: u64) -> u64 {
     let end = (e as i64).clamp(0, n);
     let start = (s as i64).clamp(0, end);
     let items: Vec<u64> = array_slice(a)[start as usize..end as usize].to_vec();
-    array_from(tid_of(a), &items)
+    array_shared(tid_of(a), &items)
 }
 
 pub fn arr_copy(a: u64) -> u64 {
     let items: Vec<u64> = array_slice(a).to_vec();
-    array_from(tid_of(a), &items)
+    array_shared(tid_of(a), &items)
 }
 
 pub fn arr_index_of(a: u64, v: u64, etid: u64) -> u64 {
@@ -372,7 +403,14 @@ pub fn arr_sort(a: u64, etid: u64) -> u64 {
 }
 
 pub fn arr_clear(a: u64) -> u64 {
+    let et = elem_tid(a);
+    let old: Vec<u64> = array_slice(a).to_vec();
     unsafe { set_word(a, ARR_LEN, 0) }
+    if meta::managed(et) {
+        for x in old {
+            release(x);
+        }
+    }
     0
 }
 
@@ -401,24 +439,38 @@ pub fn map_new_obj(tid: u64) -> u64 {
 }
 
 pub fn map_set(m: u64, k: u64, v: u64) -> u64 {
+    let (kt, vt) = map_tids(m);
+    retain_t(v, vt);
     let key = map_key(m, k);
     let d = map_data(m);
     match d.index.get(&key) {
-        Some(i) => d.vals[*i] = v,
+        Some(i) => {
+            let old = std::mem::replace(&mut d.vals[*i], v);
+            release_t(old, vt);
+        }
         None => {
+            retain_t(k, kt);
             d.index.insert(key, d.keys.len());
             d.keys.push(k);
             d.vals.push(v);
         }
     }
-    v
+    retain_t(v, vt)
+}
+
+pub fn map_insert_owned(m: u64, k: u64, v: u64) {
+    let (kt, vt) = map_tids(m);
+    map_set(m, k, v);
+    release_t(k, kt);
+    release_t(v, vt);
+    release_t(v, vt);
 }
 
 pub fn map_get(m: u64, k: u64, loc: u64) -> u64 {
     let key = map_key(m, k);
     let d = map_data(m);
     match d.index.get(&key) {
-        Some(i) => d.vals[*i],
+        Some(i) => retain_t(d.vals[*i], map_tids(m).1),
         None => {
             let kt = match desc(tid_of(m)) {
                 Desc::Map(k, _) => *k,
@@ -434,9 +486,10 @@ pub fn map_get(m: u64, k: u64, loc: u64) -> u64 {
 pub fn map_get_or(m: u64, k: u64, dflt: u64) -> u64 {
     let key = map_key(m, k);
     let d = map_data(m);
+    let vt = map_tids(m).1;
     match d.index.get(&key) {
-        Some(i) => d.vals[*i],
-        None => dflt,
+        Some(i) => retain_t(d.vals[*i], vt),
+        None => retain_t(dflt, vt),
     }
 }
 
@@ -445,7 +498,7 @@ pub fn map_find(m: u64, k: u64, vt: u64) -> u64 {
     let d = map_data(m);
     match d.index.get(&key) {
         Some(i) if meta::is_unboxed(vt as u32) => box_value(d.vals[*i], vt),
-        Some(i) => d.vals[*i],
+        Some(i) => retain_t(d.vals[*i], vt as u32),
         None => 0,
     }
 }
@@ -458,10 +511,13 @@ pub fn map_has(m: u64, k: u64) -> u64 {
 pub fn map_remove(m: u64, k: u64) -> u64 {
     let key = map_key(m, k);
     let d = map_data(m);
+    let (kt, vt) = map_tids(m);
     match d.index.remove(&key) {
         Some(i) => {
-            d.keys.remove(i);
-            d.vals.remove(i);
+            let ok = d.keys.remove(i);
+            let ov = d.vals.remove(i);
+            release_t(ok, kt);
+            release_t(ov, vt);
             for v in d.index.values_mut() {
                 if *v > i {
                     *v -= 1;
@@ -475,12 +531,12 @@ pub fn map_remove(m: u64, k: u64) -> u64 {
 
 pub fn map_keys(m: u64, arr_tid: u64) -> u64 {
     let items = map_data(m).keys.clone();
-    array_from(arr_tid as u32, &items)
+    array_shared(arr_tid as u32, &items)
 }
 
 pub fn map_values(m: u64, arr_tid: u64) -> u64 {
     let items = map_data(m).vals.clone();
-    array_from(arr_tid as u32, &items)
+    array_shared(arr_tid as u32, &items)
 }
 
 pub fn map_len(m: u64) -> u64 {
@@ -494,13 +550,13 @@ pub fn struct_alloc(tid: u64, n: u64) -> u64 {
 pub fn box_value(v: u64, tid: u64) -> u64 {
     let tid = tid as u32;
     match desc(tid) {
-        Desc::Any => v,
+        Desc::Any => retain(v),
         Desc::Null | Desc::Void => 0,
         Desc::Optional(inner) => {
             if v == 0 {
                 0
             } else if meta::is_unboxed(*inner) {
-                v
+                retain(v)
             } else {
                 box_value(v, *inner as u64)
             }
@@ -509,11 +565,11 @@ pub fn box_value(v: u64, tid: u64) -> u64 {
             if v == 0 {
                 0
             } else {
-                box_raw(tid_of(v), v)
+                box_raw(tid_of(v), retain(v))
             }
         }
-        Desc::Record { .. } => box_raw(tid_of(v), v),
-        _ => box_raw(tid, v),
+        Desc::Record { .. } => box_raw(tid_of(v), retain(v)),
+        _ => box_raw(tid, retain_t(v, tid)),
     }
 }
 
@@ -567,7 +623,11 @@ pub fn cast(v: u64, from: u64, to: u64, loc: u64) -> u64 {
         };
         rt_error(&format!("cannot cast value of type {} to {}", actual, meta::type_name(to as u32)), loc);
     }
-    payload(v, from as u32, to as u32)
+    let out = payload(v, from as u32, to as u32);
+    if meta::managed(to as u32) {
+        retain(out);
+    }
+    out
 }
 
 fn payload(v: u64, from: u32, to: u32) -> u64 {
@@ -600,7 +660,7 @@ pub fn unwrap(v: u64, opt_tid: u64, loc: u64) -> u64 {
     }
     match desc(opt_tid as u32) {
         Desc::Optional(inner) if meta::is_unboxed(*inner) => box_val(v),
-        _ => v,
+        _ => retain(v),
     }
 }
 
@@ -610,10 +670,15 @@ pub fn destroy(v: u64, loc: u64) -> u64 {
     }
     match kind_of(v) {
         K_STRUCT => unsafe {
+            let mut kids = Vec::new();
+            rc::for_children(v, |c| kids.push(c));
             for i in 0..struct_len(v) {
                 set_word(v, HDR + 8 * i, 0);
             }
             hdr(v).kind = K_DEAD;
+            for c in kids {
+                release(c);
+            }
             0
         },
         K_DEAD => rt_error("this object was already destroyed", loc),
@@ -625,7 +690,7 @@ pub fn alive(v: u64, loc: u64) -> u64 {
     if v != 0 && kind_of(v) == K_DEAD {
         rt_error("this object was destroyed and can no longer be used", loc);
     }
-    v
+    retain(v)
 }
 
 pub fn eq(a: u64, c: u64, tid: u64) -> u64 {
@@ -1015,10 +1080,8 @@ static TRAMPOLINE: AtomicUsize = AtomicUsize::new(0);
 pub fn rt_init(meta_ptr: u64, meta_len: u64, globals: u64, nglobals: u64, stack_base: u64, trampoline: u64) -> u64 {
     let blob = unsafe { std::slice::from_raw_parts(meta_ptr as usize as *const u8, meta_len as usize) };
     meta::set_meta(meta::decode(blob));
-    if nglobals > 0 {
-        gc::add_root_range(globals as usize, nglobals as usize);
-    }
-    gc::set_stack_base(stack_base as usize);
+    let _ = (globals, nglobals);
+    rc::set_main_thread();
     crate::signal::install(stack_base as usize);
     TRAMPOLINE.store(trampoline as usize, Ordering::SeqCst);
     0
@@ -1062,11 +1125,34 @@ pub fn spawn_native(fnptr: u64, argc: u64, argsptr: u64, tid: u64) -> u64 {
 }
 
 pub fn await_future(fut: u64) -> u64 {
-    crate::task::await_future(fut)
+    let v = crate::task::await_future(fut);
+    match desc(tid_of(fut)) {
+        Desc::Future(t) => retain_t(v, *t),
+        _ => v,
+    }
 }
 
 pub fn gc_collect() -> u64 {
-    gc::force_collect();
+    rc::force_collect();
+    0
+}
+
+pub fn rc_retain(p: u64) -> u64 {
+    retain(p)
+}
+
+pub fn rc_release(p: u64) -> u64 {
+    release(p);
+    0
+}
+
+pub fn rc_release_zero(p: u64) -> u64 {
+    rc::zero_reached(p);
+    0
+}
+
+pub fn rc_possible_root(p: u64) -> u64 {
+    rc::possible_root(p);
     0
 }
 

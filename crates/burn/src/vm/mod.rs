@@ -7,7 +7,7 @@ use bvm::{Host, LoadError, Module, Runner};
 use std::sync::Arc;
 
 pub fn module(p: &Program) -> Module {
-    compile::compile(p)
+    compile::compile(&crate::own::lower(p))
 }
 
 pub fn library_parts(p: &Program) -> Result<(Vec<Module>, Host), String> {

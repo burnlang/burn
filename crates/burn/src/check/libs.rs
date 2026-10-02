@@ -12,6 +12,12 @@ pub fn library_module(bytes: &[u8]) -> Result<bvm::Module, String> {
     bvm::parse(bytes)
 }
 
+pub const REF_COUNTED: &str = "RefCounted";
+
+pub fn ref_counted(m: &bvm::Module) -> bool {
+    m.annotations.iter().any(|a| a.target == bvm::Target::Module && a.name == REF_COUNTED)
+}
+
 pub fn library_modules(bytes: &[u8]) -> Result<Vec<bvm::Module>, String> {
     if bvm::archive::is_archive(bytes) {
         let a = bvm::archive::Archive::decode(bytes)?;
@@ -43,6 +49,15 @@ impl<'a> Checker<'a> {
                         self.libs.len() - 1
                     }
                 };
+                if let Ok(mods) = library_modules(&lib.bytes) {
+                    if !mods.iter().all(ref_counted) {
+                        self.emit(
+                            Diagnostic::error(*span, format!("`{}` was compiled by an older version of Burn", lib.path.display()))
+                                .help("compile it again with this version: Burn now frees memory by itself, and libraries have to follow the same rules"),
+                        );
+                        continue;
+                    }
+                }
                 match library_module(&lib.bytes) {
                     Ok(module) => self.import_library(mi, idx as u32, &module, *span),
                     Err(e) => self.error(*span, format!("cannot load `{}`: {}", lib.path.display(), e)),

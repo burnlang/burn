@@ -80,6 +80,8 @@ pub enum ExprKind {
     ArrLen(Box<Expr>),
     BoxVal(Box<Expr>),
     Seq(Vec<Stmt>, Box<Expr>),
+    Retain(Box<Expr>),
+    Release(Box<Expr>),
 }
 
 #[derive(Clone, Debug)]
@@ -163,6 +165,7 @@ pub struct IfaceSlot {
     pub impls: Vec<(TyId, FuncId)>,
 }
 
+#[derive(Clone)]
 pub struct Program {
     pub types: Types,
     pub funcs: Vec<Func>,
@@ -183,6 +186,7 @@ impl Program {
         burn_runtime::meta::Meta {
             types: self.types.descs(),
             locs: self.locs.clone(),
+            info: Vec::new(),
         }
     }
 }

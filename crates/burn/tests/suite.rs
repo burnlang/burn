@@ -542,6 +542,38 @@ fn runaway_programs_stop_at_the_heap_limit() {
 }
 
 #[test]
+fn freed_values_are_never_used_again() {
+    let root = root();
+    let mut failures = Vec::new();
+    for (file, expected) in cases() {
+        let rel = file.strip_prefix(&root).unwrap();
+        let (out, _) = output(burn().current_dir(&root).env("BURN_RC_CHECK", "1").env("BURN_GC_THRESHOLD", "4096").arg(rel));
+        if out != expected {
+            failures.push(format!("{}:\n--- expected\n{}\n--- got\n{}", rel.display(), expected, out));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn values_that_only_reference_each_other_are_freed() {
+    let dir = temp_dir("cycles");
+    let file = dir.join("cycles.bn");
+    std::fs::write(
+        &file,
+        "def struct Node(name: string) {\n    Node? next = null\n    [any] seen = []\n}\n\nfun ring(n: int): int {\n    var first = new Node(\"first\")\n    var cur = first\n    for i in 0..n {\n        var next = new Node(\"node ${i}\")\n        cur.next = next\n        next.seen.push(cur)\n        cur = next\n    }\n    cur.next = first\n    return n\n}\n\nvar total = 0\nfor round in 0..30000 {\n    total += ring(20)\n}\nvar count = fun(): fun(): int {\n    var n = 0\n    var self: any = null\n    var f = fun(): int {\n        n += 1\n        return n\n    }\n    self = f\n    return f\n}\nfor i in 0..100000 {\n    count()()\n}\nprint(total)\n",
+    )
+    .unwrap();
+    let (out, code) = output(burn().env("BURN_MAX_HEAP_MB", "24").arg(&file));
+    assert_eq!((out.as_str(), code), ("600000\n", 0));
+    if native_supported() {
+        let (out, code) = output(burn().env("BURN_MAX_HEAP_MB", "24").args(["run", "--native"]).arg(&file));
+        assert_eq!((out.as_str(), code), ("600000\n", 0));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn language_server_completes_imports_and_reports_ambiguity_once() {
     use std::io::{BufRead, BufReader, Read, Write};
     let dir = temp_dir("lsp-imports");

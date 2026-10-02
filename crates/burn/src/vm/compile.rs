@@ -82,6 +82,14 @@ pub fn compile(p: &Program) -> Module {
         })
         .collect();
     m.entry = Some(p.entry);
+    m.annotations.insert(
+        0,
+        Annotation {
+            target: Target::Module,
+            name: crate::check::libs::REF_COUNTED.into(),
+            args: Vec::new(),
+        },
+    );
     m
 }
 
@@ -350,6 +358,14 @@ impl Compiler {
             ExprKind::Seq(ss, x) => {
                 self.stmts(ss);
                 self.expr(x);
+            }
+            ExprKind::Retain(x) => {
+                self.expr(x);
+                self.emit(Op::Rt(burn_runtime::RtFn::Retain));
+            }
+            ExprKind::Release(x) => {
+                self.expr(x);
+                self.emit(Op::Rt(burn_runtime::RtFn::Release));
             }
         }
     }

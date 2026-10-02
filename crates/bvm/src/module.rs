@@ -131,6 +131,7 @@ impl Module {
         Meta {
             types: self.types.clone(),
             locs: self.locs.clone(),
+            info: Vec::new(),
         }
     }
 

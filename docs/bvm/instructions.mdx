@@ -16,7 +16,7 @@ the rightmost value is the top of the stack: `a b → c` pops `b`, then `a`, and
 | `const v` | `→ v` | push an integer, float (as its bits), `true`, `false` or `null` |
 | `tconst T` | `→ id` | push the id of type `T`; the linker renumbers it when it merges type tables |
 | `lconst n` | `→ n` | push a source location index; the linker renumbers it when it merges modules |
-| `str "s"` | `→ s` | push a string from the module's string pool (never garbage collected) |
+| `str "s"` | `→ s` | push a string from the module's string pool (static, never freed) |
 | `fref f` | `→ f` | push a function reference for `calli` |
 | `load x` | `→ v` | push local `x` |
 | `store x` | `v →` | pop into local `x` |

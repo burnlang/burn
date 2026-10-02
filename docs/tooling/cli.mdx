@@ -45,8 +45,9 @@ The older flags still work: `-r`, `-e`, `-exe <file> [name]` and `-d`.
 | `BURN_CC` / `CC` | linker driver used by `burn build` (default `cc`) |
 | `NO_COLOR` | disable colored diagnostics |
 | `BURN_HOME` | where packages are found (default `~/.burn`, packages in `packages/`) |
-| `BURN_GC_THRESHOLD` | bytes allocated between garbage collections (default 32 MB) |
-| `BURN_GC_STATS` | print a line after every collection |
+| `BURN_GC_THRESHOLD` | bytes allocated between two searches for unreachable cycles (default 32 MB) |
+| `BURN_GC_STATS` | print a line after every cycle search |
+| `BURN_RC_CHECK` | debugging aid: freed objects are kept and poisoned, and any later use of one stops the program with an internal error |
 | `BURN_MAX_HEAP_MB` | stop a program with an out of memory error when it keeps more data alive than this (default: 3/4 of the computer's memory, `0` turns the limit off) |
 | `BURN_LSP_MEMORY_MB` | the most memory `burn lsp` may use on Linux; past it the server stops instead of slowing the computer down (default 4096, `0` turns the limit off) |
 

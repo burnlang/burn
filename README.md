@@ -55,7 +55,11 @@ fun main() {
 - One definition syntax for everything: `def type`, `def struct`, `def interface`, `def enum`, `def annotation`
 - Annotations like Java's: `@Getter`, `@Setter`, `@Deprecated`, your own `def annotation`s and `annotationsOf(value)`
 - Structs with constructors, methods, static and private members, inheritance, abstract and static structs, per-object functions and `destroy`; interfaces with checked conformance
-- Arrays, maps, records, enums, first-class functions and lambdas, string templates
+- Generics: `fun first<T>(items: [T]): T?`, `def struct Stack<T>()`, with the types worked out for you
+- `match` on values, enum variants, ranges and types, with guards
+- Arrays, maps, records, enums, first-class functions and closures, string templates, bit operators
+- Automatic memory without a garbage collector: the compiler tracks ownership and frees each value as soon as it is no
+  longer used, cycles included, with no pauses and nothing to write by hand
 - `async fun` / `await` running on real threads
 - Modules with `pub` and `priv`
 - Standard library for dates, times, HTTP, JSON, math, strings, processes and files
@@ -240,7 +244,7 @@ fun main() {
 ## bvm, the Burn Virtual Machine
 
 bvm runs Burn programs, and it isn't tied to Burn. It has a readable assembly language, a compact bytecode format,
-a verifier, a garbage-collected runtime with about 100 built-in functions, host functions, threads and a Rust API
+a verifier, a reference-counted runtime with about 100 built-in functions, host functions, threads and a Rust API
 for generating code. That's everything a new language needs for a backend.
 
 ```bvm
@@ -325,7 +329,7 @@ examples are in [`examples/bvm/`](examples/bvm/).
   - `lsp/`, `fmt.rs`, `repl.rs`: tooling
 - `crates/bvm/`: the Burn Virtual Machine: instruction set, assembler, bytecode format, verifier, linker, mixins,
   archives, interpreter, the native bridge, the `bvm` command and the Ember example language
-- `crates/burn-runtime/`: runtime shared by bvm and native executables (GC, strings, collections, JSON, HTTP, tasks)
+- `crates/burn-runtime/`: runtime shared by bvm and native executables (memory, strings, collections, JSON, HTTP, tasks)
 - `tools/burnfmt/`: the formatter, written in Burn
 - `scripts/package.sh`: builds the toolchain into the layout burnup installs and releases ship
 - `install.sh`: forwards to [burnup](https://github.com/burnlang/burnup), the installer

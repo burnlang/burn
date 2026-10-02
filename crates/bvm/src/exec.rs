@@ -2,7 +2,7 @@ use crate::module::Module;
 use crate::op::{Op, NO_LOC};
 use crate::verify::{analyze, VerifyError};
 use burn_runtime::obj::*;
-use burn_runtime::{api, gc, io, meta, task};
+use burn_runtime::{api, io, meta, rc, task};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicU8, Ordering};
@@ -1039,15 +1039,6 @@ impl Vm {
     }
 }
 
-#[inline(never)]
-fn with_stack_base<R>(f: impl FnOnce() -> R) -> R {
-    let marker = [0u64; 2];
-    gc::set_stack_base(marker.as_ptr() as usize + 16);
-    let r = f();
-    std::hint::black_box(&marker);
-    r
-}
-
 pub struct Runner {
     pub globals: Vec<u64>,
     prog: Arc<Program>,
@@ -1061,10 +1052,8 @@ impl Runner {
             globals.resize(prog.nglobals.max(1), 0);
         }
         let ptr = globals.as_mut_ptr();
-        gc::clear_root_ranges();
-        gc::add_root_range(ptr as usize, globals.len());
+        rc::set_main_thread();
         let vm = Vm::new(prog.clone(), ptr);
-        gc::add_vm_stack(&vm.stack as *const Vec<u64>);
         Runner { globals, prog, vm }
     }
 
@@ -1077,8 +1066,7 @@ impl Runner {
     }
 
     pub fn call_with(&mut self, func: u32, args: &[u64]) -> u64 {
-        let vm = &mut self.vm;
-        with_stack_base(|| vm.call(func, args))
+        self.vm.call(func, args)
     }
 
     pub fn finish(self) -> Vec<u64> {
@@ -1087,9 +1075,6 @@ impl Runner {
         if std::env::var_os("BVM_STATS").is_some() {
             eprintln!("{}", self.prog.report());
         }
-        gc::remove_vm_stack(&self.vm.stack as *const Vec<u64>);
-        gc::clear_root_ranges();
-        gc::clear_stack_base();
         self.globals
     }
 }

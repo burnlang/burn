@@ -25,7 +25,8 @@ pub fn supported() -> Result<(), String> {
 
 pub fn assembly(p: &Program) -> String {
     let meta = burn_runtime::meta::encode(&p.meta());
-    x86::generate(p, &meta, &x86::Target::host())
+    let p = crate::own::lower(p);
+    x86::generate(&p, &meta, &x86::Target::host())
 }
 
 fn temp_dir() -> PathBuf {

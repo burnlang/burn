@@ -1,5 +1,4 @@
 use crate::fmt::{float_str, quote};
-use crate::gc;
 use crate::meta::{desc, Desc, TID_ARR_ANY, TID_BOOL, TID_FLOAT, TID_INT, TID_MAP_STR_ANY, TID_STR};
 use crate::obj::*;
 
@@ -38,7 +37,6 @@ impl<'a> P<'a> {
             b'{' => {
                 self.i += 1;
                 let m = map_new(crate::meta::TID_MAP_STR_ANY);
-                let _g = gc::root(m);
                 self.ws();
                 if self.i < self.s.len() && self.s[self.i] == b'}' {
                     self.i += 1;
@@ -51,14 +49,13 @@ impl<'a> P<'a> {
                     }
                     let k = self.string()?;
                     let ko = string(&k);
-                    let _gk = gc::root(ko);
                     self.ws();
                     if self.i >= self.s.len() || self.s[self.i] != b':' {
                         return self.err("expected ':'");
                     }
                     self.i += 1;
                     let v = self.value()?;
-                    crate::api::map_set(m, ko, v);
+                    crate::api::map_insert_owned(m, ko, v);
                     self.ws();
                     if self.i < self.s.len() && self.s[self.i] == b',' {
                         self.i += 1;
@@ -75,7 +72,6 @@ impl<'a> P<'a> {
             b'[' => {
                 self.i += 1;
                 let a = array_new(TID_ARR_ANY, 0);
-                let _g = gc::root(a);
                 self.ws();
                 if self.i < self.s.len() && self.s[self.i] == b']' {
                     self.i += 1;
@@ -100,7 +96,6 @@ impl<'a> P<'a> {
             b'"' => {
                 let s = self.string()?;
                 let so = string(&s);
-                let _g = gc::root(so);
                 Ok(box_raw(TID_STR, so))
             }
             b't' if self.lit("true") => Ok(box_raw(TID_BOOL, 1)),
@@ -189,7 +184,6 @@ impl<'a> P<'a> {
 pub fn parse(s: &str) -> Result<u64, String> {
     let mut p = P { s: s.as_bytes(), i: 0 };
     let v = p.value()?;
-    let _g = gc::root(v);
     p.ws();
     if p.i < p.s.len() {
         return p.err("trailing characters");

@@ -26,7 +26,7 @@ Both sides describe the functions they share the same way:
   exported automatically.
 - **Imports**: host functions a library needs. In Burn: `@Native fun hostName(): string`. In assembly:
   `import hostName 0`.
-- **Values**: both sides use the same runtime, the same heap and the same garbage collector, so ints, floats,
+- **Values**: both sides use the same runtime, the same heap and the same reference counts, so ints, floats,
   strings, arrays, maps and records pass between them without conversion. When a library is loaded into a
   native program, its types are merged into the program's types: a record that looks the same on both sides
   (same name, same fields) is the same type.
