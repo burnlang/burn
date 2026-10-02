@@ -1,17 +1,43 @@
+#![cfg_attr(burn_core, no_std)]
 #![allow(clippy::missing_safety_doc)]
 
+extern crate alloc;
+
 pub mod api;
+#[cfg(burn_core)]
+mod bare;
 pub mod fmt;
+#[cfg(not(burn_core))]
 pub mod fx;
+#[cfg(not(burn_core))]
 pub mod http;
 pub mod io;
+#[cfg(not(burn_core))]
 pub mod json;
 pub mod meta;
+pub mod num;
 pub mod obj;
 pub mod rc;
 pub mod signal;
+pub mod sync;
+#[cfg(burn_core)]
+pub mod sys;
+#[cfg(not(burn_core))]
 pub mod task;
+#[cfg(not(burn_core))]
 pub mod time;
+
+pub mod prelude {
+    #[allow(unused_imports)]
+    pub use alloc::{
+        borrow::ToOwned,
+        boxed::Box,
+        format,
+        string::{String, ToString},
+        vec,
+        vec::Vec,
+    };
+}
 
 macro_rules! runtime_fns {
     ($( $variant:ident => $sym:ident = $path:path [$($arg:ident),*] ; )*) => {

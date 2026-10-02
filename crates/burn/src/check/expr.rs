@@ -398,6 +398,7 @@ impl<'a> Checker<'a> {
             A::Is(x, te) => self.is_expr(x, te, e.span),
             A::As(x, te) => self.as_expr(x, te, e.span),
             A::Await(x) => {
+                self.needs_std(e.span, "`await`");
                 let h = self.expr(x, None);
                 match self.types.get(h.ty).clone() {
                     Ty::Future(t) => Expr::new(ExprKind::Rt(RtFn::Await, vec![h]), t),

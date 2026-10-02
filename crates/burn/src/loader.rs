@@ -97,6 +97,7 @@ pub struct Loaded {
     pub order: Vec<usize>,
     pub diags: Vec<Diagnostic>,
     pub root: usize,
+    pub no_std: bool,
 }
 
 pub struct Loader {
@@ -462,6 +463,7 @@ impl Loader {
             order,
             diags: self.diags,
             root,
+            no_std: matches!(&self.project, Some(Ok(p)) if !p.manifest.std),
         }
     }
 }

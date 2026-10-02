@@ -6,6 +6,7 @@ pub mod generics;
 pub mod init_order;
 pub mod libs;
 pub mod matching;
+pub mod nostd;
 pub mod nullsafe;
 pub mod stmt;
 pub mod structs;
@@ -206,6 +207,8 @@ pub struct Checker<'a> {
     pub inferring: u32,
     pub instance_of: HashMap<TyId, (u32, Vec<TyId>)>,
     pub inst_sites: HashMap<FuncId, (String, Span)>,
+    pub no_std: bool,
+    pub std_uses: Vec<(Span, &'static str)>,
 }
 
 pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
@@ -252,8 +255,11 @@ pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
         inferring: 0,
         instance_of: HashMap::new(),
         inst_sites: HashMap::new(),
+        no_std: loaded.no_std,
+        std_uses: Vec::new(),
     };
     c.run(loaded);
+    c.check_no_std(loaded);
     let has_errors = loaded.diags.iter().chain(c.diags.iter()).any(|d| d.severity == Severity::Error);
     let mut program = None;
     if !has_errors {
@@ -1688,6 +1694,7 @@ impl<'a> Checker<'a> {
                 v
             },
             libs: self.libs.clone(),
+            no_std: self.no_std,
             name: std::path::Path::new(&self.sm.file(loaded.modules[loaded.root].file).name)
                 .file_stem()
                 .map(|s| s.to_string_lossy().into_owned())

@@ -41,6 +41,7 @@ Usage:
       --target <native|js|bvm>        native executable (default), JavaScript or bvm bytecode
       --emit-asm <path>               also write the generated assembly (x86-64, or bvm text)
       --no-strip                      keep symbols in the executable
+      --no-std                        build without the standard runtime (same as `std = false` in burn.toml)
   burn check [files...]               type-check without running (default: the project)
   burn fix [--dry-run] <files...>     apply the compiler's suggested fixes
   burn doc [files...] [-o dir]        generate HTML documentation from Burndoc comments
@@ -503,6 +504,7 @@ Usage:
                               native executable (default), JavaScript or bvm bytecode
       --emit-asm <path>       also write the generated assembly (x86-64, or bvm text)
       --no-strip              keep symbols in the executable
+      --no-std                build without the standard runtime
   burnc --check <files...>    type-check without producing output
   burnc -v | --version        print the version"
     );
@@ -554,8 +556,24 @@ fn burnc(args: &[String]) -> ExitCode {
     }
 }
 
+fn take_no_std(args: Vec<String>) -> Vec<String> {
+    let program = args
+        .iter()
+        .position(|a| !a.starts_with('-') && (a.ends_with(".bn") || is_bvm_file(Path::new(a))));
+    let compiles = matches!(args.first().map(|s| s.as_str()), Some("build" | "check" | "dump")) || tool_name() == "burnc";
+    let mut out = Vec::new();
+    for (i, a) in args.into_iter().enumerate() {
+        if a == "--no-std" && (compiles || program.map(|p| i < p).unwrap_or(true)) {
+            driver::set_no_std(true);
+        } else {
+            out.push(a);
+        }
+    }
+    out
+}
+
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args = take_no_std(std::env::args().skip(1).collect());
     match tool_name().as_str() {
         "burni" => return burni(&args),
         "burnc" => return burnc(&args),

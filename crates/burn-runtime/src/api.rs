@@ -1,12 +1,16 @@
 use crate::fmt;
 use crate::io::{self, rt_error};
-use crate::meta::{self, desc, Desc, TID_ARR_INT, TID_INT, TID_STR};
+#[cfg(not(burn_core))]
+use crate::meta::TID_ARR_INT;
+use crate::meta::{self, desc, Desc, TID_INT, TID_STR};
+use crate::num;
 use crate::obj::*;
+use crate::prelude::*;
 use crate::rc::{self, release, release_t, retain, retain_t};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 #[inline]
-fn b(v: bool) -> u64 {
+pub(crate) fn b(v: bool) -> u64 {
     v as u64
 }
 
@@ -16,7 +20,7 @@ fn f(v: u64) -> f64 {
 }
 
 #[inline]
-fn fv(x: f64) -> u64 {
+pub(crate) fn fv(x: f64) -> u64 {
     x.to_bits()
 }
 
@@ -56,9 +60,9 @@ pub fn str_eq(a: u64, c: u64) -> u64 {
 
 pub fn str_cmp(a: u64, c: u64) -> u64 {
     match str_bytes(a).cmp(str_bytes(c)) {
-        std::cmp::Ordering::Less => (-1i64) as u64,
-        std::cmp::Ordering::Equal => 0,
-        std::cmp::Ordering::Greater => 1,
+        core::cmp::Ordering::Less => (-1i64) as u64,
+        core::cmp::Ordering::Equal => 0,
+        core::cmp::Ordering::Greater => 1,
     }
 }
 
@@ -199,7 +203,7 @@ pub fn parse_int(s: u64, loc: u64) -> u64 {
     }
     if let Ok(v) = t.parse::<f64>() {
         if v.is_finite() {
-            return (v.trunc() as i64) as u64;
+            return (num::trunc(v) as i64) as u64;
         }
     }
     rt_error(&format!("cannot convert \"{}\" to int", t), loc)
@@ -230,6 +234,7 @@ pub fn print(s: u64) -> u64 {
     0
 }
 
+#[cfg(not(burn_core))]
 pub fn print_err(s: u64) -> u64 {
     io::flush();
     use std::io::Write;
@@ -239,6 +244,7 @@ pub fn print_err(s: u64) -> u64 {
     0
 }
 
+#[cfg(not(burn_core))]
 pub fn read_stdin() -> u64 {
     use std::io::Read;
     io::flush();
@@ -306,7 +312,7 @@ pub fn arr_set(a: u64, i: u64, v: u64, loc: u64) -> u64 {
     }
     let et = elem_tid(a);
     retain_t(v, et);
-    let old = unsafe { std::mem::replace(&mut *array_data(a).add(i as usize), v) };
+    let old = unsafe { core::mem::replace(&mut *array_data(a).add(i as usize), v) };
     release_t(old, et);
     retain_t(v, et)
 }
@@ -445,7 +451,7 @@ pub fn map_set(m: u64, k: u64, v: u64) -> u64 {
     let d = map_data(m);
     match d.index.get(&key) {
         Some(i) => {
-            let old = std::mem::replace(&mut d.vals[*i], v);
+            let old = core::mem::replace(&mut d.vals[*i], v);
             release_t(old, vt);
         }
         None => {
@@ -699,9 +705,9 @@ pub fn eq(a: u64, c: u64, tid: u64) -> u64 {
 
 pub fn cmp(a: u64, c: u64, tid: u64) -> u64 {
     match fmt::compare(a, c, tid as u32) {
-        std::cmp::Ordering::Less => (-1i64) as u64,
-        std::cmp::Ordering::Equal => 0,
-        std::cmp::Ordering::Greater => 1,
+        core::cmp::Ordering::Less => (-1i64) as u64,
+        core::cmp::Ordering::Equal => 0,
+        core::cmp::Ordering::Greater => 1,
     }
 }
 
@@ -802,30 +808,30 @@ pub fn any_len(v: u64, loc: u64) -> u64 {
 pub fn fmath(op: u64, x: u64) -> u64 {
     let x = f(x);
     fv(match op {
-        0 => x.sqrt(),
-        1 => x.floor(),
-        2 => x.ceil(),
-        3 => x.round(),
-        4 => x.abs(),
-        5 => x.sin(),
-        6 => x.cos(),
-        7 => x.tan(),
-        8 => x.ln(),
-        9 => x.log10(),
-        10 => x.exp(),
-        11 => x.asin(),
-        12 => x.acos(),
-        13 => x.atan(),
+        0 => num::sqrt(x),
+        1 => num::floor(x),
+        2 => num::ceil(x),
+        3 => num::round(x),
+        4 => num::abs(x),
+        5 => num::sin(x),
+        6 => num::cos(x),
+        7 => num::tan(x),
+        8 => num::ln(x),
+        9 => num::log10(x),
+        10 => num::exp(x),
+        11 => num::asin(x),
+        12 => num::acos(x),
+        13 => num::atan(x),
         _ => x,
     })
 }
 
 pub fn fpow(a: u64, c: u64) -> u64 {
-    fv(f(a).powf(f(c)))
+    fv(num::pow(f(a), f(c)))
 }
 
 pub fn fatan2(a: u64, c: u64) -> u64 {
-    fv(f(a).atan2(f(c)))
+    fv(num::atan2(f(a), f(c)))
 }
 
 pub fn fmod(a: u64, c: u64) -> u64 {
@@ -851,16 +857,25 @@ pub fn ipow(a: u64, e: u64) -> u64 {
     r as u64
 }
 
+#[cfg(not(burn_core))]
+fn seed_bits() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(88172645463325252)
+}
+
+#[cfg(burn_core)]
+fn seed_bits() -> u64 {
+    crate::sys::wall_ns() ^ 88172645463325252
+}
+
 static RNG: AtomicU64 = AtomicU64::new(0);
 
 fn next_rand() -> u64 {
     let mut x = RNG.load(Ordering::Relaxed);
     if x == 0 {
-        x = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(88172645463325252)
-            | 1;
+        x = seed_bits() | 1;
     }
     x ^= x << 13;
     x ^= x >> 7;
@@ -887,6 +902,7 @@ pub fn seed(s: u64) -> u64 {
     0
 }
 
+#[cfg(not(burn_core))]
 pub fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -894,6 +910,7 @@ pub fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+#[cfg(not(burn_core))]
 pub fn now_sec() -> u64 {
     fv(std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -901,12 +918,14 @@ pub fn now_sec() -> u64 {
         .unwrap_or(0.0))
 }
 
+#[cfg(not(burn_core))]
 pub fn clock_ns() -> u64 {
     use std::sync::OnceLock;
     static START: OnceLock<std::time::Instant> = OnceLock::new();
     START.get_or_init(std::time::Instant::now).elapsed().as_nanos() as u64
 }
 
+#[cfg(not(burn_core))]
 pub fn sleep_ms(ms: u64) -> u64 {
     io::flush();
     let ms = (ms as i64).max(0) as u64;
@@ -914,17 +933,20 @@ pub fn sleep_ms(ms: u64) -> u64 {
     0
 }
 
+#[cfg(not(burn_core))]
 pub fn local_time() -> u64 {
     let parts = crate::time::local_parts();
     array_from(TID_ARR_INT, &parts.map(|x| x as u64))
 }
 
+#[cfg(not(burn_core))]
 pub fn http_request(method: u64, url: u64, body: u64, headers: u64) -> u64 {
     let hs: Vec<String> = array_slice(headers).iter().map(|h| str_ref(*h).to_string()).collect();
     let (status, rbody, rheaders) = crate::http::request(str_ref(method), str_ref(url), str_bytes(body), &hs);
     array_of_strings(&[status.to_string(), rbody, rheaders])
 }
 
+#[cfg(not(burn_core))]
 pub fn json_parse(s: u64, loc: u64) -> u64 {
     match crate::json::parse(str_ref(s)) {
         Ok(v) => v,
@@ -932,12 +954,14 @@ pub fn json_parse(s: u64, loc: u64) -> u64 {
     }
 }
 
+#[cfg(not(burn_core))]
 pub fn json_stringify(v: u64, tid: u64) -> u64 {
     let mut out = String::new();
     crate::json::stringify(v, tid as u32, &mut out);
     string(&out)
 }
 
+#[cfg(not(burn_core))]
 pub fn read_file(path: u64, loc: u64) -> u64 {
     match std::fs::read(str_ref(path)) {
         Ok(b) => string(&String::from_utf8_lossy(&b)),
@@ -945,10 +969,12 @@ pub fn read_file(path: u64, loc: u64) -> u64 {
     }
 }
 
+#[cfg(not(burn_core))]
 pub fn write_file(path: u64, content: u64) -> u64 {
     b(std::fs::write(str_ref(path), str_bytes(content)).is_ok())
 }
 
+#[cfg(not(burn_core))]
 pub fn append_file(path: u64, content: u64) -> u64 {
     use std::io::Write;
     let r = std::fs::OpenOptions::new()
@@ -959,14 +985,17 @@ pub fn append_file(path: u64, content: u64) -> u64 {
     b(r.is_ok())
 }
 
+#[cfg(not(burn_core))]
 pub fn file_exists(path: u64) -> u64 {
     b(std::path::Path::new(str_ref(path)).exists())
 }
 
+#[cfg(not(burn_core))]
 pub fn env_var(name: u64) -> u64 {
     string(&std::env::var(str_ref(name)).unwrap_or_default())
 }
 
+#[cfg(not(burn_core))]
 pub fn exec(program: u64, args: u64, capture: u64) -> u64 {
     let argv: Vec<String> = array_slice(args).iter().map(|a| str_ref(*a).to_string()).collect();
     let mut cmd = std::process::Command::new(str_ref(program));
@@ -989,6 +1018,7 @@ pub fn exec(program: u64, args: u64, capture: u64) -> u64 {
     }
 }
 
+#[cfg(not(burn_core))]
 pub fn fs_op(op: u64, a: u64, c: u64) -> u64 {
     use std::path::Path;
     let (a, c) = (Path::new(str_ref(a)), Path::new(str_ref(c)));
@@ -1011,6 +1041,7 @@ pub fn fs_op(op: u64, a: u64, c: u64) -> u64 {
     })
 }
 
+#[cfg(not(burn_core))]
 pub fn list_dir(path: u64) -> u64 {
     let mut names: Vec<String> = match std::fs::read_dir(str_ref(path)) {
         Ok(rd) => rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect(),
@@ -1020,6 +1051,7 @@ pub fn list_dir(path: u64) -> u64 {
     array_of_strings(&names)
 }
 
+#[cfg(not(burn_core))]
 pub fn cwd() -> u64 {
     string(&std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default())
 }
@@ -1028,6 +1060,7 @@ pub fn args() -> u64 {
     array_of_strings(&io::args())
 }
 
+#[cfg(not(burn_core))]
 pub fn exit_now(code: u64) -> u64 {
     crate::task::wait_all();
     io::exit_now(code as i32)
@@ -1078,7 +1111,7 @@ pub fn err_return(loc: u64) -> u64 {
 static TRAMPOLINE: AtomicUsize = AtomicUsize::new(0);
 
 pub fn rt_init(meta_ptr: u64, meta_len: u64, globals: u64, nglobals: u64, stack_base: u64, trampoline: u64) -> u64 {
-    let blob = unsafe { std::slice::from_raw_parts(meta_ptr as usize as *const u8, meta_len as usize) };
+    let blob = unsafe { core::slice::from_raw_parts(meta_ptr as usize as *const u8, meta_len as usize) };
     meta::set_meta(meta::decode(blob));
     let _ = (globals, nglobals);
     rc::set_main_thread();
@@ -1090,11 +1123,11 @@ pub fn rt_init(meta_ptr: u64, meta_len: u64, globals: u64, nglobals: u64, stack_
 pub fn set_args_native(argc: u64, argv: u64) -> u64 {
     let mut out = Vec::new();
     unsafe {
-        let argv = argv as usize as *const *const std::ffi::c_char;
+        let argv = argv as usize as *const *const core::ffi::c_char;
         for i in 1..argc as usize {
             let p = *argv.add(i);
             if !p.is_null() {
-                out.push(std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned());
+                out.push(core::ffi::CStr::from_ptr(p).to_string_lossy().into_owned());
             }
         }
     }
@@ -1102,6 +1135,7 @@ pub fn set_args_native(argc: u64, argv: u64) -> u64 {
     0
 }
 
+#[cfg(not(burn_core))]
 pub fn rt_exit(code: u64) -> u64 {
     crate::task::wait_all();
     io::flush();
@@ -1112,18 +1146,20 @@ pub fn trampoline() -> usize {
     TRAMPOLINE.load(Ordering::SeqCst)
 }
 
+#[cfg(not(burn_core))]
 pub fn spawn_native(fnptr: u64, argc: u64, argsptr: u64, tid: u64) -> u64 {
-    let args: Vec<u64> = unsafe { std::slice::from_raw_parts(argsptr as usize as *const u64, argc as usize).to_vec() };
+    let args: Vec<u64> = unsafe { core::slice::from_raw_parts(argsptr as usize as *const u64, argc as usize).to_vec() };
     let tramp = TRAMPOLINE.load(Ordering::SeqCst);
     crate::task::spawn(
         tid as u32,
         Box::new(move || {
-            let t: extern "C" fn(u64, u64, u64) -> u64 = unsafe { std::mem::transmute(tramp) };
+            let t: extern "C" fn(u64, u64, u64) -> u64 = unsafe { core::mem::transmute(tramp) };
             t(fnptr, args.as_ptr() as u64, args.len() as u64)
         }),
     )
 }
 
+#[cfg(not(burn_core))]
 pub fn await_future(fut: u64) -> u64 {
     let v = crate::task::await_future(fut);
     match desc(tid_of(fut)) {
@@ -1178,3 +1214,6 @@ pub fn fmin(a: u64, c: u64) -> u64 {
 pub fn fmax(a: u64, c: u64) -> u64 {
     fv(f(a).max(f(c)))
 }
+
+#[cfg(burn_core)]
+pub use crate::bare::*;
