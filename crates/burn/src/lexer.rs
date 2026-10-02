@@ -81,6 +81,7 @@ pub enum Tok {
     ShlEq,
     ShrEq,
     UShrEq,
+    FatArrow,
     Eof,
 }
 
@@ -211,6 +212,7 @@ pub fn symbol(t: &Tok) -> &'static str {
         Tok::ShlEq => "<<=",
         Tok::ShrEq => ">>=",
         Tok::UShrEq => ">>>=",
+        Tok::FatArrow => "=>",
         _ => "?",
     }
 }
@@ -321,6 +323,7 @@ impl<'a> Lexer<'a> {
             }
             let two = [c, self.peek(1)];
             let (tok, len) = match &two {
+                b"=>" => (Tok::FatArrow, 2),
                 b"&=" => (Tok::AmpEq, 2),
                 b"|=" => (Tok::PipeEq, 2),
                 b"^=" => (Tok::CaretEq, 2),

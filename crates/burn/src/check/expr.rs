@@ -414,6 +414,7 @@ impl<'a> Checker<'a> {
             A::New { ty, args } => self.new_expr(ty, args, e.span),
             A::SafeGet { obj, name, args } => self.safe_get(obj, name, args.as_deref(), e.span),
             A::Coalesce(a, b) => self.coalesce(a, b, e.span, expected),
+            A::Match { subject, arms } => self.match_value(subject.as_deref(), arms, e.span, expected),
             A::SafeAs(x, te) => self.safe_as(x, te, e.span),
             A::NotNull(x) => {
                 let h = self.expr_raw(x);
@@ -768,7 +769,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn comparison(&mut self, op: AOp, a: Expr, b: Expr, span: Span) -> Expr {
+    pub fn comparison(&mut self, op: AOp, a: Expr, b: Expr, span: Span) -> Expr {
         let cmp = match op {
             AOp::Lt => Cmp::Lt,
             AOp::Gt => Cmp::Gt,

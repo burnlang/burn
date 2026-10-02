@@ -1,0 +1,5 @@
+var n = 3
+var s = match n {
+    "two" => 2
+    else => 0
+}

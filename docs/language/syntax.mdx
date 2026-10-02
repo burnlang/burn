@@ -172,3 +172,76 @@ for name, age in {"ada": 36, "alan": 41} {
 ```
 
 `break` and `continue` work in every loop.
+
+## match
+
+`match` compares a value against patterns, top to bottom, and runs the first arm that fits:
+
+```burn
+def enum Day { Mon, Tue, Wed, Thu, Fri, Sat, Sun }
+
+fun kind(d: Day): string {
+    return match d {
+        Sat, Sun => "weekend"
+        else => "weekday"
+    }
+}
+
+fun size(n: int): string {
+    return match n {
+        0 => "zero"
+        1..=9 => "small"
+        10..100 => "medium"
+        else => "large"
+    }
+}
+```
+
+| Pattern | Matches |
+| --- | --- |
+| `3`, `"stop"`, `true`, `Color.Red` | an equal value |
+| `Red` | an enum variant, when matching an enum |
+| `1..10`, `1..=9` | a number (or string) in the range |
+| `null` | null |
+| `is string`, `is Circle c` | a value of that type; `c` is the value as a `Circle` |
+| `a, b, c` | any of the patterns |
+| `else` | everything else |
+
+An arm can add a condition with `if`, and inside an arm the matched variable is narrowed like after `is`:
+
+```burn
+fun describe(v: any): string {
+    return match v {
+        null => "nothing"
+        is int n if n > 100 => "a big int"
+        is int => "the int ${v + 1}"
+        is string s => "a string of ${len(s)}"
+        else => "something else"
+    }
+}
+```
+
+Without a value after `match`, each arm is a condition, like a chain of `if`/`else if`:
+
+```burn
+var grade = match {
+    score >= 90 => "A"
+    score >= 80 => "B"
+    else => "C"
+}
+```
+
+When a `match` produces a value it must handle every case: either with `else`, or by listing every variant of an
+enum (or `true` and `false`). Used as a statement it can leave cases out, and its arms can be blocks:
+
+```burn
+match command {
+    "go", "start" => start()
+    "stop" => {
+        save()
+        stop()
+    }
+}
+```
+
+The compiler warns when a statement `match` on an enum misses variants and when a case is handled twice.

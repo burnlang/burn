@@ -1084,6 +1084,9 @@ impl Parser {
     }
 
     fn looks_like_typed_decl(&mut self) -> bool {
+        if self.at_ident("match") && !self.peek_at(1).nl_before && self.looks_like_match() {
+            return false;
+        }
         match self.peek().kind {
             Tok::Ident(_) | Tok::LBracket | Tok::Fun | Tok::LBrace => {}
             _ => return false,
@@ -1495,7 +1498,7 @@ impl Parser {
                 Tok::Gt => BinOp::Gt,
                 Tok::Le => BinOp::Le,
                 Tok::Ge => BinOp::Ge,
-                Tok::Is => {
+                Tok::Is if !self.peek().nl_before => {
                     self.advance();
                     let t = self.ty()?;
                     let span = e.span.to(t.span);
@@ -1604,7 +1607,7 @@ impl Parser {
 
     fn cast(&mut self) -> PResult<Expr> {
         let mut e = self.unary()?;
-        while self.at(&Tok::As) {
+        while self.at(&Tok::As) && !self.peek().nl_before {
             self.advance();
             let safe = self.at(&Tok::Question) && !self.peek().nl_before;
             if safe {
@@ -1834,6 +1837,9 @@ impl Parser {
                     span: span.to(self.prev_span()),
                 });
             }
+            Tok::Ident(name) if name == "match" && !self.peek_at(1).nl_before && self.looks_like_match() => {
+                return self.match_expr();
+            }
             Tok::Ident(name) => {
                 self.advance();
                 if self.at(&Tok::LBrace) && !self.no_struct && !self.peek().nl_before && self.brace_is_struct_lit() {
@@ -1936,6 +1942,109 @@ impl Parser {
             kind,
             span: span.to(self.prev_span()),
         })
+    }
+
+    fn looks_like_match(&mut self) -> bool {
+        if self.peek_at(1).kind == Tok::LBrace {
+            return true;
+        }
+        let save = self.pos;
+        let mark = self.splits.len();
+        let saved = self.no_struct;
+        self.speculative += 1;
+        self.advance();
+        self.no_struct = true;
+        let ok = self.expr().is_ok() && self.at(&Tok::LBrace) && !self.peek().nl_before;
+        self.no_struct = saved;
+        self.speculative -= 1;
+        self.pos = save;
+        self.unsplit(mark);
+        ok
+    }
+
+    fn match_expr(&mut self) -> PResult<Expr> {
+        let start = self.advance().span;
+        let subject = if self.at(&Tok::LBrace) {
+            None
+        } else {
+            let saved = self.no_struct;
+            self.no_struct = true;
+            let e = self.expr();
+            self.no_struct = saved;
+            Some(Box::new(e?))
+        };
+        self.expect(Tok::LBrace, "`{` to start the match arms")?;
+        let saved = self.no_struct;
+        self.no_struct = false;
+        let arms = self.match_arms(subject.is_some());
+        self.no_struct = saved;
+        let arms = arms?;
+        self.expect(Tok::RBrace, "`}` to close the match")?;
+        Ok(Expr {
+            kind: ExprKind::Match { subject, arms },
+            span: start.to(self.prev_span()),
+        })
+    }
+
+    fn match_arms(&mut self, has_subject: bool) -> PResult<Vec<MatchArm>> {
+        let mut arms = Vec::new();
+        loop {
+            while self.eat(&Tok::Semi) {}
+            if self.at(&Tok::RBrace) || self.at(&Tok::Eof) {
+                return Ok(arms);
+            }
+            let start = self.peek().span;
+            let mut patterns = Vec::new();
+            if !self.eat(&Tok::Else) {
+                loop {
+                    patterns.push(self.pattern(has_subject)?);
+                    if !self.eat(&Tok::Comma) {
+                        break;
+                    }
+                }
+            }
+            let guard = if self.eat(&Tok::If) { Some(self.expr()?) } else { None };
+            self.expect(Tok::FatArrow, "`=>` after the pattern")?;
+            let body = if self.at(&Tok::LBrace) {
+                ArmBody::Block(self.block()?)
+            } else {
+                ArmBody::Expr(self.expr()?)
+            };
+            let span = start.to(self.prev_span());
+            arms.push(MatchArm { patterns, guard, body, span });
+            if self.eat(&Tok::Comma) || self.at(&Tok::RBrace) || self.at(&Tok::Semi) || self.peek().nl_before {
+                continue;
+            }
+            let t = self.peek().clone();
+            self.err(t.span, format!("expected a new line or `,` after the match arm but found {}", describe(&t.kind)));
+            return Err(());
+        }
+    }
+
+    fn pattern(&mut self, has_subject: bool) -> PResult<Pattern> {
+        if !has_subject {
+            return Ok(Pattern::Value(self.or()?));
+        }
+        if self.eat(&Tok::Is) {
+            let t = self.ty()?;
+            let bind = match self.peek().kind.clone() {
+                Tok::Ident(name) if !self.peek().nl_before => {
+                    let span = self.advance().span;
+                    Some(Ident { name, span })
+                }
+                _ => None,
+            };
+            return Ok(Pattern::Is(t, bind));
+        }
+        let e = self.bit_or()?;
+        let inclusive = match self.peek().kind {
+            Tok::DotDot => false,
+            Tok::DotDotEq => true,
+            _ => return Ok(Pattern::Value(e)),
+        };
+        self.advance();
+        let end = self.bit_or()?;
+        Ok(Pattern::Range(e, end, inclusive))
     }
 
     fn brace_is_struct_lit(&self) -> bool {

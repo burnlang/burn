@@ -1,0 +1,6 @@
+def enum Color { Red, Green, Blue }
+var c = Color.Red
+var name = match c {
+    Red => "r"
+    Green => "g"
+}

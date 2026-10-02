@@ -17,7 +17,7 @@ enum T {
 }
 
 const KEYWORDS_SPACE: &[&str] = &[
-    "if", "while", "for", "return", "else", "import", "fun", "var", "const", "def", "pub", "priv", "async", "await", "in", "is", "as", "static",
+    "if", "while", "for", "return", "else", "import", "fun", "var", "const", "def", "pub", "priv", "async", "await", "in", "is", "as", "static", "match",
 ];
 
 fn lex_line(line: &str) -> Vec<T> {
@@ -97,7 +97,7 @@ fn lex_line(line: &str) -> Vec<T> {
             continue;
         }
         if [
-            "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>", "..", "->", "!!", "::", "??",
+            "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>", "=>", "..", "->", "!!", "::", "??",
         ]
         .contains(&two.as_str())
         {

@@ -3,6 +3,7 @@ pub mod builtins;
 pub mod expr;
 pub mod init_order;
 pub mod libs;
+pub mod matching;
 pub mod nullsafe;
 pub mod stmt;
 pub mod structs;

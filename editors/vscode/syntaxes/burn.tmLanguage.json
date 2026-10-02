@@ -73,7 +73,7 @@
     },
     "keywords": {
       "patterns": [
-        { "name": "keyword.control.burn", "match": "\\b(if|else|while|for|in|return|break|continue|await|import)\\b" },
+        { "name": "keyword.control.burn", "match": "\\b(if|else|while|for|in|match|return|break|continue|await|import)\\b" },
         { "name": "keyword.declaration.burn", "match": "\\b(fun|var|const|def|async|static|abstract|pub|priv)\\b" },
         { "name": "keyword.operator.word.burn", "match": "\\b(is|as)\\b" },
         { "name": "constant.language.burn", "match": "\\b(true|false|null)\\b" },
@@ -139,6 +139,7 @@
       "patterns": [
         { "name": "keyword.operator.null-safe.burn", "match": "\\?\\.|\\?\\?|!!" },
         { "name": "keyword.operator.range.burn", "match": "\\.\\.=?" },
+        { "name": "keyword.operator.arrow.burn", "match": "=>" },
         { "name": "keyword.operator.assignment.burn", "match": ">>>=|<<=|>>=|&=|\\|=|\\^=" },
         { "name": "keyword.operator.bitwise.burn", "match": ">>>|<<|>>" },
         { "name": "keyword.operator.comparison.burn", "match": "==|!=|<=|>=|<|>" },

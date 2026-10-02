@@ -138,6 +138,30 @@ fn collect_expr(e: &ast::Expr, out: &mut HashSet<String>) {
                 }
             }
         }
+        A::Match { subject, arms } => {
+            if let Some(x) = subject {
+                collect_expr(x, out);
+            }
+            for arm in arms {
+                for p in &arm.patterns {
+                    match p {
+                        ast::Pattern::Value(x) => collect_expr(x, out),
+                        ast::Pattern::Range(a, b, _) => {
+                            collect_expr(a, out);
+                            collect_expr(b, out);
+                        }
+                        ast::Pattern::Is(..) => {}
+                    }
+                }
+                if let Some(g) = &arm.guard {
+                    collect_expr(g, out);
+                }
+                match &arm.body {
+                    ast::ArmBody::Expr(x) => collect_expr(x, out),
+                    ast::ArmBody::Block(b) => collect_assigned(&b.stmts, out),
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -284,6 +308,10 @@ impl<'a> Checker<'a> {
     pub fn stmt(&mut self, s: &ast::Stmt) -> Vec<Stmt> {
         match &s.kind {
             S::Var { name, ty, init, is_const } => self.var_decl(name, ty.as_ref(), init.as_ref(), *is_const, s.span),
+            S::Expr(ast::Expr {
+                kind: A::Match { subject, arms },
+                span,
+            }) => self.match_stmt(subject.as_deref(), arms, *span),
             S::Expr(e) => {
                 let h = self.expr(e, None);
                 if let ExprKind::Binary(BinOp::ICmp(Cmp::Eq), ..) | ExprKind::Rt(RtFn::StrEq | RtFn::Eq, _) = h.kind {

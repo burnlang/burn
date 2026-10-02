@@ -313,6 +313,28 @@ pub enum ExprKind {
     SafeGet { obj: Box<Expr>, name: Ident, args: Option<Vec<Expr>> },
     Coalesce(Box<Expr>, Box<Expr>),
     SafeAs(Box<Expr>, TypeExpr),
+    Match { subject: Option<Box<Expr>>, arms: Vec<MatchArm> },
+}
+
+#[derive(Clone, Debug)]
+pub enum Pattern {
+    Value(Expr),
+    Range(Expr, Expr, bool),
+    Is(TypeExpr, Option<Ident>),
+}
+
+#[derive(Clone, Debug)]
+pub enum ArmBody {
+    Expr(Expr),
+    Block(Block),
+}
+
+#[derive(Clone, Debug)]
+pub struct MatchArm {
+    pub patterns: Vec<Pattern>,
+    pub guard: Option<Expr>,
+    pub body: ArmBody,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug)]
