@@ -1,0 +1,172 @@
+============================================================
+Typed and inferred variables
+============================================================
+
+var count = 3
+const LIMIT = 10
+uint8 b = 200
+[string] names = []
+{string: int} ages = {"ada": 36}
+int? maybe = null
+
+------------------------------------------------------------
+
+(source_file
+  (variable_declaration
+    (identifier)
+    (number))
+  (variable_declaration
+    (identifier)
+    (number))
+  (typed_declaration
+    (type_identifier)
+    (identifier)
+    (number))
+  (typed_declaration
+    (array_type
+      (type_identifier))
+    (identifier)
+    (array_literal))
+  (typed_declaration
+    (map_type
+      (type_identifier)
+      (type_identifier))
+    (identifier)
+    (map_literal
+      (map_entry
+        (string
+          (string_content))
+        (number))))
+  (typed_declaration
+    (optional_type
+      (type_identifier))
+    (identifier)
+    (null)))
+
+============================================================
+Functions with generics and annotations
+============================================================
+
+@Deprecated
+pub fun first<T>(items: [T]): T? {
+    return items[0]
+}
+
+async fun fetch(n: int): int {
+    return await other(n)
+}
+
+------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (annotation
+      (identifier))
+    (modifier)
+    (identifier)
+    (type_parameters
+      (identifier))
+    (parameters
+      (parameter
+        (identifier)
+        (array_type
+          (type_identifier))))
+    (optional_type
+      (type_identifier))
+    (block
+      (return_statement
+        (index_expression
+          (identifier)
+          (number)))))
+  (function_declaration
+    (modifier)
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (type_identifier)))
+    (type_identifier)
+    (block
+      (return_statement
+        (await_expression
+          (call_expression
+            (identifier)
+            (arguments
+              (identifier))))))))
+
+============================================================
+Definitions
+============================================================
+
+def type Point {
+    float x
+    float y
+}
+
+def enum Color { Red, Green }
+
+def interface Shape {
+    fun area(): float
+}
+
+def abstract struct Base(name: string) : Root(name) :: Shape {
+    int count = 0
+
+    fun area(): float {
+        return 0.0
+    }
+}
+
+------------------------------------------------------------
+
+(source_file
+  (definition
+    (definition_kind)
+    (type_identifier))
+  (block
+    (typed_declaration
+      (type_identifier)
+      (identifier))
+    (typed_declaration
+      (type_identifier)
+      (identifier)))
+  (definition
+    (definition_kind)
+    (type_identifier)
+    (enum_body
+      (enum_variant
+        (identifier))
+      (enum_variant
+        (identifier))))
+  (definition
+    (definition_kind)
+    (type_identifier)
+    (interface_body
+      (function_declaration
+        (identifier)
+        (parameters)
+        (type_identifier))))
+  (definition
+    (modifier)
+    (definition_kind)
+    (type_identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (type_identifier)))
+    (type_identifier)
+    (arguments
+      (identifier))
+    (type_identifier)
+    (struct_body
+      (field_declaration
+        (type_identifier)
+        (identifier)
+        (number))
+      (function_declaration
+        (identifier)
+        (parameters)
+        (type_identifier)
+        (block
+          (return_statement
+            (number)))))))

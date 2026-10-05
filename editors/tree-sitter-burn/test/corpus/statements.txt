@@ -1,0 +1,113 @@
+============================================================
+Control flow
+============================================================
+
+if x > 3 {
+    print(x)
+} else if (x == 0) {
+    print(0)
+} else {
+    print(-1)
+}
+while (running) {
+    break
+}
+for i, v in items {
+    continue
+}
+for (var i = 0; i < 3; i = i + 1) {
+    print(i)
+}
+
+------------------------------------------------------------
+
+(source_file
+  (if_statement
+    (binary_expression
+      (identifier)
+      (number))
+    (block
+      (call_expression
+        (identifier)
+        (arguments
+          (identifier))))
+    (if_statement
+      (parenthesized_expression
+        (binary_expression
+          (identifier)
+          (number)))
+      (block
+        (call_expression
+          (identifier)
+          (arguments
+            (number))))
+      (block
+        (call_expression
+          (identifier)
+          (arguments
+            (unary_expression
+              (number)))))))
+  (while_statement
+    (parenthesized_expression
+      (identifier))
+    (block
+      (break_statement)))
+  (for_statement
+    (identifier)
+    (identifier)
+    (identifier)
+    (block
+      (continue_statement)))
+  (for_statement
+    (variable_declaration
+      (identifier)
+      (number))
+    (binary_expression
+      (identifier)
+      (number))
+    (assignment_expression
+      (identifier)
+      (binary_expression
+        (identifier)
+        (number)))
+    (block
+      (call_expression
+        (identifier)
+        (arguments
+          (identifier))))))
+
+============================================================
+Imports and per-object methods
+============================================================
+
+import "std/date"
+import (
+    "http"
+    "utils.bn"
+)
+rex.fetch(thing: string): string {
+    return thing
+}
+
+------------------------------------------------------------
+
+(source_file
+  (import_declaration
+    (string
+      (string_content)))
+  (import_declaration
+    (string
+      (string_content))
+    (string
+      (string_content)))
+  (object_method
+    (identifier)
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (type_identifier)))
+    (type_identifier)
+    (block
+      (return_statement
+        (identifier)))))
