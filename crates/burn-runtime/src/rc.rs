@@ -400,7 +400,7 @@ pub unsafe fn free_obj(p: u64) {
     let hd = &*(p as usize as *const Header);
     match hd.kind {
         K_ARRAY => {
-            unaccount(word(p, ARR_CAP) as usize * 8);
+            unaccount(word(p, ARR_CAP) as usize * elem_width(array_elem(p)));
             array_free_data(p);
         }
         K_MAP => map_free(p),

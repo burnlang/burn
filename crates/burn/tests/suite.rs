@@ -760,3 +760,34 @@ fn programs_without_the_standard_runtime_are_small_and_behave_the_same() {
     assert!(!out.contains("std/strings"), "{}", out);
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn uint64_uses_all_64_bits_on_bvm_and_natively() {
+    let dir = temp_dir("uint64");
+    let src = dir.join("hash.bn");
+    std::fs::write(
+        &src,
+        "fun fnv(text: string): uint64 {\n    uint64 h = 14695981039346656037\n    for b in text.bytes() {\n        h = (h ^ b).wrappingMul(1099511628211)\n    }\n    return h\n}\n\nfun main() {\n    uint64 top = 18446744073709551615\n    print(fnv(\"hello\"), top, top - 1, top > 9223372036854775807, top >> 63, top / 3, 0xFFFFFFFFFFFFFFFF as uint64 == top)\n    print(top + 1)\n}\n",
+    )
+    .unwrap();
+    let expected = "11831194018420276491 18446744073709551615 18446744073709551614 true 1 6148914691236517205 true\n";
+    let (out, code) = output(burn().arg(&src));
+    assert_eq!(code, 1, "{}", out);
+    assert!(out.starts_with(expected), "{}", out);
+    assert!(out.contains("integer overflow: 18446744073709551615 + 1 does not fit in uint64"), "{}", out);
+    if native_supported() {
+        for no_std in [false, true] {
+            let exe = dir.join(if no_std { "small" } else { "full" });
+            let mut cmd = burn();
+            cmd.arg("build").arg(&src).arg("-o").arg(&exe);
+            if no_std {
+                cmd.arg("--no-std");
+            }
+            let (build, code) = output(&mut cmd);
+            assert_eq!(code, 0, "{}", build);
+            let (native, _) = output(&mut Command::new(&exe));
+            assert_eq!(native, out);
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

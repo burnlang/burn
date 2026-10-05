@@ -717,7 +717,9 @@ impl Server {
         for k in KEYWORDS {
             push(k, 14, "keyword".into(), &mut items);
         }
-        for t in ["int", "float", "string", "bool", "any", "void"] {
+        for t in [
+            "int", "float", "string", "bool", "any", "void", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "float32", "byte",
+        ] {
             push(t, 22, "built-in type".into(), &mut items);
         }
         let _ = T_ARR_ANY;

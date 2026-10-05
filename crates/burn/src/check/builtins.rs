@@ -57,6 +57,8 @@ pub const BUILTINS: &[&str] = &[
     "isAlphanumeric",
     "isWhitespace",
     "fromCharCode",
+    "bytes",
+    "fromBytes",
     "sqrt",
     "pow",
     "abs",
@@ -97,6 +99,9 @@ pub const BUILTINS: &[&str] = &[
     "panic",
     "assert",
     "gc",
+    "wrappingAdd",
+    "wrappingSub",
+    "wrappingMul",
     "__localTime",
     "__httpRequest",
     "__exec",
@@ -133,6 +138,9 @@ pub fn signature(name: &str) -> &'static str {
         "substring" => "substring(text: string, start: int, end: int = length): string",
         "sqrt" => "sqrt(x: float): float",
         "pow" => "pow(base, exponent): int | float",
+        "bytes" => "bytes(text: string): [uint8], the UTF-8 bytes of the text",
+        "fromBytes" => "fromBytes(data: [uint8]): string, decoding UTF-8 (invalid bytes become \u{FFFD})",
+        "wrappingAdd" | "wrappingSub" | "wrappingMul" => "x.wrappingAdd(y): the result wraps around instead of failing on overflow",
         "random" => "random(): float in [0, 1)",
         "randomInt" => "randomInt(min: int, max: int): int (inclusive)",
         "now" => "now(): float seconds since the Unix epoch",
@@ -487,7 +495,10 @@ impl<'a> Checker<'a> {
                         }
                         "clear" => Self::rt(RtFn::ArrClear, vec![a], T_VOID),
                         _ => {
-                            if !matches!(self.types.get(et), Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Enum(_) | Ty::Any | Ty::Error) {
+                            if !matches!(
+                                self.types.get(et),
+                                Ty::Int | Ty::Float | Ty::Num(_) | Ty::Str | Ty::Bool | Ty::Enum(_) | Ty::Any | Ty::Error
+                            ) {
                                 let s = self.show(et);
                                 self.error(span, format!("cannot sort values of type {}", s));
                             }
@@ -600,7 +611,7 @@ impl<'a> Checker<'a> {
                 let sep = if n == 2 { self.barg_to(&xs[1], T_STR) } else { self.str_lit(" ") };
                 Self::rt(RtFn::StrSplit, vec![s, sep], T_ARR_STR)
             }
-            "trim" | "upper" | "lower" | "toUpper" | "toLower" | "toUpperCase" | "toLowerCase" | "chars" | "charCode" => {
+            "trim" | "upper" | "lower" | "toUpper" | "toLower" | "toUpperCase" | "toLowerCase" | "chars" | "charCode" | "bytes" => {
                 if !self.arity(name, n, 1, 1, span) {
                     return Some(Self::err_expr());
                 }
@@ -610,6 +621,10 @@ impl<'a> Checker<'a> {
                     "upper" | "toUpper" | "toUpperCase" => Self::rt(RtFn::StrUpper, vec![s], T_STR),
                     "lower" | "toLower" | "toLowerCase" => Self::rt(RtFn::StrLower, vec![s], T_STR),
                     "chars" => Self::rt(RtFn::StrChars, vec![s], T_ARR_STR),
+                    "bytes" => {
+                        let t = self.types.array(T_U8);
+                        Self::rt(RtFn::StrToBytes, vec![s, Self::tid(t)], t)
+                    }
                     _ => Self::rt(RtFn::StrCode, vec![s], T_INT),
                 }
             }
@@ -625,6 +640,14 @@ impl<'a> Checker<'a> {
                     _ => 3,
                 };
                 Self::rt(RtFn::CharClass, vec![s, Expr::int(k)], T_BOOL)
+            }
+            "fromBytes" => {
+                if !self.arity(name, n, 1, 1, span) {
+                    return Some(Self::err_expr());
+                }
+                let t = self.types.array(T_U8);
+                let a = self.barg_to(&xs[0], t);
+                Self::rt(RtFn::StrFromBytes, vec![a], T_STR)
             }
             "fromCharCode" => {
                 if !self.arity(name, n, 1, 1, span) {
@@ -705,9 +728,16 @@ impl<'a> Checker<'a> {
                     return Some(Self::err_expr());
                 }
                 let h = self.barg(&xs[0], expected);
-                match self.types.get(h.ty) {
+                match self.types.get(h.ty).clone() {
                     Ty::Int => Self::rt(RtFn::IAbs, vec![h], T_INT),
                     Ty::Float => Self::rt(RtFn::FMath, vec![Expr::int(4), h], T_FLOAT),
+                    Ty::Num(Num::F32) => Self::rt(RtFn::FMath, vec![Expr::int(4), h], T_F32),
+                    Ty::Num(n) if !n.signed() => h,
+                    Ty::Num(_) => {
+                        let t = h.ty;
+                        let a = Self::rt(RtFn::IAbs, vec![h], t);
+                        self.fit_check(a, t, span)
+                    }
                     _ => self.type_err(&xs[0], "a number", &h),
                 }
             }
@@ -722,6 +752,39 @@ impl<'a> Checker<'a> {
                 }
                 if !(self.types.is_numeric(b.ty) || b.ty == T_ERROR) {
                     return Some(self.type_err(&xs[1], "a number", &b));
+                }
+                let (a, b) = if self.types.is_integer(a.ty) && self.types.is_integer(b.ty) && a.ty != b.ty && name != "atan2" {
+                    match self.unify_ints(a, b, &format!("pass to `{}` both", name), span) {
+                        Some((a, b, _)) => (a, b),
+                        None => return Some(Self::err_expr()),
+                    }
+                } else {
+                    (a, b)
+                };
+                if a.ty == b.ty && self.types.is_integer(a.ty) && a.ty != T_INT && name != "atan2" {
+                    let t = a.ty;
+                    if t == T_U64 && name != "pow" {
+                        let cmp = if name == "min" { crate::hir::Cmp::Le } else { crate::hir::Cmp::Ge };
+                        let (sa, sb, out) = (self.new_local(t), self.new_local(t), self.new_local(t));
+                        let local = |s: u32| Expr::new(ExprKind::Local(s), t);
+                        let set = |s: u32, v: Expr| Stmt::Expr(Expr::new(ExprKind::SetLocal(s, Box::new(v)), t));
+                        let test = Expr::new(ExprKind::Binary(crate::hir::BinOp::UCmp(cmp), Box::new(local(sa)), Box::new(local(sb))), T_BOOL);
+                        let body = vec![set(sa, a), set(sb, b), Stmt::If(test, vec![set(out, local(sa))], vec![set(out, local(sb))])];
+                        return Some(Expr::new(ExprKind::Seq(body, Box::new(local(out))), t));
+                    }
+                    let f = match name {
+                        "pow" => RtFn::IPow,
+                        "min" => RtFn::IMin,
+                        _ => RtFn::IMax,
+                    };
+                    let e = Self::rt(f, vec![a, b], t);
+                    return Some(if name == "pow" { self.fit_check(e, t, span) } else { e });
+                }
+                if (self.types.is_floating(a.ty) || self.types.is_floating(b.ty)) && self.float_kind(a.ty, b.ty) == T_F32 && name != "pow" && name != "atan2" {
+                    let a = self.coerce(a, T_F32, span);
+                    let b = self.coerce(b, T_F32, span);
+                    let f = if name == "min" { RtFn::FMin } else { RtFn::FMax };
+                    return Some(Self::rt(f, vec![a, b], T_F32));
                 }
                 if a.ty == T_INT && b.ty == T_INT && name != "atan2" {
                     let f = match name {
@@ -741,6 +804,17 @@ impl<'a> Checker<'a> {
                     };
                     Self::rt(f, vec![a, b], T_FLOAT)
                 }
+            }
+            "wrappingAdd" | "wrappingSub" | "wrappingMul" => {
+                if !self.arity(name, n, 2, 2, span) {
+                    return Some(Self::err_expr());
+                }
+                let a = self.barg(&xs[0], None);
+                if !self.types.is_integer(a.ty) {
+                    return Some(if a.ty == T_ERROR { a } else { self.type_err(&xs[0], "an integer", &a) });
+                }
+                let b = self.barg(&xs[1], Some(a.ty));
+                self.wrapping(name, a, b, span)
             }
             "random" => {
                 if !self.arity(name, n, 0, 0, span) {

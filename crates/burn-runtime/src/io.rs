@@ -7,7 +7,26 @@ fn number_after(msg: &str, key: &str) -> Option<i64> {
     msg[i..].split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
 }
 
+fn range_help(name: &str) -> Option<String> {
+    if name == "int" {
+        return Some("int holds values from -9223372036854775808 to 9223372036854775807".into());
+    }
+    let n = meta::Num::ALL.into_iter().find(|n| n.name() == name && !n.is_float())?;
+    Some(format!("{} holds values from {} to {}", name, n.min_value(), n.max_value()))
+}
+
 pub fn error_help(msg: &str) -> Option<String> {
+    if let Some(rest) = msg.strip_prefix("integer overflow: ") {
+        let r = range_help(rest.rsplit(' ').next()?)?;
+        return Some(format!(
+            "{}; use a wider type, or `wrappingAdd`, `wrappingSub` and `wrappingMul` to wrap around",
+            r
+        ));
+    }
+    if msg.starts_with("cannot convert ") && !msg.starts_with("cannot convert \"") {
+        let r = range_help(msg.rsplit(' ').next()?)?;
+        return Some(format!("{}; check the value before converting it with `as`", r));
+    }
     let h = if msg.starts_with("index ") || msg.starts_with("string index ") {
         match number_after(msg, "(length ") {
             Some(0) => "it is empty, so there is nothing to read; check `len(...) > 0` first".to_string(),

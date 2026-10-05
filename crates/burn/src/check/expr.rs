@@ -48,6 +48,7 @@ impl<'a> Checker<'a> {
                             .help(format!("narrow it with `if (x is {})` first", to))
                             .maybe_fix(format!("or cast it to {}", to), span, fixed),
                     );
+                } else if self.numeric_mismatch(&h, target, span) {
                 } else if h.ty == T_FLOAT && target == T_INT {
                     let fixed = self.wrap_suffix(span, " as int");
                     self.emit(
@@ -82,6 +83,7 @@ impl<'a> Checker<'a> {
                 }
                 Ok(Expr::new(ExprKind::Conv(Conv::IntToFloat, Box::new(h)), T_FLOAT))
             }
+            _ if self.types.is_numeric(from) && self.types.is_numeric(to) => self.widen_num(h.clone(), to).ok_or(h),
             (Ty::Null, Ty::Optional(_) | Ty::Any) => Ok(Expr::new(ExprKind::Null, to)),
             (Ty::Void, _) => Err(h),
             (_, Ty::Any) => Ok(Expr::new(ExprKind::Rt(RtFn::Box, vec![h, Self::tid(from)]), T_ANY)),
@@ -165,6 +167,10 @@ impl<'a> Checker<'a> {
         if let (ExprKind::Int(v), true) = (&h.kind, h.ty == T_INT) {
             return self.str_lit(&v.to_string());
         }
+        if let (ExprKind::Int(v), true) = (&h.kind, self.types.is_integer(h.ty)) {
+            let text = self.lit_value(*v, h.ty).to_string();
+            return self.str_lit(&text);
+        }
         let t = h.ty;
         Expr::new(ExprKind::Rt(RtFn::ToStr, vec![h, Self::tid(t)]), T_STR)
     }
@@ -195,6 +201,8 @@ impl<'a> Checker<'a> {
         Some(match self.types.get(t).clone() {
             Ty::Int => Expr::int(0),
             Ty::Float => Expr::new(ExprKind::Float(0.0), T_FLOAT),
+            Ty::Num(Num::F32) => Expr::new(ExprKind::Float(0.0), t),
+            Ty::Num(_) => Expr::new(ExprKind::Int(0), t),
             Ty::Bool => Expr::new(ExprKind::Bool(false), T_BOOL),
             Ty::Str => self.str_lit(""),
             Ty::Optional(_) | Ty::Any | Ty::Null => Expr::new(ExprKind::Null, t),
@@ -297,13 +305,28 @@ impl<'a> Checker<'a> {
 
     fn expr_inner(&mut self, e: &ast::Expr, expected: Option<TyId>) -> Expr {
         match &e.kind {
-            A::Int(v) => {
-                if expected == Some(T_FLOAT) {
-                    Expr::new(ExprKind::Float(*v as f64), T_FLOAT)
-                } else {
-                    Expr::int(*v)
+            A::Int(v) => match expected {
+                Some(T_FLOAT) => Expr::new(ExprKind::Float(*v as f64), T_FLOAT),
+                Some(t) if t != T_INT && self.types.num_of(t).is_some() => self.typed_lit(*v as i128, t, e.span),
+                _ => Expr::int(*v),
+            },
+            A::BigInt(v, hex) => {
+                if expected == Some(T_U64) {
+                    return Expr::new(ExprKind::Int(*v as i64), T_U64);
                 }
+                if expected.map(|t| self.types.is_floating(t)).unwrap_or(false) {
+                    return Expr::new(ExprKind::Float(*v as f64), expected.unwrap());
+                }
+                if *hex {
+                    return Expr::int(*v as i64);
+                }
+                self.emit(
+                    Diagnostic::error(e.span, format!("`{}` does not fit in int", v))
+                        .help("int holds values up to 9223372036854775807; numbers up to 18446744073709551615 fit in `uint64`"),
+                );
+                Self::err_expr()
             }
+            A::Float(v) if expected == Some(T_F32) => Expr::new(ExprKind::Float(*v as f32 as f64), T_F32),
             A::Float(v) => Expr::new(ExprKind::Float(*v), T_FLOAT),
             A::Str(s) => self.str_lit(s),
             A::Template(parts) => {
@@ -336,8 +359,14 @@ impl<'a> Checker<'a> {
             }
             A::Ident(name) => self.ident_expr(name, e.span),
             A::Unary(AUn::Neg, x) => {
+                if let (A::Int(v), Some(t)) = (&x.kind, expected) {
+                    if t != T_INT && t != T_FLOAT && self.types.num_of(t).is_some() {
+                        return self.typed_lit(-(*v as i128), t, e.span);
+                    }
+                }
                 let h = self.expr(x, expected.filter(|t| self.types.is_numeric(*t)));
                 match self.types.get(h.ty) {
+                    Ty::Num(_) => self.num_neg(h, e.span),
                     Ty::Int => {
                         if let ExprKind::Int(v) = h.kind {
                             match v.checked_neg() {
@@ -361,8 +390,9 @@ impl<'a> Checker<'a> {
                 }
             }
             A::Unary(AUn::BitNot, x) => {
-                let h = self.expr(x, Some(T_INT));
+                let h = self.expr(x, Some(expected.filter(|t| self.types.is_integer(*t)).unwrap_or(T_INT)));
                 match self.types.get(h.ty) {
+                    Ty::Num(n) if !n.is_float() => self.num_bitnot(h),
                     Ty::Int => {
                         if let ExprKind::Int(v) = h.kind {
                             return Expr::int(!v);
@@ -602,6 +632,15 @@ impl<'a> Checker<'a> {
             }
             return Self::err_expr();
         }
+        let (l, r, lt, rt) = if self.types.is_integer(lt) && self.types.is_integer(rt) && !(lt == T_INT && rt == T_INT) {
+            match self.unify_ints(l, r, &format!("apply `{}` to", op.symbol()), span) {
+                Some((l, r, t)) if t != T_INT => return self.sized_arith(op, l, r, t, span),
+                Some((l, r, _)) => (l, r, T_INT, T_INT),
+                None => return Self::err_expr(),
+            }
+        } else {
+            (l, r, lt, rt)
+        };
         if lt == T_INT && rt == T_INT {
             if let (ExprKind::Int(a), ExprKind::Int(b)) = (&l.kind, &r.kind) {
                 let (a, b) = (*a, *b);
@@ -635,20 +674,47 @@ impl<'a> Checker<'a> {
             };
             return Expr::new(ExprKind::Binary(bop, Box::new(l), Box::new(r)), T_INT);
         }
-        let l = self.coerce(l, T_FLOAT, span);
-        let r = self.coerce(r, T_FLOAT, span);
+        let ft = self.float_kind(lt, rt);
+        let l = Self::retype(self.coerce(l, ft, span), T_FLOAT);
+        let r = Self::retype(self.coerce(r, ft, span), T_FLOAT);
         let bop = match op {
             AOp::Add => BinOp::FAdd,
             AOp::Sub => BinOp::FSub,
             AOp::Mul => BinOp::FMul,
             AOp::Div => BinOp::FDiv,
-            _ => return Expr::new(ExprKind::Rt(RtFn::FMod, vec![l, r]), T_FLOAT),
+            _ => BinOp::FSub,
         };
-        Expr::new(ExprKind::Binary(bop, Box::new(l), Box::new(r)), T_FLOAT)
+        let e = if op == AOp::Mod {
+            Expr::new(ExprKind::Rt(RtFn::FMod, vec![l, r]), T_FLOAT)
+        } else {
+            Expr::new(ExprKind::Binary(bop, Box::new(l), Box::new(r)), T_FLOAT)
+        };
+        if ft == T_F32 {
+            Self::f32_round(e)
+        } else {
+            e
+        }
     }
 
     fn bitwise(&mut self, op: AOp, l: Expr, r: Expr, span: Span) -> Expr {
         let (lt, rt) = (l.ty, r.ty);
+        let shift = matches!(op, AOp::Shl | AOp::Shr | AOp::UShr);
+        let (l, r, lt, rt) = if self.types.is_integer(lt) && self.types.is_integer(rt) && !(lt == T_INT && rt == T_INT) {
+            if lt != T_INT {
+                return self.sized_bits(op, l, r, span);
+            }
+            if shift {
+                (l, Self::retype(r, T_INT), T_INT, T_INT)
+            } else {
+                match self.unify_ints(l, r, &format!("apply `{}` to", op.symbol()), span) {
+                    Some((l, r, t)) if t != T_INT => return self.sized_bits(op, l, r, span),
+                    Some((l, r, _)) => (l, r, T_INT, T_INT),
+                    None => return Self::err_expr(),
+                }
+            }
+        } else {
+            (l, r, lt, rt)
+        };
         if lt == T_INT && rt == T_INT {
             let shift = matches!(op, AOp::Shl | AOp::Shr | AOp::UShr);
             if let ExprKind::Int(b) = r.kind {
@@ -688,7 +754,7 @@ impl<'a> Checker<'a> {
                 _ => "shifts work on ints",
             };
             self.error_note(span, msg, hint);
-        } else if lt == T_FLOAT || rt == T_FLOAT {
+        } else if self.types.is_floating(lt) || self.types.is_floating(rt) {
             self.error_note(span, msg, "bit operations only work on ints; convert with `as int` first");
         } else {
             self.error(span, msg);
@@ -758,9 +824,7 @@ impl<'a> Checker<'a> {
             if at == T_INT && bt == T_INT {
                 return Expr::new(ExprKind::Binary(BinOp::ICmp(cmp), Box::new(a), Box::new(b)), T_BOOL);
             }
-            let a = self.coerce(a, T_FLOAT, span);
-            let b = self.coerce(b, T_FLOAT, span);
-            return Expr::new(ExprKind::Binary(BinOp::FCmp(cmp), Box::new(a), Box::new(b)), T_BOOL);
+            return self.num_compare(cmp, a, b, span);
         }
         if at == bt && matches!(ak, Ty::Bool | Ty::Enum(_)) {
             return Expr::new(ExprKind::Binary(BinOp::ICmp(cmp), Box::new(a), Box::new(b)), T_BOOL);
@@ -808,9 +872,7 @@ impl<'a> Checker<'a> {
             if at == T_INT && bt == T_INT {
                 return Expr::new(ExprKind::Binary(BinOp::ICmp(cmp), Box::new(a), Box::new(b)), T_BOOL);
             }
-            let a = self.coerce(a, T_FLOAT, span);
-            let b = self.coerce(b, T_FLOAT, span);
-            return Expr::new(ExprKind::Binary(BinOp::FCmp(cmp), Box::new(a), Box::new(b)), T_BOOL);
+            return self.num_compare(cmp, a, b, span);
         }
         if at == T_STR && bt == T_STR {
             let c = Expr::new(ExprKind::Rt(RtFn::StrCmp, vec![a, b]), T_INT);
@@ -2265,7 +2327,11 @@ impl<'a> Checker<'a> {
 
     fn as_expr(&mut self, x: &ast::Expr, te: &TypeExpr, span: Span) -> Expr {
         let t = self.resolve_type(te);
-        let exp = if self.types.is_numeric(t) { None } else { Some(t) };
+        let exp = if self.types.is_numeric(t) && !matches!(x.kind, A::BigInt(..)) {
+            None
+        } else {
+            Some(t)
+        };
         let h = self.expr(x, exp);
         let from = h.ty;
         if from == t || t == T_ERROR || from == T_ERROR {
@@ -2273,6 +2339,9 @@ impl<'a> Checker<'a> {
         }
         let fk = self.types.get(from).clone();
         let tk = self.types.get(t).clone();
+        if self.types.is_numeric(from) && self.types.is_numeric(t) {
+            return self.convert_num(h, t, span);
+        }
         match (&fk, &tk) {
             (Ty::Float, Ty::Int) => return Expr::new(ExprKind::Conv(Conv::FloatToInt, Box::new(h)), T_INT),
             (Ty::Int, Ty::Float) => return self.coerce(h, T_FLOAT, span),

@@ -28,6 +28,7 @@ Built-ins can be called as functions or, when the first argument is the receiver
 | `toFloat(x)`, `parseFloat(s)` | string or int to `float` |
 | `isInt(s)`, `isNumber(s)` | check a string before converting |
 | `typeOf(x)` | the runtime type name, e.g. `"int"`, `"[string]"`, `"Person"` |
+| `x as uint8`, `x as float32`, ... | convert between [number types](../language/types.mdx#sized-numbers), checked at runtime |
 
 ## Strings
 
@@ -36,6 +37,7 @@ Built-ins can be called as functions or, when the first argument is the receiver
 `repeat(s, n)`, `chars(s)`, `reverse(s)`, `charCode(s)`, `fromCharCode(n)`. Indexing (`s[0]`) returns a
 one character string. `isLetter`, `isDigit`, `isAlphanumeric` and `isWhitespace` check that every character of
 a non-empty string belongs to the class (Unicode letters and numbers; `isDigit` accepts `0` to `9`). Lengths and indexes count Unicode characters.
+`bytes(s)` returns the UTF-8 bytes as a `[uint8]`, and `fromBytes(bytes)` decodes them back into a string.
 
 ## Arrays
 
@@ -51,7 +53,10 @@ a non-empty string belongs to the class (Unicode letters and numbers; `isDigit` 
 
 `sqrt`, `pow`, `abs`, `floor`, `ceil`, `round`, `min`, `max`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`,
 `atan2`, `log`, `log10`, `exp`, `random()` (float in `[0, 1)`), `randomInt(min, max)`, `seed(n)`.
-`floor`, `ceil` and `round` return `int`; `pow`, `min`, `max` and `abs` keep `int` when all arguments are ints.
+`floor`, `ceil` and `round` return `int`; `pow`, `min`, `max` and `abs` keep the integer type when all arguments are
+integers, and `min`, `max` and `abs` keep `float32`.
+`x.wrappingAdd(y)`, `x.wrappingSub(y)` and `x.wrappingMul(y)` wrap around at the edges of the integer type instead of
+failing on overflow.
 
 ## Time
 

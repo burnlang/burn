@@ -1677,6 +1677,14 @@ impl Parser {
                         span,
                     });
                 }
+                if let ExprKind::BigInt(v, false) = e.kind {
+                    if v == 1 << 63 {
+                        return Ok(Expr {
+                            kind: ExprKind::Int(i64::MIN),
+                            span,
+                        });
+                    }
+                }
                 Ok(Expr {
                     kind: ExprKind::Unary(UnOp::Neg, Box::new(e)),
                     span,
@@ -1815,6 +1823,10 @@ impl Parser {
             Tok::Int(v) => {
                 self.advance();
                 ExprKind::Int(v)
+            }
+            Tok::BigInt(v, hex) => {
+                self.advance();
+                ExprKind::BigInt(v, hex)
             }
             Tok::Float(v) => {
                 self.advance();

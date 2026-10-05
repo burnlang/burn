@@ -1,4 +1,5 @@
 use crate::source::Span;
+pub use burn_runtime::meta::Num;
 use burn_runtime::meta::{self, Desc};
 use std::collections::HashMap;
 
@@ -16,6 +17,18 @@ pub const T_ARR_ANY: TyId = meta::TID_ARR_ANY;
 pub const T_MAP_STR_ANY: TyId = meta::TID_MAP_STR_ANY;
 pub const T_ARR_STR: TyId = meta::TID_ARR_STR;
 pub const T_ARR_INT: TyId = meta::TID_ARR_INT;
+pub const T_I8: TyId = 12;
+pub const T_U8: TyId = 13;
+pub const T_I16: TyId = 14;
+pub const T_U16: TyId = 15;
+pub const T_I32: TyId = 16;
+pub const T_U32: TyId = 17;
+pub const T_U64: TyId = 18;
+pub const T_F32: TyId = 19;
+
+pub fn num_ty(n: Num) -> TyId {
+    T_I8 + Num::ALL.iter().position(|k| *k == n).unwrap() as TyId
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Ty {
@@ -27,6 +40,7 @@ pub enum Ty {
     Bool,
     Str,
     Any,
+    Num(Num),
     Array(TyId),
     Map(TyId, TyId),
     Optional(TyId),
@@ -131,6 +145,9 @@ impl Types {
         t.intern(Ty::Map(T_STR, T_ANY));
         t.intern(Ty::Array(T_STR));
         t.intern(Ty::Array(T_INT));
+        for n in Num::ALL {
+            t.intern(Ty::Num(n));
+        }
         t
     }
 
@@ -209,7 +226,7 @@ impl Types {
     }
 
     pub fn is_unboxed(&self, t: TyId) -> bool {
-        matches!(self.get(t), Ty::Int | Ty::Float | Ty::Bool | Ty::Enum(_) | Ty::Func(..) | Ty::Void)
+        matches!(self.get(t), Ty::Int | Ty::Float | Ty::Num(_) | Ty::Bool | Ty::Enum(_) | Ty::Func(..) | Ty::Void)
     }
 
     pub fn is_nullable(&self, t: TyId) -> bool {
@@ -217,7 +234,30 @@ impl Types {
     }
 
     pub fn is_numeric(&self, t: TyId) -> bool {
-        matches!(self.get(t), Ty::Int | Ty::Float)
+        matches!(self.get(t), Ty::Int | Ty::Float | Ty::Num(_))
+    }
+
+    pub fn num_of(&self, t: TyId) -> Option<Num> {
+        match self.get(t) {
+            Ty::Num(n) => Some(*n),
+            _ => None,
+        }
+    }
+
+    pub fn int_range(&self, t: TyId) -> Option<(u32, bool)> {
+        match self.get(t) {
+            Ty::Int => Some((64, true)),
+            Ty::Num(n) if !n.is_float() => Some((n.bits(), n.signed())),
+            _ => None,
+        }
+    }
+
+    pub fn is_integer(&self, t: TyId) -> bool {
+        self.int_range(t).is_some()
+    }
+
+    pub fn is_floating(&self, t: TyId) -> bool {
+        matches!(self.get(t), Ty::Float | Ty::Num(Num::F32))
     }
 
     pub fn unwrap_optional(&self, t: TyId) -> TyId {
@@ -274,6 +314,7 @@ impl Types {
             Ty::Bool => "bool".into(),
             Ty::Str => "string".into(),
             Ty::Any => "any".into(),
+            Ty::Num(n) => n.name().into(),
             Ty::Array(e) => format!("[{}]", self.display(*e)),
             Ty::Map(k, v) => format!("{{{}: {}}}", self.display(*k), self.display(*v)),
             Ty::Optional(i) => {
@@ -318,6 +359,7 @@ impl Types {
                 Ty::Bool => Desc::Bool,
                 Ty::Str => Desc::Str,
                 Ty::Any => Desc::Any,
+                Ty::Num(n) => Desc::Num(*n),
                 Ty::Array(e) => Desc::Array(*e),
                 Ty::Map(a, b) => Desc::Map(*a, *b),
                 Ty::Optional(i) => Desc::Optional(*i),

@@ -8,6 +8,7 @@ pub mod libs;
 pub mod matching;
 pub mod nostd;
 pub mod nullsafe;
+pub mod numeric;
 pub mod stmt;
 pub mod structs;
 
@@ -675,7 +676,16 @@ impl<'a> Checker<'a> {
 
     pub fn primitive(name: &str) -> Option<TyId> {
         Some(match name {
-            "int" | "Int" | "i64" | "long" => T_INT,
+            "int" | "Int" | "i64" | "long" | "int64" | "Int64" => T_INT,
+            "int8" | "Int8" | "i8" => T_I8,
+            "int16" | "Int16" | "i16" | "short" => T_I16,
+            "int32" | "Int32" | "i32" => T_I32,
+            "uint8" | "UInt8" | "u8" | "byte" | "Byte" => T_U8,
+            "uint16" | "UInt16" | "u16" => T_U16,
+            "uint32" | "UInt32" | "u32" => T_U32,
+            "uint64" | "UInt64" | "u64" => T_U64,
+            "float32" | "Float32" | "f32" => T_F32,
+            "float64" | "Float64" => T_FLOAT,
             "float" | "Float" | "double" | "Double" | "f64" | "number" => T_FLOAT,
             "string" | "String" | "str" | "Str" => T_STR,
             "bool" | "Bool" | "boolean" | "Boolean" => T_BOOL,
@@ -761,7 +771,7 @@ impl<'a> Checker<'a> {
     }
 
     fn check_map_key(&mut self, k: TyId, span: Span) {
-        if !matches!(self.types.get(k), Ty::Str | Ty::Int | Ty::Bool | Ty::Enum(_) | Ty::Any | Ty::Error) {
+        if !matches!(self.types.get(k), Ty::Str | Ty::Int | Ty::Bool | Ty::Enum(_) | Ty::Any | Ty::Error) && !self.types.is_integer(k) {
             let s = self.show(k);
             self.error(span, format!("map keys must be string, int, bool, enum or any, not {}", s));
         }

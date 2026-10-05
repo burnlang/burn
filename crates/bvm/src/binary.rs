@@ -132,6 +132,10 @@ fn write_desc(w: &mut W, d: &Desc) {
             w.u8(14);
             w.s(name)
         }
+        Desc::Num(n) => {
+            w.u8(16);
+            w.u8(*n as u8)
+        }
         Desc::Enum { name, variants } => {
             w.u8(15);
             w.s(name);
@@ -161,6 +165,10 @@ fn read_desc(r: &mut Rd) -> R<Desc> {
         10 => Desc::Optional(r.u32()?),
         11 => Desc::Func,
         12 => Desc::Future(r.u32()?),
+        16 => {
+            let c = r.u8()?;
+            Desc::Num(burn_runtime::meta::Num::from_code(c).ok_or_else(|| format!("bad number type code {}", c))?)
+        }
         13 => {
             let name = r.s()?;
             let class = r.u8()? != 0;

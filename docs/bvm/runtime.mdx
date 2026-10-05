@@ -25,16 +25,23 @@ an `[int]` array.
 
 ## Heap objects
 
-Heap objects start with a 16-byte header: kind (1 byte), cycle collector color, flags, padding, type id (4 bytes),
+Heap objects start with a 16-byte header: kind (1 byte), cycle collector color, flags, element kind, type id (4 bytes),
 size in bytes (4 bytes) and reference count (4 bytes). After the header:
 
 | Kind | Layout |
 | --- | --- |
 | string | length at +16, UTF-8 bytes at +24 |
-| array | length at +16, capacity at +24, pointer to the elements at +32 |
+| array | length at +16, capacity at +24, pointer to the elements at +32 (8 bytes each, or packed, see below) |
 | record | field `i` at +16 + 8·i |
 | box | the boxed value at +16, with the type id of the value in the header |
 | map, future | opaque, used through runtime functions |
+
+The sized number types (`int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32`, `uint64`, `float32`) are written
+`int8` ... `float32` in bvm assembly. On the stack they are 64-bit words like every other value: integers are
+sign- or zero-extended and `float32` values are doubles rounded to single precision. Arrays whose element type is one
+of the packed types (all of them except `uint64`) store each element in 1, 2 or 4 bytes; the element kind byte in the
+header says which, and `index`, `setindex` and the array runtime functions convert between the packed bytes and
+64-bit words.
 
 Values of type `any` are boxes (or the object itself when it is already on the heap). `rt box v tid` creates one
 and `unbox` reads it. `rt is_type`, `rt cast` and `rt type_name` inspect it.

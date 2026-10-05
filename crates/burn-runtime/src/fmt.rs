@@ -1,4 +1,4 @@
-use crate::meta::{desc, Desc};
+use crate::meta::{desc, Desc, Num};
 use crate::num;
 use crate::obj::*;
 use crate::prelude::*;
@@ -17,6 +17,31 @@ pub fn float_str(f: f64) -> String {
         return format!("{:e}", f);
     }
     format!("{}", f)
+}
+
+pub fn float32_str(f: f32) -> String {
+    if f.is_nan() {
+        return "NaN".into();
+    }
+    if f.is_infinite() {
+        return if f > 0.0 { "Infinity".into() } else { "-Infinity".into() };
+    }
+    let wide = f as f64;
+    if num::fract(wide) == 0.0 && num::abs(wide) < 1e16 {
+        return format!("{:.1}", f);
+    }
+    if num::abs(wide) >= 1e16 || (f != 0.0 && num::abs(wide) < 1e-6) {
+        return format!("{:e}", f);
+    }
+    format!("{}", f)
+}
+
+pub fn num_str(v: u64, n: Num) -> String {
+    match n {
+        Num::U64 => v.to_string(),
+        Num::F32 => float32_str(f64::from_bits(v) as f32),
+        _ => (v as i64).to_string(),
+    }
 }
 
 pub fn quote(s: &str, out: &mut String) {
@@ -49,6 +74,7 @@ pub fn write(v: u64, tid: u32, out: &mut String, nested: bool, depth: usize) {
     match desc(tid) {
         Desc::Int => out.push_str(&(v as i64).to_string()),
         Desc::Float => out.push_str(&float_str(f64::from_bits(v))),
+        Desc::Num(n) => out.push_str(&num_str(v, *n)),
         Desc::Bool => out.push_str(if v != 0 { "true" } else { "false" }),
         Desc::Str => {
             if nested {
@@ -83,7 +109,7 @@ pub fn write(v: u64, tid: u32, out: &mut String, nested: bool, depth: usize) {
         },
         Desc::Array(e) => {
             out.push('[');
-            for (i, x) in array_slice(v).iter().enumerate() {
+            for (i, x) in array_values(v).iter().enumerate() {
                 if i > 0 {
                     out.push_str(", ");
                 }
@@ -149,12 +175,13 @@ pub fn write(v: u64, tid: u32, out: &mut String, nested: bool, depth: usize) {
 pub fn equals(a: u64, b: u64, tid: u32) -> bool {
     if a == b {
         return match desc(tid) {
-            Desc::Float => !f64::from_bits(a).is_nan(),
+            Desc::Float | Desc::Num(Num::F32) => !f64::from_bits(a).is_nan(),
             _ => true,
         };
     }
     match desc(tid) {
-        Desc::Float => f64::from_bits(a) == f64::from_bits(b),
+        Desc::Float | Desc::Num(Num::F32) => f64::from_bits(a) == f64::from_bits(b),
+        Desc::Num(_) => false,
         Desc::Func => {
             a != 0
                 && b != 0
@@ -171,8 +198,8 @@ pub fn equals(a: u64, b: u64, tid: u32) -> bool {
             }
             let (ta, tb) = (tid_of(a), tid_of(b));
             if ta != tb {
-                let na = matches!(desc(ta), Desc::Int | Desc::Float);
-                let nb = matches!(desc(tb), Desc::Int | Desc::Float);
+                let na = matches!(desc(ta), Desc::Int | Desc::Float | Desc::Num(_));
+                let nb = matches!(desc(tb), Desc::Int | Desc::Float | Desc::Num(_));
                 if na && nb {
                     return as_f64(box_val(a), ta) == as_f64(box_val(b), tb);
                 }
@@ -191,7 +218,7 @@ pub fn equals(a: u64, b: u64, tid: u32) -> bool {
             }
         }
         Desc::Array(e) => {
-            let (x, y) = (array_slice(a), array_slice(b));
+            let (x, y) = (array_values(a), array_values(b));
             x.len() == y.len() && x.iter().zip(y.iter()).all(|(p, q)| equals(*p, *q, *e))
         }
         Desc::Map(_, vt) => {
@@ -229,7 +256,8 @@ pub fn equals(a: u64, b: u64, tid: u32) -> bool {
 
 pub fn as_f64(v: u64, tid: u32) -> f64 {
     match desc(tid) {
-        Desc::Float => f64::from_bits(v),
+        Desc::Float | Desc::Num(Num::F32) => f64::from_bits(v),
+        Desc::Num(Num::U64) => v as f64,
         _ => v as i64 as f64,
     }
 }
@@ -238,7 +266,9 @@ pub fn compare(a: u64, b: u64, tid: u32) -> core::cmp::Ordering {
     use core::cmp::Ordering::*;
     match desc(tid) {
         Desc::Int | Desc::Enum { .. } => (a as i64).cmp(&(b as i64)),
-        Desc::Float => f64::from_bits(a).partial_cmp(&f64::from_bits(b)).unwrap_or(Equal),
+        Desc::Float | Desc::Num(Num::F32) => f64::from_bits(a).partial_cmp(&f64::from_bits(b)).unwrap_or(Equal),
+        Desc::Num(Num::U64) => a.cmp(&b),
+        Desc::Num(_) => (a as i64).cmp(&(b as i64)),
         Desc::Bool => a.cmp(&b),
         Desc::Str => str_bytes(a).cmp(str_bytes(b)),
         Desc::Any => {

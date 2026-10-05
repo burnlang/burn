@@ -123,7 +123,7 @@
     },
     "types": {
       "patterns": [
-        { "name": "support.type.primitive.burn", "match": "\\b(int|float|string|bool|void|any|Int|Float|String|Bool|Void|Any|Future)\\b" },
+        { "name": "support.type.primitive.burn", "match": "\\b(int|float|string|bool|void|any|byte|u?int(8|16|32|64)|float(32|64)|Int|Float|String|Bool|Void|Any|Byte|U?Int(8|16|32|64)|Float(32|64)|Future)\\b" },
         { "name": "entity.name.type.burn", "match": "\\b[A-Z][A-Za-z0-9_]*\\b" }
       ]
     },

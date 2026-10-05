@@ -157,6 +157,29 @@ pub fn str_repeat(s: u64, n: u64) -> u64 {
     string(&str_ref(s).repeat(n))
 }
 
+pub fn str_to_bytes(s: u64, tid: u64) -> u64 {
+    let src = str_bytes(s);
+    let a = array_new(tid as u32, src.len());
+    if array_elem(a) == meta::Num::U8 as u8 {
+        unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), array_data(a) as *mut u8, src.len()) };
+    } else {
+        for (i, x) in src.iter().enumerate() {
+            array_put(a, i, *x as u64);
+        }
+    }
+    a
+}
+
+pub fn str_from_bytes(a: u64) -> u64 {
+    let n = array_len(a);
+    let bytes: Vec<u8> = if array_elem(a) == meta::Num::U8 as u8 {
+        unsafe { core::slice::from_raw_parts(array_data(a) as *const u8, n).to_vec() }
+    } else {
+        (0..n).map(|i| array_at(a, i) as u8).collect()
+    };
+    string(&String::from_utf8_lossy(&bytes))
+}
+
 pub fn str_chars(s: u64) -> u64 {
     let parts: Vec<String> = str_ref(s).chars().map(|c| c.to_string()).collect();
     array_of_strings(&parts)
@@ -276,7 +299,7 @@ pub fn arr_get(a: u64, i: u64, loc: u64) -> u64 {
     if (i as usize) >= n {
         err_index(loc, i, n as u64);
     }
-    retain_t(unsafe { *array_data(a).add(i as usize) }, elem_tid(a))
+    retain_t(array_at(a, i as usize), elem_tid(a))
 }
 
 #[inline]
@@ -312,7 +335,8 @@ pub fn arr_set(a: u64, i: u64, v: u64, loc: u64) -> u64 {
     }
     let et = elem_tid(a);
     retain_t(v, et);
-    let old = unsafe { core::mem::replace(&mut *array_data(a).add(i as usize), v) };
+    let old = array_at(a, i as usize);
+    array_put(a, i as usize, v);
     release_t(old, et);
     retain_t(v, et)
 }
@@ -328,7 +352,7 @@ pub fn arr_pop(a: u64, loc: u64) -> u64 {
     if n == 0 {
         rt_error("pop from empty array", loc);
     }
-    let v = array_slice(a)[n - 1];
+    let v = array_at(a, n - 1);
     unsafe { set_word(a, ARR_LEN, (n - 1) as u64) }
     v
 }
@@ -341,9 +365,8 @@ pub fn arr_insert(a: u64, i: u64, v: u64, loc: u64) -> u64 {
     }
     retain_t(v, elem_tid(a));
     array_set_len(a, n + 1);
-    let s = array_slice_mut(a);
-    s.copy_within(idx as usize..n, idx as usize + 1);
-    s[idx as usize] = v;
+    array_move(a, idx as usize, idx as usize + 1, n - idx as usize);
+    array_put(a, idx as usize, v);
     0
 }
 
@@ -352,17 +375,15 @@ pub fn arr_remove(a: u64, i: u64, loc: u64) -> u64 {
     if (i as usize) >= n {
         err_index(loc, i, n as u64);
     }
-    let s = array_slice_mut(a);
-    let v = s[i as usize];
-    s.copy_within(i as usize + 1..n, i as usize);
+    let v = array_at(a, i as usize);
+    array_move(a, i as usize + 1, i as usize, n - i as usize - 1);
     unsafe { set_word(a, ARR_LEN, (n - 1) as u64) }
     v
 }
 
 pub fn arr_concat(a: u64, c: u64) -> u64 {
-    let mut v = Vec::with_capacity(array_len(a) + array_len(c));
-    v.extend_from_slice(array_slice(a));
-    v.extend_from_slice(array_slice(c));
+    let mut v = array_values(a);
+    v.extend(array_values(c));
     array_shared(tid_of(a), &v)
 }
 
@@ -370,18 +391,18 @@ pub fn arr_slice(a: u64, s: u64, e: u64) -> u64 {
     let n = array_len(a) as i64;
     let end = (e as i64).clamp(0, n);
     let start = (s as i64).clamp(0, end);
-    let items: Vec<u64> = array_slice(a)[start as usize..end as usize].to_vec();
+    let items: Vec<u64> = (start as usize..end as usize).map(|i| array_at(a, i)).collect();
     array_shared(tid_of(a), &items)
 }
 
 pub fn arr_copy(a: u64) -> u64 {
-    let items: Vec<u64> = array_slice(a).to_vec();
+    let items: Vec<u64> = array_values(a);
     array_shared(tid_of(a), &items)
 }
 
 pub fn arr_index_of(a: u64, v: u64, etid: u64) -> u64 {
-    for (i, x) in array_slice(a).iter().enumerate() {
-        if fmt::equals(*x, v, etid as u32) {
+    for i in 0..array_len(a) {
+        if fmt::equals(array_at(a, i), v, etid as u32) {
             return i as u64;
         }
     }
@@ -393,24 +414,40 @@ pub fn arr_contains(a: u64, v: u64, etid: u64) -> u64 {
 }
 
 pub fn arr_join(a: u64, sep: u64, etid: u64) -> u64 {
-    let parts: Vec<String> = array_slice(a).iter().map(|x| fmt::to_string(*x, etid as u32)).collect();
+    let parts: Vec<String> = array_values(a).iter().map(|x| fmt::to_string(*x, etid as u32)).collect();
     string(&parts.join(str_ref(sep)))
 }
 
 pub fn arr_reverse(a: u64) -> u64 {
-    array_slice_mut(a).reverse();
+    if array_elem(a) == 0 {
+        array_slice_mut(a).reverse();
+        return 0;
+    }
+    let mut v = array_values(a);
+    v.reverse();
+    for (i, x) in v.into_iter().enumerate() {
+        array_put(a, i, x);
+    }
     0
 }
 
 pub fn arr_sort(a: u64, etid: u64) -> u64 {
     let t = etid as u32;
-    array_slice_mut(a).sort_by(|x, y| fmt::compare(*x, *y, t));
+    if array_elem(a) == 0 {
+        array_slice_mut(a).sort_by(|x, y| fmt::compare(*x, *y, t));
+        return 0;
+    }
+    let mut v = array_values(a);
+    v.sort_by(|x, y| fmt::compare(*x, *y, t));
+    for (i, x) in v.into_iter().enumerate() {
+        array_put(a, i, x);
+    }
     0
 }
 
 pub fn arr_clear(a: u64) -> u64 {
     let et = elem_tid(a);
-    let old: Vec<u64> = array_slice(a).to_vec();
+    let old: Vec<u64> = if meta::managed(et) { array_slice(a).to_vec() } else { Vec::new() };
     unsafe { set_word(a, ARR_LEN, 0) }
     if meta::managed(et) {
         for x in old {
@@ -768,7 +805,7 @@ pub fn any_index(v: u64, key: u64, key_tid: u64, loc: u64) -> u64 {
             if (i as usize) >= n {
                 err_index(loc, i, n as u64);
             }
-            box_value(array_slice(inner)[i as usize], et as u64)
+            box_value(array_at(inner, i as usize), et as u64)
         }
         Desc::Record { fields, .. } => {
             let name = match desc(key_tid as u32) {
@@ -1083,6 +1120,105 @@ pub fn err_index(loc: u64, idx: u64, len: u64) -> u64 {
 
 pub fn err_overflow(loc: u64) -> u64 {
     rt_error("integer overflow", loc)
+}
+
+pub const CONV_FROM_U64: u64 = 16;
+
+fn num_kind(code: u64) -> meta::Num {
+    meta::Num::from_code((code & 15) as u8).unwrap_or(meta::Num::U64)
+}
+
+fn num_value(v: u64, from_u64: bool) -> i128 {
+    if from_u64 {
+        v as i128
+    } else {
+        v as i64 as i128
+    }
+}
+
+pub fn num_fit(v: u64, code: u64, loc: u64) -> u64 {
+    let n = num_kind(code);
+    let x = num_value(v, n == meta::Num::U64);
+    if !n.fits(x) {
+        rt_error(&format!("integer overflow: {} does not fit in {}", x, n.name()), loc);
+    }
+    v
+}
+
+pub fn num_conv(v: u64, code: u64, loc: u64) -> u64 {
+    let n = num_kind(code);
+    let x = num_value(v, code & CONV_FROM_U64 != 0);
+    let fits = if code & 15 == 0 {
+        (i64::MIN as i128..=i64::MAX as i128).contains(&x)
+    } else {
+        n.fits(x)
+    };
+    if !fits {
+        let name = if code & 15 == 0 { "int" } else { n.name() };
+        rt_error(&format!("cannot convert {} to {}", x, name), loc);
+    }
+    v
+}
+
+pub fn num_wrap(v: u64, code: u64) -> u64 {
+    num_kind(code).wrap(v)
+}
+
+pub fn uadd(a: u64, c: u64, loc: u64) -> u64 {
+    a.checked_add(c)
+        .unwrap_or_else(|| rt_error(&format!("integer overflow: {} + {} does not fit in uint64", a, c), loc))
+}
+
+pub fn usub(a: u64, c: u64, loc: u64) -> u64 {
+    a.checked_sub(c)
+        .unwrap_or_else(|| rt_error(&format!("integer overflow: {} - {} does not fit in uint64", a, c), loc))
+}
+
+pub fn umul(a: u64, c: u64, loc: u64) -> u64 {
+    a.checked_mul(c)
+        .unwrap_or_else(|| rt_error(&format!("integer overflow: {} * {} does not fit in uint64", a, c), loc))
+}
+
+pub fn udiv(a: u64, c: u64, loc: u64) -> u64 {
+    if c == 0 {
+        err_divzero(loc);
+    }
+    a / c
+}
+
+pub fn umod(a: u64, c: u64, loc: u64) -> u64 {
+    if c == 0 {
+        err_divzero(loc);
+    }
+    a % c
+}
+
+pub fn u2f(v: u64) -> u64 {
+    fv(v as f64)
+}
+
+pub fn f2num(v: u64, code: u64, loc: u64) -> u64 {
+    let x = f(v);
+    let t = num::trunc(x);
+    let n = num_kind(code);
+    let name = if code & 15 == 0 { "int" } else { n.name() };
+    let (lo, hi) = if code & 15 == 0 {
+        (i64::MIN as f64, 9223372036854775808.0)
+    } else {
+        (n.min_value() as f64, n.max_value() as f64 + 1.0)
+    };
+    if x.is_nan() || t < lo || t >= hi {
+        rt_error(&format!("cannot convert {} to {}", fmt::float_str(x), name), loc);
+    }
+    if n == meta::Num::U64 && code & 15 != 0 {
+        t as u64
+    } else {
+        t as i64 as u64
+    }
+}
+
+pub fn f32_round(v: u64) -> u64 {
+    fv(f(v) as f32 as f64)
 }
 
 pub fn shift_check(amount: u64, loc: u64) -> u64 {

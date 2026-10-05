@@ -23,6 +23,7 @@
 - `match` expressions and statements
 - Bit operators (`& | ^ ~ << >> >>>`)
 - Automatic memory management without a garbage collector: compiler-inserted reference counting with a cycle collector
+- Sized number types (`int8` to `uint64`, `float32`) with packed arrays
 - Building without the standard runtime (`--no-std`, `std = false`) for small native executables
 
 ## Next

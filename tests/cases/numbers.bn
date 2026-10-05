@@ -1,0 +1,131 @@
+def struct Pixel(r: uint8, g: uint8, b: uint8) {
+    float32 alpha = 1.0
+
+    fun gray(): uint8 {
+        return ((r as int + g + b) / 3) as uint8
+    }
+}
+
+def type Sample {
+    int16 left
+    int16 right
+}
+
+fun checksum(data: [uint8]): uint32 {
+    uint32 sum = 0
+    for b in data {
+        sum = (sum + b) % 65521
+    }
+    return sum
+}
+
+fun largest<T>(items: [T]): T? {
+    if (items.length == 0) {
+        return null
+    }
+    var best = items[0]
+    for x in items {
+        if (x > best) {
+            best = x
+        }
+    }
+    return best
+}
+
+fun describe(n: uint16): string {
+    return match n {
+        0 => "zero"
+        1..10 => "small"
+        else => "big"
+    }
+}
+
+fun main() {
+    uint8 b = 200
+    int8 s = -100
+    UInt16 w = 60000
+    int32 i = 2000000000
+    uint64 u = 9007199254740991
+    float32 f = 0.1
+    byte z = 255
+    print(b, s, w, i, u, f, z)
+    print(b + 55, s - 28, w / 7, i % 7, u - 1, f * 3, b * 1.5)
+    int widened = b + s
+    print(widened, b > s, u > 0, b == 200, -128 as int8, -9223372036854775808)
+
+    [uint8] data = [1, 2, 3, 250]
+    data.push(5)
+    data[0] = 9
+    print(data, data.length, checksum(data))
+    [float32] fs = [1.5, 2.25]
+    fs.push(0.1)
+    print(fs, fs[2] + fs[0])
+    [int16] shorts = [-1, 2, -30000]
+    shorts.sort()
+    print(shorts, shorts.contains(2), shorts.indexOf(-30000))
+    shorts.reverse()
+    print(shorts)
+
+    print(255 as uint8, (300 / 2) as uint8, -1.9 as int8, u as float, 3000000000 as uint32)
+    print(~b, ~s, b << 1, b >> 3, s >> 2, s >>> 4, u >> 50, w & 255, w | 1, w ^ 65535)
+    print(b.wrappingAdd(100), s.wrappingSub(100), i.wrappingMul(3), z.wrappingMul(z))
+    print(abs(s), min(b, z), max(u, 7), pow(2 as uint16, 10), min(f, 0.05))
+
+    var p = new Pixel(10, 200, 30)
+    print(p.gray(), p.alpha, p)
+    var sample = Sample { left: -300, right: 300 }
+    print(sample, toJSON(sample), toJSON([b, z]), typeOf(f))
+    [uint32] xs = [5, 4000000000, 7]
+    print(largest(xs), largest([1.5 as float32, 0.25]))
+    uint8? maybe = null
+    print(maybe ?? 7)
+    maybe = 9
+    if (maybe != null) {
+        print(maybe + 1)
+    }
+    any a = w
+    if (a is uint16) {
+        print("boxed", a + 1)
+    }
+    print(describe(0), describe(5), describe(500))
+
+    uint8 counter = 0
+    var bump = fun() {
+        counter += 1
+    }
+    bump()
+    bump()
+    uint16 acc = 1
+    acc *= 300
+    acc -= 44
+    acc <<= 1
+    print(counter, acc, acc.toString(), "${acc}")
+
+    [int8] deltas = []
+    for k in 0..5 {
+        deltas.push((k * 10 - 20) as int8)
+    }
+    var total = 0
+    for k, d in deltas {
+        total += d * k
+    }
+    print(deltas, deltas.join("|"), deltas.slice(1, 3), total)
+    {uint8: string} names = {1: "one", 200: "two hundred"}
+    {string: uint64} sizes = {"a": 1}
+    sizes["b"] = 2
+    print(names[b] ?? "none", sizes)
+
+    float32 third = 1.0 / 3.0
+    float wide = third
+    print(third, wide, third as float == wide)
+    [uint8] grow = []
+    for k in 0..300 {
+        grow.push((k % 256) as uint8)
+    }
+    grow.insert(0, 42)
+    print(grow.length, grow[0], grow[256], grow.pop(), grow.remove(0), grow.length)
+    var text = "héllo".bytes()
+    text[0] = 72
+    print(text, fromBytes(text))
+    print(b * 2)
+}

@@ -299,6 +299,7 @@ pub struct Expr {
 #[derive(Clone, Debug)]
 pub enum ExprKind {
     Int(i64),
+    BigInt(u64, bool),
     Float(f64),
     Str(String),
     Template(Vec<TplExpr>),

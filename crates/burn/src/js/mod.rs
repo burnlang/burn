@@ -55,6 +55,7 @@ fn desc(d: &Desc) -> String {
         Desc::Bool => "[\"bool\"]".into(),
         Desc::Str => "[\"str\"]".into(),
         Desc::Any => "[\"any\"]".into(),
+        Desc::Num(n) => format!("[\"num\",{}]", js_str(n.name())),
         Desc::Array(e) => format!("[\"arr\",{}]", e),
         Desc::Map(k, v) => format!("[\"map\",{},{}]", k, v),
         Desc::Optional(i) => format!("[\"opt\",{}]", i),
@@ -255,6 +256,7 @@ impl<'p> Gen<'p> {
     fn expr(&mut self, e: &Expr) -> String {
         match &e.kind {
             ExprKind::TypeId(v) | ExprKind::LocId(v) => v.to_string(),
+            ExprKind::Int(v) if e.ty == crate::types::T_U64 => (*v as u64).to_string(),
             ExprKind::Int(v) => {
                 if *v < 0 {
                     format!("({})", v)
@@ -276,12 +278,32 @@ impl<'p> Gen<'p> {
                     UnOp::INeg(l) => format!("$ov(-{}, {})", x, l),
                     UnOp::FNeg => format!("(-{})", x),
                     UnOp::Not => format!("(!{})", x),
+                    UnOp::BitNot if e.ty == crate::types::T_U64 => format!("$u($bit(\"~\", {}, 0, 0))", x),
                     UnOp::BitNot => format!("$bit(\"~\", {}, 0, 0)", x),
                 }
             }
             ExprKind::Binary(op, a, b) => {
                 let (a, b) = (self.expr(a), self.expr(b));
+                let u = e.ty == crate::types::T_U64;
+                if u && matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl(_) | BinOp::UShr(_)) {
+                    let sym = match op {
+                        BinOp::BitAnd => "&",
+                        BinOp::BitOr => "|",
+                        BinOp::BitXor => "^",
+                        BinOp::Shl(_) => "<<",
+                        _ => ">>>",
+                    };
+                    let l = match op {
+                        BinOp::Shl(l) | BinOp::UShr(l) => *l as i64,
+                        _ => 0,
+                    };
+                    return format!("$u($bit({}, {}, {}, {}))", js_str(sym), a, b, l);
+                }
                 match op {
+                    BinOp::UCmp(c) => format!("({} {} {})", a, cmp_op(*c), b),
+                    BinOp::WAdd => format!("$wrap(\"+\", {}, {}, {})", a, b, u),
+                    BinOp::WSub => format!("$wrap(\"-\", {}, {}, {})", a, b, u),
+                    BinOp::WMul => format!("$wrap(\"*\", {}, {}, {})", a, b, u),
                     BinOp::IAdd(u32::MAX) => format!("({} + {})", a, b),
                     BinOp::IAdd(l) => format!("$ov({} + {}, {})", a, b, l),
                     BinOp::ISub(l) => format!("$ov({} - {}, {})", a, b, l),
