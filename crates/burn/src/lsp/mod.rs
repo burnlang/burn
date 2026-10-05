@@ -1,4 +1,5 @@
 mod assist;
+mod complete;
 mod ide;
 pub mod json;
 mod nav;
@@ -840,6 +841,13 @@ impl Server {
             }
             return Json::Arr(vec![]);
         }
+        match complete::context(&before[..prefix_end]) {
+            complete::Ctx::Annotation => return Json::Arr(self.annotation_items(uri, a)),
+            complete::Ctx::AnnotationArgs(name) => return Json::Arr(self.annotation_arg_items(uri, a, &name)),
+            complete::Ctx::DefKind => return Json::Arr(Self::def_kind_items()),
+            complete::Ctx::Type => return Json::Arr(self.type_items(uri, a)),
+            complete::Ctx::General => {}
+        }
         let mut items = Vec::new();
         let mut seen = std::collections::HashSet::new();
         let mut push = |label: &str, kind: i32, detail: String, items: &mut Vec<Json>| {
@@ -924,12 +932,10 @@ impl Server {
             }
         }
         for k in KEYWORDS {
-            push(k, 14, "keyword".into(), &mut items);
+            push(k, 14, complete::keyword_doc(k).into(), &mut items);
         }
-        for t in [
-            "int", "float", "string", "bool", "any", "void", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "float32", "byte",
-        ] {
-            push(t, 22, "built-in type".into(), &mut items);
+        for (t, doc) in complete::BUILTIN_TYPES {
+            push(t, 22, format!("built-in type: {}", doc.replace('`', "")), &mut items);
         }
         let _ = T_ARR_ANY;
         let visible: std::collections::HashSet<String> = items.iter().filter_map(|i| i.get("label").as_str().map(|s| s.to_string())).collect();
@@ -1048,7 +1054,10 @@ pub fn run() -> ExitCode {
                                 ),
                                 (
                                     "completionProvider",
-                                    Json::obj(vec![("triggerCharacters", Json::Arr(vec![Json::str("."), Json::str("\""), Json::str("/")]))]),
+                                    Json::obj(vec![(
+                                        "triggerCharacters",
+                                        Json::Arr(vec![Json::str("."), Json::str("\""), Json::str("/"), Json::str("@")]),
+                                    )]),
                                 ),
                                 ("documentLinkProvider", Json::obj(vec![("resolveProvider", Json::Bool(false))])),
                                 ("foldingRangeProvider", Json::Bool(true)),

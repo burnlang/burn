@@ -20,6 +20,10 @@ the errors the compiler reports. It supports:
   methods and every function that can be called as a method (`text.upper()`). Functions complete with their
   parentheses and show their parameters
 - completion of names from standard modules that are not imported yet; picking one adds the `import`
+- completion that fits the place you type in: only types after `:`, `is`, `as`, `::`, in `[...]` and `<...>`
+  (with built-in types, your types and standard library types, imported on pick); annotations after `@`, with the
+  fields of the annotation inside `@Name(...)`; the kinds of definition after `def`; and keywords with a short
+  explanation everywhere else
 - clickable imports: `import "std/date"` and `import "shapes.bn"` are links, and hovering one lists what the module
   exports
 - signature help while you type the arguments of a call, for functions, constructors, methods and built-ins
