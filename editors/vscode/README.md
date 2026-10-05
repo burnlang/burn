@@ -4,12 +4,16 @@ Language support for [Burn](https://github.com/burnlang/burn).
 
 - Syntax highlighting for `.bn` files, including `def` definitions and string templates
 - Live diagnostics from the real Burn compiler with exact line and column
+- Completion that keeps working while you type, for locals, globals, types, built-ins and members after `.`, with
+  docs, parentheses and parameter hints
+- Completion and quick fixes that add missing imports from the standard library and your project
 - Hover with inferred types, signatures and documentation
-- Completion for locals, globals, types, built-ins and members after `.`
+- Clickable imports that open the module, including standard library modules
 - Signature help for calls and inlay hints with inferred types
-- Go to definition, also into the standard library, built-in functions and bytecode libraries
+- Go to definition (also into the standard library, built-in functions and bytecode libraries), type definition and
+  implementation
 - Find all references, highlight references and rename across files
-- Workspace symbols, document outline, formatting and quick fixes
+- Workspace symbols, an outline with struct members, folding, formatting, quick fixes and fix all
 - Run, Run natively and Build links above `fun main`
 - **Burn: Open Standard Library Module...** and **Burn: Show Built-in Functions** to read library sources
 

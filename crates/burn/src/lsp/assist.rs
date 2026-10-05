@@ -127,7 +127,8 @@ impl Server {
                 return Some((f.1.clone(), String::new(), 0));
             }
             let ctor = format!("{}.<init>", name);
-            if let Some(f) = a.funcs.iter().find(|f| f.0 == ctor || (is_new && f.0 == *name)) {
+            let new_name = format!("new {}", name);
+            if let Some(f) = a.funcs.iter().find(|f| f.0 == ctor || f.0 == new_name || (is_new && f.0 == *name)) {
                 return Some((f.1.replacen("<init>", name, 1), String::new(), 0));
             }
             if let Some(b) = crate::doc::builtins::find(name) {
@@ -164,11 +165,16 @@ impl Server {
     }
 
     pub fn signature_help(&self, uri: &str, params: &Json) -> Json {
-        let (Some(text), Some((off, a))) = (self.docs.get(uri), self.offset(uri, params)) else {
+        let (Some(text), Some(a)) = (self.docs.get(uri), self.analyses.get(uri)) else {
             return Json::Null;
         };
-        let off = off.min(text.len());
-        let Some((paren, commas)) = open_call(&text[..off]) else {
+        let line = params.at(&["position", "line"]).as_f64().unwrap_or(0.0) as usize;
+        let ch = params.at(&["position", "character"]).as_f64().unwrap_or(0.0) as usize;
+        let doc_off = crate::source::SourceFile::new(String::new(), None, text.clone())
+            .offset_of_utf16(line, ch)
+            .min(text.len());
+        let off = super::repair::shift(&a.inserts, doc_off);
+        let Some((paren, commas)) = open_call(&text[..doc_off]) else {
             return Json::Null;
         };
         let (chain, is_new) = callee(text, paren);
