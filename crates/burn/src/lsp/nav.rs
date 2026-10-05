@@ -121,6 +121,9 @@ impl Server {
         let Some((off, a)) = self.offset(uri, params) else {
             return Json::Null;
         };
+        if let Some(j) = self.import_definition(a, off) {
+            return j;
+        }
         if let Some(d) = a.target_at(off) {
             let text = a.sm.file(d.file).text(d).to_string();
             if text.ends_with(".bvmc\"") || text.ends_with(".bar\"") || text.ends_with(".bvm\"") {
@@ -145,7 +148,7 @@ impl Server {
         Json::Null
     }
 
-    fn project_files(&self, current: &Path) -> Vec<PathBuf> {
+    pub(super) fn project_files(&self, current: &Path) -> Vec<PathBuf> {
         let mut roots: Vec<PathBuf> = Vec::new();
         if let Some(r) = crate::project::find_root(current) {
             roots.push(r);

@@ -1,13 +1,15 @@
 mod assist;
+mod ide;
 pub mod json;
 mod nav;
+mod repair;
 pub mod sources;
 
 use crate::check::{self, builtins, CheckOptions, Index};
 use crate::diag::Severity;
 use crate::loader::Loader;
 use crate::source::{FileId, SourceMap, Span};
-use crate::types::{Ty, TyId, Types, T_ARR_ANY, T_ERROR, T_STR};
+use crate::types::{Ty, TyId, Types, T_ARR_ANY, T_ERROR};
 use json::Json;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -23,6 +25,8 @@ struct Analysis {
     globals: Vec<(String, TyId, usize)>,
     funcs: Vec<(String, String, Span, usize)>,
     type_names: Vec<(String, TyId, Span, usize)>,
+    links: Vec<(Span, ide::Target)>,
+    inserts: Vec<usize>,
 }
 
 #[derive(Default)]
@@ -318,15 +322,17 @@ const ARR_METHODS: &[&str] = &[
 const MAP_METHODS: &[&str] = &["length", "keys", "values", "has", "get", "remove"];
 
 impl Server {
-    fn quick_analysis(&self, path: &Path) -> Option<Analysis> {
+    fn loader(&self) -> Loader {
         let mut loader = Loader::new();
         for (u, text) in &self.docs {
             let p = uri_to_path(u);
             let c = std::fs::canonicalize(&p).unwrap_or(p);
             loader.overrides.insert(c, text.clone());
         }
-        let root = loader.load_file(path).ok()?;
-        let loaded = loader.finish(root);
+        loader
+    }
+
+    fn build(loaded: crate::loader::Loaded, root: usize, inserts: Vec<usize>) -> (Analysis, Vec<crate::diag::Diagnostic>) {
         let root_file = loaded.modules[root].file;
         let result = check::check(
             &loaded,
@@ -336,16 +342,58 @@ impl Server {
                 repl_echo: false,
             },
         );
-        Some(Analysis {
-            sm: loaded.sm,
-            root_file,
-            root_module: root,
-            index: result.index,
-            types: result.types,
-            globals: result.globals,
-            funcs: result.funcs,
-            type_names: result.type_names,
-        })
+        let links = ide::import_links(&loaded, root);
+        let mut diags = loaded.diags;
+        diags.extend(result.diags);
+        (
+            Analysis {
+                sm: loaded.sm,
+                root_file,
+                root_module: root,
+                index: result.index,
+                types: result.types,
+                globals: result.globals,
+                funcs: result.funcs,
+                type_names: result.type_names,
+                links,
+                inserts,
+            },
+            diags,
+        )
+    }
+
+    fn quick_analysis(&self, path: &Path) -> Option<Analysis> {
+        let mut loader = self.loader();
+        let root = loader.load_file(path).ok()?;
+        let loaded = loader.finish(root);
+        Some(Self::build(loaded, root, Vec::new()).0)
+    }
+
+    fn repaired(&self, path: &Path, text: &str, errors: usize) -> Option<Analysis> {
+        let (fixed, inserts) = repair::close_braces(text)?;
+        let mut loader = self.loader();
+        let c = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        loader.overrides.insert(c, fixed.clone());
+        let root = match loader.load_file(path) {
+            Ok(r) => r,
+            Err(_) => loader.load_source(
+                &path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
+                fixed,
+                path.parent().map(|p| p.to_path_buf()),
+            ),
+        };
+        let loaded = loader.finish(root);
+        let root_file = loaded.modules[root].file;
+        if loaded
+            .diags
+            .iter()
+            .filter(|d| d.span.file == root_file && d.severity == Severity::Error)
+            .count()
+            >= errors
+        {
+            return None;
+        }
+        Some(Self::build(loaded, root, inserts).0)
     }
 
     fn analyze(&mut self, uri: &str) {
@@ -357,12 +405,7 @@ impl Server {
             );
             return;
         }
-        let mut loader = Loader::new();
-        for (u, text) in &self.docs {
-            let p = uri_to_path(u);
-            let c = std::fs::canonicalize(&p).unwrap_or(p);
-            loader.overrides.insert(c, text.clone());
-        }
+        let mut loader = self.loader();
         let root = match loader.load_file(&path) {
             Ok(r) => r,
             Err(_) => {
@@ -376,17 +419,13 @@ impl Server {
         };
         let loaded = loader.finish(root);
         let root_file = loaded.modules[root].file;
-        let result = check::check(
-            &loaded,
-            CheckOptions {
-                skip_before: None,
-                want_index: true,
-                repl_echo: false,
-            },
-        );
-        let mut diags = loaded.diags.clone();
-        diags.extend(result.diags);
-        let sm = loaded.sm;
+        let syntax_errors = loaded
+            .diags
+            .iter()
+            .filter(|d| d.span.file == root_file && d.severity == Severity::Error)
+            .count();
+        let (analysis, diags) = Self::build(loaded, root, Vec::new());
+        let sm = &analysis.sm;
         let mut by_uri: HashMap<String, Vec<Json>> = HashMap::new();
         let mut fixes = Vec::new();
         by_uri.insert(uri.to_string(), Vec::new());
@@ -409,7 +448,7 @@ impl Server {
                 message.push_str(n);
             }
             let dj = Json::obj(vec![
-                ("range", range_json(&sm, d.span)),
+                ("range", range_json(sm, d.span)),
                 ("severity", Json::num(if d.severity == Severity::Error { 1 } else { 2 })),
                 ("source", Json::str("burn")),
                 ("message", Json::str(message)),
@@ -428,7 +467,7 @@ impl Server {
                         edits: s
                             .edits
                             .iter()
-                            .map(|(sp, t)| Json::obj(vec![("range", edit_range_json(&sm, *sp)), ("newText", Json::str(t.clone()))]))
+                            .map(|(sp, t)| Json::obj(vec![("range", edit_range_json(sm, *sp)), ("newText", Json::str(t.clone()))]))
                             .collect(),
                     });
                 }
@@ -454,43 +493,65 @@ impl Server {
         }
         self.published.insert(uri.to_string(), now);
         self.fixes.insert(uri.to_string(), fixes);
-        self.analyses.insert(
-            uri.to_string(),
-            Analysis {
-                sm,
-                root_file,
-                root_module: root,
-                index: result.index,
-                types: result.types,
-                globals: result.globals,
-                funcs: result.funcs,
-                type_names: result.type_names,
-            },
-        );
+        let better = if syntax_errors > 0 {
+            self.docs.get(uri).and_then(|text| self.repaired(&path, text, syntax_errors))
+        } else {
+            None
+        };
+        self.analyses.insert(uri.to_string(), better.unwrap_or(analysis));
     }
 
     fn code_actions(&self, uri: &str, params: &Json) -> Json {
         let (Some(a), Some(fixes)) = (self.analyses.get(uri), self.fixes.get(uri)) else {
             return Json::Arr(vec![]);
         };
-        let f = a.sm.file(a.root_file);
-        let pos = |k: &str| {
-            let line = params.at(&["range", k, "line"]).as_f64().unwrap_or(0.0) as usize;
-            let ch = params.at(&["range", k, "character"]).as_f64().unwrap_or(0.0) as usize;
-            f.offset_of_utf16(line, ch)
-        };
-        let (start, end) = (pos("start"), pos("end"));
+        let only: Vec<String> = params
+            .at(&["context", "only"])
+            .as_arr()
+            .iter()
+            .filter_map(|k| k.as_str().map(|s| s.to_string()))
+            .collect();
+        let wants = |kind: &str| only.is_empty() || only.iter().any(|o| kind == o || kind.starts_with(&format!("{}.", o)));
+        let edit_of = |edits: Vec<Json>| Json::obj(vec![("changes", Json::obj(vec![(uri, Json::Arr(edits))]))]);
         let mut out = Vec::new();
-        for q in fixes {
-            if q.start <= end && start <= q.end {
-                out.push(Json::obj(vec![
-                    ("title", Json::str(q.title.clone())),
-                    ("kind", Json::str("quickfix")),
-                    ("isPreferred", Json::Bool(q.preferred)),
-                    ("diagnostics", Json::Arr(vec![q.diagnostic.clone()])),
-                    ("edit", Json::obj(vec![("changes", Json::obj(vec![(uri, Json::Arr(q.edits.clone()))]))])),
-                ]));
+        if wants("quickfix") {
+            let f = a.sm.file(a.root_file);
+            let pos = |k: &str| {
+                let line = params.at(&["range", k, "line"]).as_f64().unwrap_or(0.0) as usize;
+                let ch = params.at(&["range", k, "character"]).as_f64().unwrap_or(0.0) as usize;
+                repair::unshift(&a.inserts, f.offset_of_utf16(line, ch))
+            };
+            let (start, end) = (pos("start"), pos("end"));
+            for q in fixes {
+                if q.start <= end && start <= q.end {
+                    out.push(Json::obj(vec![
+                        ("title", Json::str(q.title.clone())),
+                        ("kind", Json::str("quickfix")),
+                        ("isPreferred", Json::Bool(q.preferred)),
+                        ("diagnostics", Json::Arr(vec![q.diagnostic.clone()])),
+                        ("edit", edit_of(q.edits.clone())),
+                    ]));
+                }
             }
+            out.extend(self.import_actions(uri, params));
+        }
+        let mut all: Vec<&QuickFix> = Vec::new();
+        for q in fixes.iter().filter(|q| q.preferred) {
+            if all.iter().all(|p| q.end < p.start || p.end < q.start) {
+                all.push(q);
+            }
+        }
+        if !all.is_empty() && (wants("source.fixAll.burn") || (wants("quickfix") && all.len() > 1 && only.is_empty())) {
+            let kind = if only.iter().any(|o| o.starts_with("source")) {
+                "source.fixAll.burn"
+            } else {
+                "quickfix"
+            };
+            out.push(Json::obj(vec![
+                ("title", Json::str(format!("Fix all auto-fixable problems in this file ({})", all.len()))),
+                ("kind", Json::str(kind)),
+                ("edit", edit_of(all.iter().flat_map(|q| q.edits.clone()).collect())),
+            ]));
         }
         Json::Arr(out)
     }
@@ -507,6 +568,9 @@ impl Server {
             Some(x) => x,
             None => return Json::Null,
         };
+        if let Some(h) = self.import_hover(a, off) {
+            return h;
+        }
         let mut best: Option<&(Span, String)> = None;
         for h in &a.index.hovers {
             if h.0.file == a.root_file
@@ -550,42 +614,124 @@ impl Server {
 
     fn member_items(&self, a: &Analysis, t: TyId, statics: bool) -> Vec<Json> {
         let mut items = Vec::new();
-        let item =
-            |label: &str, kind: i32, detail: String| Json::obj(vec![("label", Json::str(label)), ("kind", Json::num(kind)), ("detail", Json::str(detail))]);
+        let mut seen = std::collections::HashSet::new();
+        let mut add = |label: &str, kind: i32, detail: String, doc: Option<String>, call: bool, items: &mut Vec<Json>| {
+            if !seen.insert(label.to_string()) {
+                return;
+            }
+            let mut f = vec![
+                ("label", Json::str(label)),
+                ("kind", Json::num(kind as f64)),
+                ("detail", Json::str(detail)),
+                ("sortText", Json::str(format!("{}{}", if kind == 5 { 0 } else { 1 }, label))),
+            ];
+            if let Some(d) = doc {
+                f.push(("documentation", Json::obj(vec![("kind", Json::str("markdown")), ("value", Json::str(d))])));
+            }
+            if call {
+                f.push(("insertText", Json::str(format!("{}($0)", label))));
+                f.push(("insertTextFormat", Json::num(2)));
+                f.push((
+                    "command",
+                    Json::obj(vec![("title", Json::str("")), ("command", Json::str("editor.action.triggerParameterHints"))]),
+                ));
+            }
+            items.push(Json::obj(f));
+        };
+        let sig_of = |full: &str| a.funcs.iter().find(|f| f.0 == full).map(|f| f.1.clone());
         match a.types.get(t) {
             Ty::Record(r) => {
-                let rec = &a.types.records[*r as usize];
+                let mut cur = Some(*r);
+                while let Some(ri) = cur {
+                    let rec = &a.types.records[ri as usize];
+                    if statics {
+                        let mut names: Vec<&String> = rec.statics.keys().collect();
+                        names.sort();
+                        for n in names {
+                            let full = format!("{}.{}", rec.name, n);
+                            add(n, 2, sig_of(&full).unwrap_or(format!("static fun {}", full)), None, true, &mut items);
+                        }
+                    } else {
+                        for f in &rec.fields {
+                            add(&f.name, 5, a.types.display(f.ty), None, false, &mut items);
+                        }
+                        let mut names: Vec<&String> = rec.methods.keys().collect();
+                        names.sort();
+                        for n in names {
+                            let full = format!("{}.{}", rec.name, n);
+                            add(n, 2, sig_of(&full).unwrap_or(format!("fun {}", full)), None, true, &mut items);
+                        }
+                    }
+                    cur = rec.parent;
+                }
                 if statics {
-                    let mut names: Vec<&String> = rec.statics.keys().collect();
-                    names.sort();
-                    for n in names {
-                        items.push(item(n, 2, format!("static fun {}.{}", rec.name, n)));
-                    }
-                } else {
-                    for f in &rec.fields {
-                        items.push(item(&f.name, 5, a.types.display(f.ty)));
-                    }
-                    let mut names: Vec<&String> = rec.methods.keys().collect();
-                    names.sort();
-                    for n in names {
-                        items.push(item(n, 2, format!("fun {}.{}", rec.name, n)));
-                    }
+                    return items;
                 }
             }
             Ty::Interface(i) => {
                 for m in &a.types.ifaces[*i as usize].methods {
-                    items.push(item(&m.name, 2, format!("fun {}", m.name)));
+                    let ps: Vec<String> = m.params.iter().map(|p| a.types.display(*p)).collect();
+                    add(
+                        &m.name,
+                        2,
+                        format!("fun {}({}): {}", m.name, ps.join(", "), a.types.display(m.ret)),
+                        None,
+                        true,
+                        &mut items,
+                    );
                 }
+                return items;
             }
             Ty::Enum(e) if statics => {
                 for (v, _) in &a.types.enums[*e as usize].variants {
-                    items.push(item(v, 20, a.types.enums[*e as usize].name.clone()));
+                    add(v, 20, a.types.enums[*e as usize].name.clone(), None, false, &mut items);
+                }
+                return items;
+            }
+            _ if statics => return items,
+            _ => {}
+        }
+        let shown = a.types.display(t);
+        let receiver = |first: &str| -> bool {
+            let first = first.trim();
+            match a.types.get(t) {
+                Ty::Str => first == "string",
+                Ty::Array(_) => first == "[T]" || first == shown,
+                Ty::Map(..) => first.starts_with('{'),
+                Ty::Bool => first == "bool",
+                _ if a.types.is_numeric(t) => first == "float" || first == "int" || first == shown,
+                _ => first == shown,
+            }
+        };
+        for b in crate::doc::builtins::all() {
+            let Some(params) = b.sig.split_once('(').map(|(_, r)| r) else { continue };
+            let first = params.split([',', ')']).next().unwrap_or("");
+            let ty = first.split_once(':').map(|(_, t)| t.split('=').next().unwrap_or("")).unwrap_or("");
+            let returns = b.sig.rsplit_once(')').map(|(_, r)| r.trim().starts_with(':')).unwrap_or(false);
+            if !b.name.starts_with("__") && !ty.trim().is_empty() && receiver(ty) && (returns || !a.types.is_numeric(t)) {
+                add(&b.name, 2, b.sig.clone(), Some(crate::doc::comment::to_markdown(&b.doc)), true, &mut items);
+            }
+        }
+        if matches!(a.types.get(t), Ty::Str) {
+            STR_METHODS.iter().for_each(|m| add(m, 2, "string".into(), None, true, &mut items));
+        }
+        if matches!(a.types.get(t), Ty::Array(_)) {
+            ARR_METHODS.iter().for_each(|m| add(m, 2, shown.clone(), None, true, &mut items));
+        }
+        if matches!(a.types.get(t), Ty::Map(..)) {
+            MAP_METHODS.iter().for_each(|m| add(m, 2, shown.clone(), None, true, &mut items));
+        }
+        for f in &a.funcs {
+            if f.0.contains('.') || f.0.starts_with("new ") {
+                continue;
+            }
+            let Some(params) = f.1.split_once('(').map(|(_, r)| r) else { continue };
+            let first = params.split([',', ')']).next().unwrap_or("");
+            if let Some((_, ty)) = first.split_once(':') {
+                if ty.trim() == shown {
+                    add(&f.0, 2, f.1.clone(), None, true, &mut items);
                 }
             }
-            Ty::Str => STR_METHODS.iter().for_each(|m| items.push(item(m, 2, "string".into()))),
-            Ty::Array(_) => ARR_METHODS.iter().for_each(|m| items.push(item(m, 2, a.types.display(t)))),
-            Ty::Map(..) => MAP_METHODS.iter().for_each(|m| items.push(item(m, 2, a.types.display(t)))),
-            _ => {}
         }
         items
     }
@@ -652,8 +798,9 @@ impl Server {
         let line = params.at(&["position", "line"]).as_f64().unwrap_or(0.0) as usize;
         let ch = params.at(&["position", "character"]).as_f64().unwrap_or(0.0) as usize;
         let tmp = crate::source::SourceFile::new(String::new(), None, text.clone());
-        let off = tmp.offset_of_utf16(line, ch);
-        let before = &text[..off];
+        let doc_off = tmp.offset_of_utf16(line, ch);
+        let before = &text[..doc_off];
+        let off = repair::shift(&a.inserts, doc_off);
         if let Some(typed) = import_prefix(before) {
             return Json::Arr(import_items(&uri_to_path(uri), &typed));
         }
@@ -691,21 +838,39 @@ impl Server {
             if let Some((t, statics)) = self.resolve_chain(a, &chain, off) {
                 return Json::Arr(self.member_items(a, t, statics));
             }
-            return Json::Arr(self.member_items(a, T_STR, false).into_iter().take(0).collect());
+            return Json::Arr(vec![]);
         }
         let mut items = Vec::new();
         let mut seen = std::collections::HashSet::new();
         let mut push = |label: &str, kind: i32, detail: String, items: &mut Vec<Json>| {
             if seen.insert(label.to_string()) {
-                items.push(Json::obj(vec![
+                let rank = match kind {
+                    6 => 0,
+                    3 if !builtins::is_builtin(label) => 1,
+                    7 | 8 | 13 | 22 => 2,
+                    3 => 3,
+                    _ => 4,
+                };
+                let mut f = vec![
                     ("label", Json::str(label)),
-                    ("kind", Json::num(kind)),
+                    ("kind", Json::num(kind as f64)),
                     ("detail", Json::str(detail)),
-                ]));
+                    ("sortText", Json::str(format!("{}{}", rank, label))),
+                ];
+                if kind == 3 {
+                    f.push(("insertText", Json::str(format!("{}($0)", label))));
+                    f.push(("insertTextFormat", Json::num(2)));
+                    f.push((
+                        "command",
+                        Json::obj(vec![("title", Json::str("")), ("command", Json::str("editor.action.triggerParameterHints"))]),
+                    ));
+                }
+                items.push(Json::obj(f));
             }
         };
+        let in_new = before[..prefix_end].trim_end().ends_with("new");
         for l in a.index.locals.iter().rev() {
-            if l.decl.file == a.root_file && (l.decl.start as usize) < off && off <= l.scope.end as usize {
+            if l.decl.file == a.root_file && (l.decl.start as usize) < off && off <= l.scope.end as usize && !l.name.starts_with('<') {
                 push(&l.name, 6, a.types.display(l.ty), &mut items);
             }
         }
@@ -714,9 +879,11 @@ impl Server {
                 push(&g.0, 6, a.types.display(g.1), &mut items);
             }
         }
-        for f in &a.funcs {
-            if !f.0.contains('.') && !f.0.starts_with('<') {
-                push(&f.0, 3, f.1.clone(), &mut items);
+        if !in_new {
+            for f in &a.funcs {
+                if !f.0.contains('.') && !f.0.starts_with('<') && !f.0.starts_with("new ") {
+                    push(&f.0, 3, f.1.clone(), &mut items);
+                }
             }
         }
         for t in &a.type_names {
@@ -726,8 +893,14 @@ impl Server {
                 Ty::Record(r) if a.types.records[*r as usize].is_class => 7,
                 _ => 22,
             };
+            if in_new && kind != 7 {
+                continue;
+            }
             let detail = if t.1 == T_ERROR { "generic type".to_string() } else { a.types.display(t.1) };
             push(&t.0, kind, detail, &mut items);
+        }
+        if in_new {
+            return Json::Arr(items);
         }
         for b in builtins::BUILTINS {
             if !b.starts_with("__") {
@@ -759,42 +932,9 @@ impl Server {
             push(t, 22, "built-in type".into(), &mut items);
         }
         let _ = T_ARR_ANY;
+        let visible: std::collections::HashSet<String> = items.iter().filter_map(|i| i.get("label").as_str().map(|s| s.to_string())).collect();
+        items.extend(self.auto_import_items(uri, a, &visible));
         Json::Arr(items)
-    }
-
-    fn symbols(&self, uri: &str) -> Json {
-        let a = match self.analyses.get(uri) {
-            Some(a) => a,
-            None => return Json::Arr(vec![]),
-        };
-        let mut out = Vec::new();
-        let loc = |span: Span| Json::obj(vec![("uri", Json::str(uri)), ("range", range_json(&a.sm, span))]);
-        for f in &a.funcs {
-            if f.3 == a.root_module && f.2.file == a.root_file && !f.0.starts_with('<') {
-                let kind = if f.0.contains('.') { 6 } else { 12 };
-                out.push(Json::obj(vec![
-                    ("name", Json::str(f.0.clone())),
-                    ("kind", Json::num(kind)),
-                    ("location", loc(f.2)),
-                ]));
-            }
-        }
-        for t in &a.type_names {
-            if t.3 == a.root_module && t.2.file == a.root_file {
-                let kind = match a.types.get(t.1) {
-                    Ty::Interface(_) => 11,
-                    Ty::Enum(_) => 10,
-                    Ty::Record(r) if a.types.records[*r as usize].is_class => 5,
-                    _ => 23,
-                };
-                out.push(Json::obj(vec![
-                    ("name", Json::str(t.0.clone())),
-                    ("kind", Json::num(kind)),
-                    ("location", loc(t.2)),
-                ]));
-            }
-        }
-        Json::Arr(out)
     }
 
     fn formatting(&self, uri: &str) -> Json {
@@ -899,8 +1039,21 @@ pub fn run() -> ExitCode {
                                 ("definitionProvider", Json::Bool(true)),
                                 ("documentSymbolProvider", Json::Bool(true)),
                                 ("documentFormattingProvider", Json::Bool(true)),
-                                ("codeActionProvider", Json::Bool(true)),
-                                ("completionProvider", Json::obj(vec![("triggerCharacters", Json::Arr(vec![Json::str(".")]))])),
+                                (
+                                    "codeActionProvider",
+                                    Json::obj(vec![(
+                                        "codeActionKinds",
+                                        Json::Arr(vec![Json::str("quickfix"), Json::str("source.fixAll.burn")]),
+                                    )]),
+                                ),
+                                (
+                                    "completionProvider",
+                                    Json::obj(vec![("triggerCharacters", Json::Arr(vec![Json::str("."), Json::str("\""), Json::str("/")]))]),
+                                ),
+                                ("documentLinkProvider", Json::obj(vec![("resolveProvider", Json::Bool(false))])),
+                                ("foldingRangeProvider", Json::Bool(true)),
+                                ("typeDefinitionProvider", Json::Bool(true)),
+                                ("implementationProvider", Json::Bool(true)),
                                 ("referencesProvider", Json::Bool(true)),
                                 ("documentHighlightProvider", Json::Bool(true)),
                                 ("workspaceSymbolProvider", Json::Bool(true)),
@@ -922,7 +1075,13 @@ pub fn run() -> ExitCode {
                     ]),
                 );
             }
-            "initialized" | "$/cancelRequest" | "workspace/didChangeConfiguration" | "workspace/didChangeWatchedFiles" => {}
+            "initialized" | "$/cancelRequest" | "workspace/didChangeConfiguration" => {}
+            "workspace/didChangeWatchedFiles" => {
+                let open: Vec<String> = server.docs.keys().cloned().collect();
+                for u in open {
+                    server.analyze(&u);
+                }
+            }
             "shutdown" => {
                 shutdown = true;
                 respond(&id, Json::Null);
@@ -940,7 +1099,14 @@ pub fn run() -> ExitCode {
                 }
                 server.analyze(&uri);
             }
-            "textDocument/didSave" => server.analyze(&uri),
+            "textDocument/didSave" => {
+                let mut open: Vec<String> = server.docs.keys().cloned().collect();
+                open.retain(|u| *u != uri);
+                open.insert(0, uri.clone());
+                for u in open {
+                    server.analyze(&u);
+                }
+            }
             "textDocument/didClose" => {
                 server.docs.remove(&uri);
                 server.analyses.remove(&uri);
@@ -956,7 +1122,11 @@ pub fn run() -> ExitCode {
             "textDocument/hover" => respond(&id, server.hover(&uri, &params)),
             "textDocument/definition" => respond(&id, server.definition(&uri, &params)),
             "textDocument/completion" => respond(&id, server.completion(&uri, &params)),
-            "textDocument/documentSymbol" => respond(&id, server.symbols(&uri)),
+            "textDocument/documentSymbol" => respond(&id, server.document_symbols(&uri)),
+            "textDocument/documentLink" => respond(&id, server.document_links(&uri)),
+            "textDocument/foldingRange" => respond(&id, server.folding_ranges(&uri)),
+            "textDocument/typeDefinition" => respond(&id, server.type_definition(&uri, &params)),
+            "textDocument/implementation" => respond(&id, server.implementation(&uri, &params)),
             "textDocument/formatting" => respond(&id, server.formatting(&uri)),
             "textDocument/codeAction" => respond(&id, server.code_actions(&uri, &params)),
             "textDocument/references" => respond(&id, server.references(&uri, &params)),

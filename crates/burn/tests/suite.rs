@@ -792,44 +792,59 @@ fn uint64_uses_all_64_bits_on_bvm_and_natively() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[test]
-fn language_server_navigates_into_libraries_and_renames_across_files() {
-    use std::io::{BufRead, BufReader, Read, Write};
-    struct Lsp {
-        stdin: std::process::ChildStdin,
-        out: BufReader<std::process::ChildStdout>,
-        id: u32,
+struct Lsp {
+    stdin: std::process::ChildStdin,
+    out: std::io::BufReader<std::process::ChildStdout>,
+    id: u32,
+}
+impl Lsp {
+    fn open(&mut self, uri: &str, text: &str) {
+        self.send(&format!(
+            r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{}","languageId":"burn","version":1,"text":{:?}}}}}}}"#,
+            uri, text
+        ));
     }
-    impl Lsp {
-        fn send(&mut self, body: &str) {
-            write!(self.stdin, "Content-Length: {}\r\n\r\n{}", body.len(), body).unwrap();
-            self.stdin.flush().unwrap();
-        }
-        fn request(&mut self, method: &str, params: &str) -> String {
-            self.id += 1;
-            let body = format!(r#"{{"jsonrpc":"2.0","id":{},"method":"{}","params":{}}}"#, self.id, method, params);
-            self.send(&body);
+    fn change(&mut self, uri: &str, text: &str) {
+        self.send(&format!(
+            r#"{{"jsonrpc":"2.0","method":"textDocument/didChange","params":{{"textDocument":{{"uri":"{}","version":2}},"contentChanges":[{{"text":{:?}}}]}}}}"#,
+            uri, text
+        ));
+    }
+    fn send(&mut self, body: &str) {
+        use std::io::Write;
+        write!(self.stdin, "Content-Length: {}\r\n\r\n{}", body.len(), body).unwrap();
+        self.stdin.flush().unwrap();
+    }
+    fn request(&mut self, method: &str, params: &str) -> String {
+        use std::io::{BufRead, Read};
+        self.id += 1;
+        let body = format!(r#"{{"jsonrpc":"2.0","id":{},"method":"{}","params":{}}}"#, self.id, method, params);
+        self.send(&body);
+        loop {
+            let mut len = 0usize;
             loop {
-                let mut len = 0usize;
-                loop {
-                    let mut line = String::new();
-                    self.out.read_line(&mut line).unwrap();
-                    if line.trim().is_empty() {
-                        break;
-                    }
-                    if let Some(v) = line.trim().strip_prefix("Content-Length:") {
-                        len = v.trim().parse().unwrap();
-                    }
+                let mut line = String::new();
+                self.out.read_line(&mut line).unwrap();
+                if line.trim().is_empty() {
+                    break;
                 }
-                let mut buf = vec![0u8; len];
-                self.out.read_exact(&mut buf).unwrap();
-                let m = String::from_utf8(buf).unwrap();
-                if m.contains(&format!("\"id\":{},", self.id)) || m.contains(&format!("\"id\":{}}}", self.id)) {
-                    return m;
+                if let Some(v) = line.trim().strip_prefix("Content-Length:") {
+                    len = v.trim().parse().unwrap();
                 }
+            }
+            let mut buf = vec![0u8; len];
+            self.out.read_exact(&mut buf).unwrap();
+            let m = String::from_utf8(buf).unwrap();
+            if m.contains(&format!("\"id\":{},", self.id)) || m.contains(&format!("\"id\":{}}}", self.id)) {
+                return m;
             }
         }
     }
+}
+
+#[test]
+fn language_server_navigates_into_libraries_and_renames_across_files() {
+    use std::io::BufReader;
     let dir = temp_dir("lsp-nav").canonicalize().unwrap();
     let home = dir.join("home");
     std::fs::write(
@@ -899,6 +914,91 @@ fn language_server_navigates_into_libraries_and_renames_across_files() {
     assert!(hints.contains(": Square"), "{}", hints);
     let symbols = lsp.request("workspace/symbol", r#"{"query":"twi"}"#);
     assert!(symbols.contains("\"twice\"") && symbols.contains("shapes.bn"), "{}", symbols);
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn language_server_keeps_working_while_typing_and_links_imports() {
+    use std::io::BufReader;
+    let dir = temp_dir("lsp-ide").canonicalize().unwrap();
+    let home = dir.join("home");
+    std::fs::write(
+        dir.join("shapes.bn"),
+        "pub def struct Square(side: float) {\n    fun area(): float {\n        return side * side\n    }\n}\n\npub fun twice(x: int): int {\n    return x * 2\n}\n",
+    )
+    .unwrap();
+    let main = dir.join("main.bn");
+    let text =
+        "import \"shapes.bn\"\nimport \"std/date\"\n\nfun main() {\n    var sq = new Square(2.0)\n    var name = \"burn\"\n    println(sq.area(), name)\n}\n";
+    std::fs::write(&main, text).unwrap();
+    let uri = format!("file://{}", main.display());
+    let mut child = burn()
+        .arg("lsp")
+        .current_dir(&dir)
+        .env("BURN_HOME", &home)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut lsp = Lsp {
+        stdin: child.stdin.take().unwrap(),
+        out: BufReader::new(child.stdout.take().unwrap()),
+        id: 0,
+    };
+    let init = lsp.request("initialize", &format!(r#"{{"rootUri":"file://{}","capabilities":{{}}}}"#, dir.display()));
+    for cap in [
+        "documentLinkProvider",
+        "foldingRangeProvider",
+        "typeDefinitionProvider",
+        "implementationProvider",
+    ] {
+        assert!(init.contains(cap), "{}", init);
+    }
+    lsp.open(&uri, text);
+    let at = |line: usize, ch: usize| format!(r#"{{"textDocument":{{"uri":"{}"}},"position":{{"line":{},"character":{}}}}}"#, uri, line, ch);
+    let doc = format!(r#"{{"textDocument":{{"uri":"{}"}}}}"#, uri);
+    let links = lsp.request("textDocument/documentLink", &doc);
+    assert!(links.contains("shapes.bn") && links.contains("std/date.bn"), "{}", links);
+    let def = lsp.request("textDocument/definition", &at(0, 10));
+    assert!(def.contains("shapes.bn"), "{}", def);
+    let hover = lsp.request("textDocument/hover", &at(1, 10));
+    assert!(hover.contains("std/date") && hover.contains("Exports"), "{}", hover);
+    let folds = lsp.request("textDocument/foldingRange", &doc);
+    assert!(folds.contains("\"startLine\":3"), "{}", folds);
+    let tdef = lsp.request("textDocument/typeDefinition", &at(4, 9));
+    assert!(tdef.contains("shapes.bn"), "{}", tdef);
+
+    let typing = "import \"shapes.bn\"\nimport \"std/date\"\n\nfun main() {\n    var sq = new Square(2.0)\n    var name = \"burn\"\n    if name != \"\" {\n        sq.\n}\n";
+    lsp.change(&uri, typing);
+    let members = lsp.request("textDocument/completion", &at(7, 11));
+    assert!(members.contains("\"area\"") && members.contains("\"side\""), "{}", members);
+    let typing = "import \"shapes.bn\"\n\nfun main() {\n    var sq = new Square(2.0)\n    var name = \"burn\"\n    name.\n}\n";
+    lsp.change(&uri, typing);
+    let strings = lsp.request("textDocument/completion", &at(5, 9));
+    assert!(
+        strings.contains("\"upper\"") && strings.contains("\"trim\"") && !strings.contains("__exec"),
+        "{}",
+        strings
+    );
+    let typing = "import \"shapes.bn\"\n\nfun main() {\n    var word = \"x\"\n    println(wo\n}\n";
+    lsp.change(&uri, typing);
+    let locals = lsp.request("textDocument/completion", &at(4, 14));
+    assert!(locals.contains("\"word\"") && locals.contains("import \\\"std/strings\\\""), "{}", locals);
+
+    let missing = "fun main() {\n    println(twice(2), padLeft(\"a\", 2, \" \"))\n}\n";
+    lsp.change(&uri, missing);
+    let diags = r#"[{"range":{"start":{"line":1,"character":12},"end":{"line":1,"character":17}},"message":"cannot find `twice` in this scope"},{"range":{"start":{"line":1,"character":22},"end":{"line":1,"character":29}},"message":"cannot find `padLeft` in this scope"}]"#;
+    let actions = lsp.request(
+        "textDocument/codeAction",
+        &format!(
+            r#"{{"textDocument":{{"uri":"{}"}},"range":{{"start":{{"line":1,"character":0}},"end":{{"line":1,"character":40}}}},"context":{{"diagnostics":{}}}}}"#,
+            uri, diags
+        ),
+    );
+    assert!(actions.contains("Import `twice` from \\\"shapes.bn\\\""), "{}", actions);
+    assert!(actions.contains("Import `padLeft` from \\\"std/strings\\\""), "{}", actions);
     let _ = child.kill();
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&dir);

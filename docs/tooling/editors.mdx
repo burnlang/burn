@@ -12,17 +12,27 @@ order: 26
 the errors the compiler reports. It supports:
 
 - diagnostics while you type, including errors in imported files
+- all features keep working while the code is incomplete: `p.` with nothing after it, a call without its `)`, or a
+  block whose `}` is not typed yet
 - hover with inferred types, signatures and built-in documentation
 - completion for locals, globals, functions, types, keywords (including `struct`, `abstract`, `new` and `destroy`),
-  built-ins and members after `.`, with the signature and docs of each built-in
+  built-ins and members after `.`, with the signature and docs of each built-in. Members include inherited fields and
+  methods and every function that can be called as a method (`text.upper()`). Functions complete with their
+  parentheses and show their parameters
+- completion of names from standard modules that are not imported yet; picking one adds the `import`
+- clickable imports: `import "std/date"` and `import "shapes.bn"` are links, and hovering one lists what the module
+  exports
 - signature help while you type the arguments of a call, for functions, constructors, methods and built-ins
 - inlay hints with the inferred type of `var`, `const` and `for` variables that have no annotation
 - go to definition, including into imported modules, the standard library, built-in functions and the exported
   functions of bytecode libraries
+- go to type definition, and go to implementation (the structs that implement an interface or extend a struct, and
+  the methods that implement an interface method)
 - find references, highlight references and rename across all files of the project; renaming an interface method
   also renames the methods that implement it
-- workspace symbols and the document outline
-- formatting (the same as `burn fmt`) and quick fixes
+- workspace symbols, an outline with the fields and methods of each struct, and folding of blocks, comments and imports
+- formatting (the same as `burn fmt`), quick fixes from the compiler, **Import ...** fixes for names from standard
+  modules and project files, and **Fix all** (also as `source.fixAll.burn` for `editor.codeActionsOnSave`)
 
 Any editor with LSP support can use it. Import paths complete too: standard modules, the project's packages and
 local files inside `import "..."`.
@@ -79,6 +89,15 @@ The extension lives in `editors/vscode`. It adds syntax highlighting, snippets, 
 - **Burn: Open Standard Library Module...** and **Burn: Show Built-in Functions** to read the library sources
 - library sources open read-only, so they are not edited by accident
 - the Burn version in the status bar; clicking it restarts the language server
+- a warning when the installed `burn` is older than the extension and misses language server features
+
+To fix everything that can be fixed whenever you save, add this to your settings:
+
+```json
+"[burn]": {
+  "editor.codeActionsOnSave": { "source.fixAll.burn": "explicit" }
+}
+```
 
 Snippets include `defstruct`, `defabstract` and `defstatic` for the three kinds of struct, `new` and `destroy`.
 

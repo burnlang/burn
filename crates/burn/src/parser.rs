@@ -194,6 +194,14 @@ impl Parser {
     }
 
     fn sync(&mut self) {
+        self.sync_until(false);
+    }
+
+    fn sync_stmt(&mut self) {
+        self.sync_until(true);
+    }
+
+    fn sync_until(&mut self, keep_brace: bool) {
         let start = self.pos;
         let mut depth = 0i32;
         loop {
@@ -208,7 +216,7 @@ impl Parser {
                 Tok::LBrace | Tok::LParen | Tok::LBracket => depth += 1,
                 Tok::RBrace | Tok::RParen | Tok::RBracket => {
                     if depth == 0 {
-                        if self.pos == start {
+                        if self.pos == start && !(keep_brace && t.kind == Tok::RBrace) {
                             self.advance();
                         }
                         return;
@@ -1098,10 +1106,10 @@ impl Parser {
             match self.stmt() {
                 Ok(s) => stmts.push(s),
                 Err(()) => {
-                    if self.pos == before {
+                    if self.pos == before && !self.at(&Tok::RBrace) {
                         self.advance();
                     }
-                    self.sync();
+                    self.sync_stmt();
                 }
             }
         }
