@@ -987,6 +987,35 @@ fn language_server_keeps_working_while_typing_and_links_imports() {
     let locals = lsp.request("textDocument/completion", &at(4, 14));
     assert!(locals.contains("\"word\"") && locals.contains("import \\\"std/strings\\\""), "{}", locals);
 
+    let typing = "def annotation Route {\n    string path\n    string method = \"GET\"\n}\n\n@\n";
+    lsp.change(&uri, typing);
+    let annotations = lsp.request("textDocument/completion", &at(5, 1));
+    assert!(
+        annotations.contains("\"Route\"") && annotations.contains("\"Deprecated\"") && !annotations.contains("\"println\""),
+        "{}",
+        annotations
+    );
+    let typing = "def annotation Route {\n    string path\n    string method = \"GET\"\n}\n\n@Route(\"/x\", \n";
+    lsp.change(&uri, typing);
+    let fields = lsp.request("textDocument/completion", &at(5, 14));
+    assert!(fields.contains("\"method\"") && fields.contains("method: "), "{}", fields);
+    let typing = "import \"shapes.bn\"\n\nfun area(s: \n";
+    lsp.change(&uri, typing);
+    let types = lsp.request("textDocument/completion", &at(2, 12));
+    assert!(
+        types.contains("\"Square\"") && types.contains("\"uint64\"") && !types.contains("\"println\""),
+        "{}",
+        types
+    );
+    let typing = "def \n";
+    lsp.change(&uri, typing);
+    let kinds = lsp.request("textDocument/completion", &at(0, 4));
+    assert!(
+        kinds.contains("\"struct\"") && kinds.contains("\"interface\"") && !kinds.contains("\"println\""),
+        "{}",
+        kinds
+    );
+
     let missing = "fun main() {\n    println(twice(2), padLeft(\"a\", 2, \" \"))\n}\n";
     lsp.change(&uri, missing);
     let diags = r#"[{"range":{"start":{"line":1,"character":12},"end":{"line":1,"character":17}},"message":"cannot find `twice` in this scope"},{"range":{"start":{"line":1,"character":22},"end":{"line":1,"character":29}},"message":"cannot find `padLeft` in this scope"}]"#;
