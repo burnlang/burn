@@ -1,8 +1,8 @@
 {
   "name": "burn-language-server",
   "displayName": "Burn Language Support",
-  "description": "Syntax highlighting, diagnostics, completion, hover, go to definition and formatting for the Burn programming language",
-  "version": "26.1.2",
+  "description": "Burn language support: diagnostics, completion, signature help, inlay type hints, hover, go to definition (also into the standard library and built-ins), find references, rename, formatting and quick fixes",
+  "version": "26.2.0",
   "publisher": "burn",
   "icon": "images/icon.png",
   "license": "GPL-3.0-only",
@@ -52,7 +52,8 @@
     "commands": [
       {
         "command": "burn.run",
-        "title": "Burn: Run Current File"
+        "title": "Burn: Run Current File",
+        "icon": "$(play)"
       },
       {
         "command": "burn.runNative",
@@ -65,6 +66,14 @@
       {
         "command": "burn.restartServer",
         "title": "Burn: Restart Language Server"
+      },
+      {
+        "command": "burn.openStdlib",
+        "title": "Burn: Open Standard Library Module..."
+      },
+      {
+        "command": "burn.openBuiltins",
+        "title": "Burn: Show Built-in Functions"
       }
     ],
     "configuration": {
@@ -85,8 +94,36 @@
           ],
           "default": "off",
           "description": "Traces the communication between VS Code and the Burn language server."
+        },
+        "burn.codeLens.run": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show Run, Run natively and Build above `fun main()`."
         }
       }
+    },
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "burn.run",
+          "when": "resourceLangId == burn",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "burn.run",
+          "when": "editorLangId == burn"
+        },
+        {
+          "command": "burn.runNative",
+          "when": "editorLangId == burn"
+        },
+        {
+          "command": "burn.build",
+          "when": "editorLangId == burn"
+        }
+      ]
     }
   },
   "scripts": {
