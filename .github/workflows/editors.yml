@@ -63,7 +63,7 @@ jobs:
           java-version: 21
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: 8.14.3
+          gradle-version: 9.8.0
       - run: gradle buildPlugin verifyPluginStructure
       - uses: actions/upload-artifact@v4
         with:

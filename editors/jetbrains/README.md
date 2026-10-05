@@ -11,6 +11,6 @@ library sources.
 gradle buildPlugin
 ```
 
-This needs JDK 21 and Gradle 8.13 or newer. Install `build/distributions/burn-intellij-26.2.0.zip` with **Settings |
+This needs JDK 21 and Gradle 9 or newer. Install `build/distributions/burn-intellij-26.2.0.zip` with **Settings |
 Plugins | Install Plugin from Disk...**. The plugin starts `burn lsp` from your `PATH`, `$BURN_HOME/bin` or
 `~/.burn/bin`.
