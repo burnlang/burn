@@ -791,3 +791,115 @@ fn uint64_uses_all_64_bits_on_bvm_and_natively() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn language_server_navigates_into_libraries_and_renames_across_files() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    struct Lsp {
+        stdin: std::process::ChildStdin,
+        out: BufReader<std::process::ChildStdout>,
+        id: u32,
+    }
+    impl Lsp {
+        fn send(&mut self, body: &str) {
+            write!(self.stdin, "Content-Length: {}\r\n\r\n{}", body.len(), body).unwrap();
+            self.stdin.flush().unwrap();
+        }
+        fn request(&mut self, method: &str, params: &str) -> String {
+            self.id += 1;
+            let body = format!(r#"{{"jsonrpc":"2.0","id":{},"method":"{}","params":{}}}"#, self.id, method, params);
+            self.send(&body);
+            loop {
+                let mut len = 0usize;
+                loop {
+                    let mut line = String::new();
+                    self.out.read_line(&mut line).unwrap();
+                    if line.trim().is_empty() {
+                        break;
+                    }
+                    if let Some(v) = line.trim().strip_prefix("Content-Length:") {
+                        len = v.trim().parse().unwrap();
+                    }
+                }
+                let mut buf = vec![0u8; len];
+                self.out.read_exact(&mut buf).unwrap();
+                let m = String::from_utf8(buf).unwrap();
+                if m.contains(&format!("\"id\":{},", self.id)) || m.contains(&format!("\"id\":{}}}", self.id)) {
+                    return m;
+                }
+            }
+        }
+    }
+    let dir = temp_dir("lsp-nav").canonicalize().unwrap();
+    let home = dir.join("home");
+    std::fs::write(
+        dir.join("shapes.bn"),
+        "pub def interface Shape {\n    fun area(): float\n}\n\npub def struct Square(side: float) :: Shape {\n    fun area(): float {\n        return side * side\n    }\n}\n\npub fun twice(x: int): int {\n    return x * 2\n}\n",
+    )
+    .unwrap();
+    let main = dir.join("main.bn");
+    let text = "import \"shapes.bn\"\nimport \"std/date\"\n\nfun total(s: Shape): float {\n    return s.area()\n}\n\nfun main() {\n    var sq = new Square(2.0)\n    print(total(sq), twice(3), sqrt(2.0), Date.today())\n    twice(4)\n}\n";
+    std::fs::write(&main, text).unwrap();
+    let uri = format!("file://{}", main.display());
+    let mut child = burn()
+        .arg("lsp")
+        .current_dir(&dir)
+        .env("BURN_HOME", &home)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut lsp = Lsp {
+        stdin: child.stdin.take().unwrap(),
+        out: BufReader::new(child.stdout.take().unwrap()),
+        id: 0,
+    };
+    let init = lsp.request("initialize", &format!(r#"{{"rootUri":"file://{}","capabilities":{{}}}}"#, dir.display()));
+    for cap in [
+        "renameProvider",
+        "referencesProvider",
+        "signatureHelpProvider",
+        "inlayHintProvider",
+        "workspaceSymbolProvider",
+    ] {
+        assert!(init.contains(cap), "{}", init);
+    }
+    lsp.send(&format!(
+        r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{}","languageId":"burn","version":1,"text":{:?}}}}}}}"#,
+        uri, text
+    ));
+    let at = |line: usize, ch: usize| format!(r#"{{"textDocument":{{"uri":"{}"}},"position":{{"line":{},"character":{}}}}}"#, uri, line, ch);
+    let def = lsp.request("textDocument/definition", &at(9, 32));
+    assert!(def.contains("/cache/sources/") && def.contains("builtins.bn"), "{}", def);
+    let builtins = std::fs::read_to_string(home.join(format!("cache/sources/{}/builtins.bn", env!("CARGO_PKG_VERSION")))).unwrap();
+    assert!(builtins.contains("fun sqrt(x: float): float"));
+    let def = lsp.request("textDocument/definition", &at(9, 42));
+    assert!(def.contains("std/date.bn"), "{}", def);
+    let def = lsp.request("textDocument/definition", &at(4, 15));
+    assert!(def.contains("shapes.bn") && def.contains("\"line\":1"), "{}", def);
+    let refs = lsp.request(
+        "textDocument/references",
+        &at(9, 23).replace("}}", "},\"context\":{\"includeDeclaration\":true}}"),
+    );
+    assert_eq!(refs.matches("\"uri\"").count(), 3, "{}", refs);
+    let rename = lsp.request("textDocument/rename", &at(4, 15).replace("}}", "},\"newName\":\"size\"}"));
+    assert!(rename.contains("shapes.bn") && rename.contains("main.bn"), "{}", rename);
+    assert_eq!(rename.matches("\"newText\":\"size\"").count(), 3, "{}", rename);
+    let bad = lsp.request("textDocument/rename", &at(9, 32).replace("}}", "},\"newName\":\"root\"}"));
+    assert!(bad.contains("built into Burn"), "{}", bad);
+    let sig = lsp.request("textDocument/signatureHelp", &at(10, 11));
+    assert!(sig.contains("fun twice(x: int): int"), "{}", sig);
+    let hints = lsp.request(
+        "textDocument/inlayHint",
+        &format!(
+            r#"{{"textDocument":{{"uri":"{}"}},"range":{{"start":{{"line":0,"character":0}},"end":{{"line":20,"character":0}}}}}}"#,
+            uri
+        ),
+    );
+    assert!(hints.contains(": Square"), "{}", hints);
+    let symbols = lsp.request("workspace/symbol", r#"{"query":"twi"}"#);
+    assert!(symbols.contains("\"twice\"") && symbols.contains("shapes.bn"), "{}", symbols);
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&dir);
+}
