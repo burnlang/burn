@@ -1,0 +1,20 @@
+{
+  "grammars": [
+    {
+      "name": "burn",
+      "camelcase": "Burn",
+      "scope": "source.burn",
+      "path": ".",
+      "file-types": ["bn"],
+      "highlights": "queries/highlights.scm"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "GPL-3.0-only",
+    "description": "Burn grammar for tree-sitter",
+    "links": {
+      "repository": "https://github.com/burnlang/burn"
+    }
+  }
+}

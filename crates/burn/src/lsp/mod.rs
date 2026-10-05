@@ -1,4 +1,7 @@
+mod assist;
 pub mod json;
+mod nav;
+pub mod sources;
 
 use crate::check::{self, builtins, CheckOptions, Index};
 use crate::diag::Severity;
@@ -28,6 +31,7 @@ struct Server {
     analyses: HashMap<String, Analysis>,
     published: HashMap<String, Vec<String>>,
     fixes: HashMap<String, Vec<QuickFix>>,
+    roots: Vec<PathBuf>,
 }
 
 struct QuickFix {
@@ -314,8 +318,45 @@ const ARR_METHODS: &[&str] = &[
 const MAP_METHODS: &[&str] = &["length", "keys", "values", "has", "get", "remove"];
 
 impl Server {
+    fn quick_analysis(&self, path: &Path) -> Option<Analysis> {
+        let mut loader = Loader::new();
+        for (u, text) in &self.docs {
+            let p = uri_to_path(u);
+            let c = std::fs::canonicalize(&p).unwrap_or(p);
+            loader.overrides.insert(c, text.clone());
+        }
+        let root = loader.load_file(path).ok()?;
+        let loaded = loader.finish(root);
+        let root_file = loaded.modules[root].file;
+        let result = check::check(
+            &loaded,
+            CheckOptions {
+                skip_before: None,
+                want_index: true,
+                repl_echo: false,
+            },
+        );
+        Some(Analysis {
+            sm: loaded.sm,
+            root_file,
+            root_module: root,
+            index: result.index,
+            types: result.types,
+            globals: result.globals,
+            funcs: result.funcs,
+            type_names: result.type_names,
+        })
+    }
+
     fn analyze(&mut self, uri: &str) {
         let path = uri_to_path(uri);
+        if sources::is_stub(&path) {
+            notify(
+                "textDocument/publishDiagnostics",
+                Json::obj(vec![("uri", Json::str(uri)), ("diagnostics", Json::Arr(vec![]))]),
+            );
+            return;
+        }
         let mut loader = Loader::new();
         for (u, text) in &self.docs {
             let p = uri_to_path(u);
@@ -487,7 +528,7 @@ impl Server {
             None => {
                 let src = &a.sm.file(a.root_file).src;
                 let word = word_at(src, off);
-                if builtins::is_builtin(&word) {
+                if builtins::is_builtin(&word) && !word.starts_with("__") {
                     return Json::obj(vec![(
                         "contents",
                         Json::obj(vec![
@@ -505,27 +546,6 @@ impl Server {
                 Json::Null
             }
         }
-    }
-
-    fn definition(&self, uri: &str, params: &Json) -> Json {
-        let (off, a) = match self.offset(uri, params) {
-            Some(x) => x,
-            None => return Json::Null,
-        };
-        for (use_span, def) in &a.index.defs {
-            if use_span.file == a.root_file && (use_span.start as usize) <= off && off <= (use_span.end as usize) {
-                let target = if def.file == a.root_file {
-                    uri.to_string()
-                } else {
-                    match &a.sm.file(def.file).path {
-                        Some(p) => path_to_uri(p),
-                        None => return Json::Null,
-                    }
-                };
-                return Json::obj(vec![("uri", Json::str(target)), ("range", range_json(&a.sm, *def))]);
-            }
-        }
-        Json::Null
     }
 
     fn member_items(&self, a: &Analysis, t: TyId, statics: bool) -> Vec<Json> {
@@ -712,6 +732,22 @@ impl Server {
         for b in builtins::BUILTINS {
             if !b.starts_with("__") {
                 push(b, 3, builtins::signature(b).to_string(), &mut items);
+                if let (Some(doc), Some(Json::Obj(fields))) = (crate::doc::builtins::find(b), items.last_mut()) {
+                    if fields.iter().any(|(k, v)| k == "label" && v.as_str() == Some(b)) {
+                        for (k, v) in fields.iter_mut() {
+                            if k == "detail" {
+                                *v = Json::str(doc.sig.clone());
+                            }
+                        }
+                        fields.push((
+                            "documentation".into(),
+                            Json::obj(vec![
+                                ("kind", Json::str("markdown")),
+                                ("value", Json::str(crate::doc::comment::to_markdown(&doc.doc))),
+                            ]),
+                        ));
+                    }
+                }
             }
         }
         for k in KEYWORDS {
@@ -842,6 +878,16 @@ pub fn run() -> ExitCode {
         let uri = params.at(&["textDocument", "uri"]).as_str().unwrap_or("").to_string();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match method.as_str() {
             "initialize" => {
+                for f in params.get("workspaceFolders").as_arr() {
+                    if let Some(u) = f.get("uri").as_str() {
+                        server.roots.push(uri_to_path(u));
+                    }
+                }
+                if server.roots.is_empty() {
+                    if let Some(u) = params.get("rootUri").as_str() {
+                        server.roots.push(uri_to_path(u));
+                    }
+                }
                 respond(
                     &id,
                     Json::obj(vec![
@@ -855,6 +901,18 @@ pub fn run() -> ExitCode {
                                 ("documentFormattingProvider", Json::Bool(true)),
                                 ("codeActionProvider", Json::Bool(true)),
                                 ("completionProvider", Json::obj(vec![("triggerCharacters", Json::Arr(vec![Json::str(".")]))])),
+                                ("referencesProvider", Json::Bool(true)),
+                                ("documentHighlightProvider", Json::Bool(true)),
+                                ("workspaceSymbolProvider", Json::Bool(true)),
+                                ("renameProvider", Json::obj(vec![("prepareProvider", Json::Bool(true))])),
+                                ("inlayHintProvider", Json::Bool(true)),
+                                (
+                                    "signatureHelpProvider",
+                                    Json::obj(vec![
+                                        ("triggerCharacters", Json::Arr(vec![Json::str("("), Json::str(",")])),
+                                        ("retriggerCharacters", Json::Arr(vec![Json::str(",")])),
+                                    ]),
+                                ),
                             ]),
                         ),
                         (
@@ -901,6 +959,19 @@ pub fn run() -> ExitCode {
             "textDocument/documentSymbol" => respond(&id, server.symbols(&uri)),
             "textDocument/formatting" => respond(&id, server.formatting(&uri)),
             "textDocument/codeAction" => respond(&id, server.code_actions(&uri, &params)),
+            "textDocument/references" => respond(&id, server.references(&uri, &params)),
+            "textDocument/documentHighlight" => respond(&id, server.highlights(&uri, &params)),
+            "textDocument/signatureHelp" => respond(&id, server.signature_help(&uri, &params)),
+            "textDocument/inlayHint" => respond(&id, server.inlay_hints(&uri, &params)),
+            "workspace/symbol" => respond(&id, server.workspace_symbols(&params)),
+            "textDocument/prepareRename" => match server.prepare_rename(&uri, &params) {
+                Ok(r) => respond(&id, r),
+                Err(e) => respond_err(&id, -32803, &e),
+            },
+            "textDocument/rename" => match server.rename(&uri, &params) {
+                Ok(r) => respond(&id, r),
+                Err(e) => respond_err(&id, -32803, &e),
+            },
             _ => {
                 if !id.is_null() {
                     respond_err(&id, -32601, &format!("method not found: {}", method));

@@ -413,6 +413,36 @@ fun charCode(text: string): int
 fun fromCharCode(code: int): string
 
 /**
+ * Returns the UTF-8 bytes of a string.
+ *
+ * The result is a packed `[uint8]` array that uses one byte per element.
+ *
+ * @param text the string
+ * @return the bytes of `text`
+ * @see fromBytes
+ * @group Strings
+ * @since 26.1
+ * @example
+ *     "hé".bytes()  // [104, 195, 169]
+ */
+fun bytes(text: string): [uint8]
+
+/**
+ * Decodes UTF-8 bytes into a string.
+ *
+ * Bytes that are not valid UTF-8 become the replacement character `\u{FFFD}`.
+ *
+ * @param data the bytes
+ * @return the decoded string
+ * @see bytes
+ * @group Strings
+ * @since 26.1
+ * @example
+ *     fromBytes([104, 105])  // "hi"
+ */
+fun fromBytes(data: [uint8]): string
+
+/**
  * Tells whether every character of a string is a letter.
  *
  * Letters from all scripts count. An empty string gives `false`.
@@ -917,6 +947,55 @@ fun pow(base: float, exponent: float): float
  *     sqrt(2)     // 1.4142135623730951
  */
 fun sqrt(x: float): float
+
+/**
+ * Adds two integers and wraps around at the edges of their type instead of failing.
+ *
+ * Use it for hashes and checksums, where overflowing is expected. Works on every
+ * integer type; the result has the same type.
+ *
+ * @param x the first number
+ * @param y the number to add
+ * @return `x + y`, wrapped to the range of the type
+ * @see wrappingSub
+ * @see wrappingMul
+ * @group Math
+ * @since 26.1
+ * @example
+ *     uint8 b = 250
+ *     b.wrappingAdd(10)  // 4
+ */
+fun wrappingAdd(x: int, y: int): int
+
+/**
+ * Subtracts two integers and wraps around at the edges of their type instead of failing.
+ *
+ * @param x the first number
+ * @param y the number to subtract
+ * @return `x - y`, wrapped to the range of the type
+ * @see wrappingAdd
+ * @group Math
+ * @since 26.1
+ * @example
+ *     uint8 b = 3
+ *     b.wrappingSub(5)  // 254
+ */
+fun wrappingSub(x: int, y: int): int
+
+/**
+ * Multiplies two integers and wraps around at the edges of their type instead of failing.
+ *
+ * @param x the first number
+ * @param y the number to multiply by
+ * @return `x * y`, wrapped to the range of the type
+ * @see wrappingAdd
+ * @group Math
+ * @since 26.1
+ * @example
+ *     uint64 h = 14695981039346656037
+ *     h.wrappingMul(1099511628211)  // 12638153115695167455
+ */
+fun wrappingMul(x: int, y: int): int
 
 /**
  * Rounds a number down to the nearest `int`.

@@ -1,0 +1,20 @@
+[
+  {
+    "label": "burn run $ZED_STEM",
+    "command": "burn",
+    "args": ["run", "$ZED_FILE"],
+    "tags": ["burn-main"]
+  },
+  {
+    "label": "burn run --native $ZED_STEM",
+    "command": "burn",
+    "args": ["run", "--native", "$ZED_FILE"],
+    "tags": ["burn-main"]
+  },
+  {
+    "label": "burn build $ZED_STEM",
+    "command": "burn",
+    "args": ["build", "$ZED_FILE"],
+    "tags": ["burn-main"]
+  }
+]

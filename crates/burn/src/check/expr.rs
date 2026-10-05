@@ -904,6 +904,7 @@ impl<'a> Checker<'a> {
                 if let Some((st, i, ft)) = self.self_field(name) {
                     let rec = self.types.record_of(st).unwrap().clone();
                     self.check_field_access(&rec, i, target.span);
+                    self.def_link(target.span, rec.fields[i].span);
                     let s = self.self_expr(st);
                     return Place::Field(s, i as u32, ft);
                 }

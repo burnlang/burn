@@ -1,0 +1,130 @@
+============================================================
+Calls, members and literals
+============================================================
+
+print(p.x, items[0], Point { x: 1.0, y: 2.0 }, new Circle(2.0), "a ${b} c")
+
+------------------------------------------------------------
+
+(source_file
+  (call_expression
+    (identifier)
+    (arguments
+      (member_expression
+        (identifier)
+        (property_identifier))
+      (index_expression
+        (identifier)
+        (number))
+      (struct_literal
+        (type_identifier)
+        (field_initializer
+          (identifier)
+          (number))
+        (field_initializer
+          (identifier)
+          (number)))
+      (new_expression
+        (type_identifier)
+        (arguments
+          (number)))
+      (string
+        (string_content)
+        (interpolation
+          (identifier))
+        (string_content)))))
+
+============================================================
+Operators
+============================================================
+
+var x = a + b * c << 2 & mask ?? fallback
+var y = v as uint8
+var z = v is string
+x += 1
+
+------------------------------------------------------------
+
+(source_file
+  (variable_declaration
+    (identifier)
+    (binary_expression
+      (binary_expression
+        (binary_expression
+          (binary_expression
+            (identifier)
+            (binary_expression
+              (identifier)
+              (identifier)))
+          (number))
+        (identifier))
+      (identifier)))
+  (variable_declaration
+    (identifier)
+    (cast_expression
+      (identifier)
+      (type_identifier)))
+  (variable_declaration
+    (identifier)
+    (is_expression
+      (identifier)
+      (type_identifier)))
+  (assignment_expression
+    (identifier)
+    (number)))
+
+============================================================
+Lambdas and match
+============================================================
+
+var f = fun(x: int): int {
+    return x * 2
+}
+var s = match n {
+    0 => "zero"
+    1..=9, 10 => "small"
+    is int => "int"
+    else => "big"
+}
+
+------------------------------------------------------------
+
+(source_file
+  (variable_declaration
+    (identifier)
+    (lambda
+      (parameters
+        (parameter
+          (identifier)
+          (type_identifier)))
+      (type_identifier)
+      (block
+        (return_statement
+          (binary_expression
+            (identifier)
+            (number))))))
+  (variable_declaration
+    (identifier)
+    (match_expression
+      (identifier)
+      (match_arm
+        (match_pattern
+          (number))
+        (string
+          (string_content)))
+      (match_arm
+        (match_pattern
+          (range_expression
+            (number)
+            (number))
+          (number))
+        (string
+          (string_content)))
+      (match_arm
+        (match_pattern
+          (type_identifier))
+        (string
+          (string_content)))
+      (match_arm
+        (string
+          (string_content))))))

@@ -49,6 +49,7 @@ Usage:
   burn repl                           start the interactive REPL
   burn eval '<code>'                  evaluate code from the command line
   burn lsp                            start the language server (stdio)
+  burn sources                        write the standard library and built-in declarations for editors, print the folder
   burn version                        print the version
 
 Legacy flags: -r (repl), -e <code> (eval), -exe <file> [name] (build), -d <file> (show IR)"
@@ -604,6 +605,18 @@ fn main() -> ExitCode {
             }
         },
         "lsp" | "--lsp" => lsp::run(),
+        "sources" => {
+            let mut ok = lsp::sources::builtins_file().is_some();
+            for s in loader::STDLIB {
+                ok &= lsp::sources::std_file(s.name).is_some();
+            }
+            if !ok {
+                eprintln!("error: cannot write the sources to {}", lsp::sources::dir().display());
+                return ExitCode::from(1);
+            }
+            println!("{}", lsp::sources::dir().display());
+            ExitCode::SUCCESS
+        }
         "fmt" => fmt::cmd(rest),
         "fix" => fix::cmd(rest),
         "doc" => doc::cmd(rest),
