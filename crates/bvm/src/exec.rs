@@ -980,9 +980,14 @@ impl Vm {
                 Op::NewArray(t, n) => {
                     sync!();
                     let a = array_new(t, n as usize);
-                    let data = array_data(a);
                     sp = unsafe { sp.sub(n as usize) };
-                    unsafe { std::ptr::copy_nonoverlapping(sp, data, n as usize) };
+                    if array_elem(a) == 0 {
+                        unsafe { std::ptr::copy_nonoverlapping(sp, array_data(a), n as usize) };
+                    } else {
+                        for k in 0..n as usize {
+                            array_put(a, k, unsafe { *sp.add(k) });
+                        }
+                    }
                     push!(a);
                 }
                 Op::Index(l) => {
@@ -998,7 +1003,11 @@ impl Vm {
                         sync!();
                         api::err_index(l as u64, i, n as u64);
                     }
-                    *t = unsafe { *array_data(a).add(i as usize) };
+                    *t = if array_elem(a) == 0 {
+                        unsafe { *array_data(a).add(i as usize) }
+                    } else {
+                        array_at(a, i as usize)
+                    };
                 }
                 Op::SetIndex(l) => {
                     let v = pop!();
@@ -1013,7 +1022,11 @@ impl Vm {
                         sync!();
                         api::err_index(l as u64, i, n as u64);
                     }
-                    unsafe { *array_data(a).add(i as usize) = v }
+                    if array_elem(a) == 0 {
+                        unsafe { *array_data(a).add(i as usize) = v }
+                    } else {
+                        array_put(a, i as usize, v);
+                    }
                     push!(v);
                 }
                 Op::Len => {

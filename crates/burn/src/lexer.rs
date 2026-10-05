@@ -5,6 +5,7 @@ use crate::source::{FileId, Span};
 pub enum Tok {
     Ident(String),
     Int(i64),
+    BigInt(u64, bool),
     Float(f64),
     Str(String),
     Template(Vec<TplPart>),
@@ -130,6 +131,7 @@ pub fn describe(t: &Tok) -> String {
     match t {
         Tok::Ident(s) => format!("identifier `{}`", s),
         Tok::Int(v) => format!("number `{}`", v),
+        Tok::BigInt(v, _) => format!("number `{}`", v),
         Tok::Float(v) => format!("number `{}`", v),
         Tok::Str(_) | Tok::Template(_) => "string literal".into(),
         Tok::Eof => "end of file".into(),
@@ -457,8 +459,11 @@ impl<'a> Lexer<'a> {
                 self.pos += 1;
             }
             let digits: String = self.src[ds..self.pos].chars().filter(|c| *c != '_').collect();
-            match i64::from_str_radix(&digits, radix).or_else(|_| u64::from_str_radix(&digits, radix).map(|v| v as i64)) {
-                Ok(v) => self.push(Tok::Int(v), start),
+            match i64::from_str_radix(&digits, radix)
+                .map(Tok::Int)
+                .or_else(|_| u64::from_str_radix(&digits, radix).map(|v| Tok::BigInt(v, true)))
+            {
+                Ok(t) => self.push(t, start),
                 Err(_) => {
                     self.error(start, "invalid number literal");
                     self.push(Tok::Int(0), start);
@@ -490,6 +495,7 @@ impl<'a> Lexer<'a> {
         } else {
             match text.parse::<i64>() {
                 Ok(v) => self.push(Tok::Int(v), start),
+                Err(_) if text.parse::<u64>().is_ok() => self.push(Tok::BigInt(text.parse::<u64>().unwrap(), false), start),
                 Err(_) => match text.parse::<f64>() {
                     Ok(v) => {
                         self.error(start, "integer literal is too large");

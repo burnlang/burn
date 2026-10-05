@@ -355,6 +355,9 @@ impl Asm {
                 "string" => TyRef::D(Desc::Str),
                 "any" => TyRef::D(Desc::Any),
                 "fun" => TyRef::D(Desc::Func),
+                n if burn_runtime::meta::Num::ALL.iter().any(|k| k.name() == n) => {
+                    TyRef::D(Desc::Num(*burn_runtime::meta::Num::ALL.iter().find(|k| k.name() == n).unwrap()))
+                }
                 "map" => {
                     c.expect('<')?;
                     let k = self.ty(c)?;
@@ -1142,6 +1145,7 @@ impl Names {
             Desc::Str => "string".into(),
             Desc::Any => "any".into(),
             Desc::Func => "fun".into(),
+            Desc::Num(n) => n.name().into(),
             Desc::Array(e) => format!("[{}]", self.ty(m, *e)),
             Desc::Map(k, v) => format!("map<{}, {}>", self.ty(m, *k), self.ty(m, *v)),
             Desc::Optional(t) => format!("{}?", self.ty(m, *t)),

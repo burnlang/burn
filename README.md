@@ -49,6 +49,8 @@ fun main() {
 ## Features
 
 - Static types with inference, so you rarely write them
+- Sized numbers for speed and memory: `uint8`, `int16`, `uint32`, `uint64`, `float32` and more, with packed arrays
+  (a `[uint8]` uses 1 byte per element) and checked overflow
 - Smart casts: `is` checks, `!= null` checks, early returns and assignments narrow types automatically
 - Null safety with `T?`
 - Type-first declarations: `String name = "Burn"`, `[int] ids = []`

@@ -21,6 +21,75 @@ order: 3
 | `fun(A, B): R` | a function value |
 | `Future<T>` | the result of an `async fun` |
 
+## Sized numbers
+
+`int` and `float` are 64 bits wide and are the right choice most of the time. When the size of a number matters,
+for example for bytes, pixels, file formats, hashes or large arrays, Burn has sized types:
+
+| Type | Values | Other names |
+| --- | --- | --- |
+| `int8`, `int16`, `int32` | -128 to 127, -32768 to 32767, -2147483648 to 2147483647 | `Int8`, `Int16`, `Int32` |
+| `uint8`, `uint16`, `uint32` | 0 to 255, 0 to 65535, 0 to 4294967295 | `byte`, `UInt8`, `UInt16`, `UInt32` |
+| `uint64` | 0 to 18446744073709551615 | `UInt64` |
+| `float32` | a 32-bit float, about 7 significant digits | `Float32` |
+| `int64`, `float64` | the same types as `int` and `float` | `Int64`, `Float64` |
+
+```burn
+uint8 red = 200
+int16 sample = -1200
+uint64 hash = 14695981039346656037
+float32 ratio = 0.5
+[uint8] pixels = [255, 128, 0]
+```
+
+Number literals take the type they are used as, and a literal that does not fit is an error:
+
+```burn
+uint8 b = 256   // error: `256` does not fit in uint8
+```
+
+### Arithmetic
+
+Math on a sized type gives the same type, and a result that does not fit stops the program with an error, just like
+`int` overflow:
+
+```burn
+uint8 a = 200
+print(a + 55)    // 255
+print(a + 100)   // runtime error: integer overflow: 300 does not fit in uint8
+```
+
+When two different integer types meet, the smaller one is widened automatically if that loses nothing: `uint8 + int`
+is an `int`, `uint8 + int8` is an `int16`. `uint64` mixed with a signed type, and every narrowing, need `as`:
+
+```burn
+int total = 1000
+uint8 small = total as uint8   // checked: fails at runtime if total does not fit
+float32 f = 3.75
+int8 whole = f as int8         // 3, the fraction is dropped
+```
+
+For hashes and checksums, where wrapping around is the point, use `wrappingAdd`, `wrappingSub` and `wrappingMul`:
+
+```burn
+fun fnv(text: string): uint64 {
+    uint64 h = 14695981039346656037
+    for b in text.bytes() {
+        h = (h ^ b).wrappingMul(1099511628211)
+    }
+    return h
+}
+```
+
+Bit operators work on every integer type. `>>` on an unsigned type shifts in zeros, `~` flips only the bits of the
+type, and `<<` drops the bits that do not fit.
+
+### Packed arrays
+
+Arrays of `int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32` and `float32` store each element in 1, 2 or 4 bytes
+instead of 8. A `[uint8]` of a million elements takes 1 MB instead of 8 MB, and loops over packed arrays touch less
+memory, so they run faster. `text.bytes()` turns a string into its UTF-8 bytes and `fromBytes(bytes)` turns them back.
+
 ## Everything else is defined with `def`
 
 Every user defined type uses the same shape: `def <kind> Name { ... }`.

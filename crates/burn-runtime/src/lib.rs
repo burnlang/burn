@@ -103,6 +103,8 @@ runtime_fns! {
     StrCode => burn_str_code = crate::api::str_code [a];
     CharClass => burn_char_class = crate::api::char_class [a, b];
     StrFromCode => burn_str_from_code = crate::api::str_from_code [a];
+    StrToBytes => burn_str_to_bytes = crate::api::str_to_bytes [a, b];
+    StrFromBytes => burn_str_from_bytes = crate::api::str_from_bytes [a];
     ToStr => burn_to_str = crate::api::to_str [a, b];
     ParseInt => burn_parse_int = crate::api::parse_int [a, b];
     ParseFloat => burn_parse_float = crate::api::parse_float [a, b];
@@ -191,6 +193,17 @@ runtime_fns! {
     ShiftCheck => burn_shift_check = crate::api::shift_check [a, b];
     ErrShift => burn_err_shift = crate::api::err_shift [a, b];
     ErrOverflow => burn_err_overflow = crate::api::err_overflow [a];
+    NumFit => burn_num_fit = crate::api::num_fit [a, b, c];
+    NumConv => burn_num_conv = crate::api::num_conv [a, b, c];
+    NumWrap => burn_num_wrap = crate::api::num_wrap [a, b];
+    UAdd => burn_uadd = crate::api::uadd [a, b, c];
+    USub => burn_usub = crate::api::usub [a, b, c];
+    UMul => burn_umul = crate::api::umul [a, b, c];
+    UDiv => burn_udiv = crate::api::udiv [a, b, c];
+    UMod => burn_umod = crate::api::umod [a, b, c];
+    U2F => burn_u2f = crate::api::u2f [a];
+    F2Num => burn_f2num = crate::api::f2num [a, b, c];
+    F32Round => burn_f32_round = crate::api::f32_round [a];
     ErrNull => burn_err_null = crate::api::err_null [a];
     ErrReturn => burn_err_return = crate::api::err_return [a];
     Spawn => burn_spawn = crate::api::spawn_native [a, b, c, d];

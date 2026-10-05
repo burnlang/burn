@@ -1,4 +1,5 @@
 use crate::hir::{BinOp, Cmp, Const, Conv, Expr, ExprKind, External, Func, Program, Stmt, UnOp};
+use crate::types::{Num, Ty};
 use burn_runtime::RtFn;
 use std::fmt::Write;
 
@@ -92,6 +93,17 @@ fn cc(c: Cmp) -> &'static str {
         Cmp::Le => "le",
         Cmp::Gt => "g",
         Cmp::Ge => "ge",
+    }
+}
+
+fn ucc(c: Cmp) -> &'static str {
+    match c {
+        Cmp::Eq => "e",
+        Cmp::Ne => "ne",
+        Cmp::Lt => "b",
+        Cmp::Le => "be",
+        Cmp::Gt => "a",
+        Cmp::Ge => "ae",
     }
 }
 
@@ -793,6 +805,14 @@ impl<'p> Gen<'p> {
                         self.e(&format!("set{} al", cc(*c)));
                         self.e("movzx eax, al");
                     }
+                    BinOp::UCmp(c) => {
+                        self.e("cmp rax, rcx");
+                        self.e(&format!("set{} al", ucc(*c)));
+                        self.e("movzx eax, al");
+                    }
+                    BinOp::WAdd => self.e("add rax, rcx"),
+                    BinOp::WSub => self.e("sub rax, rcx"),
+                    BinOp::WMul => self.e("imul rax, rcx"),
                     BinOp::FCmp(c) => {
                         self.e("movq xmm0, rax");
                         self.e("movq xmm1, rcx");
@@ -880,7 +900,11 @@ impl<'p> Gen<'p> {
                 self.e("call rax");
                 self.pop_args(n);
             }
-            ExprKind::Rt(f, args) => self.rt_call(*f, args),
+            ExprKind::Rt(f, args) => {
+                if !self.inline_num(*f, args) {
+                    self.rt_call(*f, args)
+                }
+            }
             ExprKind::Spawn(f, args) => {
                 self.push_args(args);
                 self.e(&format!("lea rdi, [rip + bf_{}]", f));
@@ -926,10 +950,26 @@ impl<'p> Gen<'p> {
                 self.e(&format!("mov esi, {}", n));
                 self.call_rt_raw(RtFn::ArrNew.symbol());
                 if n > 0 {
+                    let elem = self.packed_elem(*t);
                     self.e("mov rdx, qword ptr [rax + 32]");
                     for i in (0..n).rev() {
                         self.e("pop rcx");
-                        self.e(&format!("mov qword ptr [rdx + {}], rcx", 8 * i));
+                        match elem {
+                            None => self.e(&format!("mov qword ptr [rdx + {}], rcx", 8 * i)),
+                            Some(Num::F32) => {
+                                self.e("movq xmm0, rcx");
+                                self.e("cvtsd2ss xmm0, xmm0");
+                                self.e(&format!("movss dword ptr [rdx + {}], xmm0", 4 * i));
+                            }
+                            Some(k) => {
+                                let (reg, w) = match k.width() {
+                                    1 => ("cl", "byte"),
+                                    2 => ("cx", "word"),
+                                    _ => ("ecx", "dword"),
+                                };
+                                self.e(&format!("mov {} ptr [rdx + {}], {}", w, k.width() * i, reg));
+                            }
+                        }
                     }
                 }
             }
@@ -939,7 +979,17 @@ impl<'p> Gen<'p> {
                 self.e("cmp rcx, qword ptr [rax + 16]");
                 self.e(&format!("jae {}", bad));
                 self.e("mov rdx, qword ptr [rax + 32]");
-                self.e("mov rax, qword ptr [rdx + rcx*8]");
+                let load = match self.packed_elem(a.ty) {
+                    None => "mov rax, qword ptr [rdx + rcx*8]",
+                    Some(Num::I8) => "movsx rax, byte ptr [rdx + rcx]",
+                    Some(Num::U8) => "movzx eax, byte ptr [rdx + rcx]",
+                    Some(Num::I16) => "movsx rax, word ptr [rdx + rcx*2]",
+                    Some(Num::U16) => "movzx eax, word ptr [rdx + rcx*2]",
+                    Some(Num::I32) => "movsxd rax, dword ptr [rdx + rcx*4]",
+                    Some(Num::U32) => "mov eax, dword ptr [rdx + rcx*4]",
+                    Some(_) => "cvtss2sd xmm0, dword ptr [rdx + rcx*4]\n    movq rax, xmm0",
+                };
+                self.e(load);
                 self.index_cold(&bad, "rax", *loc);
             }
             ExprKind::SetIndex(a, i, v, loc) => {
@@ -954,7 +1004,14 @@ impl<'p> Gen<'p> {
                 self.e("cmp rcx, qword ptr [rdx + 16]");
                 self.e(&format!("jae {}", bad));
                 self.e("mov r8, qword ptr [rdx + 32]");
-                self.e("mov qword ptr [r8 + rcx*8], rax");
+                let store = match self.packed_elem(a.ty) {
+                    None => "mov qword ptr [r8 + rcx*8], rax",
+                    Some(Num::I8 | Num::U8) => "mov byte ptr [r8 + rcx], al",
+                    Some(Num::I16 | Num::U16) => "mov word ptr [r8 + rcx*2], ax",
+                    Some(Num::I32 | Num::U32) => "mov dword ptr [r8 + rcx*4], eax",
+                    Some(_) => "movq xmm0, rax\n    cvtsd2ss xmm0, xmm0\n    movss dword ptr [r8 + rcx*4], xmm0",
+                };
+                self.e(store);
                 self.index_cold(&bad, "rdx", *loc);
             }
             ExprKind::ArrLen(a) => {
@@ -1009,6 +1066,109 @@ impl<'p> Gen<'p> {
                 }
             }
             _ => unreachable!(),
+        }
+    }
+
+    fn packed_elem(&self, arr: u32) -> Option<Num> {
+        match self.p.types.get(arr) {
+            Ty::Array(e) => self.p.types.num_of(*e).filter(|n| n.packed()),
+            _ => None,
+        }
+    }
+
+    fn rt_cold(&mut self, label: &str, setup: &str, f: RtFn) {
+        let sym = self.sym(f.symbol());
+        let call = if self.t.macos { format!("call {}", sym) } else { format!("call {}@PLT", sym) };
+        writeln!(self.cold, "{}:\n{}    and rsp, -16\n    {}\n    ud2", label, setup, call).unwrap();
+    }
+
+    fn inline_num(&mut self, f: RtFn, args: &[Expr]) -> bool {
+        let code = |e: &Expr| match e.kind {
+            ExprKind::Int(v) => Num::from_code(v as u8),
+            _ => None,
+        };
+        let loc = |e: &Expr| match e.kind {
+            ExprKind::LocId(l) => l,
+            _ => u32::MAX,
+        };
+        match f {
+            RtFn::NumWrap => {
+                let Some(n) = code(&args[1]) else { return false };
+                self.expr(&args[0]);
+                self.e(match n {
+                    Num::I8 => "movsx rax, al",
+                    Num::U8 => "movzx eax, al",
+                    Num::I16 => "movsx rax, ax",
+                    Num::U16 => "movzx eax, ax",
+                    Num::I32 => "movsxd rax, eax",
+                    Num::U32 => "mov eax, eax",
+                    _ => return true,
+                });
+                true
+            }
+            RtFn::NumFit => {
+                let Some(n) = code(&args[1]) else { return false };
+                if !n.packed() || n.is_float() {
+                    return false;
+                }
+                self.expr(&args[0]);
+                let bad = self.l();
+                match n {
+                    Num::U8 | Num::U16 => {
+                        self.e(&format!("cmp rax, {}", n.max_value()));
+                        self.e(&format!("ja {}", bad));
+                    }
+                    _ => {
+                        self.e(match n {
+                            Num::I8 => "movsx rcx, al",
+                            Num::I16 => "movsx rcx, ax",
+                            Num::I32 => "movsxd rcx, eax",
+                            _ => "mov ecx, eax",
+                        });
+                        self.e("cmp rcx, rax");
+                        self.e(&format!("jne {}", bad));
+                    }
+                }
+                let setup = format!("    mov rdi, rax\n    mov esi, {}\n    mov edx, {}\n", n as u8, loc(&args[2]));
+                self.rt_cold(&bad, &setup, RtFn::NumFit);
+                true
+            }
+            RtFn::F32Round => {
+                self.expr(&args[0]);
+                self.e("movq xmm0, rax");
+                self.e("cvtsd2ss xmm0, xmm0");
+                self.e("cvtss2sd xmm0, xmm0");
+                self.e("movq rax, xmm0");
+                true
+            }
+            RtFn::UAdd | RtFn::USub | RtFn::UMul => {
+                self.operands(&args[0], &args[1]);
+                let bad = self.l();
+                match f {
+                    RtFn::UAdd => {
+                        self.e("mov rdx, rax");
+                        self.e("add rdx, rcx");
+                        self.e(&format!("jc {}", bad));
+                        self.e("mov rax, rdx");
+                    }
+                    RtFn::USub => {
+                        self.e("mov rdx, rax");
+                        self.e("sub rdx, rcx");
+                        self.e(&format!("jc {}", bad));
+                        self.e("mov rax, rdx");
+                    }
+                    _ => {
+                        self.e("mov r8, rax");
+                        self.e("mul rcx");
+                        self.e(&format!("jo {}", bad));
+                    }
+                }
+                let first = if f == RtFn::UMul { "r8" } else { "rax" };
+                let setup = format!("    mov rdi, {}\n    mov rsi, rcx\n    mov edx, {}\n", first, loc(&args[2]));
+                self.rt_cold(&bad, &setup, f);
+                true
+            }
+            _ => false,
         }
     }
 

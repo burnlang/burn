@@ -115,23 +115,60 @@ pub fn str_is_ascii(p: u64) -> bool {
     unsafe { hdr(p).flags & F_ASCII != 0 }
 }
 
+fn elem_num(tid: u32) -> u8 {
+    match crate::meta::desc(tid) {
+        crate::meta::Desc::Array(e) => match crate::meta::desc(*e) {
+            crate::meta::Desc::Num(n) if n.packed() => *n as u8,
+            _ => 0,
+        },
+        _ => 0,
+    }
+}
+
+#[inline(always)]
+pub fn array_elem(p: u64) -> u8 {
+    unsafe { hdr(p).pad }
+}
+
+#[inline(always)]
+pub fn elem_width(code: u8) -> usize {
+    match code {
+        0 => 8,
+        1 | 2 => 1,
+        3 | 4 => 2,
+        _ => 4,
+    }
+}
+
+fn data_layout(cap: usize, code: u8) -> Layout {
+    Layout::from_size_align((cap * elem_width(code)).max(8), 8).unwrap()
+}
+
 pub fn array_new(tid: u32, len: usize) -> u64 {
     let p = rc::alloc(K_ARRAY, tid, HDR + 24);
+    let code = elem_num(tid);
     let cap = len.max(4);
     unsafe {
-        let data = alloc_zeroed(Layout::array::<u64>(cap).unwrap()) as u64;
+        hdr(p).pad = code;
+        let data = alloc_zeroed(data_layout(cap, code)) as u64;
         set_word(p, ARR_LEN, len as u64);
         set_word(p, ARR_CAP, cap as u64);
         set_word(p, ARR_DATA, data);
     }
-    rc::account(cap * 8);
+    rc::account(cap * elem_width(code));
     p
 }
 
 pub fn array_from(tid: u32, items: &[u64]) -> u64 {
     let p = array_new(tid, items.len());
-    unsafe {
-        core::ptr::copy_nonoverlapping(items.as_ptr(), array_data(p), items.len());
+    if array_elem(p) == 0 {
+        unsafe {
+            core::ptr::copy_nonoverlapping(items.as_ptr(), array_data(p), items.len());
+        }
+    } else {
+        for (i, v) in items.iter().enumerate() {
+            array_put(p, i, *v);
+        }
     }
     p
 }
@@ -157,12 +194,60 @@ pub fn array_data(p: u64) -> *mut u64 {
 
 #[inline]
 pub fn array_slice<'a>(p: u64) -> &'a [u64] {
+    debug_assert!(array_elem(p) == 0);
     unsafe { core::slice::from_raw_parts(array_data(p), array_len(p)) }
 }
 
 #[inline]
 pub fn array_slice_mut<'a>(p: u64) -> &'a mut [u64] {
+    debug_assert!(array_elem(p) == 0);
     unsafe { core::slice::from_raw_parts_mut(array_data(p), array_len(p)) }
+}
+
+#[inline]
+pub fn array_at(p: u64, i: usize) -> u64 {
+    let d = array_data(p) as usize;
+    unsafe {
+        match array_elem(p) {
+            0 => *(d as *const u64).add(i),
+            1 => *(d as *const i8).add(i) as i64 as u64,
+            2 => *(d as *const u8).add(i) as u64,
+            3 => *(d as *const i16).add(i) as i64 as u64,
+            4 => *(d as *const u16).add(i) as u64,
+            5 => *(d as *const i32).add(i) as i64 as u64,
+            6 => *(d as *const u32).add(i) as u64,
+            _ => (*(d as *const f32).add(i) as f64).to_bits(),
+        }
+    }
+}
+
+#[inline]
+pub fn array_put(p: u64, i: usize, v: u64) {
+    let d = array_data(p) as usize;
+    unsafe {
+        match array_elem(p) {
+            0 => *(d as *mut u64).add(i) = v,
+            1 | 2 => *(d as *mut u8).add(i) = v as u8,
+            3 | 4 => *(d as *mut u16).add(i) = v as u16,
+            5 | 6 => *(d as *mut u32).add(i) = v as u32,
+            _ => *(d as *mut f32).add(i) = f64::from_bits(v) as f32,
+        }
+    }
+}
+
+pub fn array_values(p: u64) -> Vec<u64> {
+    if array_elem(p) == 0 {
+        return array_slice(p).to_vec();
+    }
+    (0..array_len(p)).map(|i| array_at(p, i)).collect()
+}
+
+pub fn array_move(p: u64, from: usize, to: usize, n: usize) {
+    let w = elem_width(array_elem(p));
+    unsafe {
+        let d = array_data(p) as usize as *mut u8;
+        core::ptr::copy(d.add(from * w), d.add(to * w), n * w);
+    }
 }
 
 pub fn array_reserve(p: u64, need: usize) {
@@ -171,26 +256,27 @@ pub fn array_reserve(p: u64, need: usize) {
         if need <= cap {
             return;
         }
+        let code = array_elem(p);
+        let w = elem_width(code);
         let new_cap = need.max(cap * 2);
-        let old = Layout::array::<u64>(cap).unwrap();
-        let data = realloc(array_data(p) as *mut u8, old, new_cap * 8) as u64;
+        let old = data_layout(cap, code);
+        let new_size = data_layout(new_cap, code).size();
+        let data = realloc(array_data(p) as *mut u8, old, new_size) as u64;
         if data == 0 {
-            alloc::alloc::handle_alloc_error(Layout::array::<u64>(new_cap).unwrap());
+            alloc::alloc::handle_alloc_error(data_layout(new_cap, code));
         }
-        core::ptr::write_bytes((data as usize + cap * 8) as *mut u8, 0, (new_cap - cap) * 8);
+        core::ptr::write_bytes((data as usize + old.size()) as *mut u8, 0, new_size - old.size());
         set_word(p, ARR_DATA, data);
         set_word(p, ARR_CAP, new_cap as u64);
-        rc::account((new_cap - cap) * 8);
+        rc::account((new_cap - cap) * w);
     }
 }
 
 pub fn array_push(p: u64, v: u64) {
     let len = array_len(p);
     array_reserve(p, len + 1);
-    unsafe {
-        *array_data(p).add(len) = v;
-        set_word(p, ARR_LEN, (len + 1) as u64);
-    }
+    array_put(p, len, v);
+    unsafe { set_word(p, ARR_LEN, (len + 1) as u64) }
 }
 
 pub fn array_set_len(p: u64, len: usize) {
@@ -202,7 +288,7 @@ pub unsafe fn array_free_data(p: u64) {
     let cap = word(p, ARR_CAP) as usize;
     let data = word(p, ARR_DATA);
     if data != 0 {
-        dealloc(data as usize as *mut u8, Layout::array::<u64>(cap).unwrap());
+        dealloc(data as usize as *mut u8, data_layout(cap, array_elem(p)));
     }
 }
 

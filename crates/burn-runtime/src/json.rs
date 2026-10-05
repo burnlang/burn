@@ -202,6 +202,14 @@ pub fn stringify(v: u64, tid: u32, out: &mut String) {
                 out.push_str("null")
             }
         }
+        Desc::Num(n) => {
+            let text = crate::fmt::num_str(v, *n);
+            if *n == crate::meta::Num::F32 && !(f64::from_bits(v)).is_finite() {
+                out.push_str("null")
+            } else {
+                out.push_str(&text)
+            }
+        }
         Desc::Bool => out.push_str(if v != 0 { "true" } else { "false" }),
         Desc::Str => quote(str_ref(v), out),
         Desc::Enum { variants, .. } => quote(variants.get(v as usize).map(|s| s.as_str()).unwrap_or(""), out),
@@ -223,7 +231,7 @@ pub fn stringify(v: u64, tid: u32, out: &mut String) {
         }
         Desc::Array(e) => {
             out.push('[');
-            for (i, x) in array_slice(v).iter().enumerate() {
+            for (i, x) in array_values(v).iter().enumerate() {
                 if i > 0 {
                     out.push(',');
                 }

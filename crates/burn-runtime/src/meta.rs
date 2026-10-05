@@ -14,6 +14,101 @@ pub const TID_MAP_STR_ANY: u32 = 9;
 pub const TID_ARR_STR: u32 = 10;
 pub const TID_ARR_INT: u32 = 11;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Num {
+    I8 = 1,
+    U8 = 2,
+    I16 = 3,
+    U16 = 4,
+    I32 = 5,
+    U32 = 6,
+    U64 = 7,
+    F32 = 8,
+}
+
+impl Num {
+    pub const ALL: [Num; 8] = [Num::I8, Num::U8, Num::I16, Num::U16, Num::I32, Num::U32, Num::U64, Num::F32];
+
+    pub fn from_code(c: u8) -> Option<Num> {
+        Num::ALL.into_iter().find(|n| *n as u8 == c)
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Num::I8 => "int8",
+            Num::U8 => "uint8",
+            Num::I16 => "int16",
+            Num::U16 => "uint16",
+            Num::I32 => "int32",
+            Num::U32 => "uint32",
+            Num::U64 => "uint64",
+            Num::F32 => "float32",
+        }
+    }
+
+    pub fn bits(self) -> u32 {
+        match self {
+            Num::I8 | Num::U8 => 8,
+            Num::I16 | Num::U16 => 16,
+            Num::I32 | Num::U32 | Num::F32 => 32,
+            Num::U64 => 64,
+        }
+    }
+
+    pub fn signed(self) -> bool {
+        matches!(self, Num::I8 | Num::I16 | Num::I32 | Num::F32)
+    }
+
+    pub fn is_float(self) -> bool {
+        self == Num::F32
+    }
+
+    pub fn packed(self) -> bool {
+        self != Num::U64
+    }
+
+    pub fn width(self) -> usize {
+        if self.packed() {
+            (self.bits() / 8) as usize
+        } else {
+            8
+        }
+    }
+
+    pub fn min_value(self) -> i128 {
+        if self.signed() {
+            -(1i128 << (self.bits() - 1))
+        } else {
+            0
+        }
+    }
+
+    pub fn max_value(self) -> i128 {
+        if self.signed() {
+            (1i128 << (self.bits() - 1)) - 1
+        } else {
+            (1i128 << self.bits()) - 1
+        }
+    }
+
+    pub fn fits(self, v: i128) -> bool {
+        v >= self.min_value() && v <= self.max_value()
+    }
+
+    pub fn wrap(self, v: u64) -> u64 {
+        match self {
+            Num::I8 => v as i8 as i64 as u64,
+            Num::U8 => v as u8 as u64,
+            Num::I16 => v as i16 as i64 as u64,
+            Num::U16 => v as u16 as u64,
+            Num::I32 => v as i32 as i64 as u64,
+            Num::U32 => v as u32 as u64,
+            Num::U64 => v,
+            Num::F32 => (f64::from_bits(v) as f32 as f64).to_bits(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Desc {
     Error,
@@ -24,6 +119,7 @@ pub enum Desc {
     Bool,
     Str,
     Any,
+    Num(Num),
     Array(u32),
     Map(u32, u32),
     Optional(u32),
@@ -186,7 +282,10 @@ pub fn loc(i: u64) -> Option<&'static str> {
 }
 
 pub fn is_unboxed(tid: u32) -> bool {
-    matches!(desc(tid), Desc::Int | Desc::Float | Desc::Bool | Desc::Enum { .. } | Desc::Func | Desc::Void)
+    matches!(
+        desc(tid),
+        Desc::Int | Desc::Float | Desc::Num(_) | Desc::Bool | Desc::Enum { .. } | Desc::Func | Desc::Void
+    )
 }
 
 pub fn implements(class_tid: u32, iface: u32) -> bool {
@@ -206,6 +305,7 @@ pub fn type_name(tid: u32) -> String {
         Desc::Bool => "bool".into(),
         Desc::Str => "string".into(),
         Desc::Any => "any".into(),
+        Desc::Num(n) => n.name().into(),
         Desc::Array(e) => format!("[{}]", type_name(*e)),
         Desc::Map(k, v) => format!("{{{}: {}}}", type_name(*k), type_name(*v)),
         Desc::Optional(t) => format!("{}?", type_name(*t)),
@@ -314,6 +414,10 @@ pub fn encode(m: &Meta) -> Vec<u8> {
                 w.u8(14);
                 w.s(name)
             }
+            Desc::Num(n) => {
+                w.u8(16);
+                w.u8(*n as u8)
+            }
             Desc::Enum { name, variants } => {
                 w.u8(15);
                 w.s(name);
@@ -375,6 +479,7 @@ pub fn decode(b: &[u8]) -> Meta {
                 }
             }
             14 => Desc::Interface { name: r.s() },
+            16 => Desc::Num(Num::from_code(r.u8()).unwrap_or(Num::U64)),
             _ => {
                 let name = r.s();
                 let nv = r.u32();

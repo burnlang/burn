@@ -172,6 +172,7 @@ impl<'a> Checker<'a> {
             Desc::Bool => T_BOOL,
             Desc::Str => T_STR,
             Desc::Any => T_ANY,
+            Desc::Num(n) => crate::types::num_ty(n),
             Desc::Func => return None,
             Desc::Array(e) => {
                 let e = self.lib_type(lt, e)?;

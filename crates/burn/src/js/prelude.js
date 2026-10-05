@@ -18,6 +18,9 @@ function $errHelp(msg) {
     const n = Number(m[1]);
     return n === 0 ? "it is empty, so there is nothing to read; check `len(...) > 0` first" : "valid indexes go from 0 to " + (n - 1) + "; check the index against `len(...)` first";
   }
+  const $range = name => { if (name === "int") return "int holds values from -9223372036854775808 to 9223372036854775807"; const n = $NUMS.find(x => x && x[0] === name && x.length > 1); return n ? name + " holds values from " + n[1] + " to " + (n[3] || n[2]) : null; };
+  if (msg.startsWith("integer overflow: ")) { const r = $range(msg.split(" ").pop()); return r === null ? null : r + "; use a wider type, or `wrappingAdd`, `wrappingSub` and `wrappingMul` to wrap around"; }
+  if (msg.startsWith("cannot convert ") && !msg.startsWith("cannot convert \"")) { const r = $range(msg.split(" ").pop()); return r === null ? null : r + "; check the value before converting it with `as`"; }
   if (msg.startsWith("cannot shift by ")) return "the shift amount must be from 0 to 63";
   if (msg === "integer overflow") return "the result does not fit in `int` (-9223372036854775808 to 9223372036854775807); use `float` for larger numbers";
   if (msg === "division by zero") return "check that the divisor is not 0 before dividing";
@@ -54,7 +57,24 @@ function $errText(msg, loc) {
 }
 function $err(msg, loc) { $flush(); throw new BurnError($errText(msg, loc)); }
 function $d(t) { return $T[t] || ["err"]; }
-function $unboxed(t) { const k = $d(t)[0]; return k === "int" || k === "float" || k === "bool" || k === "enum" || k === "fun" || k === "void"; }
+function $unboxed(t) { const k = $d(t)[0]; return k === "int" || k === "float" || k === "num" || k === "bool" || k === "enum" || k === "fun" || k === "void"; }
+function $f32str(f) {
+  if (!Number.isFinite(f) || (Number.isInteger(f) && Math.abs(f) < 1e16)) return $fstr(f);
+  let s = String(f);
+  for (let p = 1; p <= 9; p++) { const c = f.toPrecision(p); if (Math.fround(parseFloat(c)) === f) { s = String(parseFloat(c)); break; } }
+  if (Math.abs(f) >= 1e16 || (f !== 0 && Math.abs(f) < 1e-6)) return parseFloat(s).toExponential().replace("e+", "e");
+  return s;
+}
+function $numstr(v, name) { return name === "float32" ? $f32str(v) : String(v); }
+const $NUMS = [null, ["int8", -128, 127], ["uint8", 0, 255], ["int16", -32768, 32767], ["uint16", 0, 65535], ["int32", -2147483648, 2147483647], ["uint32", 0, 4294967295], ["uint64", 0, 18446744073709551615, "18446744073709551615"], ["float32"]];
+function $wrap(op, a, b, u) { const x = BigInt(a), y = BigInt(b); const r = op === "+" ? x + y : op === "-" ? x - y : x * y; return Number(u ? BigInt.asUintN(64, r) : BigInt.asIntN(64, r)); }
+function $u(x) { return x < 0 ? Number(BigInt.asUintN(64, BigInt(x))) : x; }
+function $nwrap(v, c) {
+  if (c === 8) return Math.fround(v);
+  if (c === 7) return $u(v);
+  const bits = c <= 2 ? 8 : c <= 4 ? 16 : 32;
+  return Number(c % 2 === 1 ? BigInt.asIntN(bits, BigInt(v)) : BigInt.asUintN(bits, BigInt(v)));
+}
 function $tidOf(v) { if (v instanceof $Box) return v.b; if (v instanceof $Map) return v.t; if (Array.isArray(v) && v.$rec) return v[0]; return K.ERR; }
 function $rec(tid, fields) { const o = [tid, ...fields]; o.$rec = true; return o; }
 function $implements(c, i) { const d = $d(c); return d[0] === "rec" && d[4].indexOf(i) >= 0; }
@@ -72,6 +92,7 @@ function $fmt(v, t, nested, depth) {
   const d = $d(t);
   switch (d[0]) {
     case "int": return String(Math.trunc(v));
+    case "num": return $numstr(v, d[1]);
     case "float": return $fstr(v);
     case "bool": return v ? "true" : "false";
     case "str": return nested ? $quote(v) : v;
@@ -97,11 +118,11 @@ function $fmt(v, t, nested, depth) {
 function $eq(a, b, t) {
   const d = $d(t);
   switch (d[0]) {
-    case "int": case "float": case "bool": case "enum": case "str": case "void": case "null": return a === b;
+    case "int": case "float": case "num": case "bool": case "enum": case "str": case "void": case "null": return a === b;
     case "fun": return a === b || (a !== null && b !== null && a.length === b.length && a.every((x, i) => x === b[i]));
     case "any":
       if (a === null || b === null) return a === b;
-      if (a.b !== b.b) { const n = x => { const k = $d(x.b)[0]; return k === "int" || k === "float"; }; return n(a) && n(b) && a.v === b.v; }
+      if (a.b !== b.b) { const n = x => { const k = $d(x.b)[0]; return k === "int" || k === "float" || k === "num"; }; return n(a) && n(b) && a.v === b.v; }
       return $eq(a.v, b.v, a.b);
     case "opt": if (a === null || b === null) return a === b; return $unboxed(d[1]) ? $eq(a.v, b.v, d[1]) : $eq(a, b, d[1]);
     case "arr": return a.length === b.length && a.every((x, i) => $eq(x, b[i], d[1]));
@@ -151,7 +172,7 @@ function $isType(v, from, to) {
 function $tname(t) {
   const d = $d(t);
   switch (d[0]) {
-    case "int": return "int"; case "float": return "float"; case "bool": return "bool"; case "str": return "string";
+    case "int": return "int"; case "num": return d[1]; case "float": return "float"; case "bool": return "bool"; case "str": return "string";
     case "any": return "any"; case "void": return "void"; case "null": return "null"; case "fun": return "fun";
     case "arr": return "[" + $tname(d[1]) + "]";
     case "map": return "{" + $tname(d[1]) + ": " + $tname(d[2]) + "}";
@@ -220,6 +241,7 @@ function $toJson(v, t) {
   const d = $d(t);
   switch (d[0]) {
     case "int": return String(Math.trunc(v));
+    case "num": return Number.isFinite(v) ? $numstr(v, d[1]) : "null";
     case "float": return Number.isFinite(v) ? $fstr(v) : "null";
     case "bool": return v ? "true" : "false";
     case "str": return JSON.stringify(v);
@@ -262,6 +284,8 @@ const $R = {
   StrEnds: (s, p) => s.endsWith(p),
   StrRepeat: (s, n) => s.repeat(Math.max(0, n)),
   StrChars: s => $chars(s),
+  StrToBytes: (s, t) => Array.from(new TextEncoder().encode(s)),
+  StrFromBytes: a => new TextDecoder().decode(Uint8Array.from(a)),
   CharClass: (s, k) => s.length > 0 && [/^\p{Alphabetic}+$/u, /^[0-9]+$/, /^[\p{Alphabetic}\p{N}]+$/u, /^\s+$/u][k].test(s),
   StrCode: s => (s.length ? s.codePointAt(0) : -1),
   StrFromCode: n => { try { return String.fromCodePoint(n); } catch (e) { return ""; } },
@@ -391,6 +415,17 @@ const $R = {
   ErrIndex: (l, i, n) => $err("index " + i + " out of bounds (length " + n + ")", l),
   ErrDivZero: l => $err("division by zero", l),
   ErrOverflow: l => $err("integer overflow", l),
+  NumFit: (v, c, l) => { const n = $NUMS[c]; if (v < n[1] || v > n[2]) $err("integer overflow: " + v + " does not fit in " + n[0], l); return v; },
+  NumConv: (v, c, l) => { const k = c & 15; const n = k === 0 ? ["int", -9223372036854775808, 9223372036854775807] : $NUMS[k]; if (v < n[1] || v > n[2]) $err("cannot convert " + v + " to " + n[0], l); return v; },
+  NumWrap: (v, c) => $nwrap(v, c),
+  UAdd: (a, b, l) => { const r = a + b; if (r > 18446744073709551615) $err("integer overflow: " + a + " + " + b + " does not fit in uint64", l); return r; },
+  USub: (a, b, l) => { if (b > a) $err("integer overflow: " + a + " - " + b + " does not fit in uint64", l); return a - b; },
+  UMul: (a, b, l) => { const r = a * b; if (r > 18446744073709551615) $err("integer overflow: " + a + " * " + b + " does not fit in uint64", l); return r; },
+  UDiv: (a, b, l) => { if (b === 0) $err("division by zero", l); return Math.trunc(a / b); },
+  UMod: (a, b, l) => { if (b === 0) $err("division by zero", l); return a % b; },
+  U2F: v => v,
+  F2Num: (v, c, l) => { const k = c & 15; const n = k === 0 ? ["int", -9223372036854775808, 9223372036854775807] : $NUMS[k]; const t = Math.trunc(v); if (Number.isNaN(v) || t < n[1] || t > n[2]) $err("cannot convert " + $fstr(v) + " to " + n[0], l); return t; },
+  F32Round: v => Math.fround(v),
   ShiftCheck: (b, l) => { if (b < 0 || b > 63) $err("cannot shift by " + b, l); return b; },
   ErrShift: (l, b) => $err("cannot shift by " + b, l),
   ErrNull: l => $err("unexpected null value", l),
