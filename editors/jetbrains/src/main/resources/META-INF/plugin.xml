@@ -1,0 +1,59 @@
+<idea-plugin>
+    <id>dev.burnlang.burn</id>
+    <name>Burn</name>
+    <vendor url="https://github.com/burnlang/burn">Burn</vendor>
+    <description><![CDATA[
+    <p>Support for the <a href="https://github.com/burnlang/burn">Burn</a> programming language.</p>
+    <ul>
+        <li>Syntax highlighting, bracket matching and snippets</li>
+        <li>Diagnostics, completion, hover with docs, signature help and inlay type hints</li>
+        <li>Go to definition, also into the standard library, built-in functions and bytecode libraries</li>
+        <li>Find usages, highlight usages, rename across files and workspace symbols</li>
+        <li>Formatting and quick fixes</li>
+        <li>Run, run natively and build from the editor</li>
+    </ul>
+    <p>The language features come from <code>burn lsp</code>. The plugin finds <code>burn</code> on your <code>PATH</code>,
+    in <code>$BURN_HOME/bin</code> or in <code>~/.burn/bin</code>.</p>
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>org.jetbrains.plugins.textmate</depends>
+    <depends>com.redhat.devtools.lsp4ij</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <textmate.bundleProvider implementation="dev.burnlang.intellij.BurnTextMateBundleProvider"/>
+        <notificationGroup id="Burn" displayType="BALLOON"/>
+    </extensions>
+
+    <extensions defaultExtensionNs="com.redhat.devtools.lsp4ij">
+        <server id="burn"
+                name="Burn Language Server"
+                factoryClass="dev.burnlang.intellij.BurnLanguageServerFactory">
+            <description><![CDATA[
+            The Burn language server, started with <code>burn lsp</code>.
+            ]]></description>
+        </server>
+        <fileNamePatternMapping patterns="*.bn" serverId="burn" languageId="burn"/>
+    </extensions>
+
+    <actions>
+        <group id="Burn.Actions" text="Burn" popup="true">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <action id="Burn.Run" class="dev.burnlang.intellij.BurnCommandAction$Run"
+                    text="Run Current File" description="Run the current file with burn run"
+                    icon="AllIcons.Actions.Execute"/>
+            <action id="Burn.RunNative" class="dev.burnlang.intellij.BurnCommandAction$RunNative"
+                    text="Compile and Run Natively" description="Compile the current file to machine code and run it"/>
+            <action id="Burn.Build" class="dev.burnlang.intellij.BurnCommandAction$Build"
+                    text="Build Executable" description="Build a native executable with burn build"/>
+            <separator/>
+            <action id="Burn.OpenStdlib" class="dev.burnlang.intellij.OpenLibrarySourceAction$Stdlib"
+                    text="Open Standard Library Module..." description="Open the source of a std module"/>
+            <action id="Burn.OpenBuiltins" class="dev.burnlang.intellij.OpenLibrarySourceAction$Builtins"
+                    text="Show Built-in Functions" description="Open the declarations of Burn's built-in functions"/>
+        </group>
+        <reference ref="Burn.Run">
+            <add-to-group group-id="EditorPopupMenu" anchor="first"/>
+        </reference>
+    </actions>
+</idea-plugin>
