@@ -1,6 +1,6 @@
 ---
 title: Editor support
-description: The language server and the VS Code extension.
+description: The language server and the extensions for VS Code, JetBrains IDEs, Zed and Neovim.
 order: 26
 ---
 
@@ -14,13 +14,31 @@ the errors the compiler reports. It supports:
 - diagnostics while you type, including errors in imported files
 - hover with inferred types, signatures and built-in documentation
 - completion for locals, globals, functions, types, keywords (including `struct`, `abstract`, `new` and `destroy`),
-  built-ins and members after `.`
-- go to definition, including into imported modules
-- document outline
-- formatting (the same as `burn fmt`)
+  built-ins and members after `.`, with the signature and docs of each built-in
+- signature help while you type the arguments of a call, for functions, constructors, methods and built-ins
+- inlay hints with the inferred type of `var`, `const` and `for` variables that have no annotation
+- go to definition, including into imported modules, the standard library, built-in functions and the exported
+  functions of bytecode libraries
+- find references, highlight references and rename across all files of the project; renaming an interface method
+  also renames the methods that implement it
+- workspace symbols and the document outline
+- formatting (the same as `burn fmt`) and quick fixes
 
 Any editor with LSP support can use it. Import paths complete too: standard modules, the project's packages and
 local files inside `import "..."`.
+
+### Library sources
+
+The standard library and the built-ins are compiled into `burn`, so there is no file to jump to. When you go to the
+definition of `println` or of a function from `std/date`, the server writes the source once to
+`~/.burn/cache/sources/<version>/` (under `$BURN_HOME` when it is set) and opens it there:
+
+- `builtins.bn` declares every built-in function with its documentation
+- `std/<module>.bn` is the real source of each standard module
+- `libs/<library>.bn` lists the functions a `.bvmc` bytecode library exports, with their types
+
+The files are read-only and cannot be renamed into. `burn sources` writes all of them at once and prints the folder,
+which is handy for browsing or searching the standard library.
 
 ## Neovim
 
@@ -54,18 +72,75 @@ vim.fs.root(0, { "burn.toml", ".git" }) })`. `burn` must be on the `PATH` Neovim
 
 ## VS Code
 
-The extension lives in `editors/vscode`. It adds syntax highlighting, snippets, the language server client and
-commands to run, natively run and build the current file. Snippets include `defstruct`, `defabstract` and
-`defstatic` for the three kinds of struct, `new` and `destroy`.
+The extension lives in `editors/vscode`. It adds syntax highlighting, snippets, the language server client and:
+
+- **Run | Run natively | Build** links above `fun main` (turn them off with `burn.codeLens.run`) and a run button
+  in the editor title
+- **Burn: Open Standard Library Module...** and **Burn: Show Built-in Functions** to read the library sources
+- library sources open read-only, so they are not edited by accident
+- the Burn version in the status bar; clicking it restarts the language server
+
+Snippets include `defstruct`, `defabstract` and `defstatic` for the three kinds of struct, `new` and `destroy`.
 
 ```sh
 cd editors/vscode
 npm install
 npx vsce package
-code --install-extension burn-language-server-26.1.0.vsix
+code --install-extension burn-language-server-26.2.0.vsix
 ```
 
 Set `burn.path` if `burn` is not on your `PATH`.
+
+## JetBrains IDEs
+
+The plugin in `editors/jetbrains` works in IntelliJ IDEA, CLion, RustRover, PyCharm, GoLand, WebStorm and the other
+JetBrains IDEs from 2024.2 on. It uses [LSP4IJ](https://github.com/redhat-developer/lsp4ij) for the language server,
+so the IDE installs LSP4IJ along with it, and the TextMate grammar of the VS Code extension for highlighting. You get
+everything the language server offers: completion, hover, parameter info, inlay hints, go to declaration (also into
+the library sources), find usages, rename, formatting and quick fixes. **Tools | Burn** and the editor context menu
+run, natively run and build the current file, open a standard module or show the built-ins.
+
+```sh
+cd editors/jetbrains
+gradle buildPlugin
+```
+
+This needs JDK 21 and Gradle 8.13 or newer. Install `build/distributions/burn-intellij-26.2.0.zip` with **Settings |
+Plugins | Install Plugin from Disk...**. CI builds the same zip as an artifact of the Editors workflow.
+
+The plugin starts `burn lsp` from your `PATH`, `$BURN_HOME/bin` or `~/.burn/bin`. **View | Tool Windows | Language
+Servers** shows the server and its log.
+
+## Zed
+
+The Zed extension in `editors/zed` uses the tree-sitter grammar in `editors/tree-sitter-burn` for highlighting,
+outline, indentation and bracket matching, and starts `burn lsp` for everything else. A run button appears next to
+`fun main`, and the tasks `burn run`, `burn run --native` and `burn build` work on the current file.
+
+To install it, run **zed: install dev extension** and choose `editors/zed`. Zed needs Rust installed through rustup
+to build it. To use another `burn`, set the path in Zed's settings:
+
+```json
+{
+  "lsp": {
+    "burn": {
+      "binary": { "path": "/path/to/burn", "arguments": ["lsp"] }
+    }
+  }
+}
+```
+
+## Tree-sitter
+
+`editors/tree-sitter-burn` is a tree-sitter grammar for Burn with highlight queries. Zed uses it, and Neovim (through
+nvim-treesitter), Helix and other tree-sitter editors can too. After changing `grammar.js`, regenerate the parser and
+run the tests:
+
+```sh
+cd editors/tree-sitter-burn
+tree-sitter generate --abi 14
+tree-sitter test
+```
 
 ## Related repositories
 
