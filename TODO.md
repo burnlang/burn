@@ -8,7 +8,7 @@
 - Add better documentation using MDX: see `docs/`
 - Add compiling to JS: `burn build --target js` covers the whole language and standard library
 - Errors show up on line 1 even though the error is on another line: every diagnostic now has an exact line and column
-- Finish the VSCode Burn LSP: `burn lsp` plus the extension in `editors/vscode`
+- Finish the VSCode Burn LSP: `burn lsp` plus the extension in [vscode-burn](https://github.com/burnlang/vscode-burn)
 - Add private and public for imports: `pub` and `priv`
 - Add async: `async fun`, `Future<T>` and `await`
 - Toolchain installer with `burni`, `burnc`, `burnfmt` and `burn-lsp`
