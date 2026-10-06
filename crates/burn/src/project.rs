@@ -388,6 +388,10 @@ pub fn split_package_path(p: &str) -> Option<(String, String)> {
     Some((name, parts.get(3).map(|s| s.to_string()).unwrap_or_default()))
 }
 
+pub fn same_package(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b)
+}
+
 pub fn short_name(name: &str) -> &str {
     name.rsplit('/').next().unwrap_or(name)
 }
@@ -531,7 +535,11 @@ pub fn package_dir(project_root: &Path, l: &Locked) -> PathBuf {
 
 impl Project {
     pub fn locked(&self, name: &str) -> Option<&Locked> {
-        self.lock.iter().find(|l| l.name == name)
+        self.lock.iter().find(|l| same_package(&l.name, name))
+    }
+
+    pub fn is_self(&self, name: &str) -> bool {
+        same_package(&self.manifest.name, name)
     }
 
     pub fn main_path(&self) -> PathBuf {
@@ -539,10 +547,10 @@ impl Project {
     }
 
     pub fn resolve(&self, name: &str) -> Result<PathBuf, String> {
-        if name == self.manifest.name {
+        if self.is_self(name) {
             return Ok(self.root.clone());
         }
-        let declared = self.manifest.dependencies.iter().find(|(d, _)| d == name);
+        let declared = self.manifest.dependencies.iter().find(|(d, _)| same_package(d, name));
         if let (None, Some((_, Some(path)))) = (self.locked(name), declared) {
             let dir = self.root.join(path);
             return if dir.join(MANIFEST).is_file() {
@@ -566,7 +574,13 @@ impl Project {
                 }
             }
             None if declared => Err(format!("the package `{}` is not installed yet; run `ash install`", name)),
-            None => Err(format!("the package `{}` is not a dependency; add it with `ash install {}`", name, name)),
+            None => Err(format!(
+                "the package `{}` is not a dependency; add it with `ash install {}` (this project is `{}` in {})",
+                name,
+                name,
+                self.manifest.name,
+                self.root.join(MANIFEST).display()
+            )),
         }
     }
 }
