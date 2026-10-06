@@ -339,9 +339,12 @@ examples are in [`examples/bvm/`](examples/bvm/).
 - `install.sh`: forwards to [burnup](https://github.com/burnlang/burnup), the installer
 - `assets/`: the logo
 - `lib/std/`: the standard library, written in Burn
-- `editors/vscode/`: VS Code extension
 - `docs/`: documentation
 - `tests/`: end-to-end tests run against every backend
+
+Editor support lives in its own repositories: [vscode-burn](https://github.com/burnlang/vscode-burn),
+[intellij-burn](https://github.com/burnlang/intellij-burn), [zed-burn](https://github.com/burnlang/zed-burn) and
+[tree-sitter-burn](https://github.com/burnlang/tree-sitter-burn). See [editor support](docs/tooling/editors.mdx).
 
 ## Development
 
