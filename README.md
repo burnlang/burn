@@ -63,7 +63,7 @@ fun main() {
 - Automatic memory without a garbage collector: the compiler tracks ownership and frees each value as soon as it is no
   longer used, cycles included, with no pauses and nothing to write by hand
 - `async fun` / `await` running on real threads
-- Tiny executables without the standard runtime: `std = false` in burn.toml or `--no-std` (a hello world is 39 KB)
+- Tiny executables without the standard library: `std = false` in burn.toml or `--no-std` (a hello world is 39 KB)
 - Modules with `pub` and `priv`
 - Standard library for dates, times, HTTP, JSON, math, strings, processes and files
 - Projects and packages: `burn init github.com/you/app`, `burn.toml`, `burn.lock` and ash, the package manager
@@ -106,7 +106,7 @@ burni                           # REPL
 burni -e 'print(6 * 7)'         # run a snippet
 burnc app.bn                    # standalone executable ./app
 burnc app.bn -o bin/app --emit-asm app.s
-burnc app.bn --no-std           # a small executable without the standard runtime
+burnc app.bn --no-std           # a small executable without the standard library
 burnc app.bn --target js        # Node.js script app.js
 burnc app.bn --target bvm       # portable bytecode app.bvmc
 bvm app.bvmc                    # run bytecode
