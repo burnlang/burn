@@ -268,6 +268,7 @@ function $readLine(prompt) {
 const $args = process.argv.slice(2);
 const $R = {
   StrConcat: (a, b) => a + b,
+  StrAppend: (a, b) => a + b,
   StrEq: (a, b) => a === b,
   StrCmp: (a, b) => (a < b ? -1 : a > b ? 1 : 0),
   StrLen: s => $chars(s).length,

@@ -40,6 +40,34 @@ fn byte_offset(s: u64, ci: usize) -> usize {
     st.char_indices().nth(ci).map(|(i, _)| i).unwrap_or(st.len())
 }
 
+pub fn str_append(a: u64, c: u64) -> u64 {
+    if a == c || !rc::unique(a) {
+        let r = str_concat(a, c);
+        release(a);
+        return r;
+    }
+    let y = str_bytes(c);
+    if y.is_empty() {
+        return a;
+    }
+    let n = unsafe { word(a, STR_LEN) as usize };
+    let need = HDR + 8 + n + y.len() + 1;
+    let mut p = a;
+    let size = unsafe { hdr(p).size as usize };
+    if need > size {
+        p = rc::resize(p, need.max(size * 2));
+    }
+    unsafe {
+        core::ptr::copy_nonoverlapping(y.as_ptr(), (p as usize + STR_BYTES + n) as *mut u8, y.len());
+        *((p as usize + STR_BYTES + n + y.len()) as *mut u8) = 0;
+        set_word(p, STR_LEN, (n + y.len()) as u64);
+        if !str_is_ascii(c) {
+            hdr(p).flags &= !F_ASCII;
+        }
+    }
+    p
+}
+
 pub fn str_concat(a: u64, c: u64) -> u64 {
     let (x, y) = (str_bytes(a), str_bytes(c));
     if x.is_empty() {

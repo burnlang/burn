@@ -213,4 +213,5 @@ runtime_fns! {
     Release => burn_release = crate::api::rc_release [a];
     ReleaseZero => burn_release_zero = crate::api::rc_release_zero [a];
     PossibleRoot => burn_possible_root = crate::api::rc_possible_root [a];
+    StrAppend => burn_str_append = crate::api::str_append [a, b];
 }
