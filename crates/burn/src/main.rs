@@ -41,7 +41,7 @@ Usage:
       --target <native|js|bvm>        native executable (default), JavaScript or bvm bytecode
       --emit-asm <path>               also write the generated assembly (x86-64, or bvm text)
       --no-strip                      keep symbols in the executable
-      --no-std                        build without the standard runtime (same as `std = false` in burn.toml)
+      --no-std                        build without the standard library (same as `std = false` in burn.toml)
   burn check [files...]               type-check without running (default: the project)
   burn fix [--dry-run] <files...>     apply the compiler's suggested fixes
   burn doc [files...] [-o dir]        generate HTML documentation from Burndoc comments
@@ -505,7 +505,7 @@ Usage:
                               native executable (default), JavaScript or bvm bytecode
       --emit-asm <path>       also write the generated assembly (x86-64, or bvm text)
       --no-strip              keep symbols in the executable
-      --no-std                build without the standard runtime
+      --no-std                build without the standard library
   burnc --check <files...>    type-check without producing output
   burnc -v | --version        print the version"
     );

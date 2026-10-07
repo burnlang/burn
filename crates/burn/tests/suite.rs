@@ -762,35 +762,34 @@ fn programs_without_the_standard_runtime_are_small_and_behave_the_same() {
     let (out, code) = output(burn().current_dir(&project).arg("check"));
     assert_eq!(code, 1, "{}", out);
     for msg in [
-        "`std/http` needs the standard runtime for making HTTP requests",
-        "an `async fun` needs the standard runtime",
-        "working with JSON needs the standard runtime",
-        "`await` needs the standard runtime",
+        "`std/http` is part of the standard library",
+        "`std/strings` is part of the standard library",
+        "an `async fun` needs the standard library",
+        "`toJSON` is in the standard library module `std/json`",
+        "`await` needs the standard library",
         "std = false",
     ] {
         assert!(out.contains(msg), "missing `{}` in\n{}", msg, out);
     }
-    assert!(!out.contains("std/strings"), "{}", out);
+    assert!(!out.contains("import it with"), "{}", out);
 
     std::fs::write(
         project.join("src/main.bn"),
-        "import \"std/fs\"\nimport \"std/process\"\nimport \"std/time\"\n\nfun main() {\n    writeFile(\"note.txt\", \"kept\")\n    print(readFile(\"note.txt\"), len(args()), nowMs() > 0)\n    exit(3)\n}\n",
+        "fun main() {\n    var names = [\"b\", \"a\"]\n    names.sort()\n    print(names.join(\",\"), \"x\".upper(), toInt(\"41\") + 1)\n}\n",
     )
     .unwrap();
-    let (out, code) = output(burn().current_dir(&project).arg("check"));
-    assert_eq!(code, 0, "{}", out);
     let (out, code) = output(burn().current_dir(&project).arg("build"));
     assert_eq!(code, 0, "{}", out);
     let (out, code) = output(Command::new(project.join("build/app")).current_dir(&project));
-    assert_eq!((out.as_str(), code), ("kept 0 true\n", 3));
+    assert_eq!((out.as_str(), code), ("a,b X 42\n", 0));
     std::fs::write(
         project.join("src/main.bn"),
-        "import \"std/fs\"\n\nfun main() {\n    print(Files.list(\".\"))\n}\n",
+        "import \"std/fs\"\n\nfun main() {\n    print(readFile(\"x\"))\n}\n",
     )
     .unwrap();
     let (out, code) = output(burn().current_dir(&project).arg("check"));
     assert_eq!(code, 1, "{}", out);
-    assert!(out.contains("`std/fs` needs the standard runtime"), "{}", out);
+    assert!(out.contains("`std/fs` is part of the standard library"), "{}", out);
     let _ = std::fs::remove_dir_all(&tmp);
 }
 

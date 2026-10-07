@@ -606,7 +606,7 @@ impl Server {
     pub fn import_candidates(&self, uri: &str, a: &Analysis, name: &str, with_project: bool) -> Vec<String> {
         let mut out = Vec::new();
         for (module, exports) in std_exports() {
-            if exports.iter().any(|e| e.name == name) && !self.imported(a, Some(module), None) {
+            if !a.no_std && exports.iter().any(|e| e.name == name) && !self.imported(a, Some(module), None) {
                 out.push(format!("std/{}", module));
             }
         }
@@ -633,6 +633,9 @@ impl Server {
 
     pub fn auto_import_items(&self, uri: &str, a: &Analysis, visible: &std::collections::HashSet<String>) -> Vec<Json> {
         let mut out = Vec::new();
+        if a.no_std {
+            return out;
+        }
         for (module, exports) in std_exports() {
             if self.imported(a, Some(module), None) {
                 continue;

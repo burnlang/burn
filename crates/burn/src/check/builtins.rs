@@ -264,6 +264,11 @@ impl<'a> Checker<'a> {
         if self.is_dry() || !self.gated.insert((m, home)) {
             return;
         }
+        if self.no_std {
+            let d = Diagnostic::error(at, format!("`{}` is in the standard library module `std/{}`", name, home)).help(super::nostd::HELP);
+            self.emit(d);
+            return;
+        }
         let (offset, after_import) = scope.import_at;
         let text = if after_import {
             format!("\nimport \"std/{}\"", home)

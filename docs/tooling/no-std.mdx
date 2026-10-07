@@ -1,14 +1,14 @@
 ---
-title: Building without the standard runtime
-description: Small native executables that leave out threads, HTTP, JSON and the rest of the standard runtime.
+title: Building without the standard library
+description: Small native executables that use only the built-in core of the language, without the standard library.
 order: 22
 ---
 
-# Building without the standard runtime
+# Building without the standard library
 
-A native Burn executable normally carries the full runtime: threads for `async fun`, an HTTP client, JSON, processes,
-time zones and bvm for bytecode libraries. A program that needs none of that can be built without it, which gives
-much smaller executables:
+Like `no_std` in Rust, a program can be built with only the core of the language: no standard library modules and none
+of the runtime behind them (threads for `async fun`, the HTTP client, JSON, processes, time zones and bvm for bytecode
+libraries). That gives much smaller executables:
 
 ```sh
 burn build app.bn --no-std
@@ -22,7 +22,7 @@ name = "github.com/you/tool"
 std = false
 ```
 
-| Program | With the standard runtime | Without |
+| Program | With the standard library | Without |
 | --- | --- | --- |
 | `print("hello")` | 349 KB | 39 KB |
 
@@ -30,42 +30,38 @@ The language does not change. Strings, arrays, maps, structs, interfaces, generi
 templates and automatic memory all work the same way, and so do runtime errors, overflow checks and stack overflow
 detection. The executable only needs the C library and `libm`.
 
-## What stays available
+## What is available
 
-- printing and reading: `print`, `eprint`, `input`, `readStdin`
-- files: `readFile`, `writeFile`, `appendFile`, `fileExists` from `std/fs`
-- the environment: `args`, `env`, `exit` and `panic` from `std/process`
-- time: `now`, `nowMs`, `millis`, `clock`, `sleep` from `std/time`
-- numbers: everything from `std/math`, and `random`, `randomInt` and `seed` from `std/random`
-- the standard modules written in plain Burn: `std/strings`, `std/math`, `std/list`, `std/collections`, `std/path`,
-  `std/random` and `std/testing`
+Only the [built-in core](../stdlib/builtins.mdx), which needs no import:
 
-## What needs the standard runtime
+- printing and reading: `print`, `eprint`, `write`, `input`, `readStdin`
+- conversions: `toString`, `toInt`, `toFloat`, `isInt`, `isNumber`, `typeOf` and `as` casts
+- strings, arrays and maps with all their operations, like `len`, `split`, `join`, `push`, `sort`, `keys` and `has`
+- `wrappingAdd`, `wrappingSub` and `wrappingMul` on integers
+
+## What is not
 
 | Feature | Why |
 | --- | --- |
+| any `import "std/..."`, for example `std/math` or `std/strings` | the standard library is turned off |
+| the functions that live in standard modules, like `sqrt`, `readFile`, `exit`, `now` or `assert` | they belong to `std/math`, `std/fs`, `std/process`, `std/time` and `std/testing` |
 | `async fun` and `await` | they run on threads |
-| `parseJSON`, `toJSON`, `std/json` | the JSON reader and writer |
-| `std/http` | the HTTP client |
-| `Process` from `std/process`, `Files` from `std/fs` | running processes, directories and file operations |
-| `std/date`, and `Time` from `std/time` | the local time zone |
 | bytecode libraries (`import "lib.bvmc"`) | they run on bvm |
 
-Importing `std/fs`, `std/process` or `std/time` for the functions listed above is fine; using `Files`, `Process`,
-`Time` or anything else from such a module that needs the standard runtime is a compile error, and so is using one of
-the other features. The error points at the call or the import:
+Using one of these is a compile error that points at the import or the call:
 
 ```text
-error: `std/http` needs the standard runtime for making HTTP requests
+error: `std/math` is part of the standard library
  --> src/main.bn:1:8
   |
-1 | import "std/http"
+1 | import "std/math"
   |        ^^^^^^^^^^
-  = help: this program is built without the standard runtime (`std = false` in burn.toml, or `--no-std`); remove that setting to use it
+  = help: this program is built without the standard library (`std = false` in burn.toml, or `--no-std`); only the built-in core is available, so remove that setting to use it
 ```
 
 The same checks run with `burn check`, `burn run` and in the editor, so a project with `std = false` reports these
-errors before it is built. `burn run` still runs the program on bvm, which makes no difference to what it prints.
+errors before it is built, and the editor does not suggest standard library imports. `burn run` still runs the program
+on bvm, which makes no difference to what it prints.
 
 ## How it works
 

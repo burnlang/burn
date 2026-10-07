@@ -26,7 +26,7 @@ This page lists every subcommand of `burn`. The shorter toolchain commands map o
 | `burn build <file.bar\|file.bvmc>` | build a native executable that runs the bytecode |
 | `burn build <file.bn> --emit-asm out.s` | also keep the generated assembly (bvm assembly with `--target bvm`) |
 | `burn build <file.bn> --no-strip` | keep symbols in the executable |
-| `burn build <file.bn> --no-std` | build [without the standard runtime](./no-std.mdx), like `std = false` in burn.toml |
+| `burn build <file.bn> --no-std` | build [without the standard library](./no-std.mdx), like `std = false` in burn.toml |
 | `burn check <files...>` | report errors and warnings without running |
 | `burn fix [--dry-run] <files...>` | apply the compiler's certain fixes, then report what is left ([details](./fixing-errors.mdx)) |
 | `burn doc [files...] [-o dir]` | generate an HTML reference from Burndoc comments ([details](./burndoc.mdx)) |

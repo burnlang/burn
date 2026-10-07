@@ -29,6 +29,7 @@ struct Analysis {
     type_names: Vec<(String, TyId, Span, usize)>,
     links: Vec<(Span, ide::Target)>,
     inserts: Vec<usize>,
+    no_std: bool,
 }
 
 #[derive(Default)]
@@ -142,25 +143,26 @@ fn import_items(file: &Path, typed: &str) -> Vec<Json> {
             ]));
         }
     };
-    for s in crate::loader::STDLIB {
-        add(s.name.to_string(), 9, "standard library", &mut out);
+    let project = crate::project::find_root(file).and_then(|root| crate::project::load(&root).ok());
+    if project.as_ref().map(|p| p.manifest.std).unwrap_or(true) {
+        for s in crate::loader::STDLIB {
+            add(s.name.to_string(), 9, "standard library", &mut out);
+        }
     }
-    if let Some(root) = crate::project::find_root(file) {
-        if let Ok(p) = crate::project::load(&root) {
-            add(p.manifest.name.clone(), 9, "this project", &mut out);
-            for (d, _) in &p.manifest.dependencies {
-                add(d.clone(), 9, "dependency", &mut out);
-            }
-            for l in &p.lock {
-                add(l.name.clone(), 9, "installed package", &mut out);
-            }
-            if let Some((name, _)) = crate::project::split_package_path(typed.trim_end_matches('/')) {
-                if let Ok(dir) = p.resolve(&name) {
-                    let sub = typed[name.len()..].trim_start_matches('/');
-                    let (folder, _) = sub.rsplit_once('/').unwrap_or(("", sub));
-                    let base = if folder.is_empty() { name.clone() } else { format!("{}/{}", name, folder) };
-                    list_sources(&dir.join(folder), &base, &mut |l, k| add(l, k, "package file", &mut out));
-                }
+    if let Some(p) = project {
+        add(p.manifest.name.clone(), 9, "this project", &mut out);
+        for (d, _) in &p.manifest.dependencies {
+            add(d.clone(), 9, "dependency", &mut out);
+        }
+        for l in &p.lock {
+            add(l.name.clone(), 9, "installed package", &mut out);
+        }
+        if let Some((name, _)) = crate::project::split_package_path(typed.trim_end_matches('/')) {
+            if let Ok(dir) = p.resolve(&name) {
+                let sub = typed[name.len()..].trim_start_matches('/');
+                let (folder, _) = sub.rsplit_once('/').unwrap_or(("", sub));
+                let base = if folder.is_empty() { name.clone() } else { format!("{}/{}", name, folder) };
+                list_sources(&dir.join(folder), &base, &mut |l, k| add(l, k, "package file", &mut out));
             }
         }
     }
@@ -346,6 +348,7 @@ impl Server {
             },
         );
         let links = ide::import_links(&loaded, root);
+        let no_std = loaded.no_std;
         let mut diags = loaded.diags;
         diags.extend(result.diags);
         (
@@ -360,6 +363,7 @@ impl Server {
                 type_names: result.type_names,
                 links,
                 inserts,
+                no_std,
             },
             diags,
         )

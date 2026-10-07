@@ -16,7 +16,7 @@ pub fn std_only(builtin: &str) -> Option<&'static str> {
     })
 }
 
-const HELP: &str = "this program is built without the standard runtime (`std = false` in burn.toml, or `--no-std`); remove that setting to use it";
+pub const HELP: &str = "this program is built without the standard library (`std = false` in burn.toml, or `--no-std`); only the built-in core is available, so remove that setting to use it";
 
 impl<'a> Checker<'a> {
     pub fn needs_std(&mut self, span: Span, what: &'static str) {
@@ -35,32 +35,14 @@ impl<'a> Checker<'a> {
         }
         let is_std = |i: usize| loaded.modules[i].key.starts_with("std:");
         let module_of = |file| loaded.modules.iter().position(|m| m.file == file);
-        let mut needs: Vec<Option<&'static str>> = vec![None; loaded.modules.len()];
         let uses = std::mem::take(&mut self.std_uses);
         let mut seen = HashSet::new();
         for (span, what) in uses {
-            match module_of(span.file) {
-                Some(m) if is_std(m) => {
-                    needs[m].get_or_insert(what);
-                }
-                _ => {
-                    if seen.insert((span, what)) {
-                        self.emit(Diagnostic::error(span, format!("{} needs the standard runtime", what)).help(HELP));
-                    }
-                }
+            if module_of(span.file).map(is_std).unwrap_or(false) {
+                continue;
             }
-        }
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for i in 0..loaded.modules.len() {
-                if !is_std(i) || needs[i].is_some() {
-                    continue;
-                }
-                if let Some(w) = loaded.modules[i].imports.iter().find_map(|(d, _)| needs[*d]) {
-                    needs[i] = Some(w);
-                    changed = true;
-                }
+            if seen.insert((span, what)) {
+                self.emit(Diagnostic::error(span, format!("{} needs the standard library", what)).help(HELP));
             }
         }
         for (i, m) in loaded.modules.iter().enumerate() {
@@ -68,18 +50,13 @@ impl<'a> Checker<'a> {
                 continue;
             }
             for (d, span) in &m.imports {
-                let name = loaded.modules[*d].key.trim_start_matches("std:");
-                let has_builtins = super::builtins::HOMES.iter().any(|(home, _)| *home == name);
-                if has_builtins && !self.import_uses.borrow().contains(&(i, *d)) {
-                    continue;
-                }
-                if let Some(what) = needs[*d] {
-                    let name = loaded.modules[*d].key.trim_start_matches("std:").to_string();
-                    self.emit(Diagnostic::error(*span, format!("`std/{}` needs the standard runtime for {}", name, what)).help(HELP));
+                if is_std(*d) {
+                    let name = loaded.modules[*d].key.trim_start_matches("std:");
+                    self.emit(Diagnostic::error(*span, format!("`std/{}` is part of the standard library", name)).help(HELP));
                 }
             }
             for (_, span) in &m.libs {
-                self.emit(Diagnostic::error(*span, "bytecode libraries need bvm, which is part of the standard runtime").help(HELP));
+                self.emit(Diagnostic::error(*span, "bytecode libraries need bvm, which is part of the standard library").help(HELP));
             }
         }
     }
