@@ -1,3 +1,8 @@
+import "std/strings"
+import "std/math"
+import "std/process"
+import "std/fs"
+
 const VERSION = "2.0.0"
 
 def enum Kind { Word, Num, Str, Comment, Op, Open, Close, Comma, Semi, Colon, Dot, GOpen, GClose }

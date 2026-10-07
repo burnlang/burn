@@ -71,6 +71,9 @@ pub struct ModScope {
     pub gtypes: HashMap<String, Entry<u32>>,
     pub imports: Vec<usize>,
     pub init: FuncId,
+    pub std_name: Option<String>,
+    pub snippet: bool,
+    pub import_at: (usize, bool),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -210,6 +213,7 @@ pub struct Checker<'a> {
     pub inst_sites: HashMap<FuncId, (String, Span)>,
     pub no_std: bool,
     pub std_uses: Vec<(Span, &'static str)>,
+    pub gated: HashSet<(usize, &'static str)>,
 }
 
 pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
@@ -258,6 +262,7 @@ pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
         inst_sites: HashMap::new(),
         no_std: loaded.no_std,
         std_uses: Vec::new(),
+        gated: HashSet::new(),
     };
     c.run(loaded);
     c.check_no_std(loaded);
@@ -811,6 +816,16 @@ impl<'a> Checker<'a> {
                 gtypes: HashMap::new(),
                 imports: m.imports.iter().map(|(i, _)| *i).collect(),
                 init,
+                std_name: m.key.strip_prefix("std:").map(|s| s.to_string()),
+                snippet: m.key.starts_with("<<eval>>") || m.key.starts_with("<repl>"),
+                import_at: m
+                    .ast
+                    .items
+                    .iter()
+                    .filter(|it| matches!(it.kind, ItemKind::Import(_)))
+                    .map(|it| (it.span.end as usize, true))
+                    .next_back()
+                    .unwrap_or((0, false)),
             });
         }
         let mut aliases: Vec<(usize, String, TypeExpr, Span)> = Vec::new();

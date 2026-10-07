@@ -989,6 +989,9 @@ fn builtins_page(site: &Site, link: &Linker) -> Page {
             );
             d.aliases.clear();
         }
+        if let Some(m) = b.module() {
+            extra.push_str(&format!("<dl class=\"tags\"><dt>Import</dt><dd><code>import \"std/{}\"</code></dd></dl>", m));
+        }
         let mut s = detail(&ctx, &b.name, &b.name, &head, &Some(d), &[], &[]);
         s.insert_str(s.len() - "</section>".len(), &extra);
         main.push_str(&s);

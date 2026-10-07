@@ -601,7 +601,7 @@ impl Server {
                             (
                                 "value",
                                 Json::str(match crate::doc::builtins::find(&word) {
-                                    Some(b) => hover_markdown(&format!("{}\u{1}{}", b.sig, crate::doc::comment::to_markdown(&b.doc))),
+                                    Some(b) => hover_markdown(&format!("{}\u{1}{}", b.sig, b.markdown())),
                                     None => format!("```burn\n{}\n```", builtins::signature(&word)),
                                 }),
                             ),
@@ -613,7 +613,7 @@ impl Server {
         }
     }
 
-    fn member_items(&self, a: &Analysis, t: TyId, statics: bool) -> Vec<Json> {
+    fn member_items(&self, uri: &str, a: &Analysis, t: TyId, statics: bool) -> Vec<Json> {
         let mut items = Vec::new();
         let mut seen = std::collections::HashSet::new();
         let mut add = |label: &str, kind: i32, detail: String, doc: Option<String>, call: bool, items: &mut Vec<Json>| {
@@ -710,7 +710,15 @@ impl Server {
             let ty = first.split_once(':').map(|(_, t)| t.split('=').next().unwrap_or("")).unwrap_or("");
             let returns = b.sig.rsplit_once(')').map(|(_, r)| r.trim().starts_with(':')).unwrap_or(false);
             if !b.name.starts_with("__") && !ty.trim().is_empty() && receiver(ty) && (returns || !a.types.is_numeric(t)) {
-                add(&b.name, 2, b.sig.clone(), Some(crate::doc::comment::to_markdown(&b.doc)), true, &mut items);
+                add(&b.name, 2, b.sig.clone(), Some(b.markdown()), true, &mut items);
+                if let (Some(m), Some(Json::Obj(fields))) = (b.module(), items.last_mut()) {
+                    if !self.imported(a, Some(m), None) && fields.iter().any(|(k, v)| k == "label" && v.as_str() == Some(b.name.as_str())) {
+                        if let Some(edit) = self.import_edit(uri, &format!("std/{}", m)) {
+                            fields.push(("additionalTextEdits".into(), Json::Arr(vec![edit])));
+                            fields.push(("labelDetails".into(), Json::obj(vec![("description", Json::str(format!("std/{}", m)))])));
+                        }
+                    }
+                }
             }
         }
         if matches!(a.types.get(t), Ty::Str) {
@@ -837,7 +845,7 @@ impl Server {
                 }
             }
             if let Some((t, statics)) = self.resolve_chain(a, &chain, off) {
-                return Json::Arr(self.member_items(a, t, statics));
+                return Json::Arr(self.member_items(uri, a, t, statics));
             }
             return Json::Arr(vec![]);
         }
@@ -911,7 +919,8 @@ impl Server {
             return Json::Arr(items);
         }
         for b in builtins::BUILTINS {
-            if !b.starts_with("__") {
+            let hidden = builtins::home_module(b).map(|m| !self.imported(a, Some(m), None)).unwrap_or(false);
+            if !b.starts_with("__") && !hidden {
                 push(b, 3, builtins::signature(b).to_string(), &mut items);
                 if let (Some(doc), Some(Json::Obj(fields))) = (crate::doc::builtins::find(b), items.last_mut()) {
                     if fields.iter().any(|(k, v)| k == "label" && v.as_str() == Some(b)) {
@@ -922,10 +931,7 @@ impl Server {
                         }
                         fields.push((
                             "documentation".into(),
-                            Json::obj(vec![
-                                ("kind", Json::str("markdown")),
-                                ("value", Json::str(crate::doc::comment::to_markdown(&doc.doc))),
-                            ]),
+                            Json::obj(vec![("kind", Json::str("markdown")), ("value", Json::str(doc.markdown()))]),
                         ));
                     }
                 }

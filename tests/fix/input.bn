@@ -19,6 +19,7 @@ fun main() {
     total == 1
     var p: Pair = Pair(1, 2)
     print(s.area(), totl, p.a!!)
+    print(sqrt(4.0))
     if (total > 0 & true) {
         print("never")
     }

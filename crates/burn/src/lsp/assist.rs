@@ -132,7 +132,7 @@ impl Server {
                 return Some((f.1.replacen("<init>", name, 1), String::new(), 0));
             }
             if let Some(b) = crate::doc::builtins::find(name) {
-                return Some((b.sig.clone(), crate::doc::comment::to_markdown(&b.doc), 0));
+                return Some((b.sig.clone(), b.markdown(), 0));
             }
             return None;
         }
@@ -159,7 +159,7 @@ impl Server {
             }
             _ => {
                 let b = crate::doc::builtins::find(name)?;
-                Some((b.sig.clone(), crate::doc::comment::to_markdown(&b.doc), 1))
+                Some((b.sig.clone(), b.markdown(), 1))
             }
         }
     }

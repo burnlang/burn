@@ -1,3 +1,5 @@
+import "std/time"
+
 async fun compute(n: int): int {
     sleep(20)
     return n * n

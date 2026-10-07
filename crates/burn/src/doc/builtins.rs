@@ -7,6 +7,20 @@ pub struct Builtin {
     pub doc: DocComment,
 }
 
+impl Builtin {
+    pub fn module(&self) -> Option<&'static str> {
+        crate::check::builtins::home_module(&self.name)
+    }
+
+    pub fn markdown(&self) -> String {
+        let text = comment::to_markdown(&self.doc);
+        match self.module() {
+            Some(m) => format!("Needs `import \"std/{}\"`.\n\n{}", m, text),
+            None => text,
+        }
+    }
+}
+
 pub const SOURCE: &str = include_str!("builtins.bn");
 
 pub fn parse(src: &str) -> Vec<Builtin> {

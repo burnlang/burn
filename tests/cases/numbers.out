@@ -23,8 +23,8 @@ two hundred {"a": 1, "b": 2}
 301 42 255 43 42 299
 [72, 195, 169, 108, 108, 111] Héllo
 runtime error: integer overflow: 400 does not fit in uint8
-   --> tests/cases/numbers.bn:130:11
+   --> tests/cases/numbers.bn:133:11
     |
-130 |     print(b * 2)
+133 |     print(b * 2)
     |           ^
     = help: uint8 holds values from 0 to 255; use a wider type, or `wrappingAdd`, `wrappingSub` and `wrappingMul` to wrap around

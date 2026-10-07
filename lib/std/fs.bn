@@ -1,9 +1,9 @@
 /**
  * Works with files and directories.
  *
- * Reading and writing file contents uses the built-in `readFile`,
- * `writeFile`, `appendFile` and `fileExists`; `Files` adds what is needed to
- * manage whole directories. No function stops the program: failures are
+ * Importing `std/fs` gives `readFile`, `writeFile`, `appendFile` and
+ * `fileExists` for file contents; `Files` adds what is needed to manage
+ * whole directories. No function stops the program: failures are
  * reported by the return value.
  *
  * @since 26.1

@@ -71,7 +71,7 @@ fn files(name: &str, kind: Kind, target: &str) -> Vec<(&'static str, String)> {
             ));
             out.push((
                 "tests/main.bn",
-                format!("import \"{name}\"\n\nassert(greet(\"Burn\") == \"Hello, Burn!\")\nprint(\"all tests passed\")\n"),
+                format!("import \"std/testing\"\nimport \"{name}\"\n\nassert(greet(\"Burn\") == \"Hello, Burn!\")\nprint(\"all tests passed\")\n"),
             ));
             out.push((
                 "README.md",

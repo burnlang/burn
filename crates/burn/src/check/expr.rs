@@ -1353,9 +1353,10 @@ impl<'a> Checker<'a> {
                     return self.construct(t, args, span, callee.span);
                 }
                 if let Some(e) = self.builtin(name, None, args, span, expected) {
+                    self.gate_builtin(name, callee.span);
                     if self.opts.want_index {
                         let text = match crate::doc::builtins::find(name) {
-                            Some(b) => format!("{}\u{1}{}", b.sig, crate::doc::comment::to_markdown(&b.doc)),
+                            Some(b) => format!("{}\u{1}{}", b.sig, b.markdown()),
                             None => format!("(builtin) {}", builtins::signature(name)),
                         };
                         self.hover(callee.span, text);
@@ -1600,6 +1601,7 @@ impl<'a> Checker<'a> {
             _ => {}
         }
         if let Some(e) = self.builtin(&name.name, Some((o.clone(), obj.span)), args, span, expected) {
+            self.gate_builtin(&name.name, name.span);
             return e;
         }
         let m = self.cur_module();

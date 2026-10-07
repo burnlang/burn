@@ -1,10 +1,13 @@
 ---
 title: Built-in functions
-description: Functions that are always available without an import.
+description: The functions that are always available, and the ones that live in standard library modules.
 order: 10
 ---
 
 # Built-in functions
+
+The basics of the language are always available: printing, conversions and the operations on strings, arrays and
+maps. Everything else lives in a [standard library module](#in-the-standard-library) and needs its `import`.
 
 Built-ins can be called as functions or, when the first argument is the receiver, as methods:
 `len(names)` and `names.length`, `upper(s)` and `s.upper()`.
@@ -35,8 +38,8 @@ Built-ins can be called as functions or, when the first argument is the receiver
 `len`, `upper`, `lower`, `trim`, `split(s, sep)`, `join(array, sep)`, `substring(s, start, end?)`,
 `charAt(s, i)`, `contains(s, part)`, `indexOf(s, part)`, `replace(s, from, to)`, `startsWith`, `endsWith`,
 `repeat(s, n)`, `chars(s)`, `reverse(s)`, `charCode(s)`, `fromCharCode(n)`. Indexing (`s[0]`) returns a
-one character string. `isLetter`, `isDigit`, `isAlphanumeric` and `isWhitespace` check that every character of
-a non-empty string belongs to the class (Unicode letters and numbers; `isDigit` accepts `0` to `9`). Lengths and indexes count Unicode characters.
+one character string. Lengths and indexes count Unicode
+characters.
 `bytes(s)` returns the UTF-8 bytes as a `[uint8]`, and `fromBytes(bytes)` decodes them back into a string.
 
 ## Arrays
@@ -49,26 +52,61 @@ a non-empty string belongs to the class (Unicode letters and numbers; `isDigit` 
 
 `len`, `keys(m)`, `values(m)`, `has(m, k)`, `get(m, k, default)`, `remove(m, k)`, `m[k]`, `m[k] = v`.
 
-## Math
+## Numbers
 
-`sqrt`, `pow`, `abs`, `floor`, `ceil`, `round`, `min`, `max`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`,
-`atan2`, `log`, `log10`, `exp`, `random()` (float in `[0, 1)`), `randomInt(min, max)`, `seed(n)`.
-`floor`, `ceil` and `round` return `int`; `pow`, `min`, `max` and `abs` keep the integer type when all arguments are
-integers, and `min`, `max` and `abs` keep `float32`.
 `x.wrappingAdd(y)`, `x.wrappingSub(y)` and `x.wrappingMul(y)` wrap around at the edges of the integer type instead of
 failing on overflow.
 
-## Time
+## In the standard library
+
+These functions are part of the standard library. Import their module to use them; the compiler says which import
+is missing, and `burn fix` or the editor's quick fix adds it. They are still fast built-ins underneath.
+
+| Module | Functions |
+| --- | --- |
+| `std/math` | `sqrt`, `pow`, `abs`, `floor`, `ceil`, `round`, `min`, `max`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `log`, `log10`, `exp` |
+| `std/random` | `random`, `randomInt`, `seed` |
+| `std/time` | `now`, `nowMs`, `millis`, `clock`, `sleep` |
+| `std/json` | `parseJSON`, `toJSON` |
+| `std/fs` | `readFile`, `writeFile`, `appendFile`, `fileExists` |
+| `std/process` | `env`, `args`, `exit`, `panic` |
+| `std/testing` | `assert` |
+| `std/strings` | `isLetter`, `isDigit`, `isAlphanumeric`, `isWhitespace` |
+
+```burn
+import "std/math"
+import "std/testing"
+
+assert(sqrt(16.0) == 4.0)
+```
+
+`burn eval` and `burn repl` have all of them without imports.
+
+### Math
+
+`sqrt`, `pow`, `abs`, `floor`, `ceil`, `round`, `min`, `max`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`,
+`atan2`, `log`, `log10`, `exp` from `std/math`, and `random()` (float in `[0, 1)`), `randomInt(min, max)` and
+`seed(n)` from `std/random`. `floor`, `ceil` and `round` return `int`; `pow`, `min`, `max` and `abs` keep the integer
+type when all arguments are integers, and `min`, `max` and `abs` keep `float32`.
+
+### Time
 
 `now()` (seconds as float), `nowMs()` / `millis()` (milliseconds as int), `clock()` (monotonic nanoseconds),
-`sleep(ms)`.
+`sleep(ms)`, from `std/time`.
 
-## JSON
+### JSON
 
 `parseJSON(text)` returns `any`: objects become `{string: any}`, arrays `[any]`. Read values with indexing
-(`data["name"]`, `data.tags[0]`) and narrow them with `is`. `toJSON(value)` serializes any value.
+(`data["name"]`, `data.tags[0]`) and narrow them with `is`. `toJSON(value)` serializes any value. Both are in
+`std/json`.
 
-## Files, environment and process
+### Files, environment and process
 
-`readFile(path)`, `writeFile(path, text)`, `appendFile(path, text)`, `fileExists(path)`, `env(name)`,
-`args()`, `exit(code = 0)`, `panic(message)`, `assert(condition, message?)`.
+`readFile(path)`, `writeFile(path, text)`, `appendFile(path, text)` and `fileExists(path)` from `std/fs`;
+`env(name)`, `args()`, `exit(code = 0)` and `panic(message)` from `std/process`; `assert(condition, message?)` from
+`std/testing`.
+
+### Character classes
+
+`isLetter`, `isDigit`, `isAlphanumeric` and `isWhitespace` from `std/strings` check that every character of a
+non-empty string belongs to the class (Unicode letters and numbers; `isDigit` accepts `0` to `9`).

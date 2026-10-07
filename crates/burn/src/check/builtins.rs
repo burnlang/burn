@@ -110,6 +110,26 @@ pub const BUILTINS: &[&str] = &[
     "__cwd",
 ];
 
+pub const HOMES: &[(&str, &[&str])] = &[
+    (
+        "math",
+        &[
+            "sqrt", "pow", "abs", "floor", "ceil", "round", "min", "max", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "log", "log10", "exp",
+        ],
+    ),
+    ("random", &["random", "randomInt", "seed"]),
+    ("time", &["now", "nowMs", "millis", "clock", "sleep"]),
+    ("json", &["parseJSON", "toJSON"]),
+    ("fs", &["readFile", "writeFile", "appendFile", "fileExists"]),
+    ("process", &["env", "args", "exit", "panic"]),
+    ("testing", &["assert"]),
+    ("strings", &["isLetter", "isDigit", "isAlphanumeric", "isWhitespace"]),
+];
+
+pub fn home_module(name: &str) -> Option<&'static str> {
+    HOMES.iter().find(|(_, names)| names.contains(&name)).map(|(m, _)| *m)
+}
+
 pub fn is_builtin(name: &str) -> bool {
     BUILTINS.contains(&name)
 }
@@ -227,6 +247,35 @@ impl<'a> Checker<'a> {
             self.error(Self::aspan(a), format!("expected {} but found {}", what, s));
         }
         Self::err_expr()
+    }
+
+    pub fn gate_builtin(&mut self, name: &str, at: Span) {
+        let Some(home) = home_module(name) else {
+            return;
+        };
+        let m = self.cur_module();
+        let scope = &self.mods[m];
+        if scope.std_name.is_some() || scope.snippet {
+            return;
+        }
+        if scope.imports.iter().any(|i| self.mods[*i].std_name.as_deref() == Some(home)) {
+            return;
+        }
+        if self.is_dry() || !self.gated.insert((m, home)) {
+            return;
+        }
+        let (offset, after_import) = scope.import_at;
+        let text = if after_import {
+            format!("\nimport \"std/{}\"", home)
+        } else {
+            format!("import \"std/{}\"\n\n", home)
+        };
+        let d = Diagnostic::error(at, format!("`{}` is in the standard library module `std/{}`", name, home)).fix(
+            format!("import it with `import \"std/{}\"`", home),
+            Span::new(scope.file, offset, offset),
+            text,
+        );
+        self.emit(d);
     }
 
     pub fn builtin(&mut self, name: &str, recv: Option<(Expr, Span)>, args: &[ast::Expr], span: Span, expected: Option<TyId>) -> Option<Expr> {
