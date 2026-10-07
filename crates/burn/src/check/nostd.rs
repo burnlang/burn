@@ -68,6 +68,11 @@ impl<'a> Checker<'a> {
                 continue;
             }
             for (d, span) in &m.imports {
+                let name = loaded.modules[*d].key.trim_start_matches("std:");
+                let has_builtins = super::builtins::HOMES.iter().any(|(home, _)| *home == name);
+                if has_builtins && !self.import_uses.borrow().contains(&(i, *d)) {
+                    continue;
+                }
                 if let Some(what) = needs[*d] {
                     let name = loaded.modules[*d].key.trim_start_matches("std:").to_string();
                     self.emit(Diagnostic::error(*span, format!("`std/{}` needs the standard runtime for {}", name, what)).help(HELP));
