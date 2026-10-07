@@ -1,0 +1,15 @@
+(2 + x * -3) = -13
+Expr.Add(Expr.Num(2), Expr.Mul(Expr.Var("x"), Expr.Neg(Expr.Num(3))))
+y
+true false true true
+circle 1.0 3.0 Shape.Circle
+square 2.0 4.0 Shape.Rect
+rect 2.0x3.0 6.0 Shape.Rect
+dot 0.0 Shape.Dot
+9.0 Shape.Rect(4.0, 5.0)
+end
+3 42 =+*;
+word a
+nothing
+Shape.Circle(2.0) Shape.Dot [Shape.Dot, Shape.Rect(1.0, 2.0)]
+Shape.Circle(9.0)

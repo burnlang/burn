@@ -370,6 +370,7 @@ impl Server {
                 continue;
             }
             let (kind, detail) = match a.types.get(t.1) {
+                Ty::Interface(i) if !a.types.ifaces[*i as usize].variants.is_empty() => (13, format!("enum {}", t.0)),
                 Ty::Interface(_) => (8, format!("interface {}", t.0)),
                 Ty::Enum(_) => (13, format!("enum {}", t.0)),
                 Ty::Record(r) if a.types.records[*r as usize].is_class => (7, format!("struct {}", t.0)),

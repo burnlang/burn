@@ -476,6 +476,12 @@ impl Server {
                         23
                     }
                 }
+                Ty::Interface(i) if !a.types.ifaces[*i as usize].variants.is_empty() => {
+                    for v in a.types.ifaces[*i as usize].variants.iter().filter(|v| within(&v.span)) {
+                        children.push(sym(&v.name, "", 22, v.span, vec![]));
+                    }
+                    10
+                }
                 Ty::Interface(i) => {
                     for m in a.types.ifaces[*i as usize].methods.iter().filter(|m| within(&m.span)) {
                         children.push(sym(&m.name, "", 6, m.span, vec![]));

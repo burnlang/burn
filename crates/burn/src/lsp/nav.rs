@@ -66,7 +66,12 @@ impl Analysis {
             .chain(self.index.locals.iter().map(|l| l.decl))
             .chain(self.types.records.iter().flat_map(|r| r.fields.iter().map(|f| f.span)))
             .chain(self.types.enums.iter().flat_map(|e| e.variants.iter().map(|v| v.1)))
-            .chain(self.types.ifaces.iter().flat_map(|i| i.methods.iter().map(|m| m.span)));
+            .chain(
+                self.types
+                    .ifaces
+                    .iter()
+                    .flat_map(|i| i.methods.iter().map(|m| m.span).chain(i.variants.iter().map(|v| v.span))),
+            );
         decls.filter(inside).min_by_key(|s| s.end - s.start)
     }
 

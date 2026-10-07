@@ -1,0 +1,9 @@
+def enum Tok {
+    Word(text: string),
+    Num(value: int),
+    End
+}
+
+fun main() {
+    var t = Tok.Word(1)
+}

@@ -824,6 +824,40 @@ fn uint64_uses_all_64_bits_on_bvm_and_natively() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn language_server_completes_enum_variants_with_data() {
+    use std::io::BufReader;
+    let dir = temp_dir("lsp-enums").canonicalize().unwrap();
+    let main = dir.join("main.bn");
+    let text = "def enum Token {\n    Word(text: string),\n    End\n}\n\nfun main() {\n    var t = Token.\n}\n";
+    std::fs::write(&main, text).unwrap();
+    let uri = format!("file://{}", main.display());
+    let mut child = burn()
+        .arg("lsp")
+        .current_dir(&dir)
+        .env("BURN_HOME", dir.join("home"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut lsp = Lsp {
+        stdin: child.stdin.take().unwrap(),
+        out: BufReader::new(child.stdout.take().unwrap()),
+        id: 0,
+    };
+    lsp.request("initialize", r#"{"capabilities":{}}"#);
+    lsp.open(&uri, text);
+    let at = |line: usize, ch: usize| format!(r#"{{"textDocument":{{"uri":"{}"}},"position":{{"line":{},"character":{}}}}}"#, uri, line, ch);
+    let items = lsp.request("textDocument/completion", &at(6, 18));
+    assert!(items.contains("\"label\":\"Word\"") && items.contains("Token.Word(text: string)"), "{}", items);
+    assert!(items.contains("\"label\":\"End\""), "{}", items);
+    let symbols = lsp.request("textDocument/documentSymbol", &format!(r#"{{"textDocument":{{"uri":"{}"}}}}"#, uri));
+    assert!(symbols.contains("\"Token\"") && symbols.contains("\"Word\""), "{}", symbols);
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 struct Lsp {
     stdin: std::process::ChildStdin,
     out: std::io::BufReader<std::process::ChildStdout>,

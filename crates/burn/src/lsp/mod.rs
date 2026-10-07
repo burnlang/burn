@@ -676,6 +676,20 @@ impl Server {
                     return items;
                 }
             }
+            Ty::Interface(i) if statics && !a.types.ifaces[*i as usize].variants.is_empty() => {
+                let en = &a.types.ifaces[*i as usize];
+                for v in &en.variants {
+                    let rec = &a.types.records[v.record as usize];
+                    let fs: Vec<String> = rec.fields.iter().map(|f| format!("{}: {}", f.name, a.types.display(f.ty))).collect();
+                    let detail = if fs.is_empty() {
+                        en.name.clone()
+                    } else {
+                        format!("{}.{}({})", en.name, v.name, fs.join(", "))
+                    };
+                    add(&v.name, 20, detail, None, false, &mut items);
+                }
+                return items;
+            }
             Ty::Interface(i) => {
                 for m in &a.types.ifaces[*i as usize].methods {
                     let ps: Vec<String> = m.params.iter().map(|p| a.types.display(*p)).collect();
@@ -911,6 +925,7 @@ impl Server {
         }
         for t in &a.type_names {
             let kind = match a.types.get(t.1) {
+                Ty::Interface(i) if !a.types.ifaces[*i as usize].variants.is_empty() => 13,
                 Ty::Interface(_) => 8,
                 Ty::Enum(_) => 13,
                 Ty::Record(r) if a.types.records[*r as usize].is_class => 7,

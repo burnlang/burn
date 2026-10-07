@@ -877,6 +877,7 @@ fn type_page(site: &Site, link: &Linker, m: &DocModule, it: &Item) -> Page {
         main.push_str("<h2>Details</h2>");
         for x in members {
             let head = match (&x.kind, &x.sig) {
+                (MemberKind::Variant, Some(s)) => format!("{}.<span class=\"fn\">{}</span>({})", esc(&it.name), esc(&x.name), ctx.params(&s.params)),
                 (_, Some(s)) => {
                     let prefix = match x.kind {
                         MemberKind::StaticMethod => "<span class=\"kw\">static</span> ",

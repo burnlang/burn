@@ -150,6 +150,20 @@ pub fn write(v: u64, tid: u32, out: &mut String, nested: bool, depth: usize) {
                     return write(v, real, out, nested, depth);
                 }
             }
+            if name.contains('.') {
+                out.push_str(name);
+                if !fields.is_empty() {
+                    out.push('(');
+                    for (i, (_, ft)) in fields.iter().enumerate() {
+                        if i > 0 {
+                            out.push_str(", ");
+                        }
+                        write(field(v, i), *ft, out, true, depth + 1);
+                    }
+                    out.push(')');
+                }
+                return;
+            }
             if !name.is_empty() {
                 out.push_str(name);
                 out.push(' ');

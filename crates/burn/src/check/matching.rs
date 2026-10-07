@@ -3,6 +3,7 @@ use super::*;
 use crate::ast::{ArmBody, BinOp as AOp, ExprKind as A, MatchArm, Pattern};
 
 type Arm = (Option<Expr>, Vec<Stmt>, Option<(Expr, Span)>);
+type Bind = (ast::Ident, TyId, Option<Expr>);
 
 struct Prepared {
     pre: Vec<Stmt>,
@@ -152,6 +153,10 @@ impl<'a> Checker<'a> {
                 let e = &self.types.enums[ei as usize];
                 Some((e.name.clone(), e.variants.iter().map(|v| v.0.clone()).collect()))
             }
+            Ty::Interface(_) => self
+                .types
+                .variants_of(base)
+                .map(|e| (e.name.clone(), e.variants.iter().map(|v| v.name.clone()).collect())),
             _ => None,
         };
         let before = self.ctx().narrow.clone();
@@ -173,7 +178,7 @@ impl<'a> Checker<'a> {
             let mut conds: Vec<Expr> = Vec::new();
             let mut facts = Facts::default();
             let single = arm.patterns.len() == 1;
-            let mut binding: Option<(ast::Ident, TyId)> = None;
+            let mut binding: Vec<Bind> = Vec::new();
             for pat in &arm.patterns {
                 let (c, f) = match &subj {
                     None => match pat {
@@ -193,7 +198,7 @@ impl<'a> Checker<'a> {
                                 }
                             }
                         }
-                        if bind.is_some() {
+                        if !bind.is_empty() {
                             binding = bind;
                         }
                         (c, f)
@@ -213,11 +218,15 @@ impl<'a> Checker<'a> {
             }
             self.apply(&facts.t);
             let mut body = Vec::new();
-            if let Some((name, t)) = binding {
+            for (name, t, field) in binding {
                 if let Some((val, _, Some(tmp))) = &subj {
                     let declared = val.ty;
                     let read = Expr::new(ExprKind::Local(*tmp), declared);
-                    let v = if t == declared { read } else { self.payload_conv(read, declared, t) };
+                    let v = match field {
+                        Some(path) => path,
+                        None if t == declared => read,
+                        None => self.payload_conv(read, declared, t),
+                    };
                     let slot = self.declare_local(&name.name, t, name.span, false, arm.span);
                     self.hover(name.span, format!("{}: {}", name.name, self.show(t)));
                     body.push(Stmt::Expr(Expr::new(ExprKind::SetLocal(slot, Box::new(v)), t)));
@@ -340,18 +349,23 @@ impl<'a> Checker<'a> {
         key: Option<u32>,
         tmp: Option<u32>,
         variants: Option<&(String, Vec<String>)>,
-    ) -> (Expr, Facts, Option<Key>, Option<(ast::Ident, TyId)>) {
+    ) -> (Expr, Facts, Option<Key>, Vec<Bind>) {
         let sty = val.ty;
         let base = self.types.unwrap_optional(sty);
         let mut facts = Facts::default();
         match pat {
             Pattern::Value(e) => {
+                if let Some(en) = self.types.variants_of(base).cloned() {
+                    if let Some((i, name, args)) = self.variant_pattern(e, &en) {
+                        return self.variant_cond(val, &en, i, &name, args, e.span, key, tmp);
+                    }
+                }
                 if let (A::Ident(n), Some((_, vs))) = (&e.kind, variants) {
                     if self.peek_local(n).is_none() {
                         if let Some(i) = vs.iter().position(|v| v == n) {
                             let lit = Expr::new(ExprKind::Int(i as i64), base);
                             let c = self.equality(true, val, lit, e.span);
-                            return (c, facts, Some(Key::Int(i as i64)), None);
+                            return (c, facts, Some(Key::Int(i as i64)), Vec::new());
                         }
                     }
                 }
@@ -364,7 +378,7 @@ impl<'a> Checker<'a> {
                             facts.f.push((k, u));
                         }
                     }
-                    return (c, facts, Some(Key::Null), None);
+                    return (c, facts, Some(Key::Null), Vec::new());
                 }
                 let h = self.expr(e, Some(base));
                 let k = match (&h.kind, self.types.get(h.ty)) {
@@ -381,7 +395,7 @@ impl<'a> Checker<'a> {
                 {
                     let (a, b) = (self.show(sty), self.show(h.ty));
                     self.error(e.span, format!("this pattern is {} but the value being matched is {}", b, a));
-                    return (Expr::new(ExprKind::Bool(false), T_BOOL), facts, None, None);
+                    return (Expr::new(ExprKind::Bool(false), T_BOOL), facts, None, Vec::new());
                 }
                 let val = if base != sty && self.types.is_nullable(sty) {
                     let lit = h.clone();
@@ -389,11 +403,11 @@ impl<'a> Checker<'a> {
                     let not_null = Expr::new(ExprKind::Unary(crate::hir::UnOp::Not, Box::new(nn)), T_BOOL);
                     let inner = self.payload_conv(val, sty, base);
                     let eq = self.equality(true, inner, lit, e.span);
-                    return (Expr::new(ExprKind::And(Box::new(not_null), Box::new(eq)), T_BOOL), facts, k, None);
+                    return (Expr::new(ExprKind::And(Box::new(not_null), Box::new(eq)), T_BOOL), facts, k, Vec::new());
                 } else {
                     val
                 };
-                (self.equality(true, val, h, e.span), facts, k, None)
+                (self.equality(true, val, h, e.span), facts, k, Vec::new())
             }
             Pattern::Range(a, b, inclusive) => {
                 let ha = self.expr(a, Some(base));
@@ -401,12 +415,12 @@ impl<'a> Checker<'a> {
                 if !(self.types.is_numeric(base) || base == T_STR) {
                     let s = self.show(sty);
                     self.error(a.span.to(b.span), format!("ranges only match numbers and strings, not {}", s));
-                    return (Expr::new(ExprKind::Bool(false), T_BOOL), facts, None, None);
+                    return (Expr::new(ExprKind::Bool(false), T_BOOL), facts, None, Vec::new());
                 }
                 let span = a.span.to(b.span);
                 let lo = self.comparison(AOp::Ge, val.clone(), ha, span);
                 let hi = self.comparison(if *inclusive { AOp::Le } else { AOp::Lt }, val, hb, span);
-                (Expr::new(ExprKind::And(Box::new(lo), Box::new(hi)), T_BOOL), facts, None, None)
+                (Expr::new(ExprKind::And(Box::new(lo), Box::new(hi)), T_BOOL), facts, None, Vec::new())
             }
             Pattern::Is(te, bind) => {
                 let t = self.resolve_type(te);
@@ -431,9 +445,116 @@ impl<'a> Checker<'a> {
                     }
                 }
                 let k = if t == T_NULL { Some(Key::Null) } else { None };
-                (c, facts, k, bind.clone().map(|b| (b, t)))
+                (c, facts, k, bind.clone().map(|b| (b, t, None)).into_iter().collect())
             }
         }
+    }
+
+    fn variant_pattern<'e>(&mut self, e: &'e ast::Expr, en: &IfaceDef) -> Option<(usize, ast::Ident, Option<&'e [ast::Expr]>)> {
+        let (head, args) = match &e.kind {
+            A::Call { callee, args } => (&**callee, Some(args.as_slice())),
+            _ => (e, None),
+        };
+        let name = match &head.kind {
+            A::Ident(n) if self.peek_local(n).is_none() => ast::Ident {
+                name: n.clone(),
+                span: head.span,
+            },
+            A::Field { obj, name } if self.type_ident(obj) == Some(en.ty) => name.clone(),
+            _ => return None,
+        };
+        let i = en.variants.iter().position(|v| v.name == name.name)?;
+        Some((i, name, args))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn variant_cond(
+        &mut self,
+        val: Expr,
+        en: &IfaceDef,
+        i: usize,
+        name: &ast::Ident,
+        args: Option<&[ast::Expr]>,
+        span: Span,
+        key: Option<u32>,
+        tmp: Option<u32>,
+    ) -> (Expr, Facts, Option<Key>, Vec<Bind>) {
+        let mut facts = Facts::default();
+        let v = &en.variants[i];
+        let rec = self.types.records[v.record as usize].clone();
+        self.def_link(name.span, v.span);
+        let rt = rec.ty;
+        let sty = val.ty;
+        let mut cond = self.is_check(val.clone(), rt, span);
+        for k in [key, tmp].into_iter().flatten() {
+            let declared = self.declared_of(k);
+            if self.narrowable(declared, rt) && !facts.t.iter().any(|(x, _)| *x == k) {
+                facts.t.push((k, rt));
+            }
+        }
+        let mut binds = Vec::new();
+        let mut total = true;
+        match args {
+            None => {}
+            Some(args) if args.len() != rec.fields.len() => {
+                let shape: Vec<String> = rec.fields.iter().map(|f| f.name.clone()).collect();
+                self.emit(
+                    Diagnostic::error(
+                        span,
+                        format!(
+                            "`{}.{}` has {} field{} but the pattern lists {}",
+                            en.name,
+                            v.name,
+                            rec.fields.len(),
+                            if rec.fields.len() == 1 { "" } else { "s" },
+                            args.len()
+                        ),
+                    )
+                    .help(if shape.is_empty() {
+                        format!("write `{}.{}`", en.name, v.name)
+                    } else {
+                        format!("write `{}.{}({})`, using `_` for fields you do not need", en.name, v.name, shape.join(", "))
+                    }),
+                );
+                for a in args {
+                    if let A::Ident(n) = &a.kind {
+                        if n != "_" && self.peek_local(n).is_none() {
+                            binds.push((ast::Ident { name: n.clone(), span: a.span }, T_ERROR, None));
+                        }
+                    }
+                }
+                return (Expr::new(ExprKind::Bool(false), T_BOOL), facts, None, binds);
+            }
+            Some(args) => {
+                for (fi, (a, f)) in args.iter().zip(rec.fields.iter()).enumerate() {
+                    let r = self.payload_conv(val.clone(), sty, rt);
+                    let got = Expr::new(ExprKind::GetField(Box::new(r), fi as u32), f.ty);
+                    let inner = self.types.variants_of(self.types.unwrap_optional(f.ty)).cloned();
+                    if let Some(sub) = inner.as_ref().and_then(|en| self.variant_pattern(a, en).map(|p| (en.clone(), p))) {
+                        let (en, (k, kname, kargs)) = sub;
+                        let (c, _, _, b) = self.variant_cond(got, &en, k, &kname, kargs, a.span, None, None);
+                        total = false;
+                        cond = Expr::new(ExprKind::And(Box::new(cond), Box::new(c)), T_BOOL);
+                        binds.extend(b);
+                        continue;
+                    }
+                    match &a.kind {
+                        A::Ident(n) if n == "_" => {}
+                        A::Ident(n) if self.peek_local(n).is_none() && self.lookup_value_entry(self.cur_module(), n).is_none() => {
+                            binds.push((ast::Ident { name: n.clone(), span: a.span }, f.ty, Some(got)));
+                        }
+                        _ => {
+                            total = false;
+                            let want = self.expr(a, Some(f.ty));
+                            let eq = self.equality(true, got, want, a.span);
+                            cond = Expr::new(ExprKind::And(Box::new(cond), Box::new(eq)), T_BOOL);
+                        }
+                    }
+                }
+            }
+        }
+        let k = if total { Some(Key::Int(i as i64)) } else { None };
+        (cond, facts, k, binds)
     }
 }
 

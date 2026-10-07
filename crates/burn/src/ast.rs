@@ -130,6 +130,7 @@ pub enum Def {
     Enum {
         name: Ident,
         variants: Vec<Ident>,
+        fields: Vec<Option<Vec<Param>>>,
     },
     Annotation {
         name: Ident,

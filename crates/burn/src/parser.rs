@@ -753,14 +753,28 @@ impl Parser {
             "enum" => {
                 self.expect(Tok::LBrace, "`{`")?;
                 let mut variants = Vec::new();
+                let mut fields = Vec::new();
                 while !self.at(&Tok::RBrace) && !self.at(&Tok::Eof) {
                     if self.eat(&Tok::Comma) || self.eat(&Tok::Semi) {
                         continue;
                     }
                     variants.push(self.ident("enum variant")?);
+                    if self.eat(&Tok::LParen) {
+                        let mut ps = Vec::new();
+                        while !self.at(&Tok::RParen) && !self.at(&Tok::Eof) {
+                            ps.push(self.param()?);
+                            if !self.eat(&Tok::Comma) {
+                                break;
+                            }
+                        }
+                        self.expect(Tok::RParen, "`)` to close the variant's fields")?;
+                        fields.push(Some(ps));
+                    } else {
+                        fields.push(None);
+                    }
                 }
                 self.expect(Tok::RBrace, "`}`")?;
-                Ok(Def::Enum { name, variants })
+                Ok(Def::Enum { name, variants, fields })
             }
             other => {
                 self.err(
@@ -1003,6 +1017,16 @@ impl Parser {
         let mut t = match self.peek().kind.clone() {
             Tok::Ident(name) => {
                 self.advance();
+                let mut name = name;
+                if self.at(&Tok::Dot) && !self.peek().nl_before {
+                    if let Tok::Ident(v) = self.peek_at(1).kind.clone() {
+                        if v.starts_with(|c: char| c.is_ascii_uppercase()) && name.starts_with(|c: char| c.is_ascii_uppercase()) {
+                            self.advance();
+                            self.advance();
+                            name = format!("{}.{}", name, v);
+                        }
+                    }
+                }
                 let mut args = Vec::new();
                 if self.at(&Tok::Lt) && !self.peek().nl_before {
                     self.advance();
@@ -1136,7 +1160,10 @@ impl Parser {
                 }
                 return !self.peek_at(1).nl_before;
             }
-            if !matches!(self.peek_at(1).kind, Tok::Question | Tok::Lt) {
+            let dotted = self.peek_at(1).kind == Tok::Dot
+                && first.starts_with(|c: char| c.is_ascii_uppercase())
+                && matches!(&self.peek_at(2).kind, Tok::Ident(v) if v.starts_with(|c: char| c.is_ascii_uppercase()));
+            if !dotted && !matches!(self.peek_at(1).kind, Tok::Question | Tok::Lt) {
                 return false;
             }
         }
