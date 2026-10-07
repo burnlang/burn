@@ -631,12 +631,30 @@ fn main() -> ExitCode {
             cmd_check(rest)
         }
         "build" | "-exe" | "--executable" => cmd_build(rest),
+        "dump" | "-d" | "--debug" if rest.first().map(|w| w == "--tokens").unwrap_or(false) => {
+            let mut code = ExitCode::SUCCESS;
+            for f in &rest[1..] {
+                match std::fs::read_to_string(f) {
+                    Ok(src) => {
+                        if rest.len() > 2 {
+                            println!("file {}", f);
+                        }
+                        print!("{}", lexer::dump(&src));
+                    }
+                    Err(e) => {
+                        eprintln!("error: cannot read `{}`: {}", f, e);
+                        code = ExitCode::from(1);
+                    }
+                }
+            }
+            code
+        }
         "dump" | "-d" | "--debug" => {
             let (what, file) = match rest {
                 [w, f] if w.starts_with("--") => (w.trim_start_matches("--").to_string(), f.clone()),
                 [f] => ("hir".to_string(), f.clone()),
                 _ => {
-                    eprintln!("usage: burn dump [--hir|--bytecode|--asm|--js] <file.bn>");
+                    eprintln!("usage: burn dump [--hir|--bytecode|--asm|--js] <file.bn>  |  burn dump --tokens <files...>");
                     return ExitCode::from(2);
                 }
             };

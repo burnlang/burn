@@ -441,6 +441,13 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
+        if self.pos == start {
+            let ch = self.src[self.pos..].chars().next().unwrap_or('?');
+            self.pos += ch.len_utf8();
+            let span = Span::new(self.file, start, self.pos);
+            self.diags.push(Diagnostic::error(span, format!("unexpected character `{}`", ch)));
+            return;
+        }
         let text = &self.src[start..self.pos];
         let tok = keyword(text).unwrap_or_else(|| Tok::Ident(text.to_string()));
         self.push(tok, start);
@@ -557,6 +564,9 @@ impl<'a> Lexer<'a> {
                         }
                     }
                     _ => {
+                        while self.pos < self.end && !self.src.is_char_boundary(self.pos) {
+                            self.pos += 1;
+                        }
                         self.error(esc_start, "unknown escape sequence");
                     }
                 }
@@ -620,4 +630,59 @@ impl<'a> Lexer<'a> {
             self.push(Tok::Template(parts), start);
         }
     }
+}
+
+pub fn escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn dump_tokens(toks: &[Token], depth: usize, out: &mut String) {
+    let pad = "  ".repeat(depth);
+    for t in toks {
+        let head = format!("{}{} {} {}", pad, t.span.start, t.span.end, t.nl_before as u8);
+        match &t.kind {
+            Tok::Ident(s) => out.push_str(&format!("{} Ident {}\n", head, s)),
+            Tok::Int(v) => out.push_str(&format!("{} Int {}\n", head, v)),
+            Tok::BigInt(v, hex) => out.push_str(&format!("{} BigInt {} {}\n", head, v, if *hex { "hex" } else { "dec" })),
+            Tok::Float(v) => out.push_str(&format!("{} Float {}\n", head, burn_runtime::fmt::float_str(*v))),
+            Tok::Str(s) => out.push_str(&format!("{} Str {}\n", head, escape(s))),
+            Tok::Template(parts) => {
+                out.push_str(&format!("{} Template\n", head));
+                for p in parts {
+                    match p {
+                        TplPart::Lit(s) => out.push_str(&format!("{}  lit {}\n", pad, escape(s))),
+                        TplPart::Expr(ts, span) => {
+                            out.push_str(&format!("{}  expr {} {}\n", pad, span.start, span.end));
+                            dump_tokens(ts, depth + 2, out);
+                        }
+                    }
+                }
+            }
+            other => out.push_str(&format!("{} {:?}\n", head, other)),
+        }
+    }
+}
+
+pub fn dump(src: &str) -> String {
+    let (toks, diags) = lex(src, 0);
+    let mut out = String::new();
+    dump_tokens(&toks, 0, &mut out);
+    for d in &diags {
+        out.push_str(&format!("error {} {} {}\n", d.span.start, d.span.end, d.message));
+    }
+    out
 }

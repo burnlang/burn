@@ -1,0 +1,71 @@
+# The Burn compiler, written in Burn
+
+This directory holds the self-hosted Burn compiler. It is ported from the compiler in `crates/burn` part by part. Each part has to produce exactly the same result as the Rust version before the next one starts.
+
+## How each part is checked
+
+The Rust compiler can print every stage in a fixed text form. The Burn port prints the same form, and the test suite runs both over every `.bn` file in the repository. The inputs include the edge cases in `tests/lexer`, and the two outputs must match byte for byte.
+
+| Stage | Rust | Burn | Printed by |
+| --- | --- | --- | --- |
+| Tokens | `crates/burn/src/lexer.rs` | `compiler/lexer.bn` | `burn dump --tokens <files...>` |
+
+Run the comparison by hand with:
+
+```sh
+burn dump --tokens examples/*.bn > rust.txt
+burn compiler/dump.bn examples/*.bn > burn.txt
+diff rust.txt burn.txt
+```
+
+The suite test `lexer_written_in_burn_matches_the_compiler` does the same on bvm and on a native build. Lexing all 128 repository files with the Burn lexer takes about 0.2 s on bvm.
+
+## Rules for porting
+
+- Port faithfully: same structure, same names where Burn allows, same error messages and spans. Improvements happen in Rust first, then get ported.
+- A bug found while porting is fixed in the Rust compiler in the same PR, with a fixture in `tests/`. The lexer port found two:
+  - a stray non-ASCII symbol (`→`) hung the lexer;
+  - an unknown escape before a multi-byte character (`"\é"`) crashed it.
+- Every stage gets a `burn dump` form before it is ported, so the comparison never depends on parsing human-readable output.
+
+## Roadmap
+
+1. **Lexer** (done). Tokens, string templates, numbers in every base and lexer errors.
+2. **Parser and AST.**
+   - Port `parser.rs` and `ast.rs` (about 2,600 lines). The AST uses enums with data.
+   - Add `burn dump --ast`, a canonical tree printer, and compare it, including recovery after syntax errors.
+3. **Diagnostics.**
+   - Port the source map, line and column lookup, and the `-->` snippet renderer.
+   - Compare `burn check` output on `tests/errors`.
+4. **Loader and projects.**
+   - Port imports, the standard library modules (read from `lib/std`), `burn.toml` and `burn.lock` parsing, and package resolution.
+5. **Checker.** The largest part (about 10,000 lines). Split it into PRs, roughly one per Rust file:
+   - declarations and types
+   - expressions
+   - statements and flow narrowing
+   - structs and interfaces
+   - generics
+   - closures
+   - `match` and enums
+   - numbers
+   - annotations
+   - no-std rules
+
+   Compare `burn dump --hir`.
+6. **Ownership.** Port `own.rs` and compare the HIR after ownership.
+7. **bvm code generation.** Port `vm/compile.rs` and compare `burn dump --bytecode`.
+8. **Bootstrap.**
+   - The Rust compiler builds the Burn compiler (stage 1).
+   - Stage 1 builds itself (stage 2), and CI checks that both produce identical bytecode.
+   - From then on, the Burn compiler can be chosen at the command line.
+9. **After that:** the native x86-64 and JavaScript backends, then the tools (`fmt`, `doc`, `lsp`). The runtime (`crates/burn-runtime`) stays in Rust and is shared by both compilers.
+
+## Language features this relies on
+
+These features were added to Burn for the port:
+
+- **`s += piece` appends in place**, so building output is linear.
+- **Enums whose variants carry data**, with `match` destructuring, for tokens, AST nodes and types.
+- **`toInt(text, radix)`, `isInt(text, radix)` and `toString(n, radix)`** for number literals and escapes.
+
+Numbers above the `int` range (`BigInt` tokens) are kept as decimal text, so the port needs no unsigned 64-bit arithmetic.
