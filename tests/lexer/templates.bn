@@ -1,0 +1,7 @@
+var a = "x${"inner ${b} end"}y"
+var b = "${a}${b}"
+var c = "${
+}"
+var d = "${ x // c }"
+var e = "pre${'it''s'}post"
+var f = "${"\""}"

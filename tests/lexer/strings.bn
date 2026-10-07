@@ -1,0 +1,8 @@
+var a = "tab\tnl\ncr\rnul\0bs\\q\"sq\'d\$"
+var b = 'single "x"' + "\u{41}\u{1F600}\u{+42}\u{-43}\u{D800}\u{110000}\u{}\u{zz}\u41"
+var c = "bad \q \é \
+var d = "unterminated
+var e = "$ alone $x ${a} ${b + "}"} ${ {1: 2} } ${'q}'}"
+var f = "${"
+var g = "${a
+var h = "\u{41

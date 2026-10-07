@@ -196,7 +196,7 @@ fn formatter_is_idempotent() {
 fn repository_sources_are_formatted() {
     let root = root();
     let mut files = Vec::new();
-    for dir in ["tests/cases", "examples", "lib/std", "tests/modules"] {
+    for dir in ["tests/cases", "examples", "lib/std", "tests/modules", "compiler"] {
         for e in std::fs::read_dir(root.join(dir)).unwrap() {
             let p = e.unwrap().path();
             if p.extension().map(|x| x == "bn").unwrap_or(false) {
@@ -222,7 +222,7 @@ fn repository_sources_import_the_standard_modules_they_use() {
     }
     let root = root();
     let mut files = Vec::new();
-    for dir in ["tests", "examples", "lib/std", "tools"] {
+    for dir in ["tests", "examples", "lib/std", "tools", "compiler"] {
         walk(&root.join(dir), &mut files);
     }
     let mut failures = Vec::new();
@@ -239,11 +239,57 @@ fn repository_sources_import_the_standard_modules_they_use() {
 }
 
 #[test]
+fn lexer_written_in_burn_matches_the_compiler() {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        for e in std::fs::read_dir(dir).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().map(|x| x == "bn").unwrap_or(false) {
+                out.push(p);
+            }
+        }
+    }
+    let root = root();
+    let mut files = Vec::new();
+    for dir in ["tests", "examples", "lib/std", "tools", "compiler"] {
+        walk(&root.join(dir), &mut files);
+    }
+    files.sort();
+    assert!(files.len() > 100, "only {} files", files.len());
+    let (want, code) = output(burn().current_dir(&root).args(["dump", "--tokens"]).args(&files));
+    assert_eq!(code, 0, "{}", want);
+    let dir = temp_dir("selfhost-lexer");
+    let exe = dir.join("dump");
+    let (built, code) = output(burn().current_dir(&root).args(["build", "compiler/dump.bn", "-o"]).arg(&exe));
+    assert_eq!(code, 0, "{}", built);
+    let mut bvm = burn();
+    bvm.current_dir(&root).arg("compiler/dump.bn").args(&files);
+    let mut native = Command::new(&exe);
+    native.current_dir(&root).args(&files);
+    for mut run in [bvm, native] {
+        let (got, code) = output(&mut run);
+        assert_eq!(code, 0, "{}", got);
+        if got != want {
+            let line = got.lines().zip(want.lines()).position(|(a, b)| a != b).unwrap_or(0);
+            let show = |s: &str| s.lines().skip(line.saturating_sub(3)).take(8).collect::<Vec<_>>().join("\n");
+            panic!(
+                "the Burn lexer differs from the compiler at line {}:\n--- burn\n{}\n--- rust\n{}",
+                line + 1,
+                show(&got),
+                show(&want)
+            );
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn burnfmt_written_in_burn_matches_the_builtin_formatter() {
     let root = root();
     let tool = root.join("tools/burnfmt/burnfmt.bn");
     let mut files = vec![tool.clone()];
-    for dir in ["tests/cases", "examples", "lib/std"] {
+    for dir in ["tests/cases", "examples", "lib/std", "compiler"] {
         for e in std::fs::read_dir(root.join(dir)).unwrap() {
             let p = e.unwrap().path();
             if p.extension().map(|x| x == "bn").unwrap_or(false) {

@@ -1,0 +1,86 @@
+import "lexer.bn"
+import "std/fs"
+import "std/process"
+
+/** Writes text the way `burn dump --tokens` does: quoted, with control characters escaped. */
+fun quoted(s: string): string {
+    var out = "\""
+    for c in s {
+        var code = charCode(c)
+        if (c == "\\") {
+            out += "\\\\"
+        } else if (c == "\"") {
+            out += "\\\""
+        } else if (c == "\n") {
+            out += "\\n"
+        } else if (c == "\t") {
+            out += "\\t"
+        } else if (c == "\r") {
+            out += "\\r"
+        } else if (code < 32 || code == 127) {
+            out += "\\u{${toString(code, 16)}}"
+        } else {
+            out += c
+        }
+    }
+    return out + "\""
+}
+
+fun flag(b: bool): int {
+    if (b) {
+        return 1
+    }
+    return 0
+}
+
+fun base(radixed: int): string {
+    if (radixed == 1) {
+        return "hex"
+    }
+    return "dec"
+}
+
+fun dumpTokens(tokens: [Token], depth: int): string {
+    var pad = repeat("  ", depth)
+    var out = ""
+    for t in tokens {
+        var head = "${pad}${t.start} ${t.end} ${flag(t.nl)} ${t.kind}"
+        out += match t.kind {
+            Kind.Ident => "${head} ${t.text}\n"
+            Kind.Int => "${head} ${t.value}\n"
+            Kind.BigInt => "${head} ${t.text} ${base(t.value)}\n"
+            Kind.Float => "${head} ${t.number}\n"
+            Kind.Str => "${head} ${quoted(t.text)}\n"
+            else => "${head}\n"
+        }
+        for p in t.parts {
+            match p {
+                Part.Lit(text) => out += "${pad}  lit ${quoted(text)}\n"
+                Part.Code(inner, start, end) => {
+                    out += "${pad}  expr ${start} ${end}\n"
+                    out += dumpTokens(inner, depth + 2)
+                }
+            }
+        }
+    }
+    return out
+}
+
+fun dump(src: string): string {
+    var lexed = lex(src)
+    var out = dumpTokens(lexed.tokens, 0)
+    for d in lexed.diags {
+        out += "error ${d.start} ${d.end} ${d.message}\n"
+    }
+    return out
+}
+
+fun main() {
+    var files = args()
+    for f in files {
+        if (len(files) > 1) {
+            print("file ${f}")
+        }
+        write(dump(readFile(f)))
+    }
+}

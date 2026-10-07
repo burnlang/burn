@@ -1,0 +1,9 @@
+#!/usr/bin/env burn
+// line comment
+/* block /* nested */ still */ var a = 1 /* inline */ + 2
+/** doc
+ * comment
+ */
+fun f() {}
+/* unterminated /* nested */
+var z = 1
