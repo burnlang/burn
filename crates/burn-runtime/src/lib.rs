@@ -214,4 +214,7 @@ runtime_fns! {
     ReleaseZero => burn_release_zero = crate::api::rc_release_zero [a];
     PossibleRoot => burn_possible_root = crate::api::rc_possible_root [a];
     StrAppend => burn_str_append = crate::api::str_append [a, b];
+    ParseIntRadix => burn_parse_int_radix = crate::api::parse_int_radix [a, b, c];
+    IsIntRadix => burn_is_int_radix = crate::api::is_int_radix [a, b, c];
+    IntToStrRadix => burn_int_to_str_radix = crate::api::int_to_str_radix [a, b, c];
 }

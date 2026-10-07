@@ -260,6 +260,55 @@ pub fn parse_int(s: u64, loc: u64) -> u64 {
     rt_error(&format!("cannot convert \"{}\" to int", t), loc)
 }
 
+fn radix_of(r: u64, loc: u64) -> u32 {
+    let r = r as i64;
+    if !(2..=36).contains(&r) {
+        rt_error(&format!("radix {} is out of range, it must be between 2 and 36", r), loc);
+    }
+    r as u32
+}
+
+fn int_in_radix(t: &str, radix: u32) -> Option<i64> {
+    let digits = t.strip_prefix(['+', '-']).unwrap_or(t);
+    if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+        return None;
+    }
+    i64::from_str_radix(t, radix).ok()
+}
+
+pub fn parse_int_radix(s: u64, r: u64, loc: u64) -> u64 {
+    let radix = radix_of(r, loc);
+    let t = str_ref(s).trim();
+    match int_in_radix(t, radix) {
+        Some(v) => v as u64,
+        None => rt_error(&format!("cannot convert \"{}\" to an int in base {}", t, radix), loc),
+    }
+}
+
+pub fn is_int_radix(s: u64, r: u64, loc: u64) -> u64 {
+    let radix = radix_of(r, loc);
+    b(int_in_radix(str_ref(s).trim(), radix).is_some())
+}
+
+pub fn int_to_str_radix(v: u64, r: u64, loc: u64) -> u64 {
+    let radix = radix_of(r, loc);
+    let n = v as i64;
+    let mut m = n.unsigned_abs();
+    let mut out = Vec::new();
+    loop {
+        out.push(char::from_digit((m % radix as u64) as u32, radix).unwrap_or('?') as u8);
+        m /= radix as u64;
+        if m == 0 {
+            break;
+        }
+    }
+    if n < 0 {
+        out.push(b'-');
+    }
+    out.reverse();
+    str_new(&out)
+}
+
 pub fn parse_float(s: u64, loc: u64) -> u64 {
     let t = str_ref(s).trim();
     match t.parse::<f64>() {

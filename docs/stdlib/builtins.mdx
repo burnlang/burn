@@ -30,6 +30,8 @@ Built-ins can be called as functions or, when the first argument is the receiver
 | `toInt(x)`, `parseInt(s)` | string, float or bool to `int` (runtime error for invalid strings) |
 | `toFloat(x)`, `parseFloat(s)` | string or int to `float` |
 | `isInt(s)`, `isNumber(s)` | check a string before converting |
+| `toInt(s, radix)`, `isInt(s, radix)` | read an integer written in base 2 to 36, e.g. `toInt("ff", 16)` is `255` |
+| `toString(n, radix)` | write an integer in base 2 to 36, e.g. `toString(255, 2)` is `"11111111"` |
 | `typeOf(x)` | the runtime type name, e.g. `"int"`, `"[string]"`, `"Person"` |
 | `x as uint8`, `x as float32`, ... | convert between [number types](../language/types.mdx#sized-numbers), checked at runtime |
 

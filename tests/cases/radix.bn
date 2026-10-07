@@ -1,0 +1,12 @@
+fun main() {
+    print(toInt("ff", 16), toInt("FF", 16), toInt("-101", 2), toInt("777", 8), toInt("zz", 36), toInt(" 42 ", 10))
+    print("1f".toInt(16), isInt("1f", 16), isInt("1g", 16), isInt("", 2), isInt("-", 10), isInt("12", 2), isInt("12"))
+    print(toString(255, 16), toString(255, 2), toString(-255, 16), toString(0, 7), (35).toString(36))
+    var big = toInt("1fffffffffffff", 16)
+    print(big, toString(big, 16), isInt("8000000000000000", 16), toInt("-1fffffffffffff", 16))
+    var hex = ""
+    for c in [10, 11, 255] {
+        hex += toString(c, 16)
+    }
+    print(hex, toInt(hex, 16))
+}
