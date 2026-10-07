@@ -209,6 +209,36 @@ fn repository_sources_are_formatted() {
 }
 
 #[test]
+fn repository_sources_import_the_standard_modules_they_use() {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        for e in std::fs::read_dir(dir).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().map(|x| x == "bn").unwrap_or(false) {
+                out.push(p);
+            }
+        }
+    }
+    let root = root();
+    let mut files = Vec::new();
+    for dir in ["tests", "examples", "lib/std", "tools"] {
+        walk(&root.join(dir), &mut files);
+    }
+    let mut failures = Vec::new();
+    for f in files
+        .iter()
+        .filter(|f| !f.starts_with(root.join("tests/errors")) && !f.starts_with(root.join("tests/fix")))
+    {
+        let (out, _) = output(burn().current_dir(&root).arg("check").arg(f));
+        if out.contains("is in the standard library module") {
+            failures.push(format!("{}\n{}", f.display(), out));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
 fn burnfmt_written_in_burn_matches_the_builtin_formatter() {
     let root = root();
     let tool = root.join("tools/burnfmt/burnfmt.bn");
@@ -885,7 +915,7 @@ fn language_server_navigates_into_libraries_and_renames_across_files() {
     )
     .unwrap();
     let main = dir.join("main.bn");
-    let text = "import \"shapes.bn\"\nimport \"std/date\"\n\nfun total(s: Shape): float {\n    return s.area()\n}\n\nfun main() {\n    var sq = new Square(2.0)\n    print(total(sq), twice(3), sqrt(2.0), Date.today())\n    twice(4)\n}\n";
+    let text = "import \"shapes.bn\"\nimport \"std/date\"\nimport \"std/math\"\n\nfun total(s: Shape): float {\n    return s.area()\n}\n\nfun main() {\n    var sq = new Square(2.0)\n    print(total(sq), twice(3), sqrt(2.0), Date.today())\n    twice(4)\n}\n";
     std::fs::write(&main, text).unwrap();
     let uri = format!("file://{}", main.display());
     let mut child = burn()
@@ -916,25 +946,25 @@ fn language_server_navigates_into_libraries_and_renames_across_files() {
         uri, text
     ));
     let at = |line: usize, ch: usize| format!(r#"{{"textDocument":{{"uri":"{}"}},"position":{{"line":{},"character":{}}}}}"#, uri, line, ch);
-    let def = lsp.request("textDocument/definition", &at(9, 32));
+    let def = lsp.request("textDocument/definition", &at(10, 32));
     assert!(def.contains("/cache/sources/") && def.contains("builtins.bn"), "{}", def);
     let builtins = std::fs::read_to_string(home.join(format!("cache/sources/{}/builtins.bn", env!("CARGO_PKG_VERSION")))).unwrap();
     assert!(builtins.contains("fun sqrt(x: float): float"));
-    let def = lsp.request("textDocument/definition", &at(9, 42));
+    let def = lsp.request("textDocument/definition", &at(10, 42));
     assert!(def.contains("std/date.bn"), "{}", def);
-    let def = lsp.request("textDocument/definition", &at(4, 15));
+    let def = lsp.request("textDocument/definition", &at(5, 15));
     assert!(def.contains("shapes.bn") && def.contains("\"line\":1"), "{}", def);
     let refs = lsp.request(
         "textDocument/references",
-        &at(9, 23).replace("}}", "},\"context\":{\"includeDeclaration\":true}}"),
+        &at(10, 23).replace("}}", "},\"context\":{\"includeDeclaration\":true}}"),
     );
     assert_eq!(refs.matches("\"uri\"").count(), 3, "{}", refs);
-    let rename = lsp.request("textDocument/rename", &at(4, 15).replace("}}", "},\"newName\":\"size\"}"));
+    let rename = lsp.request("textDocument/rename", &at(5, 15).replace("}}", "},\"newName\":\"size\"}"));
     assert!(rename.contains("shapes.bn") && rename.contains("main.bn"), "{}", rename);
     assert_eq!(rename.matches("\"newText\":\"size\"").count(), 3, "{}", rename);
-    let bad = lsp.request("textDocument/rename", &at(9, 32).replace("}}", "},\"newName\":\"root\"}"));
+    let bad = lsp.request("textDocument/rename", &at(10, 32).replace("}}", "},\"newName\":\"root\"}"));
     assert!(bad.contains("built into Burn"), "{}", bad);
-    let sig = lsp.request("textDocument/signatureHelp", &at(10, 11));
+    let sig = lsp.request("textDocument/signatureHelp", &at(11, 11));
     assert!(sig.contains("fun twice(x: int): int"), "{}", sig);
     let hints = lsp.request(
         "textDocument/inlayHint",

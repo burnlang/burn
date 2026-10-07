@@ -66,6 +66,15 @@ pub const STDLIB: &[Stdlib] = &[
     },
 ];
 
+fn std_source(path: &Path) -> Option<&'static Stdlib> {
+    let dir = path.parent()?;
+    if dir.file_name()? != "std" || dir.parent()?.file_name()? != "lib" || path.extension()? != "bn" {
+        return None;
+    }
+    let stem = path.file_stem()?.to_str()?;
+    STDLIB.iter().find(|s| s.name == stem)
+}
+
 pub fn stdlib_name(path: &str) -> Option<&'static Stdlib> {
     let p = path.trim_end_matches(".bn");
     let p = p
@@ -319,12 +328,16 @@ impl Loader {
                 self.project = Some(crate::project::load(&root));
             }
         }
-        let key = c.display().to_string();
+        let std = std_source(&c);
+        let key = match std {
+            Some(s) => format!("std:{}", s.name),
+            None => c.display().to_string(),
+        };
         if let Some(i) = self.by_key.get(&key) {
             return Ok(*i);
         }
         let src = self.read(path).ok_or_else(|| format!("cannot read file `{}`", path.display()))?;
-        Ok(self.add_module(key, display_name(&c), Some(c), src, false))
+        Ok(self.add_module(key, display_name(&c), Some(c), src, std.is_some()))
     }
 
     pub fn load_source(&mut self, name: &str, src: String, base: Option<PathBuf>) -> usize {
