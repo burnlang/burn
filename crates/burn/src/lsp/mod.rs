@@ -132,7 +132,7 @@ fn import_items(file: &Path, typed: &str) -> Vec<Json> {
     let mut out: Vec<Json> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut add = |label: String, kind: i32, detail: &str, out: &mut Vec<Json>| {
-        if label.starts_with(typed) && seen.insert(label.clone()) {
+        if label.to_lowercase().starts_with(&typed.to_lowercase()) && seen.insert(label.clone()) {
             out.push(Json::obj(vec![
                 ("label", Json::str(&label)),
                 ("kind", Json::num(kind)),

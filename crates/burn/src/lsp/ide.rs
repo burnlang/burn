@@ -158,6 +158,15 @@ fn line_start(src: &str, offset: usize) -> usize {
     src[..offset.min(src.len())].rfind('\n').map(|i| i + 1).unwrap_or(0)
 }
 
+fn import_spec(from: &Path, to: &Path) -> String {
+    if let Some(project) = crate::project::find_root(from).and_then(|root| crate::project::load(&root).ok()) {
+        if std::fs::canonicalize(project.main_path()).ok().as_deref() == Some(to) {
+            return project.manifest.name.clone();
+        }
+    }
+    module_spec(from, to)
+}
+
 fn module_spec(from: &Path, to: &Path) -> String {
     let base = from.parent().unwrap_or(Path::new("."));
     let mut b: Vec<_> = base.components().collect();
@@ -600,7 +609,7 @@ impl Server {
                     .or_else(|| std::fs::read_to_string(&f).ok())
                     .unwrap_or_default();
                 if exports_of(&text).iter().any(|e| e.name == name) {
-                    out.push(module_spec(&current, &f));
+                    out.push(import_spec(&current, &f));
                 }
             }
         }

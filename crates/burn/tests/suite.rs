@@ -473,6 +473,10 @@ fn init_creates_projects_that_build_and_import_packages() {
     let (out, code) = run(&dir.join("greet"), &["run"]);
     assert_eq!(code, 2, "{}", out);
     assert!(out.contains("is a library"), "{}", out);
+    let (out, code) = run(&dir, &["init", "example.com/ada/dotted.bn", "--lib", "--no-git"]);
+    assert_eq!(code, 0, "{}", out);
+    let (out, code) = run(&dir.join("dotted.bn"), &["run", "tests/main.bn"]);
+    assert_eq!((out.as_str(), code), ("all tests passed\n", 0));
     std::fs::write(
         dir.join("greet/tests/case.bn"),
         "import \"example.com/Ada/greet.bn\"\n\nprint(greet(\"case\"))\n",
@@ -1037,6 +1041,63 @@ fn language_server_keeps_working_while_typing_and_links_imports() {
     );
     assert!(actions.contains("Import `twice` from \\\"shapes.bn\\\""), "{}", actions);
     assert!(actions.contains("Import `padLeft` from \\\"std/strings\\\""), "{}", actions);
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn language_server_imports_the_project_itself_by_package_name() {
+    use std::io::BufReader;
+    let dir = temp_dir("lsp-self").canonicalize().unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::create_dir_all(dir.join("tests")).unwrap();
+    std::fs::write(
+        dir.join("burn.toml"),
+        "[package]\nname = \"example.com/Ada/shapes\"\nversion = \"0.1.0\"\nkind = \"lib\"\nmain = \"src/lib.bn\"\n\n[dependencies]\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("src/lib.bn"), "pub fun twice(x: int): int {\n    return x * 2\n}\n").unwrap();
+    let test = dir.join("tests/main.bn");
+    let text = "import \"example.com/ada/\"\n\nassert(twice(2) == 4)\n";
+    std::fs::write(&test, text).unwrap();
+    let uri = format!("file://{}", test.display());
+    let mut child = burn()
+        .arg("lsp")
+        .current_dir(&dir)
+        .env("BURN_HOME", dir.join("home"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut lsp = Lsp {
+        stdin: child.stdin.take().unwrap(),
+        out: BufReader::new(child.stdout.take().unwrap()),
+        id: 0,
+    };
+    lsp.request("initialize", &format!(r#"{{"rootUri":"file://{}","capabilities":{{}}}}"#, dir.display()));
+    lsp.open(&uri, text);
+    let paths = lsp.request(
+        "textDocument/completion",
+        &format!(r#"{{"textDocument":{{"uri":"{}"}},"position":{{"line":0,"character":24}}}}"#, uri),
+    );
+    assert!(paths.contains("\"example.com/Ada/shapes\""), "{}", paths);
+    let diags = r#"[{"range":{"start":{"line":2,"character":7},"end":{"line":2,"character":12}},"message":"cannot find `twice` in this scope"}]"#;
+    let actions = lsp.request(
+        "textDocument/codeAction",
+        &format!(
+            r#"{{"textDocument":{{"uri":"{}"}},"range":{{"start":{{"line":2,"character":0}},"end":{{"line":2,"character":20}}}},"context":{{"diagnostics":{}}}}}"#,
+            uri, diags
+        ),
+    );
+    assert!(actions.contains("Import `twice` from \\\"example.com/Ada/shapes\\\""), "{}", actions);
+    let fixed = "import \"example.com/ada/shapes\"\n\nassert(twice(2) == 4)\n";
+    lsp.change(&uri, fixed);
+    let def = lsp.request(
+        "textDocument/definition",
+        &format!(r#"{{"textDocument":{{"uri":"{}"}},"position":{{"line":2,"character":8}}}}"#, uri),
+    );
+    assert!(def.contains("src/lib.bn"), "{}", def);
     let _ = child.kill();
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&dir);

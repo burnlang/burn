@@ -393,6 +393,13 @@ impl Loader {
     }
 
     fn resolve_import(&mut self, p: &str, base: Option<&Path>, from_std: bool) -> Result<usize, String> {
+        if p.ends_with(".bn") {
+            if let Some((name, sub)) = crate::project::split_package_path(p) {
+                if sub.is_empty() && self.project(base).map(|pr| pr.knows(&name)).unwrap_or(false) {
+                    return self.resolve_package(&name, "", base);
+                }
+            }
+        }
         if let Some((name, sub)) = crate::project::split_package_path(p.trim_end_matches(".bn")) {
             let sub = if p.ends_with(".bn") && !sub.is_empty() { format!("{}.bn", sub) } else { sub };
             return self.resolve_package(&name, &sub, base);

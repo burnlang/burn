@@ -542,6 +542,10 @@ impl Project {
         same_package(&self.manifest.name, name)
     }
 
+    pub fn knows(&self, name: &str) -> bool {
+        self.is_self(name) || self.manifest.dependencies.iter().any(|(d, _)| same_package(d, name)) || self.locked(name).is_some()
+    }
+
     pub fn main_path(&self) -> PathBuf {
         self.root.join(&self.manifest.main)
     }
