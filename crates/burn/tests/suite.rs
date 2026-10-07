@@ -1102,3 +1102,64 @@ fn language_server_imports_the_project_itself_by_package_name() {
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[cfg(unix)]
+#[test]
+fn language_server_reloads_the_project_with_ash_sync() {
+    use std::io::BufReader;
+    use std::os::unix::fs::PermissionsExt;
+    let dir = temp_dir("lsp-reload").canonicalize().unwrap();
+    let home = dir.join("home");
+    std::fs::create_dir_all(home.join("bin")).unwrap();
+    let ash = home.join("bin/ash");
+    std::fs::write(&ash, format!("#!/bin/sh\necho \"$@\" > \"{}\"\n", dir.join("ran").display())).unwrap();
+    std::fs::set_permissions(&ash, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("burn.toml"),
+        "[package]\nname = \"example.com/ada/app\"\nversion = \"0.1.0\"\nmain = \"src/main.bn\"\n\n[dependencies]\n\"example.com/ada/colors\" = \"^1.0\"\n",
+    )
+    .unwrap();
+    let main = dir.join("src/main.bn");
+    let text = "import \"example.com/ada/colors\"\n\nfun main() {}\n";
+    std::fs::write(&main, text).unwrap();
+    let uri = format!("file://{}", main.display());
+    let mut child = burn()
+        .arg("lsp")
+        .current_dir(&dir)
+        .env("BURN_HOME", &home)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut lsp = Lsp {
+        stdin: child.stdin.take().unwrap(),
+        out: BufReader::new(child.stdout.take().unwrap()),
+        id: 0,
+    };
+    let init = lsp.request("initialize", &format!(r#"{{"rootUri":"file://{}","capabilities":{{}}}}"#, dir.display()));
+    assert!(init.contains("burn.server.reloadProject"), "{}", init);
+    lsp.open(&uri, text);
+    let diags = r#"[{"range":{"start":{"line":0,"character":7},"end":{"line":0,"character":31}},"message":"the package `example.com/ada/colors` is not installed yet; run `ash install`"}]"#;
+    let actions = lsp.request(
+        "textDocument/codeAction",
+        &format!(
+            r#"{{"textDocument":{{"uri":"{}"}},"range":{{"start":{{"line":0,"character":0}},"end":{{"line":0,"character":31}}}},"context":{{"diagnostics":{}}}}}"#,
+            uri, diags
+        ),
+    );
+    assert!(
+        actions.contains("Reload project (ash sync)") && actions.contains("burn.server.reloadProject"),
+        "{}",
+        actions
+    );
+    let done = lsp.request(
+        "workspace/executeCommand",
+        &format!(r#"{{"command":"burn.server.reloadProject","arguments":["{}"]}}"#, uri),
+    );
+    assert!(done.contains("\"result\":null"), "{}", done);
+    assert_eq!(std::fs::read_to_string(dir.join("ran")).unwrap().trim(), "sync");
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&dir);
+}

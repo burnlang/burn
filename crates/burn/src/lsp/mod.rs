@@ -3,6 +3,7 @@ mod complete;
 mod ide;
 pub mod json;
 mod nav;
+mod reload;
 mod repair;
 pub mod sources;
 
@@ -37,6 +38,7 @@ struct Server {
     published: HashMap<String, Vec<String>>,
     fixes: HashMap<String, Vec<QuickFix>>,
     roots: Vec<PathBuf>,
+    watch: bool,
 }
 
 struct QuickFix {
@@ -535,6 +537,7 @@ impl Server {
                 }
             }
             out.extend(self.import_actions(uri, params));
+            out.extend(self.reload_actions(uri, params));
         }
         let mut all: Vec<&QuickFix> = Vec::new();
         for q in fixes.iter().filter(|q| q.preferred) {
@@ -1019,11 +1022,15 @@ pub fn run() -> ExitCode {
     let mut shutdown = false;
     while let Some(msg) = read_message(&mut reader) {
         let method = msg.get("method").as_str().unwrap_or("").to_string();
+        if method.is_empty() {
+            continue;
+        }
         let id = msg.get("id").clone();
         let params = msg.get("params").clone();
         let uri = params.at(&["textDocument", "uri"]).as_str().unwrap_or("").to_string();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match method.as_str() {
             "initialize" => {
+                server.watch = reload::wants_watchers(&params);
                 for f in params.get("workspaceFolders").as_arr() {
                     if let Some(u) = f.get("uri").as_str() {
                         server.roots.push(uri_to_path(u));
@@ -1059,6 +1066,10 @@ pub fn run() -> ExitCode {
                                         Json::Arr(vec![Json::str("."), Json::str("\""), Json::str("/"), Json::str("@")]),
                                     )]),
                                 ),
+                                (
+                                    "executeCommandProvider",
+                                    Json::obj(vec![("commands", Json::Arr(vec![Json::str(reload::RELOAD)]))]),
+                                ),
                                 ("documentLinkProvider", Json::obj(vec![("resolveProvider", Json::Bool(false))])),
                                 ("foldingRangeProvider", Json::Bool(true)),
                                 ("typeDefinitionProvider", Json::Bool(true)),
@@ -1084,11 +1095,19 @@ pub fn run() -> ExitCode {
                     ]),
                 );
             }
-            "initialized" | "$/cancelRequest" | "workspace/didChangeConfiguration" => {}
-            "workspace/didChangeWatchedFiles" => {
-                let open: Vec<String> = server.docs.keys().cloned().collect();
-                for u in open {
-                    server.analyze(&u);
+            "initialized" => {
+                if server.watch {
+                    reload::register_watchers();
+                }
+            }
+            "$/cancelRequest" | "workspace/didChangeConfiguration" => {}
+            "workspace/didChangeWatchedFiles" => server.reanalyze_all(),
+            "workspace/executeCommand" => {
+                if params.get("command").as_str() == Some(reload::RELOAD) {
+                    let r = server.reload_project(&params);
+                    respond(&id, r);
+                } else {
+                    respond_err(&id, -32601, "unknown command");
                 }
             }
             "shutdown" => {

@@ -41,6 +41,16 @@ the errors the compiler reports. It supports:
 Any editor with LSP support can use it. Import paths complete too: standard modules, the project's packages and
 local files inside `import "..."`.
 
+### Reloading a project
+
+Like a Gradle sync, reloading a project brings the editor up to date with `burn.toml`: it runs `ash sync`, which
+refreshes the package index and installs every dependency, and then checks the open files again.
+
+- The language server watches `burn.toml` and `burn.lock` and checks open files again whenever they change.
+- An import of a package that is not installed gets a **Reload project (ash sync)** quick fix, in every editor.
+- VS Code and the JetBrains plugin show a **Reload** prompt after `burn.toml` changes, and have a **Reload Burn
+  Project** command; Zed has an `ash sync` task.
+
 ### Library sources
 
 The standard library and the built-ins are compiled into `burn`, so there is no file to jump to. When you go to the
