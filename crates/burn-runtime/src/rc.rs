@@ -2,7 +2,7 @@ use crate::meta::{self, desc, Desc, I_BOX_TRACK, I_TRACK};
 use crate::obj::*;
 use crate::prelude::*;
 use crate::sync::{cached, env, Global};
-use alloc::alloc::{alloc_zeroed, dealloc, Layout};
+use alloc::alloc::{alloc_zeroed, dealloc, realloc, Layout};
 use core::cell::{Cell, RefCell};
 use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering};
 
@@ -158,6 +158,54 @@ pub fn alloc(kind: u8, tid: u32, size: usize) -> u64 {
     }
     account(size);
     p as u64
+}
+
+pub fn unique(p: u64) -> bool {
+    if p == 0 {
+        return false;
+    }
+    let h = unsafe { hdr(p) };
+    if h.flags & F_STATIC != 0 || h.kind == K_FREED {
+        return false;
+    }
+    if multi() {
+        rc_cell(p).load(Ordering::Acquire) == 1
+    } else {
+        h.rc == 1
+    }
+}
+
+pub fn resize(p: u64, size: usize) -> u64 {
+    let size = (size + 15) & !15;
+    if size > u32::MAX as usize {
+        crate::io::rt_error("out of memory: a single value is larger than 4 GB", u64::MAX);
+    }
+    let old = unsafe { hdr(p).size as usize };
+    if checking() {
+        let layout = Layout::from_size_align(size, 16).unwrap();
+        let q = unsafe { alloc_zeroed(layout) };
+        if q.is_null() {
+            alloc::alloc::handle_alloc_error(layout);
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(p as usize as *const u8, q, old.min(size));
+            hdr(q as u64).size = size as u32;
+        }
+        account(size);
+        unsafe { free_obj(p) };
+        return q as u64;
+    }
+    let q = unsafe { realloc(p as usize as *mut u8, Layout::from_size_align(old, 16).unwrap(), size) };
+    if q.is_null() {
+        alloc::alloc::handle_alloc_error(Layout::from_size_align(size, 16).unwrap());
+    }
+    unsafe { hdr(q as u64).size = size as u32 };
+    if size >= old {
+        account(size - old);
+    } else {
+        unaccount(old - size);
+    }
+    q as u64
 }
 
 fn safe_point() {

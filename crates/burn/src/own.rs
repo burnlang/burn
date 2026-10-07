@@ -1,5 +1,6 @@
 use crate::hir::{Expr, ExprKind, Func, Program, Stmt, UnOp};
 use crate::types::*;
+use burn_runtime::RtFn;
 
 pub fn lower(p: &Program) -> Program {
     let mut out = p.clone();
@@ -133,6 +134,42 @@ fn visit_stmt(s: &Stmt, f: &mut dyn FnMut(&Expr)) {
     }
 }
 
+fn reads(e: &Expr, hit: &dyn Fn(&ExprKind) -> bool) -> bool {
+    let mut found = false;
+    visit(e, &mut |x| found |= hit(&x.kind));
+    found
+}
+
+fn concat_base(e: &Expr) -> Option<&Expr> {
+    match &e.kind {
+        ExprKind::Rt(RtFn::StrConcat, xs) if xs.len() == 2 => Some(concat_base(&xs[0]).unwrap_or(&xs[0])),
+        _ => None,
+    }
+}
+
+fn concat_parts(e: Expr, out: &mut Vec<Expr>) {
+    if let ExprKind::Rt(RtFn::StrConcat, xs) = e.kind {
+        let mut it = xs.into_iter();
+        if let (Some(a), Some(b)) = (it.next(), it.next()) {
+            concat_parts(a, out);
+            out.push(b);
+        }
+    }
+}
+
+fn concat_refs<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
+    if let ExprKind::Rt(RtFn::StrConcat, xs) = &e.kind {
+        if xs.len() == 2 {
+            concat_refs(&xs[0], out);
+            out.push(&xs[1]);
+        }
+    }
+}
+
+fn append(a: Expr, b: Expr) -> Expr {
+    Expr::new(ExprKind::Rt(RtFn::StrAppend, vec![a, b]), T_STR)
+}
+
 fn is_fresh(e: &Expr) -> bool {
     match &e.kind {
         ExprKind::Call(..)
@@ -204,6 +241,32 @@ impl<'a> Pass<'a> {
         pre.extend(out);
         f.body = pre;
         f.locals = p.locals;
+    }
+
+    fn may_write(&self, e: &Expr) -> bool {
+        reads(e, &|k| match k {
+            ExprKind::Call(..)
+            | ExprKind::CallIndirect(..)
+            | ExprKind::CallIface(..)
+            | ExprKind::Spawn(..)
+            | ExprKind::SetField(..)
+            | ExprKind::SetGlobal(..)
+            | ExprKind::SetIndex(..) => true,
+            ExprKind::Rt(_, xs) => xs.iter().any(|x| matches!(self.types.get(x.ty), Ty::Func(..))),
+            _ => false,
+        })
+    }
+
+    fn appendable(&self, v: &Expr, base: &dyn Fn(&ExprKind) -> bool, conflict: &dyn Fn(&ExprKind) -> bool, heap: bool) -> bool {
+        if !concat_base(v).is_some_and(|b| base(&b.kind)) {
+            return false;
+        }
+        let mut parts = Vec::new();
+        concat_refs(v, &mut parts);
+        if parts.len() > 1 && parts.iter().any(|p| reads(p, conflict)) {
+            return false;
+        }
+        !heap || !parts.iter().any(|p| self.may_write(p))
     }
 
     fn managed(&self, t: TyId) -> bool {
@@ -406,6 +469,16 @@ impl<'a> Pass<'a> {
     }
 
     fn assign_local(&mut self, s: u32, ty: TyId, v: Expr, out: &mut Vec<Stmt>) {
+        let base = |k: &ExprKind| matches!(k, ExprKind::Local(x) if *x == s);
+        if ty == T_STR && !writes_local(&v, s) && self.appendable(&v, &base, &base, false) {
+            let mut parts = Vec::new();
+            concat_parts(v, &mut parts);
+            for b in parts {
+                let b2 = self.expr(b, Want::Borrowed);
+                out.push(Stmt::Expr(set_local(s, append(local(s, ty), b2))));
+            }
+            return;
+        }
         let safe = !writes_local(&v, s);
         let old = self.raw(ty);
         let v2 = self.expr(v, Want::Owned);
@@ -422,6 +495,17 @@ impl<'a> Pass<'a> {
     }
 
     fn assign_global(&mut self, g: u32, ty: TyId, v: Expr, out: &mut Vec<Stmt>) {
+        let base = |k: &ExprKind| matches!(k, ExprKind::Global(x) if *x == g);
+        if ty == T_STR && self.appendable(&v, &base, &base, true) {
+            let mut parts = Vec::new();
+            concat_parts(v, &mut parts);
+            for b in parts {
+                let b2 = self.expr(b, Want::Borrowed);
+                let cur = Expr::new(ExprKind::Global(g), ty);
+                out.push(Stmt::Expr(Expr::new(ExprKind::SetGlobal(g, Box::new(append(cur, b2))), ty)));
+            }
+            return;
+        }
         let effects = v.has_side_effects();
         let old = self.raw(ty);
         let v2 = self.expr(v, Want::Owned);
@@ -450,6 +534,25 @@ impl<'a> Pass<'a> {
 
     fn assign_field(&mut self, o: Expr, i: u32, v: Expr, out: &mut Vec<Stmt>) -> Expr {
         let ty = v.ty;
+        if let (ExprKind::Local(slot), true) = (&o.kind, ty == T_STR) {
+            let slot = *slot;
+            let field = |k: &ExprKind| matches!(k, ExprKind::GetField(x, j) if *j == i && matches!(x.kind, ExprKind::Local(y) if y == slot));
+            let any = |k: &ExprKind| matches!(k, ExprKind::GetField(_, j) if *j == i);
+            if !writes_local(&v, slot) && self.appendable(&v, &field, &any, true) {
+                let obj = self.expr(o, Want::Borrowed);
+                let mut parts = Vec::new();
+                concat_parts(v, &mut parts);
+                for b in parts {
+                    let b2 = self.expr(b, Want::Borrowed);
+                    let cur = Expr::new(ExprKind::GetField(Box::new(obj.clone()), i), ty);
+                    out.push(Stmt::Expr(Expr::new(
+                        ExprKind::SetField(Box::new(obj.clone()), i, Box::new(append(cur, b2))),
+                        ty,
+                    )));
+                }
+                return Expr::new(ExprKind::GetField(Box::new(obj), i), ty);
+            }
+        }
         let effects = v.has_side_effects();
         let o2 = self.expr(o, Want::Borrowed);
         let obj = self.stash(o2, out);
