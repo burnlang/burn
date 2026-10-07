@@ -114,7 +114,22 @@ pub fn exports_of(text: &str) -> Vec<Export> {
 
 pub fn std_exports() -> &'static [(&'static str, Vec<Export>)] {
     static ALL: std::sync::OnceLock<Vec<(&'static str, Vec<Export>)>> = std::sync::OnceLock::new();
-    ALL.get_or_init(|| STDLIB.iter().map(|s| (s.name, exports_of(s.src))).collect())
+    ALL.get_or_init(|| {
+        STDLIB
+            .iter()
+            .map(|s| {
+                let mut exports = exports_of(s.src);
+                for b in crate::doc::builtins::all().iter().filter(|b| b.module() == Some(s.name)) {
+                    exports.push(Export {
+                        name: b.name.clone(),
+                        kind: 3,
+                        detail: b.sig.clone(),
+                    });
+                }
+                (s.name, exports)
+            })
+            .collect()
+    })
 }
 
 fn matching_brace(tokens: &[Token], open: usize) -> Option<usize> {
@@ -580,7 +595,7 @@ impl Server {
         Some(Json::obj(vec![("range", line_range(line, line)), ("newText", Json::str(new_text))]))
     }
 
-    fn imported(&self, a: &Analysis, std_name: Option<&str>, file: Option<&Path>) -> bool {
+    pub fn imported(&self, a: &Analysis, std_name: Option<&str>, file: Option<&Path>) -> bool {
         a.links.iter().any(|(_, t)| match t {
             Target::Std(n) => Some(*n) == std_name,
             Target::File(p) => file.map(|f| std::fs::canonicalize(p).ok() == std::fs::canonicalize(f).ok()).unwrap_or(false),

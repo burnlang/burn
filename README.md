@@ -233,6 +233,8 @@ for a in annotationsOf(c) {
 ### Async
 
 ```burn
+import "std/time"
+
 async fun fetch(n: int): int {
     sleep(100)
     return n * 2

@@ -1,0 +1,4 @@
+fun main() {
+    var root = sqrt(2.0)
+    print(root, max(1, 2))
+}

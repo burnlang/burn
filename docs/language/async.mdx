@@ -10,6 +10,8 @@ Calling an `async fun` starts it in the background and immediately returns a `Fu
 result.
 
 ```burn
+import "std/time"
+
 async fun download(name: string, ms: int): string {
     sleep(ms)
     return name + " done"

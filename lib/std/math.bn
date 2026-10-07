@@ -24,8 +24,9 @@ pub const TAU = 6.283185307179586
 /**
  * Math helpers that complement the built-in math functions.
  *
- * Basic operations such as `sqrt`, `abs`, `min`, `max` and `pow` are
- * built in and need no import.
+ * Importing `std/math` also gives the basic functions `sqrt`, `pow`, `abs`,
+ * `floor`, `ceil`, `round`, `min`, `max`, the trigonometric functions,
+ * `log`, `log10` and `exp`.
  *
  * @since 26.1
  */

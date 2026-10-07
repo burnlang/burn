@@ -8,6 +8,7 @@ order: 13
 
 ```burn
 import "http"
+import "std/json"
 
 var response = HTTP.get("https://api.github.com/repos/burnlang/burn")
 print(response.statusCode)

@@ -1,3 +1,6 @@
+import "std/math"
+import "std/json"
+
 def struct Pixel(r: uint8, g: uint8, b: uint8) {
     float32 alpha = 1.0
 

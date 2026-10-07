@@ -392,7 +392,7 @@ fn fix_applies_the_compiler_suggestions() {
     std::fs::copy(root.join("tests/fix/input.bn"), &file).unwrap();
     let (out, code) = output(burn().arg("fix").arg(&file));
     assert_eq!(code, 0, "{}", out);
-    assert!(out.contains("fixed 7 problems"), "{}", out);
+    assert!(out.contains("fixed 8 problems"), "{}", out);
     let got = std::fs::read_to_string(&file).unwrap();
     let want = std::fs::read_to_string(root.join("tests/fix/expected.bn")).unwrap();
     let _ = std::fs::remove_dir_all(&tmp);

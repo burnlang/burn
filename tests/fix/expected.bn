@@ -1,3 +1,5 @@
+import "std/math"
+
 def interface Shape {
     fun area(): float
 }
@@ -19,6 +21,7 @@ fun main() {
     total = 1
     var p: Pair = Pair(1, 2)
     print(s.area(), total, p.a)
+    print(sqrt(4.0))
     if (total > 0 && true) {
         print("never")
     }
