@@ -32,11 +32,11 @@ detection. The executable only needs the C library and `libm`.
 
 ## What stays available
 
-- printing and reading: `print`, `printErr`, `input`, `readStdin`
-- files: `readFile`, `writeFile`, `appendFile`, `fileExists`
-- the environment: `args`, `env`, `exit`
-- time: `now`, `nowMs`, `millis`, `clock`, `sleep`
-- numbers: everything in `math`, `random`, `randomInt` and `seed`
+- printing and reading: `print`, `eprint`, `input`, `readStdin`
+- files: `readFile`, `writeFile`, `appendFile`, `fileExists` from `std/fs`
+- the environment: `args`, `env`, `exit` and `panic` from `std/process`
+- time: `now`, `nowMs`, `millis`, `clock`, `sleep` from `std/time`
+- numbers: everything from `std/math`, and `random`, `randomInt` and `seed` from `std/random`
 - the standard modules written in plain Burn: `std/strings`, `std/math`, `std/list`, `std/collections`, `std/path`,
   `std/random` and `std/testing`
 
@@ -47,11 +47,13 @@ detection. The executable only needs the C library and `libm`.
 | `async fun` and `await` | they run on threads |
 | `parseJSON`, `toJSON`, `std/json` | the JSON reader and writer |
 | `std/http` | the HTTP client |
-| `std/process`, `std/fs` | running processes, directories and file operations |
-| `std/date`, `std/time` | the local time zone |
+| `Process` from `std/process`, `Files` from `std/fs` | running processes, directories and file operations |
+| `std/date`, and `Time` from `std/time` | the local time zone |
 | bytecode libraries (`import "lib.bvmc"`) | they run on bvm |
 
-Using one of these is a compile error that points at the call or the import:
+Importing `std/fs`, `std/process` or `std/time` for the functions listed above is fine; using `Files`, `Process`,
+`Time` or anything else from such a module that needs the standard runtime is a compile error, and so is using one of
+the other features. The error points at the call or the import:
 
 ```text
 error: `std/http` needs the standard runtime for making HTTP requests

@@ -771,6 +771,26 @@ fn programs_without_the_standard_runtime_are_small_and_behave_the_same() {
         assert!(out.contains(msg), "missing `{}` in\n{}", msg, out);
     }
     assert!(!out.contains("std/strings"), "{}", out);
+
+    std::fs::write(
+        project.join("src/main.bn"),
+        "import \"std/fs\"\nimport \"std/process\"\nimport \"std/time\"\n\nfun main() {\n    writeFile(\"note.txt\", \"kept\")\n    print(readFile(\"note.txt\"), len(args()), nowMs() > 0)\n    exit(3)\n}\n",
+    )
+    .unwrap();
+    let (out, code) = output(burn().current_dir(&project).arg("check"));
+    assert_eq!(code, 0, "{}", out);
+    let (out, code) = output(burn().current_dir(&project).arg("build"));
+    assert_eq!(code, 0, "{}", out);
+    let (out, code) = output(Command::new(project.join("build/app")).current_dir(&project));
+    assert_eq!((out.as_str(), code), ("kept 0 true\n", 3));
+    std::fs::write(
+        project.join("src/main.bn"),
+        "import \"std/fs\"\n\nfun main() {\n    print(Files.list(\".\"))\n}\n",
+    )
+    .unwrap();
+    let (out, code) = output(burn().current_dir(&project).arg("check"));
+    assert_eq!(code, 1, "{}", out);
+    assert!(out.contains("`std/fs` needs the standard runtime"), "{}", out);
     let _ = std::fs::remove_dir_all(&tmp);
 }
 

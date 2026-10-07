@@ -214,6 +214,7 @@ pub struct Checker<'a> {
     pub no_std: bool,
     pub std_uses: Vec<(Span, &'static str)>,
     pub gated: HashSet<(usize, &'static str)>,
+    pub import_uses: std::cell::RefCell<HashSet<(usize, usize)>>,
 }
 
 pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
@@ -263,6 +264,7 @@ pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
         no_std: loaded.no_std,
         std_uses: Vec::new(),
         gated: HashSet::new(),
+        import_uses: std::cell::RefCell::new(HashSet::new()),
     };
     c.run(loaded);
     c.check_no_std(loaded);
@@ -638,7 +640,11 @@ impl<'a> Checker<'a> {
         }
         match found.len() {
             0 => Ok(None),
-            1 => Ok(Some(found.pop().unwrap().1)),
+            1 => {
+                let (imp, e) = found.pop().unwrap();
+                self.import_uses.borrow_mut().insert((module, imp));
+                Ok(Some(e))
+            }
             _ => Err(found.iter().map(|(m, _)| self.sm.file(self.mods[*m].file).name.clone()).collect()),
         }
     }
