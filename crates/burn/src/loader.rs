@@ -220,7 +220,7 @@ impl Loader {
     fn resolve_package(&mut self, name: &str, sub: &str, base: Option<&Path>) -> Result<usize, String> {
         let (dir, is_self) = {
             let project = self.project(base)?;
-            (project.resolve(name)?, project.manifest.name == name)
+            (project.resolve(name)?, project.is_self(name))
         };
         let file = if sub.is_empty() {
             if is_self {
@@ -251,7 +251,7 @@ impl Loader {
     fn package_bytecode(&mut self, name: &str, base: Option<&Path>) -> Result<PathBuf, String> {
         let (dir, own, project) = {
             let p = self.project(base)?;
-            (p.resolve(name)?, p.manifest.name == name, p.clone())
+            (p.resolve(name)?, p.is_self(name), p.clone())
         };
         if own {
             return Err(format!(

@@ -473,6 +473,14 @@ fn init_creates_projects_that_build_and_import_packages() {
     let (out, code) = run(&dir.join("greet"), &["run"]);
     assert_eq!(code, 2, "{}", out);
     assert!(out.contains("is a library"), "{}", out);
+    std::fs::write(
+        dir.join("greet/tests/case.bn"),
+        "import \"example.com/Ada/greet.bn\"\n\nprint(greet(\"case\"))\n",
+    )
+    .unwrap();
+    let (out, code) = run(&dir.join("greet"), &["run", "tests/case.bn"]);
+    assert_eq!(code, 0, "{}", out);
+    assert!(out.contains("case"), "{}", out);
 
     let (out, code) = run(&dir, &["init", "example.com/ada/app", "--target", "js", "--no-git"]);
     assert_eq!(code, 0, "{}", out);
@@ -486,6 +494,7 @@ fn init_creates_projects_that_build_and_import_packages() {
     let (out, code) = run(&app, &["check"]);
     assert_eq!(code, 1);
     assert!(out.contains("not a dependency; add it with `ash install example.com/ada/greet`"), "{}", out);
+    assert!(out.contains("this project is `example.com/ada/app`"), "{}", out);
 
     std::fs::write(
         app.join("burn.toml"),
