@@ -142,8 +142,9 @@ pub fn signature(name: &str) -> &'static str {
         "readStdin" => "readStdin(): string, all remaining standard input",
         "write" => "write(value): prints without a newline",
         "input" => "input(prompt: string = \"\"): string",
-        "toString" | "str" => "toString(value): string",
-        "toInt" | "parseInt" => "toInt(value: string | float | int): int",
+        "toString" | "str" => "toString(value): string  |  toString(n: int, radix: int): string, n written in base 2 to 36",
+        "toInt" | "parseInt" => "toInt(value: string | float | int): int  |  toInt(text: string, radix: int): int, text read in base 2 to 36",
+        "isInt" => "isInt(text: string, radix: int = 10): bool",
         "toFloat" | "parseFloat" => "toFloat(value: string | int | float): float",
         "len" | "length" | "size" => "len(value: string | [T] | {K: V}): int",
         "push" => "push(array: [T], value: T)",
@@ -354,8 +355,14 @@ impl<'a> Checker<'a> {
                 Self::rt(RtFn::Input, vec![p], T_STR)
             }
             "toString" | "str" => {
-                if !self.arity(name, n, 1, 1, span) {
+                if !self.arity(name, n, 1, 2, span) {
                     return Some(Self::err_expr());
+                }
+                if n == 2 {
+                    let h = self.barg_to(&xs[0], T_INT);
+                    let r = self.barg_to(&xs[1], T_INT);
+                    let l = self.loc_expr(span);
+                    return Some(Self::rt(RtFn::IntToStrRadix, vec![h, r, l], T_STR));
                 }
                 let h = self.barg(&xs[0], None);
                 if h.ty == T_VOID {
@@ -364,8 +371,14 @@ impl<'a> Checker<'a> {
                 self.stringify(h)
             }
             "toInt" | "parseInt" => {
-                if !self.arity(name, n, 1, 1, span) {
+                if !self.arity(name, n, 1, 2, span) {
                     return Some(Self::err_expr());
+                }
+                if n == 2 {
+                    let h = self.barg_to(&xs[0], T_STR);
+                    let r = self.barg_to(&xs[1], T_INT);
+                    let l = self.loc_expr(span);
+                    return Some(Self::rt(RtFn::ParseIntRadix, vec![h, r, l], T_INT));
                 }
                 let h = self.barg(&xs[0], None);
                 match self.types.get(h.ty).clone() {
@@ -400,8 +413,14 @@ impl<'a> Checker<'a> {
                 }
             }
             "isInt" | "isNumber" => {
-                if !self.arity(name, n, 1, 1, span) {
+                if !self.arity(name, n, 1, if name == "isInt" { 2 } else { 1 }, span) {
                     return Some(Self::err_expr());
+                }
+                if n == 2 {
+                    let h = self.barg_to(&xs[0], T_STR);
+                    let r = self.barg_to(&xs[1], T_INT);
+                    let l = self.loc_expr(span);
+                    return Some(Self::rt(RtFn::IsIntRadix, vec![h, r, l], T_BOOL));
                 }
                 let h = self.barg_to(&xs[0], T_STR);
                 Self::rt(if name == "isInt" { RtFn::IsIntStr } else { RtFn::IsFloatStr }, vec![h], T_BOOL)
