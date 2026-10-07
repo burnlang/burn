@@ -232,6 +232,7 @@ fun size(n: int): string {
 | --- | --- |
 | `3`, `"stop"`, `true`, `Color.Red` | an equal value |
 | `Red` | an enum variant, when matching an enum |
+| `Shape.Rect(w, h)`, `Expr.Neg(Expr.Num(0))` | a variant with data; binds its fields (`_` skips one) |
 | `1..10`, `1..=9` | a number (or string) in the range |
 | `null` | null |
 | `is string`, `is Circle c` | a value of that type; `c` is the value as a `Circle` |

@@ -1255,7 +1255,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn type_ident(&mut self, e: &ast::Expr) -> Option<TyId> {
+    pub fn type_ident(&mut self, e: &ast::Expr) -> Option<TyId> {
         if let A::Ident(n) = &e.kind {
             if self.peek_local(n).is_some() || self.self_field(n).is_some() {
                 return None;
@@ -1467,6 +1467,9 @@ impl<'a> Checker<'a> {
 
     pub fn method_call(&mut self, obj: &ast::Expr, name: &ast::Ident, args: &[ast::Expr], span: Span, expected: Option<TyId>) -> Expr {
         if let Some(t) = self.type_ident(obj) {
+            if self.types.variants_of(t).is_some() {
+                return self.variant_value(t, name, Some(args), span);
+            }
             match self.types.get(t).clone() {
                 Ty::Record(ri) => {
                     let rec = self.types.records[ri as usize].clone();
@@ -1643,8 +1646,63 @@ impl<'a> Checker<'a> {
         }
     }
 
+    pub fn variant_value(&mut self, t: TyId, name: &ast::Ident, args: Option<&[ast::Expr]>, span: Span) -> Expr {
+        let Some(en) = self.types.variants_of(t).cloned() else {
+            return Self::err_expr();
+        };
+        let Some(v) = en.variants.iter().find(|v| v.name == name.name) else {
+            let cands: Vec<&str> = en.variants.iter().map(|v| v.name.as_str()).collect();
+            match suggest(&name.name, cands.into_iter()) {
+                Some(s) => self.error_fix(name.span, format!("enum {} has no variant `{}`", en.name, name.name), &s),
+                None => self.error(name.span, format!("enum {} has no variant `{}`", en.name, name.name)),
+            }
+            for a in args.unwrap_or(&[]) {
+                self.expr(a, None);
+            }
+            return Self::err_expr();
+        };
+        self.def_link(name.span, v.span);
+        let rec = self.types.records[v.record as usize].clone();
+        let shape: Vec<String> = rec.fields.iter().map(|f| format!("{}: {}", f.name, self.show(f.ty))).collect();
+        let shown = if shape.is_empty() {
+            format!("{}.{}", en.name, v.name)
+        } else {
+            format!("{}.{}({})", en.name, v.name, shape.join(", "))
+        };
+        self.hover(name.span, shown.clone());
+        let vals = match args {
+            None if !rec.fields.is_empty() => {
+                self.emit(
+                    Diagnostic::error(span, format!("`{}.{}` carries data, so it needs its fields", en.name, v.name))
+                        .note(format!("it is declared as `{}`", shown)),
+                );
+                return Self::err_expr();
+            }
+            None => Vec::new(),
+            Some(args) => {
+                if rec.fields.is_empty() {
+                    self.emit(
+                        Diagnostic::error(span, format!("`{}.{}` carries no data, so it takes no arguments", en.name, v.name))
+                            .help(format!("write `{}.{}`", en.name, v.name)),
+                    );
+                    for a in args {
+                        self.expr(a, None);
+                    }
+                    return Self::err_expr();
+                }
+                let params: Vec<TyId> = rec.fields.iter().map(|f| f.ty).collect();
+                let what = format!("`{}.{}`", en.name, v.name);
+                self.check_args_sig(&params, args, None, span, &what, Some(&shown))
+            }
+        };
+        Self::retype(Expr::new(ExprKind::NewStruct(rec.ty, vals), rec.ty), t)
+    }
+
     pub fn field(&mut self, obj: &ast::Expr, name: &ast::Ident, span: Span) -> Expr {
         if let Some(t) = self.type_ident(obj) {
+            if self.types.variants_of(t).is_some() {
+                return self.variant_value(t, name, None, span);
+            }
             match self.types.get(t).clone() {
                 Ty::Enum(ei) => {
                     let en = self.types.enums[ei as usize].clone();

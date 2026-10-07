@@ -238,13 +238,17 @@ pub fn build(name: &str, is_std: bool, src: &str, m: &ast::Module) -> DocModule 
                         }
                         items.push(i);
                     }
-                    Def::Enum { variants, .. } => {
+                    Def::Enum { variants, fields, .. } => {
                         let mut i = base(Kind::Enum, &dname);
-                        for v in variants {
+                        for (v, fs) in variants.iter().zip(fields) {
                             i.members.push(Member {
                                 kind: MemberKind::Variant,
                                 name: v.name.clone(),
-                                sig: None,
+                                sig: fs.as_ref().map(|fs| Sig {
+                                    params: fs.iter().map(|p| (p.name.name.clone(), p.ty.clone())).collect(),
+                                    ret: None,
+                                    is_async: false,
+                                }),
                                 ty: None,
                                 default: None,
                                 doc: doc_at(src, v.span.start),

@@ -103,6 +103,14 @@ pub struct IfaceDef {
     pub module: u32,
     pub span: Span,
     pub ty: TyId,
+    pub variants: Vec<Variant>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Variant {
+    pub name: String,
+    pub span: Span,
+    pub record: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -216,6 +224,25 @@ impl Types {
         def.ty = self.intern(Ty::Enum(idx));
         self.enums.push(def);
         idx
+    }
+
+    pub fn variants_of(&self, t: TyId) -> Option<&IfaceDef> {
+        match self.get(t) {
+            Ty::Interface(i) if !self.ifaces[*i as usize].variants.is_empty() => Some(&self.ifaces[*i as usize]),
+            _ => None,
+        }
+    }
+
+    pub fn variant_of(&self, t: TyId) -> Option<(&IfaceDef, usize)> {
+        let r = match self.get(t) {
+            Ty::Record(r) => *r,
+            _ => return None,
+        };
+        let rec = &self.records[r as usize];
+        rec.implements.iter().find_map(|i| {
+            let e = &self.ifaces[*i as usize];
+            e.variants.iter().position(|v| v.record == r).map(|k| (e, k))
+        })
     }
 
     pub fn record_of(&self, t: TyId) -> Option<&RecordDef> {

@@ -108,6 +108,7 @@ function $fmt(v, t, nested, depth) {
     case "rec": {
       if (v.$dead) return "<destroyed " + $tname(v[0]) + ">";
       if (v[0] !== t && $d(v[0])[0] === "rec") return $fmt(v, v[0], nested, depth);
+      if (d[1].includes(".")) return d[2].length ? d[1] + "(" + d[2].map((f, i) => $fmt(v[i + 1], f[1], true, depth + 1)).join(", ") + ")" : d[1];
       const fs = d[2].map((f, i) => f[0] + ": " + $fmt(v[i + 1], f[1], true, depth + 1));
       const body = fs.length ? "{ " + fs.join(", ") + " }" : "{}";
       return d[1] ? d[1] + " " + body : body;

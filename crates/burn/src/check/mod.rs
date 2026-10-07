@@ -725,6 +725,27 @@ impl<'a> Checker<'a> {
                         }
                     };
                 }
+                if let Some((base, v)) = name.split_once('.') {
+                    let Some(t) = self.lookup_type_name(module, base, te.span) else {
+                        self.error(te.span, format!("unknown type `{}`", base));
+                        return T_ERROR;
+                    };
+                    let Some(en) = self.types.variants_of(t).cloned() else {
+                        let s = self.show(t);
+                        self.error(te.span, format!("{} is not an enum with data, so `{}` is not a type", s, name));
+                        return T_ERROR;
+                    };
+                    return match en.variants.iter().find(|x| x.name == v) {
+                        Some(x) => {
+                            self.def_link(te.span, x.span);
+                            self.types.records[x.record as usize].ty
+                        }
+                        None => {
+                            self.error(te.span, format!("enum {} has no variant `{}`", en.name, v));
+                            T_ERROR
+                        }
+                    };
+                }
                 if let Some(t) = self.lookup_type_name(module, name, te.span) {
                     return t;
                 }
@@ -1000,16 +1021,47 @@ impl<'a> Checker<'a> {
                     module: mi as u32,
                     span: name.span,
                     ty: 0,
+                    variants: Vec::new(),
                 });
                 let t = self.types.ifaces[ii as usize].ty;
                 self.add_type(mi, name, t, vis);
             }
-            Def::Enum { name, variants } => {
+            Def::Enum { name, variants, fields } => {
                 let mut seen: HashMap<&str, Span> = HashMap::new();
                 for v in variants {
                     if seen.insert(&v.name, v.span).is_some() {
                         self.error(v.span, format!("duplicate enum variant `{}`", v.name));
                     }
+                }
+                if fields.iter().any(|f| f.is_some()) {
+                    let ii = self.types.new_iface(IfaceDef {
+                        name: name.name.clone(),
+                        methods: Vec::new(),
+                        module: mi as u32,
+                        span: name.span,
+                        ty: 0,
+                        variants: Vec::new(),
+                    });
+                    let mut out = Vec::new();
+                    for v in variants {
+                        let ri = self.types.new_record(RecordDef {
+                            name: format!("{}.{}", name.name, v.name),
+                            module: mi as u32,
+                            span: v.span,
+                            implements: vec![ii],
+                            ..Default::default()
+                        });
+                        out.push(Variant {
+                            name: v.name.clone(),
+                            span: v.span,
+                            record: ri,
+                        });
+                    }
+                    self.iface_slot_base.insert(ii, 0);
+                    self.types.ifaces[ii as usize].variants = out;
+                    let t = self.types.ifaces[ii as usize].ty;
+                    self.add_type(mi, name, t, vis);
+                    return;
                 }
                 let ei = self.types.new_enum(EnumDef {
                     name: name.name.clone(),
@@ -1097,6 +1149,32 @@ impl<'a> Checker<'a> {
                 } = d
                 {
                     self.fill_struct(mi, ri, name, *kind, params, (extends, supers, *colon_extra), statics, pdecl);
+                }
+            }
+            Def::Enum { fields, .. } => {
+                let Some(e) = self.types.variants_of(t).cloned() else {
+                    return;
+                };
+                for (v, fs) in e.variants.iter().zip(fields) {
+                    let mut out: Vec<FieldDef> = Vec::new();
+                    for p in fs.iter().flatten() {
+                        let ft = self.resolve_type_in(&p.ty, mi);
+                        if ft == T_VOID {
+                            self.error(p.ty.span, "fields cannot have type void");
+                        }
+                        if out.iter().any(|x| x.name == p.name.name) {
+                            self.error(p.name.span, format!("duplicate field `{}`", p.name.name));
+                            continue;
+                        }
+                        out.push(FieldDef {
+                            name: p.name.name.clone(),
+                            ty: ft,
+                            default: None,
+                            private: false,
+                            span: p.name.span,
+                        });
+                    }
+                    self.types.records[v.record as usize].fields = out;
                 }
             }
             Def::Interface { methods, .. } => {

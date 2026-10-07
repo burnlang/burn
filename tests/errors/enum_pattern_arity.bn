@@ -1,0 +1,12 @@
+def enum Tok {
+    Word(text: string),
+    Num(value: int),
+    End
+}
+
+fun f(t: Tok): int {
+    return match t {
+        Tok.Num(a, b) => a
+        else => 0
+    }
+}

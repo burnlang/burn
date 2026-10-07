@@ -1,0 +1,117 @@
+import "../modules/tokens.bn"
+
+def enum Expr {
+    Num(value: int),
+    Var(name: string),
+    Add(left: Expr, right: Expr),
+    Mul(left: Expr, right: Expr),
+    Neg(inner: Expr)
+}
+
+def enum Shape {
+    Circle(radius: float),
+    Rect(w: float, h: float),
+    Dot
+}
+
+def struct Holder(shape: Shape, tags: [string]) {
+    fun describe(): string {
+        return match shape {
+            Shape.Circle(r) => "circle ${r}"
+            Shape.Rect(w, h) if w == h => "square ${w}"
+            Shape.Rect(w, h) => "rect ${w}x${h}"
+            Shape.Dot => "dot"
+        }
+    }
+}
+
+fun eval(e: Expr, env: {string: int}): int {
+    return match e {
+        Expr.Num(v) => v
+        Expr.Var(n) => env[n] ?? 0
+        Expr.Add(a, b) => eval(a, env) + eval(b, env)
+        Expr.Mul(a, b) => eval(a, env) * eval(b, env)
+        Expr.Neg(x) => -eval(x, env)
+    }
+}
+
+fun show(e: Expr): string {
+    return match e {
+        Expr.Num(v) => "${v}"
+        Expr.Var(n) => n
+        Expr.Add(a, b) => "(${show(a)} + ${show(b)})"
+        Expr.Mul(a, b) => "${show(a)} * ${show(b)}"
+        Expr.Neg(x) => "-${show(x)}"
+    }
+}
+
+fun simplify(e: Expr): Expr {
+    return match e {
+        Expr.Add(Expr.Num(0), b) => simplify(b)
+        Expr.Mul(a, b) => Expr.Mul(simplify(a), simplify(b))
+        Expr.Neg(Expr.Neg(x)) => simplify(x)
+        else => e
+    }
+}
+
+fun area(s: Shape): float {
+    if (s is Shape.Circle) {
+        return 3.0 * s.radius * s.radius
+    }
+    if (s is Shape.Rect) {
+        return s.w * s.h
+    }
+    return 0.0
+}
+
+fun first(ts: [Token]): Token? {
+    if (len(ts) == 0) {
+        return null
+    }
+    return ts[0]
+}
+
+fun main() {
+    var e = Expr.Add(Expr.Num(2), Expr.Mul(Expr.Var("x"), Expr.Neg(Expr.Num(3))))
+    print(show(e), "=", eval(e, {"x": 5}))
+    print(e)
+    print(show(simplify(Expr.Neg(Expr.Neg(Expr.Var("y"))))))
+    print(Expr.Num(1) == Expr.Num(1), Expr.Num(1) == Expr.Num(2), Shape.Dot == Shape.Dot, Shape.Dot != Shape.Circle(1.0))
+    for s in [Shape.Circle(1.0), Shape.Rect(2.0, 2.0), Shape.Rect(2.0, 3.0), Shape.Dot] {
+        var h = new Holder(s, ["a"])
+        print(h.describe(), area(s), typeOf(s))
+    }
+    Shape.Rect r = Shape.Rect(4.0, 5.0) as Shape.Rect
+    print(r.w + r.h, r)
+    var words = 0
+    var total = 0
+    var syms = ""
+    for t in tokenize("let x = 12 + y * 30;") {
+        match t {
+            Token.Word(_) => words += 1
+            Token.Number(n) => total += n
+            Token.Symbol(c) => syms += c
+            Token.End => print("end")
+        }
+    }
+    print(words, total, syms)
+    var none: [Token] = []
+    for ts in [tokenize("a"), none] {
+        var label = match first(ts) {
+            null => "nothing"
+            Token.Word(w) => "word ${w}"
+            else => "other"
+        }
+        print(label)
+    }
+    var pick = fun(n: int): Shape {
+        if (n > 0) {
+            return Shape.Circle(n * 1.0)
+        }
+        return Shape.Dot
+    }
+    print(pick(2), pick(0), [Shape.Dot, Shape.Rect(1.0, 2.0)])
+    var kinds: {string: Shape} = {}
+    kinds["c"] = Shape.Circle(9.0)
+    print(kinds["c"] ?? Shape.Dot)
+}

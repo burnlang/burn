@@ -148,6 +148,36 @@ var c = Color.Green
 print(c, c == Color.Green, c as int)
 ```
 
+Variants can carry data. Give a variant its fields in parentheses, build it like a function call, and take it apart
+with `match`:
+
+```burn
+def enum Shape {
+    Circle(radius: float),
+    Rect(w: float, h: float),
+    Dot
+}
+
+fun area(s: Shape): float {
+    return match s {
+        Shape.Circle(r) => 3.14159 * r * r
+        Shape.Rect(w, h) => w * h
+        Shape.Dot => 0.0
+    }
+}
+
+print(area(Shape.Rect(2.0, 3.0)), Shape.Circle(1.0))
+```
+
+- A `match` that produces a value must handle every variant (or have an `else` arm); a statement `match` warns about
+  the ones it misses.
+- In a pattern, each field is a name to bind, `_` to skip it, a value it must equal (`Token.Int(0)`), or another
+  variant pattern (`Expr.Neg(Expr.Num(n))`). Guards work as usual: `Shape.Rect(w, h) if w == h => "square"`.
+- `Shape.Circle` is also a type: `if (s is Shape.Circle) { print(s.radius) }` narrows `s` so its fields can be read.
+- Values print the way they are built (`Shape.Circle(1.0)`), and `==` compares them field by field.
+- An enum whose variants carry data is a reference type like a struct, so it can be recursive:
+  `def enum Expr { Num(value: int), Add(left: Expr, right: Expr) }`.
+
 ### `def struct` and `def interface`
 
 Structs hold fields and methods and are created with `new`:

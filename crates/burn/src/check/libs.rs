@@ -224,6 +224,7 @@ impl<'a> Checker<'a> {
                         module: lt.module as u32,
                         span: lt.span,
                         ty: 0,
+                        variants: Vec::new(),
                     });
                     let ty = self.types.ifaces[ii as usize].ty;
                     self.mods[lt.module].types.insert(
