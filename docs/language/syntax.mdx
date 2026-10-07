@@ -90,6 +90,8 @@ print("escapes: \n \t \" \\ \$ \u{2764}")
 
 `+` converts the other side to a string automatically. `${...}` embeds any expression.
 
+Building a string with `s += piece` in a loop is cheap: when nothing else holds the string, Burn appends to it in place instead of copying it. This works for local variables, struct fields and globals.
+
 ## Functions
 
 ```burn

@@ -33,6 +33,7 @@ The compiler keeps the bookkeeping cheap:
 - Returning a local variable hands it to the caller instead of copying.
 - Numbers, bools and enums are not objects and are never counted.
 - String literals are part of the program and are never freed.
+- `s += piece` grows the string in place when `s` is its only owner, so building text in a loop takes linear time.
 - Async tasks get their own share of the values passed to them, so tasks can safely use the same objects.
 
 ## Cycles

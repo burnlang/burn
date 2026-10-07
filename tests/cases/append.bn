@@ -1,0 +1,71 @@
+def struct Buf(text: string) {
+    fun add(s: string) {
+        text += s
+    }
+
+    fun addTwice(s: string) {
+        text = text + s + "|" + s
+    }
+}
+
+var log = ""
+
+fun note(s: string) {
+    log += s + ";"
+}
+
+fun grow(base: string): string {
+    var s = base
+    s += "!"
+    return s
+}
+
+fun main() {
+    var s = ""
+    for i in 0..5 {
+        s += "${i}"
+    }
+    print(s)
+    var keep = s
+    s += "x"
+    print(keep, s)
+    s += s
+    print(s)
+    s = s + "-" + s
+    print(s)
+    var u = "h"
+    u += "é"
+    u += "llo"
+    print(u, len(u), upper(u))
+    var b = new Buf("")
+    b.add("a")
+    b.add("b")
+    var snap = b.text
+    b.add("c")
+    b.addTwice("d")
+    print(snap, b.text)
+    b.text += b.text
+    print(b.text)
+    note("one")
+    note("two")
+    var saved = log
+    note("three")
+    print(saved, log)
+    var word = "base"
+    print(grow(word), word)
+    var parts: [string] = ["p"]
+    parts[0] += "q"
+    print(parts[0])
+    var count = 0
+    var big = ""
+    for i in 0..20000 {
+        big += "ab"
+        count += 1
+    }
+    print(len(big), count, substring(big, 0, 6))
+    var t = "n"
+    t += 1
+    t += true
+    t += 2.5
+    print(t)
+}
