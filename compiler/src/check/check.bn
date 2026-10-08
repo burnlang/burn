@@ -506,14 +506,6 @@ pub def struct Checker(loaded: Loaded) {
     {int: InstanceSite} instSites = {}
     [StdUse] stdUses = []
     {string: bool} gated = {}
-    [string] unported = []
-
-    /** Notes a part of the checker that is not ported yet; the dump prints it instead of a program. */
-    fun notPorted(what: string) {
-        if (!contains(unported, what)) {
-            unported.push(what)
-        }
-    }
 
     fun fileOf(mi: int): int {
         return loaded.modules[mi].file

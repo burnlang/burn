@@ -284,12 +284,13 @@ fn compiler_written_in_burn_matches_the_compiler() {
     let exe = dir.join("dump");
     let (built, code) = output(burn().current_dir(&root).args(["build", "compiler/src/main.bn", "-o"]).arg(&exe));
     assert_eq!(code, 0, "{}", built);
-    let stages: [(&str, &[PathBuf]); 7] = [
+    let stages: [(&str, &[PathBuf]); 8] = [
         ("--tokens", &files),
         ("--ast", &files),
         ("--diagnostics", &files),
         ("--modules", &files),
         ("--decls", &files),
+        ("--checked", &files),
         ("--toml", &tomls),
         ("--project", &places),
     ];
@@ -320,74 +321,7 @@ fn compiler_written_in_burn_matches_the_compiler() {
             }
         }
     }
-    checked_programs_match(&root, &home, &exe, &files);
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-fn checked_sections(out: &str, files: &[PathBuf]) -> Vec<String> {
-    let mut sections = Vec::new();
-    let mut rest = out;
-    for (i, f) in files.iter().enumerate() {
-        let head = format!("file {}\n", f.display());
-        assert!(rest.starts_with(&head), "missing the output of {}", f.display());
-        rest = &rest[head.len()..];
-        let end = match files.get(i + 1) {
-            Some(next) => rest.find(&format!("file {}\n", next.display())).unwrap_or(rest.len()),
-            None => rest.len(),
-        };
-        sections.push(rest[..end].to_string());
-        rest = &rest[end..];
-    }
-    sections
-}
-
-fn checked_programs_match(root: &Path, home: &Path, exe: &Path, files: &[PathBuf]) {
-    let listed = std::fs::read_to_string(root.join("tests/check/checked.txt")).unwrap();
-    let ported: Vec<PathBuf> = listed.lines().filter(|l| !l.is_empty()).map(|l| root.join(l)).collect();
-    for p in &ported {
-        assert!(files.contains(p), "tests/check/checked.txt lists {}, which does not exist", p.display());
-    }
-    let (want, code) = output(burn().current_dir(root).env("BURN_HOME", home).args(["dump", "--checked"]).args(files));
-    assert_eq!(code, 0, "{}", want);
-    let want = checked_sections(&want, files);
-    let mut bvm = burn();
-    bvm.current_dir(root)
-        .env("BURN_HOME", home)
-        .arg("compiler/src/main.bn")
-        .arg("--checked")
-        .args(files);
-    let mut native = Command::new(exe);
-    native.current_dir(root).env("BURN_HOME", home).arg("--checked").args(files);
-    for mut run in [bvm, native] {
-        let (got, code) = output(&mut run);
-        assert_eq!(code, 0, "{}", got);
-        let got = checked_sections(&got, files);
-        let mut compared = 0;
-        for (i, f) in files.iter().enumerate() {
-            if got[i].starts_with("not ported yet") {
-                assert!(
-                    !ported.contains(f),
-                    "{} is listed in tests/check/checked.txt, but the compiler written in Burn says:\n{}",
-                    f.display(),
-                    got[i]
-                );
-                continue;
-            }
-            compared += 1;
-            if got[i] != want[i] {
-                let line = got[i].lines().zip(want[i].lines()).position(|(a, b)| a != b).unwrap_or(0);
-                let show = |s: &str| s.lines().skip(line.saturating_sub(3)).take(8).collect::<Vec<_>>().join("\n");
-                panic!(
-                    "`burn dump --checked {}` and the compiler written in Burn differ at line {}:\n--- burn\n{}\n--- rust\n{}",
-                    f.display(),
-                    line + 1,
-                    show(&got[i]),
-                    show(&want[i])
-                );
-            }
-        }
-        assert!(compared >= ported.len(), "compared only {} programs", compared);
-    }
 }
 
 #[test]

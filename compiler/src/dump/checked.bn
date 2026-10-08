@@ -310,7 +310,7 @@ fun programLines(c: Checker, p: HProgram): [string] {
     return out
 }
 
-/** The checked program, as `burn dump --checked` prints it; parts the port does not cover yet are listed instead. */
+/** The checked program, as `burn dump --checked` prints it. */
 pub fun dumpChecked(file: string): string {
     var loader = new Loader()
     var err = new Problem()
@@ -321,13 +321,6 @@ pub fun dumpChecked(file: string): string {
     var loaded = loader.finish(root)
     var r = checkProgram(loaded)
     var c = r.checker
-    if (len(c.unported) > 0) {
-        var out = ""
-        for u in c.unported {
-            out += "not ported yet: ${u}\n"
-        }
-        return out
-    }
     [string] out = []
     for d in r.diags {
         out.push(render(loaded.files[d.file], d.diag))
