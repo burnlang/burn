@@ -354,6 +354,51 @@ fn projects_use_a_standard_layout() {
 }
 
 #[test]
+fn workspaces_build_every_member() {
+    let dir = temp_dir("workspace");
+    let (out, code) = output(burn().current_dir(&dir).args(["init", "github.com/ada/game", "--workspace", "--no-git"]));
+    assert_eq!(code, 0, "{}", out);
+    let ws = dir.join("game");
+    let run = |cwd: &Path, args: &[&str]| output(burn().current_dir(cwd).args(args));
+    let toml = std::fs::read_to_string(ws.join("burn.toml")).unwrap();
+    assert!(toml.contains("members = [\"common\", \"native\", \"js\", \"bvm\"]"), "{}", toml);
+    let (out, code) = run(&ws, &["build"]);
+    assert_eq!(code, 0, "{}", out);
+    for f in ["native/build/native", "js/build/js.js", "bvm/build/bvm.bvmc"] {
+        assert!(ws.join(f).is_file(), "{} missing after:\n{}", f, out);
+    }
+    for t in ["native", "js", "bvm"] {
+        assert_eq!(run(&ws, &["run", "-p", t]), (format!("Hello from {}!\n", t), 0));
+    }
+    let (out, code) = run(&ws, &["run"]);
+    assert!(code != 0 && out.contains("pick one with `-p` (native, js, bvm)"), "{}", out);
+    assert_eq!(run(&ws.join("native"), &["run"]), ("Hello from native!\n".to_string(), 0));
+    let (out, code) = run(&ws, &["run", "-p", "nope"]);
+    assert!(code != 0 && out.contains("has no member `nope`"), "{}", out);
+    let (out, code) = run(&ws, &["init", "tools", "--lib", "--no-git"]);
+    assert!(code == 0 && out.contains("added \"tools\" to the workspace's members"), "{}", out);
+    assert!(std::fs::read_to_string(ws.join("tools/burn.toml"))
+        .unwrap()
+        .contains("name = \"github.com/ada/game/tools\""));
+    std::fs::write(
+        ws.join("native/src/main.bn"),
+        "import \"github.com/ada/game/common\"\nimport \"github.com/ada/game/tools\"\n\nfun main() {\n    print(greeting(\"native\"), greet(\"tools\"))\n}\n",
+    )
+    .unwrap();
+    assert_eq!(run(&ws, &["run", "-p", "native"]), ("Hello from native! Hello, tools!\n".to_string(), 0));
+    let (out, code) = run(&ws, &["test"]);
+    assert!(
+        code == 0 && out.contains("common/tests/main.bn ... ok") && out.contains("tools/tests/main.bn ... ok") && out.contains("2 passed"),
+        "{}",
+        out
+    );
+    assert_eq!(run(&ws, &["check"]).1, 0);
+    let (out, code) = run(&ws, &["check", "-p", "native"]);
+    assert_eq!(code, 0, "{}", out);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn burnfmt_written_in_burn_matches_the_builtin_formatter() {
     let root = root();
     let tool = root.join("tools/burnfmt/burnfmt.bn");

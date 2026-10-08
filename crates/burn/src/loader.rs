@@ -288,10 +288,7 @@ impl Loader {
     }
 
     fn load_library(&mut self, p: &str, base: Option<&Path>) -> Result<usize, String> {
-        let package = p
-            .strip_suffix(".bvmc")
-            .and_then(crate::project::split_package_path)
-            .filter(|(_, sub)| sub.is_empty());
+        let package = p.strip_suffix(".bvmc").and_then(|q| self.split(q, base)).filter(|(_, sub)| sub.is_empty());
         let path = if let Some((name, _)) = package {
             self.package_bytecode(&name, base)?
         } else {
@@ -409,6 +406,14 @@ impl Loader {
         idx
     }
 
+    fn split(&mut self, p: &str, base: Option<&Path>) -> Option<(String, String)> {
+        crate::project::split_package_path(p)?;
+        match self.project(base) {
+            Ok(pr) => pr.split_import(p),
+            Err(_) => crate::project::split_package_path(p),
+        }
+    }
+
     fn resolve_root_import(&mut self, rest: &str, base: Option<&Path>) -> Result<usize, String> {
         let start = base.map(|b| b.to_path_buf()).or_else(|| std::env::current_dir().ok()).unwrap_or_default();
         let Some(root) = crate::project::find_root(&start) else {
@@ -437,13 +442,13 @@ impl Loader {
             return self.resolve_root_import(rest, base);
         }
         if p.ends_with(".bn") {
-            if let Some((name, sub)) = crate::project::split_package_path(p) {
+            if let Some((name, sub)) = self.split(p, base) {
                 if sub.is_empty() && self.project(base).map(|pr| pr.knows(&name)).unwrap_or(false) {
                     return self.resolve_package(&name, "", base);
                 }
             }
         }
-        if let Some((name, sub)) = crate::project::split_package_path(p.trim_end_matches(".bn")) {
+        if let Some((name, sub)) = self.split(p.trim_end_matches(".bn"), base) {
             let sub = if p.ends_with(".bn") && !sub.is_empty() { format!("{}.bn", sub) } else { sub };
             return self.resolve_package(&name, &sub, base);
         }

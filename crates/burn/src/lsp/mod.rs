@@ -170,7 +170,12 @@ fn import_items(file: &Path, typed: &str) -> Vec<Json> {
         for l in &p.lock {
             add(l.name.clone(), 9, "installed package", &mut out);
         }
-        if let Some((name, _)) = crate::project::split_package_path(typed.trim_end_matches('/')) {
+        for m in p.workspace.iter().flat_map(|w| w.members.iter()) {
+            if let Some(n) = &m.name {
+                add(n.clone(), 9, "workspace member", &mut out);
+            }
+        }
+        if let Some((name, _)) = p.split_import(typed.trim_end_matches('/')) {
             if let Ok(dir) = p.resolve(&name) {
                 let sub = typed[name.len()..].trim_start_matches('/');
                 let (folder, _) = sub.rsplit_once('/').unwrap_or(("", sub));
