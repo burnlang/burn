@@ -46,6 +46,7 @@ The inputs include the error-recovery fixtures in `tests/lexer` and `tests/parse
    - Compare `burn check` output on `tests/errors`.
 4. **Loader and projects.**
    - Port imports, the standard library modules (read from `lib/std`), `burn.toml` and `burn.lock` parsing, and package resolution.
+   - Include the project layout (`@/` imports, source roots, `mod.bn`, `src/bin`) and workspaces.
 5. **Checker.** The largest part (about 10,000 lines). Split it into PRs, roughly one per Rust file:
    - declarations and types
    - expressions

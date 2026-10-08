@@ -288,6 +288,72 @@ fn compiler_written_in_burn_matches_the_compiler() {
 }
 
 #[test]
+fn projects_use_a_standard_layout() {
+    let dir = temp_dir("layout");
+    let (out, code) = output(burn().current_dir(&dir).args(["init", "github.com/ada/app", "--no-git"]));
+    assert_eq!(code, 0, "{}", out);
+    let app = dir.join("app");
+    let write = |rel: &str, text: &str| {
+        let p = app.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    };
+    write(
+        "src/net/http/mod.bn",
+        "import \"@/util/text\"\n\npub fun fetch(url: string): string {\n    return shout(\"GET \" + url)\n}\n",
+    );
+    write("src/util/text.bn", "pub fun shout(s: string): string {\n    return upper(s)\n}\n");
+    write(
+        "src/net/dns.bn",
+        "import \"@/net/http\"\n\npub fun lookup(host: string): string {\n    return fetch(\"dns://\" + host)\n}\n",
+    );
+    write(
+        "src/main.bn",
+        "import \"@/net/http\"\nimport \"github.com/ada/app/net/dns\"\nimport \"github.com/ada/app/src/util/text\"\n\nfun main() {\n    print(fetch(\"a\"), lookup(\"b\"), shout(\"c\"))\n}\n",
+    );
+    write(
+        "src/bin/tool.bn",
+        "import \"@/util/text\"\nimport \"std/process\"\n\nfun main() {\n    print(shout(\"tool\"), args())\n}\n",
+    );
+    write("src/bin/server/main.bn", "fun main() {\n    print(\"server\")\n}\n");
+    write("examples/hello.bn", "import \"@/net/http\"\n\nprint(fetch(\"example\"))\n");
+    write(
+        "tests/text.bn",
+        "import \"std/testing\"\nimport \"@/util/text\"\n\nassert(shout(\"a\") == \"A\")\n",
+    );
+    let run = |args: &[&str]| output(burn().current_dir(&app).args(args));
+    assert_eq!(run(&["run"]), ("GET A GET DNS://B C\n".to_string(), 0));
+    assert_eq!(run(&["run", "--bin", "tool", "--", "x"]), ("TOOL [\"x\"]\n".to_string(), 0));
+    assert_eq!(run(&["run", "--bin", "server"]), ("server\n".to_string(), 0));
+    assert_eq!(run(&["run", "--example", "hello"]), ("GET EXAMPLE\n".to_string(), 0));
+    let (out, code) = run(&["run", "--bin", "nope"]);
+    assert!(code != 0 && out.contains("it has: server, tool"), "{}", out);
+    assert_eq!(run(&["check"]).1, 0);
+    let (out, code) = run(&["build", "--target", "bvm"]);
+    assert_eq!(code, 0, "{}", out);
+    for f in ["build/app.bvmc", "build/server.bvmc", "build/tool.bvmc"] {
+        assert!(app.join(f).is_file(), "{} missing after:\n{}", f, out);
+    }
+    let (out, code) = run(&["test"]);
+    assert!(
+        code == 0 && out.contains("test tests/text.bn ... ok") && out.contains("1 passed, 0 failed"),
+        "{}",
+        out
+    );
+    write("tests/broken.bn", "import \"std/testing\"\n\nassert(1 == 2, \"one is not two\")\n");
+    let (out, code) = run(&["test"]);
+    assert!(
+        code != 0 && out.contains("test tests/broken.bn ... FAILED") && out.contains("one is not two"),
+        "{}",
+        out
+    );
+    write("src/bad.bn", "import \"@/missing/thing\"\n");
+    let (out, code) = run(&["check", "src/bad.bn"]);
+    assert!(code != 0 && out.contains("cannot find `@/missing/thing`"), "{}", out);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn burnfmt_written_in_burn_matches_the_builtin_formatter() {
     let root = root();
     let tool = root.join("tools/burnfmt/burnfmt.bn");

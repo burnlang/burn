@@ -31,13 +31,48 @@ burn init github.com/you/colors --lib          # a library
 Both get a `burn.toml`, a `.gitignore`, a `README.md` and a git repository (skip it with `--no-git`). Pass a
 directory after the name to create the project somewhere else, or `.` for the current folder.
 
+## Project layout
+
+Every project has the same shape, so tools and people always know where things are:
+
+```text
+hello/
+├── burn.toml          the manifest
+├── burn.lock          exact versions of the dependencies (written by ash)
+├── src/               the sources; folders in it are packages
+│   ├── main.bn        the program (an app), or lib.bn (a library)
+│   ├── net/
+│   │   ├── mod.bn     the module `net` (optional)
+│   │   └── http.bn    the module `net/http`
+│   └── bin/           more programs in the same project
+│       ├── tool.bn    `burn run --bin tool`
+│       └── server/
+│           └── main.bn  `burn run --bin server`
+├── tests/             every file is a test program: `burn test`
+├── examples/          `burn run --example <name>`
+└── build/             what `burn build` writes (ignored by git)
+```
+
+Sources import each other through the project's source root, wherever they are, with `@/`. Other projects use
+the package name, the same path written out in full:
+
+```burn
+import "@/net/http"                 // inside the project
+import "github.com/you/hello/net/http"  // from anywhere
+```
+
+`src/` is the folder of the `main` file, so a project whose `main` is somewhere else has its source root there.
+
 Inside a project, `burn` commands work without a file name:
 
 | Command | What it does |
 | --- | --- |
 | `burn run [args]` | run `main` on bvm; `--native` compiles it first |
-| `burn build` | build `main` for the project's target into `build/`; `--target` overrides it |
-| `burn check` | type-check the project |
+| `burn run --bin <name>` | run `src/bin/<name>.bn` (or `src/bin/<name>/main.bn`) |
+| `burn run --example <name>` | run `examples/<name>.bn` |
+| `burn build` | build `main` and every program in `src/bin` for the project's target into `build/`; `--target` overrides it, `--bin` and `--example` build one program |
+| `burn check` | type-check every source, program, test and example of the project |
+| `burn test [filter]` | run each file in `tests/`; a test fails when it exits with an error, such as a failed `assert` |
 
 ## burn.toml
 
@@ -122,12 +157,13 @@ project. Local packages (`source = "path+../local"`) are used where they are.
 
 ```burn
 import "github.com/you/colors"
-import "github.com/you/colors/src/extra"
+import "github.com/you/colors/extra"
 
 print(paint("hello"))
 ```
 
-The package name loads the package's `main` file; a longer path loads another file from it. The compiler finds
+The package name loads the package's `main` file; a longer path loads a module from its `src/` folder
+(`extra` is `src/extra.bn`, and the older form with `src/` written out still works). The compiler finds
 packages through `burn.lock`, so imports never touch the network. A project can import its own files by its name
 too, which is how a library's tests use it: `import "github.com/you/colors"`.
 

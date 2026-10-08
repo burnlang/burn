@@ -239,20 +239,24 @@ impl Loader {
                 crate::project::package_main(&dir)?
             }
         } else {
+            let src = if is_self {
+                self.project(base)?.source_root()
+            } else {
+                crate::project::package_source_root(&dir)?
+            };
+            let exists = |p: &Path| p.is_file() || self.overrides.contains_key(&canonical(p));
             let direct = dir.join(sub);
             if direct.is_file() {
                 direct
+            } else if let Some(f) = crate::project::module_file(&src, sub, &exists).or_else(|| crate::project::module_file(&dir, sub, &exists)) {
+                f
             } else {
-                dir.join(format!("{}.bn", sub))
+                let want = src.join(if sub.ends_with(".bn") { sub.to_string() } else { format!("{}.bn", sub) });
+                return Err(format!("cannot find `{}` in the package `{}` (there is no {})", sub, name, want.display()));
             }
         };
         if !file.is_file() && !self.overrides.contains_key(&canonical(&file)) {
-            return Err(format!(
-                "cannot find `{}` in the package `{}` ({})",
-                if sub.is_empty() { "its main file" } else { sub },
-                name,
-                file.display()
-            ));
+            return Err(format!("cannot find the main file of the package `{}` ({})", name, file.display()));
         }
         self.load_file(&file)
     }
@@ -405,7 +409,33 @@ impl Loader {
         idx
     }
 
+    fn resolve_root_import(&mut self, rest: &str, base: Option<&Path>) -> Result<usize, String> {
+        let start = base.map(|b| b.to_path_buf()).or_else(|| std::env::current_dir().ok()).unwrap_or_default();
+        let Some(root) = crate::project::find_root(&start) else {
+            return Err(format!(
+                "`@/{}` imports from the project's sources, but this file is not in a project (there is no burn.toml here or above)",
+                rest
+            ));
+        };
+        let src = crate::project::package_source_root(&root)?;
+        let exists = |p: &Path| p.is_file() || self.overrides.contains_key(&canonical(p));
+        match crate::project::module_file(&src, rest, &exists) {
+            Some(f) => self.load_file(&f),
+            None => {
+                let want = if rest.ends_with(".bn") {
+                    rest.to_string()
+                } else {
+                    format!("{}.bn", rest.trim_end_matches('/'))
+                };
+                Err(format!("cannot find `@/{}`: there is no {}", rest, src.join(want).display()))
+            }
+        }
+    }
+
     fn resolve_import(&mut self, p: &str, base: Option<&Path>, from_std: bool) -> Result<usize, String> {
+        if let Some(rest) = p.strip_prefix("@/") {
+            return self.resolve_root_import(rest, base);
+        }
         if p.ends_with(".bn") {
             if let Some((name, sub)) = crate::project::split_package_path(p) {
                 if sub.is_empty() && self.project(base).map(|pr| pr.knows(&name)).unwrap_or(false) {
@@ -421,6 +451,7 @@ impl Loader {
         if let Some(b) = base {
             candidates.push(b.join(p));
             candidates.push(b.join(format!("{}.bn", p)));
+            candidates.push(b.join(p).join("mod.bn"));
         }
         if let Ok(cwd) = std::env::current_dir() {
             candidates.push(cwd.join(p));
