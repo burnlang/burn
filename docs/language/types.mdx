@@ -172,7 +172,9 @@ print(area(Shape.Rect(2.0, 3.0)), Shape.Circle(1.0))
 - A `match` that produces a value must handle every variant (or have an `else` arm); a statement `match` warns about
   the ones it misses.
 - In a pattern, each field is a name to bind, `_` to skip it, a value it must equal (`Token.Int(0)`), or another
-  variant pattern (`Expr.Neg(Expr.Num(n))`). Guards work as usual: `Shape.Rect(w, h) if w == h => "square"`.
+  variant pattern (`Expr.Neg(Expr.Num(n))`). A name that is already a variable or constant is a value to compare
+  against; any other name (including one that is also a function) binds a new name. Guards work as usual:
+  `Shape.Rect(w, h) if w == h => "square"`.
 - `Shape.Circle` is also a type: `if (s is Shape.Circle) { print(s.radius) }` narrows `s` so its fields can be read.
 - Values print the way they are built (`Shape.Circle(1.0)`), and `==` compares them field by field.
 - An enum whose variants carry data is a reference type like a struct, so it can be recursive:

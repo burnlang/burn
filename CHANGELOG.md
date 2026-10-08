@@ -13,7 +13,8 @@ The release that ships the compiler written in Burn.
   - `burn init <name> --workspace` creates the multi-target layout: a `common` library and one app per target (native, js, bvm).
   - Members are named under the workspace (`github.com/you/game/common`), import each other directly and share one `burn.lock`.
   - At the root, `burn build`/`check`/`test` cover every member, and `-p <member>` picks one.
-- Self-hosting: the lexer and the parser are ported to Burn (`compiler/`). Both produce output identical to the Rust compiler's, checked by `burn dump --tokens` and `burn dump --ast` on every Burn file in the repository.
+- Self-hosting: the lexer, the parser and the diagnostic renderer are ported to Burn (`compiler/`). They produce output identical to the Rust compiler's, checked by `burn dump --tokens`, `--ast` and `--diagnostics` on every Burn file in the repository.
+- Fixed: a pattern binding named like a function (`Kind.Big(digits)` with a `fun digits` in scope) was compared against the function instead of binding a new name.
 - Fixed: a stray non-ASCII symbol made the lexer loop forever, and an unknown escape before a multi-byte character crashed it.
 
 ## 26.1.0-experimental-2

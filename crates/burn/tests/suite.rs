@@ -261,7 +261,7 @@ fn compiler_written_in_burn_matches_the_compiler() {
     let exe = dir.join("dump");
     let (built, code) = output(burn().current_dir(&root).args(["build", "compiler/dump.bn", "-o"]).arg(&exe));
     assert_eq!(code, 0, "{}", built);
-    for stage in ["--tokens", "--ast"] {
+    for stage in ["--tokens", "--ast", "--diagnostics"] {
         let (want, code) = output(burn().current_dir(&root).args(["dump", stage]).args(&files));
         assert_eq!(code, 0, "{}", want);
         let mut bvm = burn();

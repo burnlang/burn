@@ -71,6 +71,17 @@ fun first(ts: [Token]): Token? {
     return ts[0]
 }
 
+fun scale(x: float): float {
+    return x * 2.0
+}
+
+fun unscaled(s: Shape): float {
+    return match s {
+        Shape.Circle(scale) => scale
+        else => 0.0
+    }
+}
+
 fun main() {
     var e = Expr.Add(Expr.Num(2), Expr.Mul(Expr.Var("x"), Expr.Neg(Expr.Num(3))))
     print(show(e), "=", eval(e, {"x": 5}))
@@ -114,4 +125,5 @@ fun main() {
     var kinds: {string: Shape} = {}
     kinds["c"] = Shape.Circle(9.0)
     print(kinds["c"] ?? Shape.Dot)
+    print(unscaled(Shape.Circle(3.0)), scale(1.5))
 }

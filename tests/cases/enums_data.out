@@ -13,3 +13,4 @@ word a
 nothing
 Shape.Circle(2.0) Shape.Dot [Shape.Dot, Shape.Rect(1.0, 2.0)]
 Shape.Circle(9.0)
+3.0 3.0
