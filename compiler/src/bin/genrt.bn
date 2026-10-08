@@ -1,0 +1,26 @@
+import "std/fs"
+import "std/strings"
+
+/**
+ * Prints `compiler/src/vm/runtime.bn`, which maps each runtime function of `crates/burn-runtime` to its symbol, the way
+ * `rt_name` in bvm names them. Run it from the repository root: `burn compiler/src/bin/genrt.bn > compiler/src/vm/runtime.bn`.
+ */
+fun main() {
+    var src = readFile("crates/burn-runtime/src/lib.rs")
+    print("/** The symbol of each runtime function without `burn_`, by its name in `RtFn`, written by `compiler/src/bin/genrt.bn`. */")
+    print("pub fun runtimeSymbols(): {string: string} {")
+    print("    {string: string} out = {}")
+    for line in split(src, "\n") {
+        var t = trim(line)
+        var arrow = indexOf(t, " => burn_")
+        var eq = indexOf(t, " = ")
+        if (arrow <= 0 || eq <= arrow || !endsWith(t, "];")) {
+            continue
+        }
+        var name = substring(t, 0, arrow)
+        var symbol = substring(t, arrow + 9, eq)
+        print("    out[\"${name}\"] = \"${symbol}\"")
+    }
+    print("    return out")
+    print("}")
+}

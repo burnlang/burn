@@ -280,11 +280,17 @@ fn compiler_written_in_burn_matches_the_compiler() {
         generated == std::fs::read_to_string(root.join("compiler/src/project/stdlib.bn")).unwrap(),
         "compiler/src/project/stdlib.bn is out of date; run `burn compiler/src/bin/genstd.bn > compiler/src/project/stdlib.bn`"
     );
+    let (generated, code) = output(burn().current_dir(&root).arg("compiler/src/bin/genrt.bn"));
+    assert_eq!(code, 0, "{}", generated);
+    assert!(
+        generated == std::fs::read_to_string(root.join("compiler/src/vm/runtime.bn")).unwrap(),
+        "compiler/src/vm/runtime.bn is out of date; run `burn compiler/src/bin/genrt.bn > compiler/src/vm/runtime.bn`"
+    );
     let dir = temp_dir("selfhost");
     let exe = dir.join("dump");
     let (built, code) = output(burn().current_dir(&root).args(["build", "compiler/src/main.bn", "-o"]).arg(&exe));
     assert_eq!(code, 0, "{}", built);
-    let stages: [(&str, &[PathBuf]); 9] = [
+    let stages: [(&str, &[PathBuf]); 10] = [
         ("--tokens", &files),
         ("--ast", &files),
         ("--diagnostics", &files),
@@ -292,6 +298,7 @@ fn compiler_written_in_burn_matches_the_compiler() {
         ("--decls", &files),
         ("--checked", &files),
         ("--owned", &files),
+        ("--bvm", &files),
         ("--toml", &tomls),
         ("--project", &places),
     ];

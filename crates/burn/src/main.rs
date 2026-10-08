@@ -37,6 +37,7 @@ const TEXT_DUMPS: &[&str] = &[
     "--decls",
     "--checked",
     "--owned",
+    "--bvm",
 ];
 
 fn usage() {
@@ -886,12 +887,13 @@ fn main() -> ExitCode {
                 if rest.len() > 2 {
                     println!("file {}", f);
                 }
-                if mode == "--project" || mode == "--modules" || mode == "--decls" || mode == "--checked" || mode == "--owned" {
+                if mode == "--project" || mode == "--modules" || mode == "--decls" || mode == "--checked" || mode == "--owned" || mode == "--bvm" {
                     let out = match mode.as_str() {
                         "--project" => loaddump::project(Path::new(f)),
                         "--modules" => loaddump::modules(Path::new(f)),
                         "--checked" => loaddump::checked(Path::new(f)),
                         "--owned" => loaddump::owned(Path::new(f)),
+                        "--bvm" => loaddump::bytecode(Path::new(f)),
                         _ => loaddump::declarations(Path::new(f)),
                     };
                     print!("{}", out);
@@ -920,7 +922,7 @@ fn main() -> ExitCode {
                 [w, f] if w.starts_with("--") => (w.trim_start_matches("--").to_string(), f.clone()),
                 [f] => ("hir".to_string(), f.clone()),
                 _ => {
-                    eprintln!("usage: burn dump [--hir|--bytecode|--asm|--js] <file.bn>  |  burn dump --tokens|--ast|--diagnostics|--toml|--project|--modules|--decls|--checked|--owned <files...>");
+                    eprintln!("usage: burn dump [--hir|--bytecode|--asm|--js] <file.bn>  |  burn dump --tokens|--ast|--diagnostics|--toml|--project|--modules|--decls|--checked|--owned|--bvm <files...>");
                     return ExitCode::from(2);
                 }
             };

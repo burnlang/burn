@@ -13,9 +13,11 @@ This directory holds the self-hosted Burn compiler. It is ported from the compil
 | `src/project/` | `burn.toml`, `burn.lock`, workspaces, paths, the module loader and the embedded standard library | `project.rs`, `loader.rs` |
 | `src/check/` | the type table and the type checker | `types.rs`, `hir.rs`, `check/` |
 | `src/lower/` | passes over the checked program: ownership (reference counting) | `own.rs` |
+| `src/vm/` | bvm code generation and the bvm assembly text it is written as | `vm/compile.rs`, and from the bvm crate `op.rs`, `module.rs`, `builder.rs` and `asm.rs` |
 | `src/dump/` | the `burn dump` text forms that the tests compare | `astdump.rs`, `loaddump.rs`, `check/declsdump.rs`, `check/hirdump.rs` |
 | `src/main.bn` | the entry point; for now it prints the `burn dump` forms | |
 | `src/bin/genstd.bn` | writes `src/project/stdlib.bn` from `lib/std` | |
+| `src/bin/genrt.bn` | writes `src/vm/runtime.bn`, the symbol of each runtime function, from `crates/burn-runtime/src/lib.rs` | |
 
 The sources import each other with relative paths (`"../syntax/ast.bn"`) because stage0 does not know `@/` imports yet.
 
@@ -34,6 +36,7 @@ The Rust compiler can print every stage in a fixed text form. The Burn port prin
 | Declared types, functions, globals and their errors | `crates/burn/src/types.rs`, `check/` up to `declare` | `src/check/types.bn`, `src/check/check.bn`, `src/check/hir.bn` | `burn dump --decls <files...>` |
 | Checked program (functions, statements and expressions after type checking) and checker errors | `crates/burn/src/check/` | `src/check/body.bn` and the files next to it | `burn dump --checked <files...>` |
 | The program after ownership, with `Retain`, `Release` and their temporaries | `crates/burn/src/own.rs` | `src/lower/own.bn` | `burn dump --owned <files...>` |
+| The bvm module in bvm assembly | `crates/burn/src/vm/compile.rs`, `crates/bvm/src/asm.rs` | `src/vm/compile.bn`, `src/vm/asm.bn` | `burn dump --bvm <files...>` |
 
 Run the comparison by hand with:
 
@@ -84,7 +87,7 @@ The inputs include the error-recovery fixtures in `tests/lexer` and `tests/parse
      The files next to it port the matching Rust files: `expr.bn`, `calls.bn`, `builtins.bn`, `stmt.bn`, `closures.bn`, `generics.bn`, `numeric.bn` (with `wide.bn` for 128-bit constant folding), `matching.bn` (`match`), `nullsafe.bn` (`?.`, `??` and `as?`), `structs.bn` (constructors, inheritance, abstract methods, virtual calls and their devirtualization, static values, `new`, generic structs, adding functions to objects and `destroy`), `annotations.bn` (`annotationsOf` and mixins) and `init_order.bn`.
      The suite compares `burn dump --checked` on every Burn file in the repository. The fixtures in `tests/check/bodies` cover closures, generic functions, return types, initialization order, sized numbers, `match`, the nullable operators and structs.
 6. **Ownership** (done). `src/lower/own.bn` ports `own.rs`: which locals own their values, retains for borrowed values that are kept, releases at the end of statements, scopes and functions, temporaries for nested calls, and in-place appends for `s += ...` on locals, globals and fields. `burn dump --owned` prints the program after the pass, and the suite compares it on every Burn file in the repository.
-7. **bvm code generation.** Port `vm/compile.rs` and compare `burn dump --bytecode`.
+7. **bvm code generation** (done). `src/vm/compile.bn` ports `vm/compile.rs`, and `src/vm/asm.bn` writes the module as bvm assembly (`.bvm`), like `disassemble` in the bvm crate. Burn has no binary file output yet and stage0 cannot get one, so the Burn compiler writes the text form, which `burn <file.bvm>` assembles and runs. `burn dump --bvm` prints it, and the suite compares it on every Burn file in the repository. `src/vm/bits.bn` converts floats to and from their bits for constants, and `src/vm/runtime.bn` (written by `src/bin/genrt.bn`) names the runtime functions.
 8. **Bootstrap** (see *Stage0* below).
    - The Rust compiler builds the Burn compiler (stage 1).
    - Stage 1 builds itself (stage 2), and CI checks that both produce identical bytecode.

@@ -1,0 +1,294 @@
+import "../check/hir.bn"
+
+/** A bvm instruction, like `Op` in `crates/bvm/src/op.rs`; only the ones Burn code generation emits. */
+pub def enum Op {
+    Const(value: int),
+    TypeConst(ty: int),
+    LocConst(loc: int),
+    Str(id: int),
+    FuncRef(func: int),
+    Load(slot: int),
+    Store(slot: int),
+    Tee(slot: int),
+    GLoad(id: int),
+    GStore(id: int),
+    GTee(id: int),
+    Pop,
+    IAdd,
+    ISub,
+    IMul,
+    IDiv(loc: int),
+    IAddOv(loc: int),
+    ISubOv(loc: int),
+    IMulOv(loc: int),
+    INegOv(loc: int),
+    IRem(loc: int),
+    And,
+    Or,
+    Xor,
+    Shl,
+    Shr,
+    UShr,
+    FAdd,
+    FSub,
+    FMul,
+    FDiv,
+    FNeg,
+    ICmp(cmp: Cmp),
+    UCmp(cmp: Cmp),
+    FCmp(cmp: Cmp),
+    Not,
+    I2F,
+    F2I,
+    Jmp(target: int),
+    Jz(target: int),
+    Jnz(target: int),
+    JzKeep(target: int),
+    JnzKeep(target: int),
+    Call(func: int),
+    CallInd(argc: int),
+    Dispatch(table: int, argc: int),
+    Ret,
+    RetVoid,
+    Rt(name: string),
+    Host(id: int),
+    Spawn(func: int, argc: int, ty: int),
+    NewRecord(ty: int, argc: int),
+    GetField(index: int),
+    SetField(index: int),
+    NewArray(ty: int, count: int),
+    Index(loc: int),
+    SetIndex(loc: int),
+    Len,
+    Unbox
+}
+
+fun cmpLetters(c: Cmp): string {
+    return match c {
+        Cmp.Eq => "eq"
+        Cmp.Ne => "ne"
+        Cmp.Lt => "lt"
+        Cmp.Le => "le"
+        Cmp.Gt => "gt"
+        Cmp.Ge => "ge"
+    }
+}
+
+/** The name of an instruction in bvm assembly. */
+pub fun mnemonic(op: Op): string {
+    return match op {
+        Op.Const(value) => "const"
+        Op.TypeConst(ty) => "tconst"
+        Op.LocConst(loc) => "lconst"
+        Op.Str(id) => "str"
+        Op.FuncRef(func) => "fref"
+        Op.Load(slot) => "load"
+        Op.Store(slot) => "store"
+        Op.Tee(slot) => "tee"
+        Op.GLoad(id) => "gload"
+        Op.GStore(id) => "gstore"
+        Op.GTee(id) => "gtee"
+        Op.Pop => "pop"
+        Op.IAdd => "iadd"
+        Op.ISub => "isub"
+        Op.IMul => "imul"
+        Op.IDiv(loc) => "idiv"
+        Op.IAddOv(loc) => "iadd.ovf"
+        Op.ISubOv(loc) => "isub.ovf"
+        Op.IMulOv(loc) => "imul.ovf"
+        Op.INegOv(loc) => "ineg.ovf"
+        Op.IRem(loc) => "irem"
+        Op.And => "and"
+        Op.Or => "or"
+        Op.Xor => "xor"
+        Op.Shl => "shl"
+        Op.Shr => "shr"
+        Op.UShr => "ushr"
+        Op.FAdd => "fadd"
+        Op.FSub => "fsub"
+        Op.FMul => "fmul"
+        Op.FDiv => "fdiv"
+        Op.FNeg => "fneg"
+        Op.ICmp(cmp) => "i${cmpLetters(cmp)}"
+        Op.UCmp(cmp) => "u${cmpLetters(cmp)}"
+        Op.FCmp(cmp) => "f${cmpLetters(cmp)}"
+        Op.Not => "not"
+        Op.I2F => "i2f"
+        Op.F2I => "f2i"
+        Op.Jmp(target) => "jmp"
+        Op.Jz(target) => "jz"
+        Op.Jnz(target) => "jnz"
+        Op.JzKeep(target) => "jzk"
+        Op.JnzKeep(target) => "jnzk"
+        Op.Call(func) => "call"
+        Op.CallInd(argc) => "calli"
+        Op.Dispatch(table, argc) => "dispatch"
+        Op.Ret => "ret"
+        Op.RetVoid => "retv"
+        Op.Rt(name) => "rt"
+        Op.Host(id) => "host"
+        Op.Spawn(func, argc, ty) => "spawn"
+        Op.NewRecord(ty, argc) => "new"
+        Op.GetField(index) => "getf"
+        Op.SetField(index) => "setf"
+        Op.NewArray(ty, count) => "newarr"
+        Op.Index(loc) => "index"
+        Op.SetIndex(loc) => "setindex"
+        Op.Len => "len"
+        Op.Unbox => "unbox"
+    }
+}
+
+pub fun isTerminator(op: Op): bool {
+    return op is Op.Jmp || op is Op.Ret || op is Op.RetVoid
+}
+
+pub fun jumpTarget(op: Op): int? {
+    if (op is Op.Jmp) {
+        return op.target
+    }
+    if (op is Op.Jz) {
+        return op.target
+    }
+    if (op is Op.Jnz) {
+        return op.target
+    }
+    if (op is Op.JzKeep) {
+        return op.target
+    }
+    if (op is Op.JnzKeep) {
+        return op.target
+    }
+    return null
+}
+
+pub fun withJumpTarget(op: Op, t: int): Op {
+    if (op is Op.Jmp) {
+        return Op.Jmp(t)
+    }
+    if (op is Op.Jz) {
+        return Op.Jz(t)
+    }
+    if (op is Op.Jnz) {
+        return Op.Jnz(t)
+    }
+    if (op is Op.JzKeep) {
+        return Op.JzKeep(t)
+    }
+    if (op is Op.JnzKeep) {
+        return Op.JnzKeep(t)
+    }
+    return op
+}
+
+/** How bvm describes a type, like `Desc` in `burn_runtime::meta`. */
+pub def enum Desc {
+    Error,
+    Void,
+    Null,
+    Int,
+    Float,
+    Bool,
+    Str,
+    Any,
+    Num(code: int),
+    Array(elem: int),
+    Map(key: int, value: int),
+    Optional(inner: int),
+    Func,
+    Future(inner: int),
+    Record(name: string, fields: [DescField], isClass: bool, implements: [int]),
+    Interface(name: string),
+    Enum(name: string, variants: [string])
+}
+
+pub def type DescField {
+    string name
+    int ty
+}
+
+pub def type Sig {
+    [int] params
+    int ret
+}
+
+pub def type VFunc {
+    string name
+    int params
+    int locals
+    [string] names
+    [Op] code
+    bool external
+    Sig? sig
+}
+
+pub def type Import {
+    string name
+    int argc
+}
+
+pub def type TableEntry {
+    int ty
+    int func
+}
+
+pub def type Table {
+    string name
+    int argc
+    [TableEntry] entries
+}
+
+pub def enum Target {
+    Module,
+    Func(id: int),
+    Type(id: int),
+    Global(id: int)
+}
+
+pub def enum Value {
+    Int(value: int),
+    Float(value: float),
+    Bool(value: bool),
+    Str(text: string)
+}
+
+pub def type ValueArg {
+    string key
+    Value value
+}
+
+pub def type VAnnotation {
+    Target target
+    string name
+    [ValueArg] args
+}
+
+/** A bvm module, like `Module` in `crates/bvm/src/module.rs`. */
+pub def type VModule {
+    string name
+    [Desc] types
+    [string] strings
+    [string] locs
+    [string] globals
+    [Import] imports
+    [VFunc] funcs
+    [Table] tables
+    [VAnnotation] annotations
+    int? entry
+}
+
+pub fun sameTarget(a: Target, b: Target): bool {
+    if (a is Target.Module) {
+        return b is Target.Module
+    }
+    if (a is Target.Func) {
+        return b is Target.Func && a.id == b.id
+    }
+    if (a is Target.Type) {
+        return b is Target.Type && a.id == b.id
+    }
+    if (a is Target.Global) {
+        return b is Target.Global && a.id == b.id
+    }
+    return false
+}

@@ -1,0 +1,632 @@
+import "../check/types.bn"
+import "bits.bn"
+import "module.bn"
+import "runtime.bn"
+
+const FIRST_USER_TYPE = 12
+const BUILTIN_TYPES = ["error", "void", "null", "int", "float", "bool", "string", "any"]
+const TYPE_WORDS = ["fun", "map", "future", "record", "struct", "class", "interface", "enum", "implements"]
+const NUM_TYPE_NAMES = ["int8", "uint8", "int16", "uint16", "int32", "uint32", "uint64", "float32"]
+const SIMPLE_OPS = ["pop", "dup", "swap", "iadd", "isub", "imul", "ineg", "and", "or", "xor", "shl", "shr", "ushr", "fadd", "fsub", "fmul", "fdiv", "frem", "fneg", "not", "i2f", "f2i", "ret", "retv", "len", "unbox"]
+const NO_LOC = 4294967295
+const TWO_53 = 9007199254740992
+
+def type Names {
+    {int: string} types
+    [string] funcs
+    [string] globals
+    [string] tables
+    [string] imports
+    {string: string} runtime
+}
+
+fun isAsciiLetter(c: string): bool {
+    return (c >= "a" && c <= "z") || (c >= "A" && c <= "Z")
+}
+
+fun isAsciiDigit(c: string): bool {
+    return c >= "0" && c <= "9"
+}
+
+fun isIdent(s: string): bool {
+    if (len(s) == 0 || endsWith(s, ".")) {
+        return false
+    }
+    var first = true
+    for c in s {
+        if (first) {
+            if (!isAsciiLetter(c) && c != "_" && c != "$") {
+                return false
+            }
+            first = false
+        } else if (!isAsciiLetter(c) && !isAsciiDigit(c) && c != "_" && c != "$" && c != ".") {
+            return false
+        }
+    }
+    return true
+}
+
+fun isTypeIdent(s: string): bool {
+    return isIdent(s) && !contains(BUILTIN_TYPES, s) && !contains(TYPE_WORDS, s)
+}
+
+/** Escapes text for a quoted string in bvm assembly, like `escape` in `asm.rs`. */
+pub fun escape(s: string): string {
+    var out = ""
+    for c in s {
+        var code = charCode(c)
+        if (c == "\"") {
+            out += "\\\""
+        } else if (c == "\\") {
+            out += "\\\\"
+        } else if (c == "\n") {
+            out += "\\n"
+        } else if (c == "\t") {
+            out += "\\t"
+        } else if (c == "\r") {
+            out += "\\r"
+        } else if (code < 32 || code == 127) {
+            out += "\\u{${toString(code, 16)}}"
+        } else {
+            out += c
+        }
+    }
+    return out
+}
+
+priv fun quoted(s: string): string {
+    if (isIdent(s)) {
+        return s
+    }
+    return "\"${escape(s)}\""
+}
+
+fun uniqueRefs(items: [string]): [string] {
+    {string: int} seen = {}
+    for s in items {
+        seen[s] = (seen[s] ?? 0) + 1
+    }
+    [string] out = []
+    for i in 0..len(items) {
+        var s = items[i]
+        if ((seen[s] ?? 0) == 1 && s != "") {
+            out.push(quoted(s))
+        } else {
+            out.push("@${i}")
+        }
+    }
+    return out
+}
+
+fun typeDeclName(d: Desc): string? {
+    if (d is Desc.Record && d.name != "") {
+        return d.name
+    }
+    if (d is Desc.Interface && d.name != "") {
+        return d.name
+    }
+    if (d is Desc.Enum && d.name != "") {
+        return d.name
+    }
+    return null
+}
+
+fun namesOf(m: VModule): Names {
+    {string: int} counts = {}
+    for i in FIRST_USER_TYPE..len(m.types) {
+        var n = typeDeclName(m.types[i])
+        if (n != null) {
+            counts[n] = (counts[n] ?? 0) + 1
+        }
+    }
+    {int: string} types = {}
+    for i in FIRST_USER_TYPE..len(m.types) {
+        var n = typeDeclName(m.types[i])
+        if (n != null && (counts[n] ?? 0) == 1 && isTypeIdent(n)) {
+            types[i] = n
+        }
+    }
+    [string] fnames = []
+    for f in m.funcs {
+        fnames.push(f.name)
+    }
+    [string] tnames = []
+    for t in m.tables {
+        tnames.push(t.name)
+    }
+    [string] imports = []
+    for i in m.imports {
+        imports.push(quoted(i.name))
+    }
+    return Names { types: types, funcs: uniqueRefs(fnames), globals: uniqueRefs(m.globals), tables: uniqueRefs(tnames), imports: imports, runtime: runtimeSymbols() }
+}
+
+fun tyName(n: Names, m: VModule, t: int): string {
+    if (t < FIRST_USER_TYPE) {
+        if (t < len(m.types) && t >= len(BUILTIN_TYPES)) {
+            return descText(n, m, m.types[t], "")
+        }
+        if (t < len(BUILTIN_TYPES)) {
+            return BUILTIN_TYPES[t]
+        }
+        return "#${t}"
+    }
+    return n.types[t] ?? "#${t}"
+}
+
+fun named(kind: string, name: string, decl: string): string {
+    if (name == "" || name == decl) {
+        return kind
+    }
+    return "${kind} \"${escape(name)}\""
+}
+
+fun descText(n: Names, m: VModule, d: Desc, decl: string): string {
+    if (d is Desc.Error) {
+        return "error"
+    }
+    if (d is Desc.Void) {
+        return "void"
+    }
+    if (d is Desc.Null) {
+        return "null"
+    }
+    if (d is Desc.Int) {
+        return "int"
+    }
+    if (d is Desc.Float) {
+        return "float"
+    }
+    if (d is Desc.Bool) {
+        return "bool"
+    }
+    if (d is Desc.Str) {
+        return "string"
+    }
+    if (d is Desc.Any) {
+        return "any"
+    }
+    if (d is Desc.Func) {
+        return "fun"
+    }
+    if (d is Desc.Num) {
+        return NUM_TYPE_NAMES[d.code]
+    }
+    if (d is Desc.Array) {
+        return "[${tyName(n, m, d.elem)}]"
+    }
+    if (d is Desc.Map) {
+        return "map<${tyName(n, m, d.key)}, ${tyName(n, m, d.value)}>"
+    }
+    if (d is Desc.Optional) {
+        return "${tyName(n, m, d.inner)}?"
+    }
+    if (d is Desc.Future) {
+        return "future<${tyName(n, m, d.inner)}>"
+    }
+    if (d is Desc.Interface) {
+        return named("interface", d.name, decl)
+    }
+    if (d is Desc.Enum) {
+        [string] vs = []
+        for v in d.variants {
+            vs.push(quoted(v))
+        }
+        return "${named("enum", d.name, decl)} { ${joinWith(vs, ", ")} }"
+    }
+    if (d is Desc.Record) {
+        var kind = "record"
+        if (d.isClass) {
+            kind = "struct"
+        }
+        [string] fs = []
+        for f in d.fields {
+            fs.push("${quoted(f.name)}: ${tyName(n, m, f.ty)}")
+        }
+        var s = "${named(kind, d.name, decl)} { ${joinWith(fs, ", ")} }"
+        if (len(fs) == 0) {
+            s = "${named(kind, d.name, decl)} {}"
+        }
+        if (len(d.implements) > 0) {
+            [string] impls = []
+            for t in d.implements {
+                impls.push(tyName(n, m, t))
+            }
+            s += " implements ${joinWith(impls, ", ")}"
+        }
+        return s
+    }
+    return "?"
+}
+
+fun constText(v: int): string {
+    var big = v > TWO_53 || v < -TWO_53
+    if (big) {
+        var f = floatFromBits(v)
+        if (f == f && (f - f) == 0.0 && f != 0.0) {
+            return debugFloat(f)
+        }
+    }
+    return "${v}"
+}
+
+fun valueText(v: Value): string {
+    return match v {
+        Value.Int(value) => "${value}"
+        Value.Float(value) => debugFloat(value)
+        Value.Bool(value) => "${value}"
+        Value.Str(text) => "\"${escape(text)}\""
+    }
+}
+
+priv fun annotationLines(m: VModule, target: Target, indent: string): string {
+    var o = ""
+    for a in m.annotations {
+        if (!sameTarget(a.target, target)) {
+            continue
+        }
+        o += "${indent}@${a.name}"
+        if (len(a.args) == 1 && a.args[0].key == "value") {
+            o += " ${valueText(a.args[0].value)}\n"
+            continue
+        }
+        for x in a.args {
+            o += " ${quoted(x.key)}=${valueText(x.value)}"
+        }
+        o += "\n"
+    }
+    return o
+}
+
+fun namesUsable(f: VFunc): bool {
+    if (f.params > f.locals || len(f.names) != f.locals) {
+        return false
+    }
+    {string: bool} set = {}
+    for s in f.names {
+        if (!isIdent(s) || contains(SIMPLE_OPS, s) || s == "_" || isCmpOp(s)) {
+            return false
+        }
+        set[s] = true
+    }
+    return len(keys(set)) == len(f.names)
+}
+
+fun isCmpOp(s: string): bool {
+    if (len(s) != 3) {
+        return false
+    }
+    var head = substring(s, 0, 1)
+    var tail = substring(s, 1)
+    return (head == "i" || head == "u" || head == "f") && contains(["eq", "ne", "lt", "le", "gt", "ge"], tail)
+}
+
+fun head(n: Names, m: VModule, f: VFunc, namedIn: bool): string {
+    var usable = namedIn || (f.external && namesUsable(f))
+    [string] ps = []
+    var sig = f.sig
+    if (sig != null) {
+        for i in 0..f.params {
+            var pname = "_"
+            if (usable) {
+                pname = f.names[i]
+            }
+            var t = "any"
+            if (i < len(sig.params)) {
+                t = tyName(n, m, sig.params[i])
+            }
+            ps.push("${pname}: ${t}")
+        }
+        return "${quoted(f.name)}(${joinWith(ps, ", ")}): ${tyName(n, m, sig.ret)}"
+    }
+    if (usable) {
+        for i in 0..f.params {
+            ps.push(f.names[i])
+        }
+        return "${quoted(f.name)}(${joinWith(ps, ", ")})"
+    }
+    return "${quoted(f.name)}(${f.params})"
+}
+
+fun fref(n: Names, f: int): string {
+    if (f < len(n.funcs)) {
+        return n.funcs[f]
+    }
+    return "@${f}"
+}
+
+fun refOr(list: [string], i: int): string {
+    if (i < len(list)) {
+        return list[i]
+    }
+    return "@${i}"
+}
+
+fun locText(l: int): string {
+    if (l == NO_LOC) {
+        return ""
+    }
+    return " ${l}"
+}
+
+fun opArg(n: Names, m: VModule, f: VFunc, named: bool, firstStr: {string: int}, targets: {int: string}, op: Op): string {
+    if (op is Op.Const) {
+        return " ${constText(op.value)}"
+    }
+    if (op is Op.TypeConst) {
+        return " ${tyName(n, m, op.ty)}"
+    }
+    if (op is Op.LocConst) {
+        return " ${op.loc}"
+    }
+    if (op is Op.Str) {
+        if (op.id < len(m.strings) && firstStr[m.strings[op.id]] == op.id) {
+            return " \"${escape(m.strings[op.id])}\""
+        }
+        return " @${op.id}"
+    }
+    if (op is Op.FuncRef) {
+        return " ${fref(n, op.func)}"
+    }
+    if (op is Op.Call) {
+        return " ${fref(n, op.func)}"
+    }
+    if (op is Op.Load || op is Op.Store || op is Op.Tee) {
+        var s = 0
+        if (op is Op.Load) {
+            s = op.slot
+        } else if (op is Op.Store) {
+            s = op.slot
+        } else if (op is Op.Tee) {
+            s = op.slot
+        }
+        if (named && s < len(f.names)) {
+            return " ${f.names[s]}"
+        }
+        return " ${s}"
+    }
+    if (op is Op.GLoad) {
+        return " ${refOr(n.globals, op.id)}"
+    }
+    if (op is Op.GStore) {
+        return " ${refOr(n.globals, op.id)}"
+    }
+    if (op is Op.GTee) {
+        return " ${refOr(n.globals, op.id)}"
+    }
+    if (op is Op.IDiv) {
+        return locText(op.loc)
+    }
+    if (op is Op.IRem) {
+        return locText(op.loc)
+    }
+    if (op is Op.Index) {
+        return locText(op.loc)
+    }
+    if (op is Op.SetIndex) {
+        return locText(op.loc)
+    }
+    if (op is Op.IAddOv) {
+        return locText(op.loc)
+    }
+    if (op is Op.ISubOv) {
+        return locText(op.loc)
+    }
+    if (op is Op.IMulOv) {
+        return locText(op.loc)
+    }
+    if (op is Op.INegOv) {
+        return locText(op.loc)
+    }
+    var t = jumpTarget(op)
+    if (t != null) {
+        return " ${targets[t] ?? ""}"
+    }
+    if (op is Op.CallInd) {
+        return " ${op.argc}"
+    }
+    if (op is Op.Dispatch) {
+        return " ${refOr(n.tables, op.table)}"
+    }
+    if (op is Op.Rt) {
+        var sym = n.runtime[op.name] ?? op.name
+        if (startsWith(sym, "burn_")) {
+            sym = substring(sym, 5)
+        }
+        return " ${sym}"
+    }
+    if (op is Op.Host) {
+        return " ${refOr(n.imports, op.id)}"
+    }
+    if (op is Op.Spawn) {
+        return " ${fref(n, op.func)} ${tyName(n, m, op.ty)}"
+    }
+    if (op is Op.NewRecord) {
+        return " ${tyName(n, m, op.ty)}"
+    }
+    if (op is Op.NewArray) {
+        return " ${tyName(n, m, op.ty)} ${op.count}"
+    }
+    if (op is Op.GetField) {
+        return " ${op.index}"
+    }
+    if (op is Op.SetField) {
+        return " ${op.index}"
+    }
+    return ""
+}
+
+fun funcText(n: Names, m: VModule, f: VFunc, firstStr: {string: int}): string {
+    var named = namesUsable(f)
+    var o = "func ${head(n, m, f, named)}\n"
+    if (named) {
+        for i in f.params..len(f.names) {
+            o += "    local ${f.names[i]}\n"
+        }
+    } else if (f.locals > f.params) {
+        o += "    locals ${f.locals - f.params}\n"
+    }
+    {int: bool} seen = {}
+    for op in f.code {
+        var t = jumpTarget(op)
+        if (t != null) {
+            seen[t] = true
+        }
+    }
+    var points = keys(seen)
+    sort(points)
+    {int: string} targets = {}
+    for i in 0..len(points) {
+        targets[points[i]] = "L${i}"
+    }
+    for i in 0..len(f.code) {
+        var l = targets[i]
+        if (l != null) {
+            o += "${l}:\n"
+        }
+        var op = f.code[i]
+        o += "    ${mnemonic(op)}${opArg(n, m, f, named, firstStr, targets, op)}\n"
+    }
+    var last = targets[len(f.code)]
+    if (last != null) {
+        o += "${last}:\n"
+    }
+    return o + "end\n"
+}
+
+/** The module in bvm assembly, like `disassemble` in `crates/bvm/src/asm.rs`. */
+pub fun disassemble(m: VModule): string {
+    var n = namesOf(m)
+    [string] o = ["; bvm module, format 2\n"]
+    var sections = 0
+    var hasModuleAnns = false
+    for a in m.annotations {
+        if (a.target is Target.Module) {
+            hasModuleAnns = true
+        }
+    }
+    if (m.name != "" || hasModuleAnns) {
+        o.push(annotationLines(m, Target.Module, ""))
+        o.push("module ${quoted(m.name)}\n")
+        sections = 1
+    }
+    var hasTypes = len(m.types) > FIRST_USER_TYPE
+    if (hasTypes && sections > 0) {
+        o.push("\n")
+    }
+    if (hasTypes) {
+        sections += 1
+    }
+    for i in FIRST_USER_TYPE..len(m.types) {
+        var decl = n.types[i]
+        var lbl = decl ?? "#${i}"
+        o.push(annotationLines(m, Target.Type(i), ""))
+        o.push("type ${lbl} = ${descText(n, m, m.types[i], decl ?? "")}\n")
+    }
+    var had = len(m.strings) > 0
+    if (had && sections > 0) {
+        o.push("\n")
+    }
+    if (had) {
+        sections += 1
+    }
+    for s in m.strings {
+        o.push("string \"${escape(s)}\"\n")
+    }
+    had = len(m.locs) > 0
+    if (had && sections > 0) {
+        o.push("\n")
+    }
+    if (had) {
+        sections += 1
+    }
+    for s in m.locs {
+        o.push("loc \"${escape(s)}\"\n")
+    }
+    had = len(m.globals) > 0
+    if (had && sections > 0) {
+        o.push("\n")
+    }
+    if (had) {
+        sections += 1
+    }
+    for i in 0..len(m.globals) {
+        o.push(annotationLines(m, Target.Global(i), ""))
+        o.push("global ${quoted(m.globals[i])}\n")
+    }
+    had = len(m.imports) > 0
+    if (had && sections > 0) {
+        o.push("\n")
+    }
+    if (had) {
+        sections += 1
+    }
+    for i in m.imports {
+        o.push("import ${quoted(i.name)} ${i.argc}\n")
+    }
+    had = len(m.tables) > 0
+    if (had && sections > 0) {
+        o.push("\n")
+    }
+    if (had) {
+        sections += 1
+    }
+    for t in m.tables {
+        [string] es = []
+        for e in t.entries {
+            es.push("${tyName(n, m, e.ty)}: ${fref(n, e.func)}")
+        }
+        if (len(es) == 0) {
+            o.push("table ${quoted(t.name)} ${t.argc} {}\n")
+        } else {
+            o.push("table ${quoted(t.name)} ${t.argc} { ${joinWith(es, ", ")} }\n")
+        }
+    }
+    var entry = m.entry
+    had = entry != null
+    if (had && sections > 0) {
+        o.push("\n")
+    }
+    if (had) {
+        sections += 1
+    }
+    if (entry != null) {
+        o.push("entry ${refOr(n.funcs, entry)}\n")
+    }
+    [int] externs = []
+    for i in 0..len(m.funcs) {
+        if (m.funcs[i].external) {
+            externs.push(i)
+        }
+    }
+    had = len(externs) > 0
+    if (had && sections > 0) {
+        o.push("\n")
+    }
+    if (had) {
+        sections += 1
+    }
+    for i in externs {
+        o.push(annotationLines(m, Target.Func(i), ""))
+        o.push("extern func ${head(n, m, m.funcs[i], false)}\n")
+    }
+    {string: int} firstStr = {}
+    for i in 0..len(m.strings) {
+        if (!has(firstStr, m.strings[i])) {
+            firstStr[m.strings[i]] = i
+        }
+    }
+    for i in 0..len(m.funcs) {
+        var f = m.funcs[i]
+        if (f.external) {
+            continue
+        }
+        if (sections > 0) {
+            o.push("\n")
+        }
+        sections += 1
+        o.push(annotationLines(m, Target.Func(i), ""))
+        o.push(funcText(n, m, f, firstStr))
+    }
+    return joinWith(o, "")
+}

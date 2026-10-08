@@ -6,6 +6,8 @@ import "../diag/diag.bn"
 import "../lower/own.bn"
 import "../project/loader.bn"
 import "../project/project.bn"
+import "../vm/asm.bn"
+import "../vm/compile.bn"
 import "declarations.bn"
 import "syntax.bn"
 
@@ -337,5 +339,38 @@ pub fun dumpChecked(file: string, owned: bool): string {
     } else {
         out.push("no program\n")
     }
+    return joinWith(out, "")
+}
+
+/** The program as bvm assembly after ownership, as `burn dump --bvm` prints it. */
+pub fun dumpBvm(file: string): string {
+    var loader = new Loader()
+    var err = new Problem()
+    var root = loader.loadFile(file, err)
+    if (root < 0) {
+        return "error ${err.message}\n"
+    }
+    var loaded = loader.finish(root)
+    var r = checkProgram(loaded)
+    var c = r.checker
+    [string] out = []
+    for d in r.diags {
+        out.push(render(loaded.files[d.file], d.diag))
+    }
+    var p = r.program
+    if (p == null) {
+        out.push("no program\n")
+        return joinWith(out, "")
+    }
+    [string] globals = []
+    for g in p.globals {
+        if (g.module == "") {
+            globals.push(g.name)
+        } else {
+            globals.push("${g.module}.${g.name}")
+        }
+    }
+    var m = compileModule(c, p.name, lowerOwnership(c.types, p.funcs), globals, p.entry)
+    out.push(disassemble(m))
     return joinWith(out, "")
 }
