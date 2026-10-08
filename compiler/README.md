@@ -54,11 +54,26 @@ The suite test `lexer_written_in_burn_matches_the_compiler` does the same on bvm
    Compare `burn dump --hir`.
 6. **Ownership.** Port `own.rs` and compare the HIR after ownership.
 7. **bvm code generation.** Port `vm/compile.rs` and compare `burn dump --bytecode`.
-8. **Bootstrap.**
+8. **Bootstrap** (see *Stage0* above).
    - The Rust compiler builds the Burn compiler (stage 1).
    - Stage 1 builds itself (stage 2), and CI checks that both produce identical bytecode.
    - From then on, the Burn compiler can be chosen at the command line.
 9. **After that:** the native x86-64 and JavaScript backends, then the tools (`fmt`, `doc`, `lsp`). The runtime (`crates/burn-runtime`) stays in Rust and is shared by both compilers.
+
+## Stage0: the last compiler written in Rust
+
+`compiler/STAGE0` names a release of the Rust compiler, currently `v26.1.0-experimental-2`. It is the bootstrap compiler: it builds the Burn compiler for the first time, and nothing after it needs Rust to compile Burn code.
+
+- **The action:** `.github/actions/stage0` downloads that release for the runner's platform, checks it against the release's `SHA256SUMS`, and puts its `burn` on `PATH`. It runs on Linux x86-64 and macOS (Intel and Apple silicon).
+- **The guard:** the CI job `stage0` builds the Burn compiler in `compiler/` with that release on every push. So the sources here may only use language features that stage0 already understands. To use a newer feature in the compiler, cut a new release first, then move `compiler/STAGE0` to it.
+- **After the switch:** once the port is complete, the release workflow will build:
+  1. `stage1` = stage0 compiling `compiler/`
+  2. `stage2` = `stage1` compiling `compiler/`
+  3. `stage3` = `stage2` compiling `compiler/`
+
+  It checks that `stage2` and `stage3` produce identical bytecode and ships `stage2`. From then on, each release can bootstrap from the previous Burn release instead of stage0. The Rust compiler crate can then be retired. The runtime (`crates/burn-runtime`) stays in Rust.
+
+To cut a release by hand, run the **Release** workflow from the Actions tab with the tag to create. The tag must be `v` followed by the workspace version.
 
 ## Language features this relies on
 
