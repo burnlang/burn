@@ -149,6 +149,19 @@ fn import_items(file: &Path, typed: &str) -> Vec<Json> {
             add(s.name.to_string(), 9, "standard library", &mut out);
         }
     }
+    if let Some(p) = &project {
+        let src = p.source_root();
+        if typed.starts_with('@') {
+            let rest = typed.trim_start_matches('@').trim_start_matches('/');
+            let (folder, _) = rest.rsplit_once('/').unwrap_or(("", rest));
+            let base = if folder.is_empty() { "@".to_string() } else { format!("@/{}", folder) };
+            list_sources(&src.join(folder), &base, &mut |l, k| {
+                add(l.trim_end_matches("/mod").to_string(), k, "project file", &mut out)
+            });
+        } else {
+            add("@/".to_string(), 19, "this project's sources", &mut out);
+        }
+    }
     if let Some(p) = project {
         add(p.manifest.name.clone(), 9, "this project", &mut out);
         for (d, _) in &p.manifest.dependencies {
@@ -162,7 +175,8 @@ fn import_items(file: &Path, typed: &str) -> Vec<Json> {
                 let sub = typed[name.len()..].trim_start_matches('/');
                 let (folder, _) = sub.rsplit_once('/').unwrap_or(("", sub));
                 let base = if folder.is_empty() { name.clone() } else { format!("{}/{}", name, folder) };
-                list_sources(&dir.join(folder), &base, &mut |l, k| add(l, k, "package file", &mut out));
+                let src = crate::project::package_source_root(&dir).unwrap_or(dir);
+                list_sources(&src.join(folder), &base, &mut |l, k| add(l, k, "package file", &mut out));
             }
         }
     }

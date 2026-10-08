@@ -173,10 +173,34 @@ fn line_start(src: &str, offset: usize) -> usize {
     src[..offset.min(src.len())].rfind('\n').map(|i| i + 1).unwrap_or(0)
 }
 
+fn source_path(src: &Path, to: &Path) -> Option<String> {
+    let src = std::fs::canonicalize(src).ok()?;
+    let rel = to.strip_prefix(&src).ok()?;
+    let rel = rel.to_string_lossy().replace('\\', "/");
+    let rel = rel.strip_suffix(".bn").unwrap_or(&rel);
+    let rel = rel.strip_suffix("/mod").unwrap_or(rel);
+    Some(rel.to_string())
+}
+
 fn import_spec(from: &Path, to: &Path) -> String {
-    if let Some(project) = crate::project::find_root(from).and_then(|root| crate::project::load(&root).ok()) {
+    let here = crate::project::find_root(from);
+    if let Some(project) = here.as_ref().and_then(|root| crate::project::load(root).ok()) {
         if std::fs::canonicalize(project.main_path()).ok().as_deref() == Some(to) {
             return project.manifest.name.clone();
+        }
+        if let Some(rel) = source_path(&project.source_root(), to) {
+            return format!("@/{}", rel);
+        }
+    }
+    let there = crate::project::find_root(to);
+    if there.is_some() && there != here {
+        if let Some(p) = there.and_then(|root| crate::project::load(&root).ok()) {
+            if std::fs::canonicalize(p.main_path()).ok().as_deref() == Some(to) {
+                return p.manifest.name.clone();
+            }
+            if let Some(rel) = source_path(&p.source_root(), to) {
+                return format!("{}/{}", p.manifest.name, rel);
+            }
         }
     }
     module_spec(from, to)

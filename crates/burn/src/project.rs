@@ -550,6 +550,10 @@ impl Project {
         self.root.join(&self.manifest.main)
     }
 
+    pub fn source_root(&self) -> PathBuf {
+        source_root(&self.root, &self.manifest)
+    }
+
     pub fn resolve(&self, name: &str) -> Result<PathBuf, String> {
         if self.is_self(name) {
             return Ok(self.root.clone());
@@ -587,6 +591,31 @@ impl Project {
             )),
         }
     }
+}
+
+pub fn source_root(dir: &Path, m: &Manifest) -> PathBuf {
+    match Path::new(&m.main).parent() {
+        Some(p) if !p.as_os_str().is_empty() => dir.join(p),
+        _ => dir.to_path_buf(),
+    }
+}
+
+pub fn package_source_root(dir: &Path) -> Result<PathBuf, String> {
+    let src = std::fs::read_to_string(dir.join(MANIFEST)).map_err(|e| format!("cannot read {}: {}", dir.join(MANIFEST).display(), e))?;
+    let m = parse_manifest(&src).map_err(|e| format!("{}: {}", dir.join(MANIFEST).display(), e))?;
+    Ok(source_root(dir, &m))
+}
+
+pub fn module_file(base: &Path, path: &str, exists: &dyn Fn(&Path) -> bool) -> Option<PathBuf> {
+    let path = path.trim_end_matches('/');
+    let mut candidates = Vec::new();
+    if path.ends_with(".bn") {
+        candidates.push(base.join(path));
+    } else {
+        candidates.push(base.join(format!("{}.bn", path)));
+        candidates.push(base.join(path).join("mod.bn"));
+    }
+    candidates.into_iter().find(|c| exists(c))
 }
 
 pub fn package_main(dir: &Path) -> Result<PathBuf, String> {

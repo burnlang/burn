@@ -10,17 +10,25 @@ order: 6
 
 ```burn
 import "std/date"
-import "utils.bn"
+import "@/net/http"
+import "github.com/you/colors/palette"
 import (
     "json"
     "../shared/geometry.bn"
 )
 ```
 
-- A name without a path (`"date"`, `"std/date"`) refers to the standard library.
-- A package name (`"github.com/owner/project"`) loads an installed package, see
-  [projects and packages](../tooling/packages.mdx).
-- Paths are resolved relative to the importing file first and then to the current directory. `.bn` is optional.
+| Import | Loads |
+| --- | --- |
+| `"date"`, `"std/date"` | a module of the standard library |
+| `"@/net/http"` | `src/net/http.bn` of the project the file is in, from anywhere in the project (like Rust's `crate::`) |
+| `"github.com/you/colors"` | the main file of an installed package, see [projects and packages](../tooling/packages.mdx) |
+| `"github.com/you/colors/palette"` | `src/palette.bn` of that package (like a fully qualified Java import) |
+| `"utils"`, `"../shared/geometry.bn"` | a file relative to the importing file, then to the current directory |
+
+- Folders inside `src/` are packages: `src/net/http.bn` is the module `net/http`. A folder can also be imported as
+  a whole when it has a `mod.bn`: `import "@/net"` loads `src/net/mod.bn`.
+- `.bn` is optional everywhere.
 - Each module is loaded once, and its top level statements run once, before the importing module.
 
 ## `pub` and `priv`

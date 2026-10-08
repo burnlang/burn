@@ -18,6 +18,7 @@ mod parser;
 mod project;
 mod repl;
 mod source;
+mod targets;
 mod types;
 mod vm;
 
@@ -37,13 +38,18 @@ Usage:
                                       create a project, named like github.com/you/app
   burn run [file.bn] [--native] [args...]
                                       run a program, or the project's main file; --native compiles it first
+      --bin <name>                    run src/bin/<name>.bn of the project
+      --example <name>                run examples/<name>.bn of the project
   burn build [file.bn] [options]      compile to a standalone executable, or build the project
+                                      (its main file and every program in src/bin, into build/)
+      --bin <name>, --example <name>  build only that program
       -o, --output <path>             output file (default: file name without .bn)
       --target <native|js|bvm>        native executable (default), JavaScript or bvm bytecode
       --emit-asm <path>               also write the generated assembly (x86-64, or bvm text)
       --no-strip                      keep symbols in the executable
       --no-std                        build without the standard library (same as `std = false` in burn.toml)
-  burn check [files...]               type-check without running (default: the project)
+  burn check [files...]               type-check without running (default: the whole project)
+  burn test [filter...]               run every test in the project's tests/ folder
   burn fix [--dry-run] <files...>     apply the compiler's suggested fixes
   burn doc [files...] [-o dir]        generate HTML documentation from Burndoc comments
   burn fmt [-w] [--check] <files...>  format source files
@@ -154,7 +160,92 @@ fn project_main() -> Result<(project::Project, PathBuf), ExitCode> {
     }
 }
 
+#[derive(Default)]
+struct Selection {
+    bin: Option<String>,
+    example: Option<String>,
+}
+
+impl Selection {
+    fn any(&self) -> bool {
+        self.bin.is_some() || self.example.is_some()
+    }
+
+    fn pick(&self, p: &project::Project) -> Result<Option<targets::Entry>, String> {
+        if let Some(b) = &self.bin {
+            return targets::find(targets::bins(p), "program in src/bin", b, p).map(Some);
+        }
+        if let Some(x) = &self.example {
+            return targets::find(targets::examples(p), "example", x, p).map(Some);
+        }
+        Ok(None)
+    }
+
+    fn flag(&mut self, a: &str, value: Option<&String>) -> Option<Result<(), String>> {
+        let slot = match a {
+            "--bin" => &mut self.bin,
+            "--example" => &mut self.example,
+            _ => return None,
+        };
+        Some(match value {
+            Some(v) => {
+                *slot = Some(v.clone());
+                Ok(())
+            }
+            None => Err(format!("`{}` needs a name", a)),
+        })
+    }
+}
+
+fn cmd_test(args: &[String]) -> ExitCode {
+    let p = match current_project() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            return ExitCode::from(2);
+        }
+    };
+    let tests: Vec<targets::Entry> = targets::tests(&p)
+        .into_iter()
+        .filter(|t| args.is_empty() || args.iter().any(|f| t.name.contains(f.as_str())))
+        .collect();
+    if tests.is_empty() {
+        println!("no tests in {}", shown(p.root.join("tests")).display());
+        return ExitCode::SUCCESS;
+    }
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("burn"));
+    println!("testing {} ({} file{})", p.manifest.name, tests.len(), if tests.len() == 1 { "" } else { "s" });
+    let mut failures = Vec::new();
+    for t in &tests {
+        let shown_path = shown(t.path.clone());
+        match std::process::Command::new(&exe).arg(&t.path).current_dir(&p.root).output() {
+            Ok(out) if out.status.success() => println!("test {} ... ok", shown_path.display()),
+            Ok(out) => {
+                println!("test {} ... FAILED", shown_path.display());
+                failures.push((
+                    shown_path,
+                    format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)),
+                ));
+            }
+            Err(e) => {
+                println!("test {} ... FAILED", shown_path.display());
+                failures.push((shown_path, e.to_string()));
+            }
+        }
+    }
+    for (path, out) in &failures {
+        println!("\n---- {} ----\n{}", path.display(), out.trim_end());
+    }
+    println!("\n{} passed, {} failed", tests.len() - failures.len(), failures.len());
+    if failures.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
 fn cmd_build(args: &[String]) -> ExitCode {
+    let mut selection = Selection::default();
     let mut file: Option<PathBuf> = None;
     let mut output: Option<PathBuf> = None;
     let mut target = "native".to_string();
@@ -179,6 +270,13 @@ fn cmd_build(args: &[String]) -> ExitCode {
                 emit_asm = args.get(i).map(PathBuf::from);
             }
             "--no-strip" => strip = false,
+            "--bin" | "--example" => {
+                i += 1;
+                if let Some(Err(e)) = selection.flag(a, args.get(i)) {
+                    eprintln!("error: {}", e);
+                    return ExitCode::from(2);
+                }
+            }
             _ if a.starts_with("--target=") => {
                 target = a["--target=".len()..].to_string();
                 explicit_target = true;
@@ -194,45 +292,77 @@ fn cmd_build(args: &[String]) -> ExitCode {
     }
     let file = match file {
         Some(f) => f,
-        None => {
-            let (p, main) = match project_main() {
-                Ok(x) => x,
-                Err(c) => return c,
-            };
-            if p.manifest.kind == project::Kind::Lib && !explicit_target {
-                return match compile(&main) {
-                    Some(_) => {
-                        println!("checked {} (a library is used through imports, so there is nothing to build)", p.manifest.name);
-                        ExitCode::SUCCESS
-                    }
-                    None => ExitCode::from(1),
-                };
-            }
-            if !explicit_target {
-                target = p.manifest.target.clone();
-            }
-            println!("building {} {} ({})", p.manifest.name, p.manifest.version, target);
-            if output.is_none() {
-                let short = project::short_name(&p.manifest.name);
-                let rel = p.manifest.output.clone().unwrap_or_else(|| match target.as_str() {
-                    "js" | "javascript" | "node" => format!("build/{}.js", short),
-                    "bvm" | "bytecode" => format!("build/{}.bvmc", short),
-                    "bar" => format!("build/{}.bar", short),
-                    _ => format!("build/{}", short),
-                });
-                let out = p.root.join(rel);
-                let out = std::env::current_dir()
-                    .ok()
-                    .and_then(|c| out.strip_prefix(&c).ok().map(|r| r.to_path_buf()))
-                    .unwrap_or(out);
-                if let Some(parent) = out.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                output = Some(out);
-            }
-            main
+        None => return build_project(selection, output, target, explicit_target, emit_asm, strip),
+    };
+    build_one(file, output, target, emit_asm, strip)
+}
+
+fn shown(path: PathBuf) -> PathBuf {
+    std::env::current_dir()
+        .ok()
+        .and_then(|c| path.strip_prefix(&c).ok().map(|r| r.to_path_buf()))
+        .unwrap_or(path)
+}
+
+fn build_project(selection: Selection, output: Option<PathBuf>, target: String, explicit_target: bool, emit_asm: Option<PathBuf>, strip: bool) -> ExitCode {
+    let p = match current_project() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            return ExitCode::from(2);
         }
     };
+    let entries = match selection.pick(&p) {
+        Ok(Some(e)) => vec![e],
+        Ok(None) => {
+            let mut list = targets::programs(&p);
+            if list.is_empty() && p.manifest.kind == project::Kind::Lib {
+                if explicit_target {
+                    list.extend(targets::main_entry(&p));
+                } else {
+                    return match compile(&p.main_path()) {
+                        Some(_) => {
+                            println!("checked {} (a library is used through imports, so there is nothing to build)", p.manifest.name);
+                            ExitCode::SUCCESS
+                        }
+                        None => ExitCode::from(1),
+                    };
+                }
+            }
+            list
+        }
+        Err(e) => {
+            eprintln!("error: {}", e);
+            return ExitCode::from(2);
+        }
+    };
+    if entries.is_empty() {
+        eprintln!(
+            "error: {} has nothing to build (no {} and no programs in src/bin)",
+            p.manifest.name, p.manifest.main
+        );
+        return ExitCode::from(2);
+    }
+    let target = if explicit_target { target } else { p.manifest.target.clone() };
+    println!("building {} {} ({})", p.manifest.name, p.manifest.version, target);
+    let single = entries.len() == 1;
+    for e in entries {
+        let out = match (&output, single) {
+            (Some(o), true) => o.clone(),
+            _ => shown(targets::output_for(&p, &e, &target)),
+        };
+        if let Some(parent) = out.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let code = build_one(e.path.clone(), Some(out), target.clone(), emit_asm.clone(), strip);
+        if code != ExitCode::SUCCESS {
+            return code;
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+fn build_one(file: PathBuf, output: Option<PathBuf>, target: String, emit_asm: Option<PathBuf>, strip: bool) -> ExitCode {
     if let Some(parent) = output.as_ref().and_then(|o| o.parent()) {
         if !parent.as_os_str().is_empty() {
             let _ = std::fs::create_dir_all(parent);
@@ -625,12 +755,13 @@ fn main() -> ExitCode {
         "check" => {
             if rest.is_empty() {
                 return match project_main() {
-                    Ok((_, main)) => cmd_check(&[main.display().to_string()]),
+                    Ok((p, _)) => cmd_check(&targets::all(&p).iter().map(|e| e.path.display().to_string()).collect::<Vec<_>>()),
                     Err(c) => c,
                 };
             }
             cmd_check(rest)
         }
+        "test" => cmd_test(rest),
         "build" | "-exe" | "--executable" => cmd_build(rest),
         "dump" | "-d" | "--debug" if rest.first().map(|w| w == "--tokens" || w == "--ast").unwrap_or(false) => {
             let ast = rest[0] == "--ast";
@@ -666,14 +797,51 @@ fn main() -> ExitCode {
             let mut native_mode = false;
             let mut file = None;
             let mut prog_args = Vec::new();
-            for a in rest {
-                if file.is_none() && (a == "--native" || a == "-n") {
-                    native_mode = true;
-                } else if file.is_none() {
+            let mut selection = Selection::default();
+            let mut i = 0;
+            while i < rest.len() {
+                let a = &rest[i];
+                if file.is_none() && prog_args.is_empty() {
+                    if a == "--native" || a == "-n" {
+                        native_mode = true;
+                        i += 1;
+                        continue;
+                    }
+                    match selection.flag(a, rest.get(i + 1)) {
+                        Some(Ok(())) => {
+                            i += 2;
+                            continue;
+                        }
+                        Some(Err(e)) => {
+                            eprintln!("error: {}", e);
+                            return ExitCode::from(2);
+                        }
+                        None => {}
+                    }
+                }
+                if file.is_none() && !selection.any() {
                     file = Some(a.clone());
-                } else {
+                } else if !(prog_args.is_empty() && a == "--" && selection.any()) {
                     prog_args.push(a.clone());
                 }
+                i += 1;
+            }
+            if selection.any() {
+                let p = match current_project() {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("error: {}", e);
+                        return ExitCode::from(2);
+                    }
+                };
+                return match selection.pick(&p) {
+                    Ok(Some(e)) => cmd_run(&e.path, prog_args, native_mode),
+                    Ok(None) => ExitCode::from(2),
+                    Err(e) => {
+                        eprintln!("error: {}", e);
+                        ExitCode::from(2)
+                    }
+                };
             }
             match file {
                 Some(f) if f == "--" => match project_main() {
