@@ -1,0 +1,43 @@
+def abstract struct Animal(name: string) {
+    abstract fun speak(): string
+}
+
+def struct Cat(name: string) :: Animal(name) {
+    fun speak(): int {
+        return 1
+    }
+}
+
+def struct Fish(name: string) :: Animal(name) {
+}
+
+def struct Point(x: int, y: int) {
+    fun destroy(reason: string) {
+        print(reason)
+    }
+}
+
+def struct Counter {
+    int n = 0
+}
+
+def static struct Tools {
+    static var calls = 0
+}
+
+var p = new Point(1, 2)
+destroy p("done")
+var after = p.x
+var c = new Counter()
+destroy c(1)
+var wrong = new Animal("x")
+var none = new Tools()
+var n = 3
+n.extra() {
+    return 1
+}
+c.n() {
+    return 2
+}
+Counter? maybe = null
+destroy maybe()

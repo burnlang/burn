@@ -231,7 +231,7 @@ pub fun callExpr(c: Checker, callee: Expr, args: [Expr], span: SrcSpan, expected
     if (gid != null) {
         return genericCall(c, gid, null, args, span, cspan, expected)
     }
-    var gt = genericTargetCall(c, Ident { name: name, span: callee.span }, expected, args)
+    var gt = genericTargetCall(c, Ident { name: name, span: callee.span }, [], expected, args)
     if (gt != null) {
         if (gt == T_ERROR) {
             return errExpr()

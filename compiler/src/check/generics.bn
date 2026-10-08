@@ -300,12 +300,15 @@ fun finishTarget(c: Checker, g: GenericShape, name: Ident, binds: {string: int})
 }
 
 /** The instance of a generic type that `Name(args)` creates, or null when `Name` is not a generic type. */
-pub fun genericTargetCall(c: Checker, name: Ident, expected: int?, args: [Expr]): int? {
+pub fun genericTargetCall(c: Checker, name: Ident, targs: [TypeExpr], expected: int?, args: [Expr]): int? {
     var shape = genericShape(c, name)
     if (shape == null) {
         return null
     }
     GenericShape g = shape
+    if (len(targs) > 0) {
+        return c.resolveType(TypeExpr { kind: TypeKind.Named(name.name, targs), span: name.span })
+    }
     var hit = expectedInstance(c, g.gid, expected)
     if (hit != null) {
         return hit

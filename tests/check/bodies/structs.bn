@@ -1,0 +1,66 @@
+def abstract struct Animal(name: string) {
+    static var count: int = 0
+    static const KIND = "animal"
+
+    abstract fun speak(): string
+
+    fun describe(): string {
+        return "${name} says ${speak()}"
+    }
+}
+
+def struct Dog(name: string, breed: string) :: Animal(name) {
+    int legs = 4
+
+    fun speak(): string {
+        return "woof"
+    }
+
+    fun init() {
+        Animal.count += 1
+    }
+}
+
+def struct Puppy(name: string) : Dog(name, "mixed") {
+    fun speak(): string {
+        return "yip"
+    }
+}
+
+def struct Box<T>(value: T) {
+    fun get(): T {
+        return value
+    }
+}
+
+def struct Point(x: int, y: int) {
+    fun sum(): int {
+        return x + y
+    }
+
+    fun destroy() {
+        print("bye")
+    }
+}
+
+def struct Counter {
+    int n = 0
+    [string] seen = []
+}
+
+var d = new Dog("rex", "lab")
+var a: Animal = d
+var text = a.describe()
+var b = new Box(5)
+var got = b.get()
+var p = new Point(1, 2)
+var q = new Point(3, 4)
+q.double() {
+    return sum() * 2
+}
+var twice = q.double()
+destroy p()
+var c = new Counter()
+var pup = new Puppy("bo")
+var sound = pup.describe()
+print(text, got, twice, Animal.KIND, Animal.count, c.n, sound)

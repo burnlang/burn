@@ -563,10 +563,11 @@ pub fun stmtOf(c: Checker, s: Stmt): [HStmt] {
         return blockStmts(c, k.block.stmts)
     }
     if (k is StmtKind.Extend) {
-        c.notPorted("adding functions to objects")
-        return []
+        return extendStmt(c, k.target, k.decl)
     }
-    c.notPorted("`destroy`")
+    if (k is StmtKind.Destroy) {
+        return destroyStmt(c, k.target, k.args, span)
+    }
     return []
 }
 
