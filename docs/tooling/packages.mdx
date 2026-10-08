@@ -112,6 +112,9 @@ members = ["common", "native", "js", "bvm"]
   (`burn run -p native`, `burn build -p js`). Inside a member's folder, commands work on that member alone.
 - `burn init <name>` inside a workspace creates a new member and adds it to `members`; a plain name such as
   `burn init tools --lib` is named after the workspace (`github.com/you/game/tools`).
+- Other projects can install a member like any package: `ash install github.com/you/game/common` downloads the
+  repository `github.com/you/game` and uses its `common` folder. A member that others install should list the
+  members it uses as `path` dependencies; ash pins them to the same commit.
 
 ## burn.toml
 

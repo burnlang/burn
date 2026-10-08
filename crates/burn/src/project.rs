@@ -665,11 +665,16 @@ pub fn package_dir(project_root: &Path, l: &Locked) -> PathBuf {
     }
     let rev: String = l.rev.chars().take(12).collect();
     let mut dir = burn_home().join("packages");
-    for part in l.name.split('/') {
+    let parts: Vec<&str> = l.name.split('/').collect();
+    let (repo, sub) = parts.split_at(parts.len().min(3));
+    for part in repo {
         dir.push(part);
     }
     let file = dir.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
     dir.set_file_name(format!("{}@{}", file, rev));
+    for part in sub {
+        dir.push(part);
+    }
     dir
 }
 
@@ -827,6 +832,17 @@ build = "burnc src/lib.bn --target js -o build/hello.js"
         assert!(!valid_name("../owner/project"));
         assert_eq!(split_package_path("github.com/a/b/src/x"), Some(("github.com/a/b".into(), "src/x".into())));
         assert_eq!(split_package_path("utils/math.bn"), None);
+    }
+
+    #[test]
+    fn keeps_sub_packages_inside_their_repository() {
+        let l = Locked {
+            name: "github.com/ada/game/common".into(),
+            rev: "0123456789abcdef".into(),
+            source: "git+https://github.com/ada/game".into(),
+        };
+        let dir = package_dir(Path::new("/p"), &l);
+        assert!(dir.ends_with("packages/github.com/ada/game@0123456789ab/common"), "{}", dir.display());
     }
 
     #[test]
