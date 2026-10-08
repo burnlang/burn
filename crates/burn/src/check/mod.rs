@@ -346,7 +346,7 @@ pub fn suggest<'b>(name: &str, candidates: impl Iterator<Item = &'b str>) -> Opt
         }
         let d = edit_distance(name, c);
         let limit = (name.len() / 3).max(1);
-        if d <= limit && best.map(|(bd, _)| d < bd).unwrap_or(true) {
+        if d <= limit && best.map(|(bd, bc)| d < bd || (d == bd && c < bc)).unwrap_or(true) {
             best = Some((d, c));
         }
     }
@@ -1803,5 +1803,22 @@ impl<'a> Checker<'a> {
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::suggest;
+
+    #[test]
+    fn suggestions_do_not_depend_on_the_order_of_candidates() {
+        let names = ["Abg", "Abd", "Abc", "Abf"];
+        for k in 0..names.len() {
+            let mut order = names.to_vec();
+            order.rotate_left(k);
+            assert_eq!(suggest("Abe", order.into_iter()).as_deref(), Some("Abc"));
+        }
+        assert_eq!(suggest("lenght", ["length", "len"].into_iter()).as_deref(), Some("length"));
+        assert_eq!(suggest("zzz", ["abc"].into_iter()), None);
     }
 }
