@@ -61,7 +61,7 @@ The inputs include the error-recovery fixtures in `tests/lexer` and `tests/parse
    Compare `burn dump --hir`.
 6. **Ownership.** Port `own.rs` and compare the HIR after ownership.
 7. **bvm code generation.** Port `vm/compile.rs` and compare `burn dump --bytecode`.
-8. **Bootstrap** (see *Stage0* above).
+8. **Bootstrap** (see *Stage0* below).
    - The Rust compiler builds the Burn compiler (stage 1).
    - Stage 1 builds itself (stage 2), and CI checks that both produce identical bytecode.
    - From then on, the Burn compiler can be chosen at the command line.
