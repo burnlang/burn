@@ -1,7 +1,9 @@
 import "../diag/diag.bn"
 import "../project/loader.bn"
 import "../syntax/ast.bn"
+import "body.bn"
 import "hir.bn"
+import "std/strings"
 import "types.bn"
 
 pub const ANNOTATION_BUILTINS = ["Getter", "Setter", "Deprecated", "Export", "Native", "Inject", "Overwrite", "Redirect"]
@@ -62,6 +64,7 @@ pub def type FuncInfo {
     string? deprecated
     External? external
     {string: int}? tenv
+    HFunc? hir
 }
 
 pub def type GlobalInfo {
@@ -121,6 +124,79 @@ pub def type TypeAlias {
     string name
     TypeExpr ty
 }
+
+pub def type LocalSym {
+    int slot
+    bool isConst
+    SrcSpan span
+}
+
+pub def type Capture {
+    int outer
+    int inner
+    bool byCell
+}
+
+/** What the checker knows inside one function body, like `FnCtx` in `check/mod.rs`. */
+pub def type FnCtx {
+    int func
+    int module
+    [int] locals
+    [{string: LocalSym}] scopes
+    {int: int} narrow
+    int? ret
+    [int] returns
+    int loops
+    int? selfTy
+    bool isInit
+    bool dry
+    bool lambda
+    {string: bool} cellNames
+    {int: int} cells
+    [Capture] captures
+}
+
+/** A function added to one object (`x.name() { ... }`), or an object that was destroyed. */
+pub def enum Fact {
+    Ext(target: int, name: string, fid: int),
+    Dead(target: int, span: SrcSpan)
+}
+
+pub def type ClosureInfo {
+    int ty
+    [ClosureCapture] captures
+}
+
+pub def type ClosureCapture {
+    int outer
+    bool byCell
+    int ty
+}
+
+pub def type InitSpan {
+    int module
+    int start
+    int end
+    SrcSpan span
+}
+
+pub def type StdUse {
+    SrcSpan span
+    string what
+}
+
+pub def type InstanceSite {
+    string name
+    SrcSpan span
+}
+
+pub def type InstanceOf {
+    int gid
+    [int] targs
+}
+
+pub const GLOBAL_KEY = 2147483648
+pub const FACT_KEY = 1073741824
 
 /** Where an annotation is written; the variants match `Site` in `annot.rs`. */
 pub def enum Site {
@@ -304,6 +380,10 @@ pub fun suggest(name: string, candidates: [string]): string? {
     return best
 }
 
+fun isAsciiAlnum(c: int): bool {
+    return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+}
+
 fun literalType(e: Expr): int? {
     var k = e.kind
     if (k is ExprKind.Int) {
@@ -327,7 +407,7 @@ fun literalType(e: Expr): int? {
     return null
 }
 
-fun typeMentions(te: TypeExpr, names: [string]): bool {
+pub fun typeMentions(te: TypeExpr, names: [string]): bool {
     var k = te.kind
     if (k is TypeKind.Named) {
         if (len(k.args) == 0 && contains(names, k.name)) {
@@ -372,7 +452,7 @@ fun targsKey(targs: [int]): string {
     return out
 }
 
-fun findInstance(list: [GenericInstance], targs: [int]): int? {
+pub fun findInstance(list: [GenericInstance], targs: [int]): int? {
     var key = targsKey(targs)
     for x in list {
         if (targsKey(x.targs) == key) {
@@ -404,6 +484,36 @@ pub def struct Checker(loaded: Loaded) {
     [{string: int}] tenv = []
     [PendingInstance] pendingInstances = []
     bool structsReady = false
+    [FnCtx] fx = []
+    [string] strings = []
+    {string: int} stringIds = {}
+    [string] locs = []
+    {string: int} locIds = {}
+    {string: int} lambdas = {}
+    {string: int} anon = {}
+    {int: ClosureInfo} closures = {}
+    {int: int} adapters = {}
+    {int: int} cellTypes = {}
+    {string: int} vslots = {}
+    {int: bool} vslotSet = {}
+    [Fact] facts = []
+    bool anyDead = false
+    bool hasDestroy = false
+    {int: bool} extFuncs = {}
+    [InitSpan] initSpans = []
+    int inferring = 0
+    {int: InstanceOf} instanceOf = {}
+    {int: InstanceSite} instSites = {}
+    [StdUse] stdUses = []
+    {string: bool} gated = {}
+    [string] unported = []
+
+    /** Notes a part of the checker that is not ported yet; the dump prints it instead of a program. */
+    fun notPorted(what: string) {
+        if (!contains(unported, what)) {
+            unported.push(what)
+        }
+    }
 
     fun fileOf(mi: int): int {
         return loaded.modules[mi].file
@@ -428,7 +538,309 @@ pub def struct Checker(loaded: Loaded) {
     }
 
     fun emit(d: LoadDiag) {
+        if (isDry()) {
+            return
+        }
+        var note = instanceNote()
+        if (note != null) {
+            d.diag.notes.push(note)
+        }
         diags.push(d)
+    }
+
+    fun instanceNote(): string? {
+        var i = len(fx) - 1
+        while (i >= 0) {
+            var c = fx[i]
+            var site = instSites[c.func]
+            if (site != null) {
+                if (site.span.file < len(loaded.files)) {
+                    var f = loaded.files[site.span.file]
+                    return "this is the version `${site.name}`, used at ${f.name}:${f.lineCol(site.span.start)[0]}"
+                }
+                return "this is the version `${site.name}`"
+            }
+            if (!c.lambda) {
+                break
+            }
+            i -= 1
+        }
+        return null
+    }
+
+    fun isDry(): bool {
+        return len(fx) > 0 && fx[len(fx) - 1].dry
+    }
+
+    fun ctx(): FnCtx {
+        return fx[len(fx) - 1]
+    }
+
+    fun curModule(): int {
+        if (len(fx) == 0) {
+            return 0
+        }
+        return fx[len(fx) - 1].module
+    }
+
+    /** The span of a node of the module being checked. */
+    fun sp(s: Span): SrcSpan {
+        return spanIn(curModule(), s)
+    }
+
+    fun srcText(span: SrcSpan): string {
+        if (span.file >= len(loaded.files)) {
+            return ""
+        }
+        var f = loaded.files[span.file]
+        f.index()
+        return f.text(span.start, span.end)
+    }
+
+    fun wrapSuffix(span: SrcSpan, suffix: string): string {
+        var t = srcText(span)
+        for ch in t {
+            if (!isAlphanumeric(ch) && ch != "_" && ch != "." && ch != "(" && ch != ")" && ch != "[" && ch != "]" && ch != "\"") {
+                return "(${t})${suffix}"
+            }
+        }
+        return t + suffix
+    }
+
+    fun keywordBefore(decl: SrcSpan, word: string): SrcSpan? {
+        if (decl.file >= len(loaded.files)) {
+            return null
+        }
+        var f = loaded.files[decl.file]
+        var line = f.lineCol(decl.start)[0]
+        var start = f.lineStart(line)
+        var before = f.text(start, decl.start).bytes()
+        var w = word.bytes()
+        var i = len(before) - len(w)
+        while (i >= 0) {
+            var same = true
+            for k in 0..len(w) {
+                if (before[i + k] != w[k]) {
+                    same = false
+                    break
+                }
+            }
+            if (same) {
+                var okLeft = i == 0 || !isAsciiAlnum(before[i - 1])
+                var okRight = i + len(w) >= len(before) || !isAsciiAlnum(before[i + len(w)])
+                if (okLeft && okRight) {
+                    return SrcSpan { file: decl.file, start: start + i, end: start + i + len(w) }
+                }
+                return null
+            }
+            i -= 1
+        }
+        return null
+    }
+
+    fun warnAt(span: SrcSpan, msg: string): LoadDiag {
+        return LoadDiag { file: span.file, diag: warningAt(span.start, span.end, msg) }
+    }
+
+    fun stringId(text: string): int {
+        var hit = stringIds[text]
+        if (hit != null) {
+            return hit
+        }
+        var i = len(strings)
+        strings.push(text)
+        stringIds[text] = i
+        return i
+    }
+
+    fun strLit(text: string): HExpr {
+        return hexpr(HKind.Str(stringId(text)), T_STR)
+    }
+
+    fun loc(span: SrcSpan): int {
+        var key = "${span.file}:${span.start}"
+        var hit = locIds[key]
+        if (hit != null) {
+            return hit
+        }
+        var text = "<unknown>"
+        if (span.file < len(loaded.files)) {
+            var f = loaded.files[span.file]
+            var lc = f.lineCol(span.start)
+            text = "${f.name}:${lc[0]}:${lc[1]}"
+        }
+        var i = len(locs)
+        locs.push(text)
+        locIds[key] = i
+        return i
+    }
+
+    fun locExpr(span: SrcSpan): HExpr {
+        return hexpr(HKind.LocId(loc(span)), T_INT)
+    }
+
+    fun newLocal(ty: int): int {
+        var c = ctx()
+        c.locals.push(ty)
+        return len(c.locals) - 1
+    }
+
+    fun declareLocal(name: string, ty: int, span: SrcSpan, isConst: bool): int {
+        var slot = newLocal(ty)
+        var c = ctx()
+        c.scopes[len(c.scopes) - 1][name] = LocalSym { slot: slot, isConst: isConst, span: span }
+        remove(c.narrow, slot)
+        return slot
+    }
+
+    fun peekLocal(name: string): LocalSym? {
+        if (len(fx) == 0) {
+            return null
+        }
+        var c = ctx()
+        var i = len(c.scopes) - 1
+        while (i >= 0) {
+            var l = c.scopes[i][name]
+            if (l != null) {
+                return l
+            }
+            i -= 1
+        }
+        return null
+    }
+
+    fun lookupLocal(name: string): LocalSym? {
+        var l = peekLocal(name)
+        if (l != null) {
+            return l
+        }
+        return capture(name)
+    }
+
+    fun capture(name: string): LocalSym? {
+        var n = len(fx)
+        if (n < 2 || !fx[n - 1].lambda) {
+            return null
+        }
+        return captureAt(n - 1, name)
+    }
+
+    fun captureAt(depth: int, name: string): LocalSym? {
+        if (depth == 0) {
+            return null
+        }
+        var parent = fx[depth - 1]
+        LocalSym? found = null
+        var i = len(parent.scopes) - 1
+        while (i >= 0) {
+            var l = parent.scopes[i][name]
+            if (l != null) {
+                found = l
+                break
+            }
+            i -= 1
+        }
+        if (found != null) {
+            if (parent.isInit && len(parent.scopes) == 1) {
+                return null
+            }
+        } else if (parent.lambda) {
+            found = captureAt(depth - 1, name)
+        }
+        if (found == null) {
+            return null
+        }
+        var outer = found
+        if (parent.isInit) {
+            var inner = false
+            for k in 1..len(parent.scopes) {
+                var l = parent.scopes[k][name]
+                if (l != null && l.slot == outer.slot) {
+                    inner = true
+                }
+            }
+            if (!inner) {
+                return null
+            }
+        }
+        var ty = parent.locals[outer.slot]
+        var cell = parent.cells[outer.slot]
+        int? narrowed = null
+        if (cell == null) {
+            narrowed = parent.narrow[outer.slot]
+        }
+        var c = fx[depth]
+        c.locals.push(ty)
+        var slot = len(c.locals) - 1
+        if (cell != null) {
+            c.cells[slot] = cell
+        }
+        if (narrowed != null) {
+            c.narrow[slot] = narrowed
+        }
+        c.captures.push(Capture { outer: outer.slot, inner: slot, byCell: cell != null })
+        var sym = LocalSym { slot: slot, isConst: outer.isConst, span: outer.span }
+        c.scopes[0][name] = sym
+        return sym
+    }
+
+    fun enclosingSelf(): int? {
+        var i = len(fx) - 1
+        while (i >= 0) {
+            var t = fx[i].selfTy
+            if (t != null) {
+                return t
+            }
+            if (!fx[i].lambda) {
+                return null
+            }
+            i -= 1
+        }
+        return null
+    }
+
+    fun selfExpr(st: int): HExpr {
+        if (len(fx) > 0 && ctx().selfTy != null) {
+            return local(0, st)
+        }
+        var l = lookupLocal("self")
+        if (l != null) {
+            return local(l.slot, st)
+        }
+        return local(0, st)
+    }
+
+    fun lookupValueEntry(module: int, name: string): ValEntry? {
+        [string] ambiguous = []
+        var e = visibleValue(module, name, ambiguous)
+        if (len(ambiguous) > 1) {
+            return null
+        }
+        return e
+    }
+
+    fun valueAmbiguous(module: int, name: string): bool {
+        [string] ambiguous = []
+        visibleValue(module, name, ambiguous)
+        return len(ambiguous) > 1
+    }
+
+    fun lookupValue(name: string, span: SrcSpan): ValSym? {
+        var m = curModule()
+        [string] ambiguous = []
+        var e = visibleValue(m, name, ambiguous)
+        if (len(ambiguous) > 1) {
+            error(span, "`${name}` is ambiguous: it is defined in ${joinWith(ambiguous, " and ")}")
+            return null
+        }
+        if (e == null) {
+            return null
+        }
+        return e.sym
+    }
+
+    fun resolveType(te: TypeExpr): int {
+        return resolveTypeIn(te, curModule())
     }
 
     fun errorDiag(span: SrcSpan, msg: string): LoadDiag {
@@ -812,7 +1224,11 @@ pub def struct Checker(loaded: Loaded) {
         var ri = types.newRecord(rec)
         var t = types.records[ri].ty
         g.instances.push(GenericInstance { targs: targs, target: t })
+        instanceOf[t] = InstanceOf { gid: gid, targs: targs }
         pendingInstances.push(PendingInstance { gid: gid, record: ri, targs: targs, span: span })
+        if (structsReady) {
+            completeInstances(self)
+        }
         return t
     }
 
@@ -1784,7 +2200,8 @@ pub def struct Checker(loaded: Loaded) {
             annotations: annotations,
             deprecated: deprecated,
             external: external,
-            tenv: env
+            tenv: env,
+            hir: null
         })
         return fid
     }
@@ -1887,7 +2304,8 @@ pub def struct Checker(loaded: Loaded) {
                 annotations: [],
                 deprecated: null,
                 external: null,
-                tenv: null
+                tenv: null,
+                hir: null
             })
             types.records[ri].ctor = fid
         }
@@ -1920,7 +2338,8 @@ pub def struct Checker(loaded: Loaded) {
                 annotations: [],
                 deprecated: null,
                 external: null,
-                tenv: null
+                tenv: null,
+                hir: null
             })
             [int] imports = []
             for r in m.imports {

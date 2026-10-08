@@ -1,0 +1,265 @@
+/**
+ * A signed 128-bit integer, for the constant folding the Rust checker does in `i128`.
+ * The magnitude is kept as eight 16-bit limbs, lowest first.
+ */
+pub def type Wide {
+    bool neg
+    [int] limbs
+}
+
+fun zeroLimbs(): [int] {
+    return [0, 0, 0, 0, 0, 0, 0, 0]
+}
+
+fun isZeroLimbs(l: [int]): bool {
+    for x in l {
+        if (x != 0) {
+            return false
+        }
+    }
+    return true
+}
+
+fun make(neg: bool, limbs: [int]): Wide {
+    return Wide { neg: neg && !isZeroLimbs(limbs), limbs: limbs }
+}
+
+/** The bits of `v` as an unsigned 64-bit number. */
+pub fun wideFromU64(v: int): Wide {
+    var l = zeroLimbs()
+    for i in 0..4 {
+        l[i] = (v >>> (16 * i)) & 65535
+    }
+    return make(false, l)
+}
+
+pub fun wideFromInt(v: int): Wide {
+    if (v >= 0) {
+        return wideFromU64(v)
+    }
+    var m = wideFromU64(wrappingSub(0, v))
+    return make(true, m.limbs)
+}
+
+pub fun wideNeg(a: Wide): Wide {
+    return make(!a.neg, a.limbs)
+}
+
+fun cmpMag(a: [int], b: [int]): int {
+    var i = 7
+    while (i >= 0) {
+        if (a[i] != b[i]) {
+            if (a[i] < b[i]) {
+                return -1
+            }
+            return 1
+        }
+        i -= 1
+    }
+    return 0
+}
+
+fun addMag(a: [int], b: [int]): [int]? {
+    var out = zeroLimbs()
+    var carry = 0
+    for i in 0..8 {
+        var s = a[i] + b[i] + carry
+        out[i] = s & 65535
+        carry = s >> 16
+    }
+    if (carry != 0) {
+        return null
+    }
+    return out
+}
+
+fun subMag(a: [int], b: [int]): [int] {
+    var out = zeroLimbs()
+    var borrow = 0
+    for i in 0..8 {
+        var s = a[i] - b[i] - borrow
+        borrow = 0
+        if (s < 0) {
+            s += 65536
+            borrow = 1
+        }
+        out[i] = s
+    }
+    return out
+}
+
+fun fitsSigned(neg: bool, l: [int]): bool {
+    if (l[7] < 32768) {
+        return true
+    }
+    if (!neg) {
+        return false
+    }
+    for i in 0..7 {
+        if (l[i] != 0) {
+            return false
+        }
+    }
+    return l[7] == 32768
+}
+
+/** `a + b`, or null when it overflows `i128`. */
+pub fun wideAdd(a: Wide, b: Wide): Wide? {
+    if (a.neg == b.neg) {
+        var s = addMag(a.limbs, b.limbs)
+        if (s == null || !fitsSigned(a.neg, s)) {
+            return null
+        }
+        return make(a.neg, s)
+    }
+    if (cmpMag(a.limbs, b.limbs) >= 0) {
+        return make(a.neg, subMag(a.limbs, b.limbs))
+    }
+    return make(b.neg, subMag(b.limbs, a.limbs))
+}
+
+pub fun wideSub(a: Wide, b: Wide): Wide? {
+    return wideAdd(a, wideNeg(b))
+}
+
+/** `a * b`, or null when it overflows `i128`. */
+pub fun wideMul(a: Wide, b: Wide): Wide? {
+    [int] acc = []
+    for i in 0..16 {
+        acc.push(0)
+    }
+    for i in 0..8 {
+        if (a.limbs[i] == 0) {
+            continue
+        }
+        for j in 0..8 {
+            acc[i + j] += a.limbs[i] * b.limbs[j]
+        }
+    }
+    var carry = 0
+    for k in 0..16 {
+        var s = acc[k] + carry
+        acc[k] = s & 65535
+        carry = s >> 16
+    }
+    for k in 8..16 {
+        if (acc[k] != 0) {
+            return null
+        }
+    }
+    var l = slice(acc, 0, 8)
+    var neg = a.neg != b.neg
+    if (!fitsSigned(neg, l)) {
+        return null
+    }
+    return make(neg, l)
+}
+
+fun shiftLeftOne(l: [int]): [int] {
+    var out = zeroLimbs()
+    var carry = 0
+    for i in 0..8 {
+        var s = (l[i] << 1) | carry
+        out[i] = s & 65535
+        carry = s >> 16
+    }
+    return out
+}
+
+fun bitAt(l: [int], bit: int): int {
+    return (l[bit / 16] >> (bit % 16)) & 1
+}
+
+fun divMod(a: [int], b: [int], wantRem: bool): [int] {
+    var q = zeroLimbs()
+    var r = zeroLimbs()
+    var bit = 127
+    while (bit >= 0) {
+        r = shiftLeftOne(r)
+        r[0] = r[0] | bitAt(a, bit)
+        if (cmpMag(r, b) >= 0) {
+            r = subMag(r, b)
+            q[bit / 16] = q[bit / 16] | (1 << (bit % 16))
+        }
+        bit -= 1
+    }
+    if (wantRem) {
+        return r
+    }
+    return q
+}
+
+/** `a / b` for values that are not negative and `b != 0`. */
+pub fun wideDivU(a: Wide, b: Wide): Wide {
+    return make(false, divMod(a.limbs, b.limbs, false))
+}
+
+pub fun wideRemU(a: Wide, b: Wide): Wide {
+    return make(false, divMod(a.limbs, b.limbs, true))
+}
+
+pub fun wideCmp(a: Wide, b: Wide): int {
+    if (a.neg != b.neg) {
+        if (a.neg) {
+            return -1
+        }
+        return 1
+    }
+    var c = cmpMag(a.limbs, b.limbs)
+    if (a.neg) {
+        return -c
+    }
+    return c
+}
+
+pub fun wideIsZero(a: Wide): bool {
+    return isZeroLimbs(a.limbs)
+}
+
+/** The low 64 bits, like `v as i64` in Rust. */
+pub fun wideToI64(a: Wide): int {
+    var v = 0
+    for i in 0..4 {
+        v = v | (a.limbs[i] << (16 * i))
+    }
+    if (a.neg) {
+        return wrappingSub(0, v)
+    }
+    return v
+}
+
+/** Whether the value fits in `i64`. */
+pub fun wideFitsI64(a: Wide): bool {
+    return wideCmp(a, wideFromInt(-9223372036854775807 - 1)) >= 0 && wideCmp(a, wideFromInt(9223372036854775807)) <= 0
+}
+
+pub fun wideText(a: Wide): string {
+    if (isZeroLimbs(a.limbs)) {
+        return "0"
+    }
+    var l = slice(a.limbs, 0, 8)
+    var digits = ""
+    var ten = zeroLimbs()
+    ten[0] = 10
+    while (!isZeroLimbs(l)) {
+        var r = divMod(l, ten, true)
+        l = divMod(l, ten, false)
+        digits = "${r[0]}" + digits
+    }
+    if (a.neg) {
+        return "-" + digits
+    }
+    return digits
+}
+
+/** The nearest float, like `v as f64` in Rust. */
+pub fun wideToFloat(a: Wide): float {
+    return toFloat(wideText(a))
+}
+
+/** `2^bits - 1` and friends: the range of an integer type with `bits` bits. */
+pub fun widePow2(bits: int): Wide {
+    var l = zeroLimbs()
+    l[bits / 16] = 1 << (bits % 16)
+    return make(false, l)
+}

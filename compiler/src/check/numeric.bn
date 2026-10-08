@@ -1,0 +1,607 @@
+import "../diag/diag.bn"
+import "../syntax/ast.bn"
+import "check.bn"
+import "expr.bn"
+import "hir.bn"
+import "types.bn"
+import "wide.bn"
+
+const NUM_BITS = [8, 8, 16, 16, 32, 32, 64, 32]
+const NUM_SIGNED = [true, false, true, false, true, false, false, true]
+
+/** The index of a sized number type in `NUM_NAMES`, or -1. */
+pub fun numIndex(c: Checker, t: int): int {
+    var k = c.types.kindOf(t)
+    if (k is Ty.Num) {
+        return k.code
+    }
+    return -1
+}
+
+pub fun numCodeOf(c: Checker, t: int): int {
+    return numIndex(c, t) + 1
+}
+
+/** `(bits, signed)` of an integer type, like `int_range`. */
+pub fun intRange(c: Checker, t: int): [int]? {
+    var k = c.types.kindOf(t)
+    if (k is Ty.Int) {
+        return [64, 1]
+    }
+    if (k is Ty.Num && k.code != 7) {
+        var signed = 0
+        if (NUM_SIGNED[k.code]) {
+            signed = 1
+        }
+        return [NUM_BITS[k.code], signed]
+    }
+    return null
+}
+
+pub fun isNumeric(c: Checker, t: int): bool {
+    var k = c.types.kindOf(t)
+    return k is Ty.Int || k is Ty.Float || k is Ty.Num
+}
+
+pub fun isFloating(c: Checker, t: int): bool {
+    return t == T_FLOAT || t == T_F32
+}
+
+fun numMin(n: int): Wide {
+    if (NUM_SIGNED[n]) {
+        return wideNeg(widePow2(NUM_BITS[n] - 1))
+    }
+    return wideFromInt(0)
+}
+
+fun numMax(n: int): Wide {
+    if (NUM_SIGNED[n]) {
+        return wideSub(widePow2(NUM_BITS[n] - 1), wideFromInt(1)) ?? wideFromInt(0)
+    }
+    return wideSub(widePow2(NUM_BITS[n]), wideFromInt(1)) ?? wideFromInt(0)
+}
+
+/** `Num::wrap`: the bits of `v` cut to the width of the type and sign-extended. */
+pub fun numWrap(n: int, v: int): int {
+    if (n == 6) {
+        return v
+    }
+    if (n == 7) {
+        return v
+    }
+    var bits = NUM_BITS[n]
+    var mask = (1 << bits) - 1
+    var x = v & mask
+    if (NUM_SIGNED[n] && (x >> (bits - 1)) & 1 == 1) {
+        return x - (1 << bits)
+    }
+    return x
+}
+
+pub fun plainIntLit(h: HExpr): int? {
+    var k = h.kind
+    if (k is HKind.Int && h.ty == T_INT) {
+        return k.value
+    }
+    return null
+}
+
+pub fun intWidens(c: Checker, from: int, to: int): bool {
+    var a = intRange(c, from)
+    var b = intRange(c, to)
+    if (a == null || b == null) {
+        return false
+    }
+    var fs = a[1] == 1
+    var ts = b[1] == 1
+    if (!fs && ts) {
+        return a[0] < b[0]
+    }
+    if (fs && !ts) {
+        return false
+    }
+    return a[0] <= b[0]
+}
+
+pub fun litValue(v: int, t: int): Wide {
+    if (t == T_U64) {
+        return wideFromU64(v)
+    }
+    return wideFromInt(v)
+}
+
+pub fun fitsInt(c: Checker, v: Wide, t: int): bool {
+    var k = c.types.kindOf(t)
+    if (k is Ty.Int) {
+        return wideFitsI64(v)
+    }
+    if (k is Ty.Num && k.code != 7) {
+        return wideCmp(v, numMin(k.code)) >= 0 && wideCmp(v, numMax(k.code)) <= 0
+    }
+    return false
+}
+
+pub fun rangeText(c: Checker, t: int): string {
+    var k = c.types.kindOf(t)
+    if (k is Ty.Num && k.code != 7) {
+        return "${NUM_NAMES[k.code]} holds values from ${wideText(numMin(k.code))} to ${wideText(numMax(k.code))}"
+    }
+    return "int holds values from -9223372036854775808 to 9223372036854775807"
+}
+
+fun f32Of(f: float): float {
+    return (f as float32) as float
+}
+
+pub fun typedLit(c: Checker, v: Wide, t: int, span: SrcSpan): HExpr {
+    if (isFloating(c, t)) {
+        var f = wideToFloat(v)
+        if (t == T_F32) {
+            f = f32Of(f)
+        }
+        return hexpr(HKind.Float(f), t)
+    }
+    if (!fitsInt(c, v, t)) {
+        var d = c.errorDiag(span, "`${wideText(v)}` does not fit in ${c.show(t)}")
+        d.diag.helps.push(rangeText(c, t))
+        c.emit(d)
+        return errExpr()
+    }
+    return hexpr(HKind.Int(wideToI64(v)), t)
+}
+
+pub fun fitCheck(c: Checker, h: HExpr, t: int, span: SrcSpan): HExpr {
+    var l = c.locExpr(span)
+    return rt("NumFit", [h, hint(numCodeOf(c, t)), l], t)
+}
+
+pub fun wrapTo(c: Checker, h: HExpr, t: int): HExpr {
+    var k = h.kind
+    var n = numIndex(c, t)
+    if (k is HKind.Int && n >= 0) {
+        return hexpr(HKind.Int(numWrap(n, k.value)), t)
+    }
+    return rt("NumWrap", [h, hint(numCodeOf(c, t))], t)
+}
+
+pub fun f32Round(h: HExpr): HExpr {
+    var k = h.kind
+    if (k is HKind.Float) {
+        return hexpr(HKind.Float(f32Of(k.value)), T_F32)
+    }
+    return rt("F32Round", [h], T_F32)
+}
+
+pub fun widenNum(c: Checker, h: HExpr, to: int): HExpr? {
+    var from = h.ty
+    if (c.types.isInteger(from) && c.types.isInteger(to)) {
+        var v = plainIntLit(h)
+        if (v != null) {
+            if (fitsInt(c, wideFromInt(v), to)) {
+                return hexpr(HKind.Int(v), to)
+            }
+            return null
+        }
+        if (intWidens(c, from, to)) {
+            return retype(h, to)
+        }
+        return null
+    }
+    if (c.types.isInteger(from) && isFloating(c, to)) {
+        var k = h.kind
+        HExpr? asFloat = null
+        if (k is HKind.Int) {
+            asFloat = hexpr(HKind.Float(wideToFloat(litValue(k.value, from))), T_FLOAT)
+        } else if (from == T_U64) {
+            asFloat = rt("U2F", [h], T_FLOAT)
+        } else {
+            asFloat = hexpr(HKind.Conv(Conv.IntToFloat, h), T_FLOAT)
+        }
+        var x = asFloat
+        if (to == T_F32) {
+            return f32Round(x)
+        }
+        return x
+    }
+    if (from == T_F32 && to == T_FLOAT) {
+        return retype(h, T_FLOAT)
+    }
+    if (from == T_FLOAT && to == T_F32) {
+        var k = h.kind
+        if (k is HKind.Float) {
+            return hexpr(HKind.Float(f32Of(k.value)), T_F32)
+        }
+    }
+    return null
+}
+
+pub fun numericMismatch(c: Checker, h: HExpr, target: int, span: SrcSpan): bool {
+    if (!(isNumeric(c, h.ty) && isNumeric(c, target)) || (h.ty == T_FLOAT && target == T_INT)) {
+        return false
+    }
+    var from = c.show(h.ty)
+    var to = c.show(target)
+    var fixed = c.wrapSuffix(span, " as ${to}")
+    var help = "${to} cannot hold every ${from} value; `as ${to}` checks the value at runtime"
+    if (isFloating(c, h.ty) && c.types.isInteger(target)) {
+        help = "`as ${to}` drops the fraction and fails at runtime if the value does not fit"
+    } else if (isFloating(c, target)) {
+        help = "`as ${to}` rounds the value to the precision of ${to}"
+    }
+    var d = c.errorDiag(span, "expected ${to} but found ${from}")
+    d.diag.helps.push(help)
+    addFix(d.diag, "convert it with `as ${to}`", span.start, span.end, fixed, false)
+    c.emit(d)
+    return true
+}
+
+pub fun convertNum(c: Checker, h: HExpr, to: int, span: SrcSpan): HExpr {
+    var from = h.ty
+    var w = widenNum(c, h, to)
+    if (w != null) {
+        return w
+    }
+    if (c.types.isInteger(from) && c.types.isInteger(to)) {
+        var k = h.kind
+        if (k is HKind.Int) {
+            var v = litValue(k.value, from)
+            if (fitsInt(c, v, to)) {
+                return hexpr(HKind.Int(wideToI64(v)), to)
+            }
+            c.error(span, "cannot convert ${wideText(v)} to ${c.show(to)}")
+            return errExpr()
+        }
+        var code = numCodeOf(c, to)
+        if (from == T_U64) {
+            code = code | 16
+        }
+        var l = c.locExpr(span)
+        return rt("NumConv", [h, hint(code), l], to)
+    }
+    if (isFloating(c, from) && c.types.isInteger(to)) {
+        if (to == T_INT) {
+            return hexpr(HKind.Conv(Conv.FloatToInt, retype(h, T_FLOAT)), T_INT)
+        }
+        var code = numCodeOf(c, to)
+        var l = c.locExpr(span)
+        return rt("F2Num", [retype(h, T_FLOAT), hint(code), l], to)
+    }
+    if (from == T_FLOAT && to == T_F32) {
+        return f32Round(h)
+    }
+    c.error(span, "cannot convert ${c.show(from)} to ${c.show(to)}")
+    return errExpr()
+}
+
+/** Two integer operands brought to one type, like `unify_ints`; null after reporting an error. */
+pub def type IntPair {
+    HExpr left
+    HExpr right
+    int ty
+}
+
+pub fun unifyInts(c: Checker, l: HExpr, r: HExpr, what: string, span: SrcSpan): IntPair? {
+    var lt = l.ty
+    var rtype = r.ty
+    if (lt == rtype) {
+        return IntPair { left: l, right: r, ty: lt }
+    }
+    var lv = plainIntLit(l)
+    if (lv != null) {
+        var x = typedLit(c, wideFromInt(lv), rtype, span)
+        if (x.ty == T_ERROR) {
+            return null
+        }
+        return IntPair { left: x, right: r, ty: rtype }
+    }
+    var rv = plainIntLit(r)
+    if (rv != null) {
+        var x = typedLit(c, wideFromInt(rv), lt, span)
+        if (x.ty == T_ERROR) {
+            return null
+        }
+        return IntPair { left: l, right: x, ty: lt }
+    }
+    if (intWidens(c, lt, rtype)) {
+        return IntPair { left: retype(l, rtype), right: r, ty: rtype }
+    }
+    if (intWidens(c, rtype, lt)) {
+        return IntPair { left: l, right: retype(r, lt), ty: lt }
+    }
+    var a = intRange(c, lt)
+    var b = intRange(c, rtype)
+    if (a != null && b != null) {
+        var need = 0
+        if (a[1] == 1) {
+            need = a[0]
+            if (b[0] + 1 > need) {
+                need = b[0] + 1
+            }
+        } else {
+            need = b[0]
+            if (a[0] + 1 > need) {
+                need = a[0] + 1
+            }
+        }
+        int? t = null
+        if (need <= 16) {
+            t = T_I16
+        } else if (need <= 32) {
+            t = T_I32
+        } else if (need <= 64) {
+            t = T_INT
+        }
+        if (t != null) {
+            return IntPair { left: retype(l, t), right: retype(r, t), ty: t }
+        }
+    }
+    var x = c.show(lt)
+    var y = c.show(rtype)
+    var d = c.errorDiag(span, "cannot ${what} ${x} and ${y}")
+    d.diag.helps.push("neither type can hold every value of the other; convert one side with `as ${x}` or `as ${y}`")
+    c.emit(d)
+    return null
+}
+
+pub fun floatKind(c: Checker, lt: int, rtype: int): int {
+    var smallL = lt == T_F32 || c.types.isInteger(lt)
+    var smallR = rtype == T_F32 || c.types.isInteger(rtype)
+    if ((lt == T_F32 || rtype == T_F32) && smallL && smallR) {
+        return T_F32
+    }
+    return T_FLOAT
+}
+
+fun intBinOp(op: BinOp, loc: int): HBinOp {
+    return match op {
+        BinOp.Add => HBinOp.IAdd(loc)
+        BinOp.Sub => HBinOp.ISub(loc)
+        BinOp.Mul => HBinOp.IMul(loc)
+        BinOp.Div => HBinOp.IDiv(loc)
+        else => HBinOp.IMod(loc)
+    }
+}
+
+pub fun sizedArith(c: Checker, op: BinOp, l: HExpr, r: HExpr, t: int, span: SrcSpan): HExpr {
+    var u64t = t == T_U64
+    var signed = true
+    var range = intRange(c, t)
+    if (range != null) {
+        signed = range[1] == 1
+    }
+    var lk = l.kind
+    var rk = r.kind
+    if (lk is HKind.Int && rk is HKind.Int) {
+        var a = litValue(lk.value, t)
+        var b = litValue(rk.value, t)
+        Wide? v = null
+        var folded = true
+        if (op == BinOp.Add) {
+            v = wideAdd(a, b)
+        } else if (op == BinOp.Sub) {
+            v = wideSub(a, b)
+        } else if (op == BinOp.Mul) {
+            v = wideMul(a, b)
+            folded = v != null
+        } else if (op == BinOp.Div && !wideIsZero(b)) {
+            if (u64t) {
+                v = wideDivU(a, b)
+            } else {
+                v = wideFromInt(wrappingDiv(wideToI64(a), wideToI64(b)))
+            }
+        } else if (op == BinOp.Mod && !wideIsZero(b)) {
+            if (u64t) {
+                v = wideRemU(a, b)
+            } else {
+                v = wideFromInt(wrappingRem(wideToI64(a), wideToI64(b)))
+            }
+        } else {
+            folded = false
+        }
+        if (folded && v != null) {
+            if (fitsInt(c, v, t)) {
+                return hexpr(HKind.Int(wideToI64(v)), t)
+            }
+            var d = c.errorDiag(span, "`${wideText(a)} ${symbolOf(op)} ${wideText(b)}` overflows ${c.show(t)}")
+            d.diag.helps.push(rangeText(c, t))
+            c.emit(d)
+            return errExpr()
+        }
+    }
+    var loc = c.loc(span)
+    if (u64t) {
+        var f = "UMod"
+        if (op == BinOp.Add) {
+            f = "UAdd"
+        } else if (op == BinOp.Sub) {
+            f = "USub"
+        } else if (op == BinOp.Mul) {
+            f = "UMul"
+        } else if (op == BinOp.Div) {
+            f = "UDiv"
+        }
+        return rt(f, [l, r, hexpr(HKind.LocId(loc), T_INT)], t)
+    }
+    var e = binary(intBinOp(op, loc), l, r, t)
+    if (op == BinOp.Mod || (op == BinOp.Div && !signed)) {
+        return e
+    }
+    return fitCheck(c, e, t, span)
+}
+
+pub fun wrappingDiv(a: int, b: int): int {
+    if (b == -1) {
+        return wrappingSub(0, a)
+    }
+    return a / b
+}
+
+pub fun wrappingRem(a: int, b: int): int {
+    if (b == -1) {
+        return 0
+    }
+    return a % b
+}
+
+fun maskOf(bits: int): int {
+    if (bits == 64) {
+        return -1
+    }
+    return (1 << bits) - 1
+}
+
+pub fun sizedBits(c: Checker, op: BinOp, left: HExpr, right: HExpr, span: SrcSpan): HExpr {
+    var shift = op == BinOp.Shl || op == BinOp.Shr || op == BinOp.UShr
+    var l = left
+    var r = right
+    var t = left.ty
+    if (shift) {
+        r = retype(right, T_INT)
+    } else {
+        var u = unifyInts(c, left, right, "apply `${symbolOf(op)}` to", span)
+        if (u == null) {
+            return errExpr()
+        }
+        l = u.left
+        r = u.right
+        t = u.ty
+    }
+    var bits = 64
+    var signed = true
+    var range = intRange(c, t)
+    if (range != null) {
+        bits = range[0]
+        signed = range[1] == 1
+    }
+    var rk = r.kind
+    if (shift && rk is HKind.Int && (rk.value < 0 || rk.value >= 64)) {
+        var d = c.errorDiag(span, "cannot shift by ${rk.value}")
+        d.diag.helps.push("the shift amount must be from 0 to 63")
+        c.emit(d)
+        return errExpr()
+    }
+    var lk = l.kind
+    if (lk is HKind.Int && rk is HKind.Int) {
+        var a = lk.value
+        var b = rk.value
+        var v = 0
+        if (op == BinOp.BitAnd) {
+            v = a & b
+        } else if (op == BinOp.BitOr) {
+            v = a | b
+        } else if (op == BinOp.BitXor) {
+            v = a ^ b
+        } else if (op == BinOp.Shl) {
+            v = a << b
+        } else if (op == BinOp.Shr && signed) {
+            v = a >> b
+        } else {
+            v = (a & maskOf(bits)) >>> b
+        }
+        return wrapTo(c, hexpr(HKind.Int(v), t), t)
+    }
+    var loc = NO_LOC
+    if (!(rk is HKind.Int)) {
+        loc = c.loc(span)
+    }
+    if (op == BinOp.BitAnd) {
+        return binary(HBinOp.BitAnd, l, r, t)
+    }
+    if (op == BinOp.BitOr) {
+        return binary(HBinOp.BitOr, l, r, t)
+    }
+    if (op == BinOp.BitXor) {
+        return binary(HBinOp.BitXor, l, r, t)
+    }
+    if (op == BinOp.Shl) {
+        var e = binary(HBinOp.Shl(loc), l, r, t)
+        if (bits == 64) {
+            return e
+        }
+        return wrapTo(c, e, t)
+    }
+    if (op == BinOp.Shr && signed) {
+        return binary(HBinOp.Shr(loc), l, r, t)
+    }
+    if (!signed || bits == 64) {
+        return binary(HBinOp.UShr(loc), l, r, t)
+    }
+    var mask = hexpr(HKind.Int((1 << bits) - 1), t)
+    var masked = binary(HBinOp.BitAnd, l, mask, t)
+    return wrapTo(c, binary(HBinOp.UShr(loc), masked, r, t), t)
+}
+
+pub fun numCompare(c: Checker, cmp: Cmp, a: HExpr, b: HExpr, span: SrcSpan): HExpr {
+    if (c.types.isInteger(a.ty) && c.types.isInteger(b.ty)) {
+        var what = "order"
+        if (cmp == Cmp.Eq || cmp == Cmp.Ne) {
+            what = "compare"
+        }
+        var u = unifyInts(c, a, b, what, span)
+        if (u == null) {
+            return hexpr(HKind.Bool(false), T_BOOL)
+        }
+        if (u.ty == T_U64 && cmp != Cmp.Eq && cmp != Cmp.Ne) {
+            return binary(HBinOp.UCmp(cmp), u.left, u.right, T_BOOL)
+        }
+        return binary(HBinOp.ICmp(cmp), u.left, u.right, T_BOOL)
+    }
+    var x = coerce(c, a, T_FLOAT, span)
+    var y = coerce(c, b, T_FLOAT, span)
+    return binary(HBinOp.FCmp(cmp), x, y, T_BOOL)
+}
+
+pub fun numNeg(c: Checker, h: HExpr, span: SrcSpan): HExpr {
+    var t = h.ty
+    var n = numIndex(c, t)
+    if (n == 7) {
+        return hexpr(HKind.Unary(HUnOp.FNeg, h), T_F32)
+    }
+    if (n >= 0 && NUM_SIGNED[n]) {
+        var k = h.kind
+        if (k is HKind.Int) {
+            return typedLit(c, wideNeg(wideFromInt(k.value)), t, span)
+        }
+        var l = c.loc(span)
+        return fitCheck(c, hexpr(HKind.Unary(HUnOp.INeg(l), h), t), t, span)
+    }
+    var d = c.errorDiag(span, "cannot negate a value of type ${c.show(t)}")
+    d.diag.helps.push("unsigned types only hold zero and positive numbers; convert with `as int` first")
+    c.emit(d)
+    return errExpr()
+}
+
+pub fun numBitnot(c: Checker, h: HExpr): HExpr {
+    var t = h.ty
+    var n = numIndex(c, t)
+    var k = h.kind
+    if (n >= 0 && n != 6 && !NUM_SIGNED[n]) {
+        var bits = NUM_BITS[n]
+        var mask = hexpr(HKind.Int((1 << bits) - 1), t)
+        if (k is HKind.Int) {
+            return hexpr(HKind.Int(~k.value & ((1 << bits) - 1)), t)
+        }
+        return binary(HBinOp.BitXor, h, mask, t)
+    }
+    if (k is HKind.Int) {
+        return hexpr(HKind.Int(~k.value), t)
+    }
+    return hexpr(HKind.Unary(HUnOp.BitNot, h), t)
+}
+
+pub fun wrappingOp(c: Checker, name: string, recv: HExpr, arg: HExpr, span: SrcSpan): HExpr {
+    var t = recv.ty
+    var a = coerce(c, arg, t, span)
+    var op = HBinOp.WMul
+    if (name == "wrappingAdd") {
+        op = HBinOp.WAdd
+    } else if (name == "wrappingSub") {
+        op = HBinOp.WSub
+    }
+    var e = binary(op, recv, a, t)
+    var n = numIndex(c, t)
+    if (n >= 0 && n != 6) {
+        return wrapTo(c, e, t)
+    }
+    return e
+}

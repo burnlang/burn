@@ -45,7 +45,7 @@ fun constText(v: Const): string {
     }
 }
 
-fun annotationLines(pad: string, anns: [HirAnnotation]): string {
+pub fun annotationLines(pad: string, anns: [HirAnnotation]): string {
     var out = ""
     for a in anns {
         [string] args = []

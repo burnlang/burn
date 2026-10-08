@@ -1,0 +1,494 @@
+import "../syntax/ast.bn"
+import "body.bn"
+import "check.bn"
+import "hir.bn"
+import "types.bn"
+
+def type Names {
+    {string: bool} inLambda
+    {string: bool} assigned
+}
+
+fun walkBlock(b: [Stmt], depth: int, n: Names): void {
+    for s in b {
+        walkStmt(s, depth, n)
+    }
+}
+
+fun walkAll(xs: [Expr], depth: int, n: Names): void {
+    for x in xs {
+        walk(x, depth, n)
+    }
+}
+
+fun walkStmt(s: Stmt, depth: int, n: Names): void {
+    var k = s.kind
+    if (k is StmtKind.Var) {
+        var init = k.init
+        if (init != null) {
+            walk(init, depth, n)
+        }
+    } else if (k is StmtKind.Eval) {
+        walk(k.value, depth, n)
+    } else if (k is StmtKind.If) {
+        walk(k.cond, depth, n)
+        walkBlock(k.then.stmts, depth, n)
+        var els = k.els
+        if (els != null) {
+            walkBlock(els.stmts, depth, n)
+        }
+    } else if (k is StmtKind.While) {
+        walk(k.cond, depth, n)
+        walkBlock(k.body.stmts, depth, n)
+    } else if (k is StmtKind.For) {
+        var init = k.init
+        if (init != null) {
+            walkStmt(init, depth, n)
+        }
+        var cond = k.cond
+        if (cond != null) {
+            walk(cond, depth, n)
+        }
+        var step = k.step
+        if (step != null) {
+            walk(step, depth, n)
+        }
+        walkBlock(k.body.stmts, depth, n)
+    } else if (k is StmtKind.ForIn) {
+        var it = k.iter
+        if (it is ForIter.Range) {
+            walk(it.from, depth, n)
+            walk(it.to, depth, n)
+        } else if (it is ForIter.Over) {
+            walk(it.value, depth, n)
+        }
+        walkBlock(k.body.stmts, depth, n)
+    } else if (k is StmtKind.Return) {
+        var v = k.value
+        if (v != null) {
+            walk(v, depth, n)
+        }
+    } else if (k is StmtKind.Nested) {
+        walkBlock(k.block.stmts, depth, n)
+    } else if (k is StmtKind.Extend) {
+        walkBlock(k.decl.body.stmts, depth + 1, n)
+    } else if (k is StmtKind.Destroy) {
+        n.assigned[k.target.name] = true
+        if (depth > 0) {
+            n.inLambda[k.target.name] = true
+        }
+        walkAll(k.args, depth, n)
+    }
+}
+
+fun walk(e: Expr, depth: int, n: Names): void {
+    var k = e.kind
+    if (k is ExprKind.Ident) {
+        if (depth > 0) {
+            n.inLambda[k.name] = true
+        }
+    } else if (k is ExprKind.Template) {
+        for p in k.parts {
+            if (p is TplExpr.Code) {
+                walk(p.value, depth, n)
+            }
+        }
+    } else if (k is ExprKind.Unary) {
+        walk(k.operand, depth, n)
+    } else if (k is ExprKind.Await) {
+        walk(k.value, depth, n)
+    } else if (k is ExprKind.NotNull) {
+        walk(k.value, depth, n)
+    } else if (k is ExprKind.Is) {
+        walk(k.value, depth, n)
+    } else if (k is ExprKind.As) {
+        walk(k.value, depth, n)
+    } else if (k is ExprKind.SafeAs) {
+        walk(k.value, depth, n)
+    } else if (k is ExprKind.Binary) {
+        walk(k.left, depth, n)
+        walk(k.right, depth, n)
+    } else if (k is ExprKind.Coalesce) {
+        walk(k.left, depth, n)
+        walk(k.right, depth, n)
+    } else if (k is ExprKind.Index) {
+        walk(k.obj, depth, n)
+        walk(k.index, depth, n)
+    } else if (k is ExprKind.Assign) {
+        var tk = k.target.kind
+        if (tk is ExprKind.Ident) {
+            n.assigned[tk.name] = true
+        }
+        walk(k.target, depth, n)
+        walk(k.value, depth, n)
+    } else if (k is ExprKind.Call) {
+        walk(k.callee, depth, n)
+        walkAll(k.args, depth, n)
+    } else if (k is ExprKind.Field) {
+        walk(k.obj, depth, n)
+    } else if (k is ExprKind.SafeGet) {
+        walk(k.obj, depth, n)
+        var args = k.args
+        if (args != null) {
+            walkAll(args, depth, n)
+        }
+    } else if (k is ExprKind.Array) {
+        walkAll(k.items, depth, n)
+    } else if (k is ExprKind.StructLit) {
+        for f in k.fields {
+            walk(f.value, depth, n)
+        }
+    } else if (k is ExprKind.MapLit) {
+        for p in k.pairs {
+            walk(p.key, depth, n)
+            walk(p.value, depth, n)
+        }
+    } else if (k is ExprKind.Lambda) {
+        walkBlock(k.decl.body.stmts, depth + 1, n)
+    } else if (k is ExprKind.New) {
+        walkAll(k.args, depth, n)
+    } else if (k is ExprKind.Match) {
+        var subject = k.subject
+        if (subject != null) {
+            walk(subject, depth, n)
+        }
+        for arm in k.arms {
+            for p in arm.patterns {
+                if (p is Pattern.Value) {
+                    walk(p.value, depth, n)
+                } else if (p is Pattern.Range) {
+                    walk(p.from, depth, n)
+                    walk(p.to, depth, n)
+                }
+            }
+            var g = arm.guard
+            if (g != null) {
+                walk(g, depth, n)
+            }
+            var body = arm.body
+            if (body is ArmBody.Value) {
+                walk(body.value, depth, n)
+            } else if (body is ArmBody.Body) {
+                walkBlock(body.block.stmts, depth, n)
+            }
+        }
+    }
+}
+
+/** The local variables that a lambda uses and that are assigned somewhere, so they must live in a cell. */
+pub fun cellNames(body: [Stmt]): {string: bool} {
+    var n = Names { inLambda: {}, assigned: {} }
+    walkBlock(body, 0, n)
+    {string: bool} out = {}
+    for name in keys(n.inLambda) {
+        if (has(n.assigned, name)) {
+            out[name] = true
+        }
+    }
+    return out
+}
+
+fun rewriteAll(xs: [HExpr], cells: {int: int}): [HExpr] {
+    [HExpr] out = []
+    for x in xs {
+        out.push(rewrite(x, cells))
+    }
+    return out
+}
+
+fun rewriteStmts(ss: [HStmt], cells: {int: int}): [HStmt] {
+    [HStmt] out = []
+    for s in ss {
+        if (s is HStmt.Eval) {
+            out.push(HStmt.Eval(rewrite(s.value, cells)))
+        } else if (s is HStmt.Return) {
+            var v = s.value
+            if (v != null) {
+                out.push(HStmt.Return(rewrite(v, cells)))
+            } else {
+                out.push(s)
+            }
+        } else if (s is HStmt.If) {
+            out.push(HStmt.If(rewrite(s.cond, cells), rewriteStmts(s.then, cells), rewriteStmts(s.els, cells)))
+        } else if (s is HStmt.Loop) {
+            var cond = s.cond
+            HExpr? c = null
+            if (cond != null) {
+                c = rewrite(cond, cells)
+            }
+            out.push(HStmt.Loop(c, rewriteStmts(s.body, cells), rewriteStmts(s.step, cells)))
+        } else {
+            out.push(s)
+        }
+    }
+    return out
+}
+
+/** Reads and writes of locals that live in cells go through the cell, like `rewrite` in `closures.rs`. */
+fun rewrite(e: HExpr, cells: {int: int}): HExpr {
+    var k = e.kind
+    if (k is HKind.Local) {
+        var ct = cells[k.slot]
+        if (ct != null && e.ty != ct) {
+            return hexpr(HKind.GetField(local(k.slot, ct), 0), e.ty)
+        }
+        return e
+    }
+    if (k is HKind.SetLocal) {
+        var ct = cells[k.slot]
+        if (ct != null) {
+            var vk = k.value.kind
+            if (vk is HKind.NewStruct && vk.ty == ct) {
+                [HExpr] xs = []
+                for x in vk.args {
+                    var xk = x.kind
+                    if (xk is HKind.Local && xk.slot == k.slot) {
+                        xs.push(x)
+                    } else {
+                        xs.push(rewrite(x, cells))
+                    }
+                }
+                return hexpr(HKind.SetLocal(k.slot, hexpr(HKind.NewStruct(vk.ty, xs), k.value.ty)), ct)
+            }
+            var v = rewrite(k.value, cells)
+            return hexpr(HKind.SetField(local(k.slot, ct), 0, v), e.ty)
+        }
+        return hexpr(HKind.SetLocal(k.slot, rewrite(k.value, cells)), e.ty)
+    }
+    var nk = rewriteKind(k, cells)
+    if (nk == null) {
+        return e
+    }
+    return hexpr(nk, e.ty)
+}
+
+fun rewriteKind(k: HKind, cells: {int: int}): HKind? {
+    if (k is HKind.SetGlobal) {
+        return HKind.SetGlobal(k.id, rewrite(k.value, cells))
+    }
+    if (k is HKind.Unary) {
+        return HKind.Unary(k.op, rewrite(k.value, cells))
+    }
+    if (k is HKind.Conv) {
+        return HKind.Conv(k.conv, rewrite(k.value, cells))
+    }
+    if (k is HKind.GetField) {
+        return HKind.GetField(rewrite(k.obj, cells), k.index)
+    }
+    if (k is HKind.ArrLen) {
+        return HKind.ArrLen(rewrite(k.value, cells))
+    }
+    if (k is HKind.BoxVal) {
+        return HKind.BoxVal(rewrite(k.value, cells))
+    }
+    if (k is HKind.Binary) {
+        return HKind.Binary(k.op, rewrite(k.left, cells), rewrite(k.right, cells))
+    }
+    if (k is HKind.And) {
+        return HKind.And(rewrite(k.left, cells), rewrite(k.right, cells))
+    }
+    if (k is HKind.Or) {
+        return HKind.Or(rewrite(k.left, cells), rewrite(k.right, cells))
+    }
+    if (k is HKind.Index) {
+        return HKind.Index(rewrite(k.obj, cells), rewrite(k.index, cells), k.loc)
+    }
+    if (k is HKind.SetField) {
+        return HKind.SetField(rewrite(k.obj, cells), k.index, rewrite(k.value, cells))
+    }
+    if (k is HKind.SetIndex) {
+        return HKind.SetIndex(rewrite(k.obj, cells), rewrite(k.index, cells), rewrite(k.value, cells), k.loc)
+    }
+    if (k is HKind.Call) {
+        return HKind.Call(k.func, rewriteAll(k.args, cells))
+    }
+    if (k is HKind.CallIface) {
+        return HKind.CallIface(k.slot, rewriteAll(k.args, cells))
+    }
+    if (k is HKind.Rt) {
+        return HKind.Rt(k.name, rewriteAll(k.args, cells))
+    }
+    if (k is HKind.Spawn) {
+        return HKind.Spawn(k.func, rewriteAll(k.args, cells))
+    }
+    if (k is HKind.NewStruct) {
+        return HKind.NewStruct(k.ty, rewriteAll(k.args, cells))
+    }
+    if (k is HKind.NewArray) {
+        return HKind.NewArray(k.ty, rewriteAll(k.items, cells))
+    }
+    if (k is HKind.CallIndirect) {
+        return HKind.CallIndirect(rewrite(k.callee, cells), rewriteAll(k.args, cells))
+    }
+    if (k is HKind.Seq) {
+        return HKind.Seq(rewriteStmts(k.stmts, cells), rewrite(k.value, cells))
+    }
+    return null
+}
+
+pub fun cellType(c: Checker, t: int): int {
+    var hit = c.cellTypes[t]
+    if (hit != null) {
+        return hit
+    }
+    var rec = newRecordDef("<cell>", 0, SrcSpan { file: 0, start: 0, end: 0 })
+    rec.fields = [FieldDef { name: "<value>", ty: t, value: null, private: false, span: SrcSpan { file: 0, start: 0, end: 0 } }]
+    var ri = c.types.newRecord(rec)
+    var ct = c.types.records[ri].ty
+    c.cellTypes[t] = ct
+    return ct
+}
+
+pub fun closureRecord(c: Checker, fields: [int]): int {
+    var none = SrcSpan { file: 0, start: 0, end: 0 }
+    [FieldDef] fs = [FieldDef { name: "<fn>", ty: T_INT, value: null, private: false, span: none }]
+    for i in 0..len(fields) {
+        fs.push(FieldDef { name: "<${i}>", ty: fields[i], value: null, private: false, span: none })
+    }
+    var rec = newRecordDef("<closure>", 0, none)
+    rec.fields = fs
+    var ri = c.types.newRecord(rec)
+    return c.types.records[ri].ty
+}
+
+pub fun makeCellLocal(c: Checker, slot: int): int {
+    var t = c.ctx().locals[slot]
+    var ct = cellType(c, t)
+    c.ctx().cells[slot] = ct
+    return ct
+}
+
+/** `finish_cells`: the body with cell reads and writes rewritten; `locals` gets the cell types. */
+pub fun finishCells(body: [HStmt], locals: [int], cells: {int: int}): [HStmt] {
+    if (len(keys(cells)) == 0) {
+        return body
+    }
+    var out = rewriteStmts(body, cells)
+    for s in keys(cells) {
+        locals[s] = cells[s] ?? locals[s]
+    }
+    return out
+}
+
+pub fun closureValue(c: Checker, fid: int, t: int): HExpr {
+    var info = c.closures[fid]
+    if (info == null) {
+        return hexpr(HKind.FuncRef(fid), t)
+    }
+    [HExpr] fields = [hexpr(HKind.FuncRef(fid), T_INT)]
+    for cap in info.captures {
+        fields.push(local(cap.outer, cap.ty))
+    }
+    return hexpr(HKind.NewStruct(info.ty, fields), t)
+}
+
+pub fun funcValue(c: Checker, f: int): HExpr {
+    var t = funcType(c, f)
+    var adapter = c.adapters[f]
+    if (adapter == null) {
+        var info = c.funcs[f]
+        var params = info.params
+        var ret = info.ret ?? T_VOID
+        if (info.isAsync) {
+            ret = c.types.future(info.ret ?? T_VOID)
+        }
+        var name = "<ref ${info.name}>"
+        var cty = closureRecord(c, [])
+        [HExpr] args = []
+        [int] locals = []
+        for i in 0..len(params) {
+            args.push(local(i, params[i].ty))
+            locals.push(params[i].ty)
+        }
+        locals.push(cty)
+        var call = hexpr(HKind.Call(f, args), ret)
+        [HStmt] body = [HStmt.Return(call)]
+        if (ret == T_VOID) {
+            body = [HStmt.Eval(call), HStmt.Return(null)]
+        }
+        var fid = len(c.funcs)
+        c.funcs.push(FuncInfo {
+            name: name,
+            params: params,
+            ret: ret,
+            isAsync: false,
+            decl: null,
+            module: info.module,
+            selfTy: null,
+            state: FnState.Done,
+            span: info.span,
+            private: true,
+            isStatic: true,
+            annotations: [],
+            deprecated: null,
+            external: null,
+            tenv: null,
+            hir: HFunc { name: name, params: len(params) + 1, locals: locals, ret: ret, body: body, isAsync: false, span: info.span, endLoc: 0, annotations: [], external: null }
+        })
+        c.closures[fid] = ClosureInfo { ty: cty, captures: [] }
+        c.adapters[f] = fid
+        adapter = fid
+    }
+    return closureValue(c, adapter, t)
+}
+
+pub fun callValue(c: Checker, callee: HExpr, args: [HExpr], ret: int): HExpr {
+    var ct = callee.ty
+    var env = callee
+    HStmt? pre = null
+    if (!(callee.kind is HKind.Local)) {
+        var slot = c.newLocal(ct)
+        pre = HStmt.Eval(setLocal(slot, callee, ct))
+        env = local(slot, ct)
+    }
+    var fnv = hexpr(HKind.GetField(env, 0), T_INT)
+    var all = slice(args, 0, len(args))
+    all.push(env)
+    var call = hexpr(HKind.CallIndirect(fnv, all), ret)
+    var p = pre
+    if (p != null) {
+        return hexpr(HKind.Seq([p], call), ret)
+    }
+    return call
+}
+
+pub fun lambdaExpr(c: Checker, f: FunDecl): HExpr {
+    var fspan = c.sp(f.span)
+    var owner = 0
+    if (len(c.fx) > 0) {
+        owner = c.ctx().func
+    }
+    var key = "${fspan.file}:${fspan.start}:${owner}"
+    var known = c.lambdas[key]
+    if (known != null) {
+        var t = funcType(c, known)
+        return closureValue(c, known, t)
+    }
+    if (f.isAsync) {
+        c.error(fspan, "async lambdas are not supported yet")
+    }
+    var m = c.curModule()
+    if (c.isDry()) {
+        [int] ps = []
+        for p in f.params {
+            ps.push(c.resolveTypeIn(p.ty, m))
+        }
+        var r = T_ANY
+        if (c.inferring > 0) {
+            r = T_ERROR
+        }
+        var rt = f.ret
+        if (rt != null) {
+            r = c.resolveTypeIn(rt, m)
+        }
+        var t = c.types.func(ps, r)
+        return hexpr(HKind.Int(0), t)
+    }
+    var fid = c.declareFun(m, f, null, false, false)
+    c.funcs[fid].name = "<lambda:${c.lineOf(fspan)}>"
+    c.lambdas[key] = fid
+    c.closures[fid] = ClosureInfo { ty: T_INT, captures: [] }
+    checkFunc(c, fid)
+    var t = funcType(c, fid)
+    return closureValue(c, fid, t)
+}

@@ -1,0 +1,252 @@
+import "../diag/diag.bn"
+import "check.bn"
+import "hir.bn"
+import "types.bn"
+
+def type Uses {
+    [int] reads
+    [int] calls
+    [int] indirect
+}
+
+def type Work {
+    int func
+    [int] path
+}
+
+fun newUses(): Uses {
+    return Uses { reads: [], calls: [], indirect: [] }
+}
+
+fun walkStmts(stmts: [HStmt], u: Uses, slots: [IfaceSlot], taken: {int: bool}): void {
+    for s in stmts {
+        if (s is HStmt.Eval) {
+            walk(s.value, u, slots, taken)
+        } else if (s is HStmt.Return) {
+            var v = s.value
+            if (v != null) {
+                walk(v, u, slots, taken)
+            }
+        } else if (s is HStmt.If) {
+            walk(s.cond, u, slots, taken)
+            walkStmts(s.then, u, slots, taken)
+            walkStmts(s.els, u, slots, taken)
+        } else if (s is HStmt.Loop) {
+            var cond = s.cond
+            if (cond != null) {
+                walk(cond, u, slots, taken)
+            }
+            walkStmts(s.body, u, slots, taken)
+            walkStmts(s.step, u, slots, taken)
+        }
+    }
+}
+
+fun walkAll(xs: [HExpr], u: Uses, slots: [IfaceSlot], taken: {int: bool}): void {
+    for x in xs {
+        walk(x, u, slots, taken)
+    }
+}
+
+fun walk(e: HExpr, u: Uses, slots: [IfaceSlot], taken: {int: bool}): void {
+    var k = e.kind
+    if (k is HKind.Global) {
+        u.reads.push(k.id)
+    } else if (k is HKind.FuncRef) {
+        taken[k.func] = true
+    } else if (k is HKind.Call) {
+        u.calls.push(k.func)
+        walkAll(k.args, u, slots, taken)
+    } else if (k is HKind.Spawn) {
+        u.calls.push(k.func)
+        walkAll(k.args, u, slots, taken)
+    } else if (k is HKind.CallIface) {
+        if (k.slot < len(slots)) {
+            for im in slots[k.slot].impls {
+                u.calls.push(im.func)
+            }
+        }
+        walkAll(k.args, u, slots, taken)
+    } else if (k is HKind.CallIndirect) {
+        u.indirect.push(len(k.args))
+        walk(k.callee, u, slots, taken)
+        walkAll(k.args, u, slots, taken)
+    } else if (k is HKind.SetLocal) {
+        walk(k.value, u, slots, taken)
+    } else if (k is HKind.SetGlobal) {
+        walk(k.value, u, slots, taken)
+    } else if (k is HKind.Unary) {
+        walk(k.value, u, slots, taken)
+    } else if (k is HKind.Conv) {
+        walk(k.value, u, slots, taken)
+    } else if (k is HKind.GetField) {
+        walk(k.obj, u, slots, taken)
+    } else if (k is HKind.ArrLen) {
+        walk(k.value, u, slots, taken)
+    } else if (k is HKind.BoxVal) {
+        walk(k.value, u, slots, taken)
+    } else if (k is HKind.Binary) {
+        walk(k.left, u, slots, taken)
+        walk(k.right, u, slots, taken)
+    } else if (k is HKind.And) {
+        walk(k.left, u, slots, taken)
+        walk(k.right, u, slots, taken)
+    } else if (k is HKind.Or) {
+        walk(k.left, u, slots, taken)
+        walk(k.right, u, slots, taken)
+    } else if (k is HKind.SetField) {
+        walk(k.obj, u, slots, taken)
+        walk(k.value, u, slots, taken)
+    } else if (k is HKind.Index) {
+        walk(k.obj, u, slots, taken)
+        walk(k.index, u, slots, taken)
+    } else if (k is HKind.SetIndex) {
+        walk(k.obj, u, slots, taken)
+        walk(k.index, u, slots, taken)
+        walk(k.value, u, slots, taken)
+    } else if (k is HKind.Rt) {
+        walkAll(k.args, u, slots, taken)
+    } else if (k is HKind.NewStruct) {
+        walkAll(k.args, u, slots, taken)
+    } else if (k is HKind.NewArray) {
+        walkAll(k.items, u, slots, taken)
+    } else if (k is HKind.Seq) {
+        walkStmts(k.stmts, u, slots, taken)
+        walk(k.value, u, slots, taken)
+    }
+}
+
+fun lateRead(reads: [int], initAt: {int: int}, i: int, reported: {int: bool}): int? {
+    for g in reads {
+        var at = initAt[g]
+        if (at != null && at >= i && !has(reported, g)) {
+            return g
+        }
+    }
+    return null
+}
+
+fun extend(path: [int], f: int): [int] {
+    var p = slice(path, 0, len(path))
+    p.push(f)
+    return p
+}
+
+/** Reports globals read before the statement that initializes them, like `check_init_order` in Rust. */
+pub fun checkInitOrder(c: Checker) {
+    {int: bool} taken = {}
+    [Uses] uses = []
+    [int] arity = []
+    for f in c.funcs {
+        var u = newUses()
+        var h = f.hir
+        if (h != null) {
+            walkStmts(h.body, u, c.slots, taken)
+        }
+        uses.push(u)
+        arity.push(len(f.params))
+    }
+    var targets = keys(taken)
+    sort(targets)
+    var spans = c.initSpans
+    c.initSpans = []
+    for mi in c.loaded.order {
+        var init = c.mods[mi].init
+        var h = c.funcs[init].hir
+        if (h == null) {
+            continue
+        }
+        var body = h.body
+        {int: int} initAt = {}
+        for g in 0..len(c.globals) {
+            var gi = c.globals[g]
+            if (gi.module != mi) {
+                continue
+            }
+            for sp in spans {
+                if (sp.module == mi && sp.span.file == gi.span.file && sp.span.start <= gi.span.start && gi.span.end <= sp.span.end) {
+                    initAt[g] = sp.start
+                    break
+                }
+            }
+        }
+        if (len(keys(initAt)) == 0) {
+            continue
+        }
+        {int: bool} reported = {}
+        for i in 0..len(body) {
+            var u = newUses()
+            {int: bool} scratch = {}
+            walkStmts([body[i]], u, c.slots, scratch)
+            {int: bool} seen = {}
+            [Work] work = []
+            for f in u.calls {
+                work.push(Work { func: f, path: [f] })
+            }
+            for n in u.indirect {
+                for f in targets {
+                    if (arity[f] == n) {
+                        work.push(Work { func: f, path: [f] })
+                    }
+                }
+            }
+            int? hitGlobal = null
+            [int] hitPath = []
+            while (len(work) > 0) {
+                var w = work[len(work) - 1]
+                work = slice(work, 0, len(work) - 1)
+                if (has(seen, w.func)) {
+                    continue
+                }
+                seen[w.func] = true
+                var fu = uses[w.func]
+                var g = lateRead(fu.reads, initAt, i, reported)
+                if (g != null) {
+                    hitGlobal = g
+                    hitPath = w.path
+                    break
+                }
+                for cf in fu.calls {
+                    work.push(Work { func: cf, path: extend(w.path, cf) })
+                }
+                for n in fu.indirect {
+                    for t in targets {
+                        if (arity[t] == n) {
+                            work.push(Work { func: t, path: extend(w.path, t) })
+                        }
+                    }
+                }
+            }
+            var direct = lateRead(u.reads, initAt, i, reported)
+            if (direct != null) {
+                hitGlobal = direct
+                hitPath = []
+            }
+            var hg = hitGlobal
+            if (hg == null) {
+                continue
+            }
+            int g = hg
+            reported[g] = true
+            var gi = c.globals[g]
+            var span = gi.span
+            for sp in spans {
+                if (sp.module == mi && sp.start <= i && i < sp.end) {
+                    span = sp.span
+                    break
+                }
+            }
+            var line = c.lineOf(gi.span)
+            [string] chain = []
+            for f in hitPath {
+                chain.push("`${c.funcs[f].name}`")
+            }
+            var d = c.errorDiag(span, "`${gi.name}` is used before it is initialized")
+            if (len(chain) > 0) {
+                d.diag.notes.push("this runs ${joinWith(chain, " → ")}, which reads `${gi.name}`")
+            }
+            d.diag.helps.push("`${gi.name}` is initialized on line ${line}; move this statement below it, or move `${gi.name}` above this statement")
+            c.emit(d)
+        }
+    }
+}

@@ -1,0 +1,344 @@
+import "../check/body.bn"
+import "../check/check.bn"
+import "../check/hir.bn"
+import "../check/types.bn"
+import "../diag/diag.bn"
+import "../project/loader.bn"
+import "../project/project.bn"
+import "declarations.bn"
+import "syntax.bn"
+
+fun cmpText(c: Cmp): string {
+    return match c {
+        Cmp.Eq => "Eq"
+        Cmp.Ne => "Ne"
+        Cmp.Lt => "Lt"
+        Cmp.Le => "Le"
+        Cmp.Gt => "Gt"
+        Cmp.Ge => "Ge"
+    }
+}
+
+fun binOpText(op: HBinOp): string {
+    return match op {
+        HBinOp.IAdd(loc) => "IAdd(${loc})"
+        HBinOp.ISub(loc) => "ISub(${loc})"
+        HBinOp.IMul(loc) => "IMul(${loc})"
+        HBinOp.IDiv(loc) => "IDiv(${loc})"
+        HBinOp.IMod(loc) => "IMod(${loc})"
+        HBinOp.FAdd => "FAdd"
+        HBinOp.FSub => "FSub"
+        HBinOp.FMul => "FMul"
+        HBinOp.FDiv => "FDiv"
+        HBinOp.ICmp(cmp) => "ICmp(${cmpText(cmp)})"
+        HBinOp.UCmp(cmp) => "UCmp(${cmpText(cmp)})"
+        HBinOp.FCmp(cmp) => "FCmp(${cmpText(cmp)})"
+        HBinOp.WAdd => "WAdd"
+        HBinOp.WSub => "WSub"
+        HBinOp.WMul => "WMul"
+        HBinOp.BitAnd => "BitAnd"
+        HBinOp.BitOr => "BitOr"
+        HBinOp.BitXor => "BitXor"
+        HBinOp.Shl(loc) => "Shl(${loc})"
+        HBinOp.Shr(loc) => "Shr(${loc})"
+        HBinOp.UShr(loc) => "UShr(${loc})"
+    }
+}
+
+fun unOpText(op: HUnOp): string {
+    return match op {
+        HUnOp.INeg(loc) => "INeg(${loc})"
+        HUnOp.FNeg => "FNeg"
+        HUnOp.Not => "Not"
+        HUnOp.BitNot => "BitNot"
+    }
+}
+
+fun convText(c: Conv): string {
+    if (c == Conv.IntToFloat) {
+        return "IntToFloat"
+    }
+    return "FloatToInt"
+}
+
+def type Node {
+    string head
+    [HExpr] kids
+    [HStmt] stmts
+}
+
+fun node(head: string, kids: [HExpr]): Node {
+    return Node { head: head, kids: kids, stmts: [] }
+}
+
+fun withFirst(first: HExpr, rest: [HExpr]): [HExpr] {
+    [HExpr] out = [first]
+    for x in rest {
+        out.push(x)
+    }
+    return out
+}
+
+fun nodeOf(e: HExpr): Node {
+    var k = e.kind
+    if (k is HKind.Int) {
+        return node("Int ${k.value}", [])
+    }
+    if (k is HKind.TypeId) {
+        return node("TypeId ${k.id}", [])
+    }
+    if (k is HKind.LocId) {
+        return node("LocId ${k.id}", [])
+    }
+    if (k is HKind.Float) {
+        return node("Float ${k.value}", [])
+    }
+    if (k is HKind.Bool) {
+        return node("Bool ${k.value}", [])
+    }
+    if (k is HKind.Str) {
+        return node("Str ${k.id}", [])
+    }
+    if (k is HKind.Null) {
+        return node("Null", [])
+    }
+    if (k is HKind.Local) {
+        return node("Local ${k.slot}", [])
+    }
+    if (k is HKind.Global) {
+        return node("Global ${k.id}", [])
+    }
+    if (k is HKind.SetLocal) {
+        return node("SetLocal ${k.slot}", [k.value])
+    }
+    if (k is HKind.SetGlobal) {
+        return node("SetGlobal ${k.id}", [k.value])
+    }
+    if (k is HKind.Unary) {
+        return node("Unary ${unOpText(k.op)}", [k.value])
+    }
+    if (k is HKind.Binary) {
+        return node("Binary ${binOpText(k.op)}", [k.left, k.right])
+    }
+    if (k is HKind.And) {
+        return node("And", [k.left, k.right])
+    }
+    if (k is HKind.Or) {
+        return node("Or", [k.left, k.right])
+    }
+    if (k is HKind.Conv) {
+        return node("Conv ${convText(k.conv)}", [k.value])
+    }
+    if (k is HKind.Call) {
+        return node("Call ${k.func}", k.args)
+    }
+    if (k is HKind.CallIndirect) {
+        return node("CallIndirect", withFirst(k.callee, k.args))
+    }
+    if (k is HKind.CallIface) {
+        return node("CallIface ${k.slot}", k.args)
+    }
+    if (k is HKind.Rt) {
+        return node("Rt ${k.name}", k.args)
+    }
+    if (k is HKind.Spawn) {
+        return node("Spawn ${k.func}", k.args)
+    }
+    if (k is HKind.FuncRef) {
+        return node("FuncRef ${k.func}", [])
+    }
+    if (k is HKind.NewStruct) {
+        return node("NewStruct ${k.ty}", k.args)
+    }
+    if (k is HKind.GetField) {
+        return node("GetField ${k.index}", [k.obj])
+    }
+    if (k is HKind.SetField) {
+        return node("SetField ${k.index}", [k.obj, k.value])
+    }
+    if (k is HKind.NewArray) {
+        return node("NewArray ${k.ty}", k.items)
+    }
+    if (k is HKind.Index) {
+        return node("Index ${k.loc}", [k.obj, k.index])
+    }
+    if (k is HKind.SetIndex) {
+        return node("SetIndex ${k.loc}", [k.obj, k.index, k.value])
+    }
+    if (k is HKind.ArrLen) {
+        return node("ArrLen", [k.value])
+    }
+    if (k is HKind.BoxVal) {
+        return node("BoxVal", [k.value])
+    }
+    if (k is HKind.Seq) {
+        return Node { head: "Seq", kids: [k.value], stmts: k.stmts }
+    }
+    if (k is HKind.Retain) {
+        return node("Retain", [k.value])
+    }
+    if (k is HKind.Release) {
+        return node("Release", [k.value])
+    }
+    return node("?", [])
+}
+
+fun pad(depth: int): string {
+    var out = ""
+    for i in 0..depth {
+        out += "  "
+    }
+    return out
+}
+
+fun exprLines(out: [string], depth: int, e: HExpr): void {
+    var n = nodeOf(e)
+    out.push("${pad(depth)}${n.head} : ${e.ty}\n")
+    for s in n.stmts {
+        stmtLines(out, depth + 1, s)
+    }
+    for k in n.kids {
+        exprLines(out, depth + 1, k)
+    }
+}
+
+fun stmtsLines(out: [string], depth: int, list: [HStmt]): void {
+    for s in list {
+        stmtLines(out, depth, s)
+    }
+}
+
+fun stmtLines(out: [string], depth: int, s: HStmt): void {
+    var p = pad(depth)
+    if (s is HStmt.Eval) {
+        out.push("${p}expr\n")
+        exprLines(out, depth + 1, s.value)
+    } else if (s is HStmt.If) {
+        out.push("${p}if\n")
+        exprLines(out, depth + 1, s.cond)
+        out.push("${p}then\n")
+        stmtsLines(out, depth + 1, s.then)
+        out.push("${p}else\n")
+        stmtsLines(out, depth + 1, s.els)
+        out.push("${p}end\n")
+    } else if (s is HStmt.Loop) {
+        out.push("${p}loop\n")
+        var cond = s.cond
+        if (cond != null) {
+            exprLines(out, depth + 1, cond)
+        }
+        out.push("${p}body\n")
+        stmtsLines(out, depth + 1, s.body)
+        out.push("${p}step\n")
+        stmtsLines(out, depth + 1, s.step)
+        out.push("${p}end\n")
+    } else if (s is HStmt.Return) {
+        out.push("${p}return\n")
+        var v = s.value
+        if (v != null) {
+            exprLines(out, depth + 1, v)
+        }
+    } else if (s is HStmt.Break) {
+        out.push("${p}break\n")
+    } else if (s is HStmt.Continue) {
+        out.push("${p}continue\n")
+    }
+}
+
+fun hspan(s: SrcSpan): string {
+    return "${s.file}:${s.start}-${s.end}"
+}
+
+fun funcLines(out: [string], i: int, f: HFunc) {
+    var ext = "-"
+    var x = f.external
+    if (x is External.Native) {
+        ext = "native ${x.name}"
+    } else if (x is External.Lib) {
+        ext = "lib ${x.lib} ${x.name}"
+    }
+    [string] locals = []
+    for t in f.locals {
+        locals.push("${t}")
+    }
+    out.push("func ${i} ${f.name} params=${f.params} ret=${f.ret} async=${f.isAsync} span=${hspan(f.span)} end_loc=${f.endLoc} external=${ext} locals=[${joinWith(locals, ",")}]\n")
+    out.push(annotationLines("  ", f.annotations))
+    stmtsLines(out, 1, f.body)
+}
+
+fun programLines(c: Checker, p: HProgram): [string] {
+    [string] out = []
+    var main = "-"
+    var m = p.main
+    if (m != null) {
+        main = "${m}"
+    }
+    out.push("program ${p.name} entry=${p.entry} main=${main} no_std=${p.noStd}\n")
+    for t in 0..c.types.count() {
+        out.push("type ${t} ${c.show(t)}\n")
+    }
+    for i in 0..len(p.funcs) {
+        funcLines(out, i, p.funcs[i])
+    }
+    for i in 0..len(p.globals) {
+        var g = p.globals[i]
+        out.push("global ${i} ${g.name} ${g.ty} ${g.module}\n")
+    }
+    for i in 0..len(c.strings) {
+        out.push("string ${i} ${quoted(c.strings[i])}\n")
+    }
+    for i in 0..len(c.locs) {
+        out.push("loc ${i} ${c.locs[i]}\n")
+    }
+    for i in 0..len(c.slots) {
+        var s = c.slots[i]
+        [string] impls = []
+        for x in s.impls {
+            impls.push("${x.ty}:${x.func}")
+        }
+        out.push("slot ${i} ${s.name} argc=${s.argc} impls=[${joinWith(impls, ", ")}]\n")
+    }
+    for x in p.inits {
+        out.push("init ${x.key} ${x.func}\n")
+    }
+    var annotated = keys(c.typeAnns)
+    sort(annotated)
+    for t in annotated {
+        out.push("type_annotations ${t}\n")
+        out.push(annotationLines("  ", c.typeAnns[t] ?? []))
+    }
+    return out
+}
+
+/** The checked program, as `burn dump --checked` prints it; parts the port does not cover yet are listed instead. */
+pub fun dumpChecked(file: string): string {
+    var loader = new Loader()
+    var err = new Problem()
+    var root = loader.loadFile(file, err)
+    if (root < 0) {
+        return "error ${err.message}\n"
+    }
+    var loaded = loader.finish(root)
+    var r = checkProgram(loaded)
+    var c = r.checker
+    if (len(c.unported) > 0) {
+        var out = ""
+        for u in c.unported {
+            out += "not ported yet: ${u}\n"
+        }
+        return out
+    }
+    [string] out = []
+    for d in r.diags {
+        out.push(render(loaded.files[d.file], d.diag))
+    }
+    var p = r.program
+    if (p != null) {
+        for line in programLines(c, p) {
+            out.push(line)
+        }
+    } else {
+        out.push("no program\n")
+    }
+    return joinWith(out, "")
+}

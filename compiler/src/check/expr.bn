@@ -1,0 +1,2001 @@
+import "../diag/diag.bn"
+import "../syntax/ast.bn"
+import "body.bn"
+import "builtins.bn"
+import "calls.bn"
+import "check.bn"
+import "closures.bn"
+import "generics.bn"
+import "hir.bn"
+import "numeric.bn"
+import "stmt.bn"
+import "structs.bn"
+import "types.bn"
+import "wide.bn"
+
+/** An assignable place, like `Place` in `expr.rs`. */
+pub def enum Place {
+    Local(slot: int, ty: int),
+    Global(id: int, ty: int),
+    Field(obj: HExpr, index: int, ty: int),
+    Index(obj: HExpr, index: HExpr, ty: int, loc: int),
+    MapKey(obj: HExpr, key: HExpr, ty: int),
+    Error
+}
+
+pub fun exprTo(c: Checker, e: Expr, target: int): HExpr {
+    var h = exprOf(c, e, target)
+    return coerce(c, h, target, c.sp(e.span))
+}
+
+pub fun coerce(c: Checker, h: HExpr, target: int, span: SrcSpan): HExpr {
+    var ok = tryCoerce(c, h, target)
+    if (ok != null) {
+        return ok
+    }
+    var from = c.show(h.ty)
+    var to = c.show(target)
+    if (h.ty == T_VOID) {
+        c.error(span, "expected a value of type ${to} but this expression returns nothing")
+    } else if (h.ty == T_NULL) {
+        c.errorNote(span, "`null` is not allowed for type ${to}", "use `${to}?` to make the type nullable")
+    } else if (c.types.isNullable(h.ty) && c.types.unwrapOptional(h.ty) == target) {
+        var fixed = c.wrapSuffix(span, "!!")
+        var d = c.errorDiag(span, "expected ${to} but found ${from}")
+        d.diag.helps.push("the value may be null: check it with `if (x != null)` first, or give a fallback with `x ?? value`")
+        addFix(d.diag, "or assert that it is not null (fails at runtime if it is)", span.start, span.end, fixed, false)
+        c.emit(d)
+    } else if (h.ty == T_ANY) {
+        var fixed = c.wrapSuffix(span, " as ${to}")
+        var d = c.errorDiag(span, "expected ${to} but found any")
+        d.diag.helps.push("narrow it with `if (x is ${to})` first")
+        addFix(d.diag, "or cast it to ${to}", span.start, span.end, fixed, false)
+        c.emit(d)
+    } else if (numericMismatch(c, h, target, span)) {
+    } else if (h.ty == T_FLOAT && target == T_INT) {
+        var fixed = c.wrapSuffix(span, " as int")
+        var d = c.errorDiag(span, "expected int but found float")
+        d.diag.helps.push("use `round(x)`, `floor(x)` or `ceil(x)` to choose how to round")
+        addFix(d.diag, "or drop the fraction with `as int`", span.start, span.end, fixed, false)
+        c.emit(d)
+    } else {
+        c.error(span, "expected ${to} but found ${from}")
+    }
+    return errExpr()
+}
+
+/** `try_coerce`: the converted value, or null when it cannot be converted (the caller keeps `h`). */
+pub fun tryCoerce(c: Checker, h: HExpr, to: int): HExpr? {
+    var from = h.ty
+    if (from == to || from == T_ERROR || to == T_ERROR) {
+        return h
+    }
+    var fk = c.types.kindOf(from)
+    var tk = c.types.kindOf(to)
+    if (fk is Ty.Int && tk is Ty.Float) {
+        var k = h.kind
+        if (k is HKind.Int) {
+            return hexpr(HKind.Float(toFloat(k.value)), T_FLOAT)
+        }
+        return hexpr(HKind.Conv(Conv.IntToFloat, h), T_FLOAT)
+    }
+    if (isNumeric(c, from) && isNumeric(c, to)) {
+        return widenNum(c, h, to)
+    }
+    if (fk is Ty.Null && (tk is Ty.Optional || tk is Ty.Any)) {
+        return hexpr(HKind.Null, to)
+    }
+    if (fk is Ty.Void) {
+        return null
+    }
+    if (tk is Ty.Any) {
+        return rt("Box", [h, tid(from)], T_ANY)
+    }
+    if (fk is Ty.Optional && tk is Ty.Optional) {
+        if (!c.types.isUnboxed(fk.inner) && !c.types.isUnboxed(tk.inner) && c.types.implements(fk.inner, tk.inner)) {
+            return retype(h, to)
+        }
+        return null
+    }
+    if (tk is Ty.Optional) {
+        var inner = tk.inner
+        var h2 = tryCoerce(c, h, inner)
+        if (h2 == null) {
+            return null
+        }
+        if (c.types.isUnboxed(inner)) {
+            return rt("Box", [h2, tid(inner)], to)
+        }
+        return retype(h2, to)
+    }
+    if (fk is Ty.Record && (tk is Ty.Interface || tk is Ty.Record) && c.types.implements(from, to)) {
+        return retype(h, to)
+    }
+    if (fk is Ty.Record && tk is Ty.Interface) {
+        return null
+    }
+    if (fk is Ty.Record && tk is Ty.Record) {
+        return coerceRecord(c, h, from, to, fk.index, tk.index)
+    }
+    if (fk is Ty.Array && tk is Ty.Array) {
+        var k = h.kind
+        if (k is HKind.NewArray) {
+            [HExpr] out = []
+            for it in k.items {
+                var x = tryCoerce(c, it, tk.elem)
+                if (x == null) {
+                    return null
+                }
+                out.push(x)
+            }
+            return hexpr(HKind.NewArray(to, out), to)
+        }
+        return null
+    }
+    return null
+}
+
+fun coerceRecord(c: Checker, h: HExpr, from: int, to: int, a: int, b: int): HExpr? {
+    var ra = c.types.records[a]
+    var rb = c.types.records[b]
+    if (!ra.anon || rb.isClass || len(ra.fields) != len(rb.fields)) {
+        return null
+    }
+    for f in rb.fields {
+        if (fieldIndex(ra, f.name) < 0) {
+            return null
+        }
+    }
+    var k = h.kind
+    if (k is HKind.NewStruct) {
+        [HExpr] out = []
+        for f in rb.fields {
+            var x = tryCoerce(c, k.args[fieldIndex(ra, f.name)], f.ty)
+            if (x == null) {
+                return null
+            }
+            out.push(x)
+        }
+        return hexpr(HKind.NewStruct(to, out), to)
+    }
+    var slot = c.newLocal(from)
+    [HExpr] out = []
+    for f in rb.fields {
+        var i = fieldIndex(ra, f.name)
+        var get = hexpr(HKind.GetField(local(slot, from), i), ra.fields[i].ty)
+        var x = tryCoerce(c, get, f.ty)
+        if (x == null) {
+            return null
+        }
+        out.push(x)
+    }
+    var set = HStmt.Eval(setLocal(slot, h, from))
+    return hexpr(HKind.Seq([set], hexpr(HKind.NewStruct(to, out), to)), to)
+}
+
+pub fun stringify(c: Checker, h: HExpr): HExpr {
+    if (h.ty == T_STR || h.ty == T_ERROR) {
+        return h
+    }
+    var k = h.kind
+    if (k is HKind.Int && h.ty == T_INT) {
+        return c.strLit("${k.value}")
+    }
+    if (k is HKind.Int && c.types.isInteger(h.ty)) {
+        return c.strLit(wideText(litValue(k.value, h.ty)))
+    }
+    return rt("ToStr", [h, tid(h.ty)], T_STR)
+}
+
+pub fun concat(c: Checker, a: HExpr, b: HExpr): HExpr {
+    var x = stringify(c, a)
+    var y = stringify(c, b)
+    var xk = x.kind
+    var yk = y.kind
+    if (xk is HKind.Str && yk is HKind.Str) {
+        return c.strLit(c.strings[xk.id] + c.strings[yk.id])
+    }
+    return rt("StrConcat", [x, y], T_STR)
+}
+
+/** The first half of `with_temp`: the value to use, and the statement that stores it when it has side effects. */
+pub def type Temp {
+    HStmt? set
+    HExpr value
+}
+
+pub fun tempOf(c: Checker, h: HExpr): Temp {
+    if (!hasSideEffects(h)) {
+        return Temp { set: null, value: h }
+    }
+    var slot = c.newLocal(h.ty)
+    return Temp { set: HStmt.Eval(setLocal(slot, h, h.ty)), value: local(slot, h.ty) }
+}
+
+pub fun withTemp(t: Temp, body: HExpr): HExpr {
+    var s = t.set
+    if (s == null) {
+        return body
+    }
+    return hexpr(HKind.Seq([s], body), body.ty)
+}
+
+pub fun zeroOf(c: Checker, t: int): HExpr? {
+    var k = c.types.kindOf(t)
+    if (k is Ty.Int) {
+        return hint(0)
+    }
+    if (k is Ty.Float) {
+        return hexpr(HKind.Float(0.0), T_FLOAT)
+    }
+    if (k is Ty.Num) {
+        if (k.code == 7) {
+            return hexpr(HKind.Float(0.0), t)
+        }
+        return hexpr(HKind.Int(0), t)
+    }
+    if (k is Ty.Bool) {
+        return hexpr(HKind.Bool(false), T_BOOL)
+    }
+    if (k is Ty.Str) {
+        return c.strLit("")
+    }
+    if (k is Ty.Optional || k is Ty.Any || k is Ty.Null) {
+        return hexpr(HKind.Null, t)
+    }
+    if (k is Ty.Array) {
+        return hexpr(HKind.NewArray(t, []), t)
+    }
+    if (k is Ty.Map) {
+        return rt("MapNew", [tid(t)], t)
+    }
+    if (k is Ty.Enum) {
+        return hexpr(HKind.Int(0), t)
+    }
+    if (k is Ty.Error) {
+        return errExpr()
+    }
+    return null
+}
+
+pub fun payloadConv(c: Checker, h: HExpr, declared: int, narrowed: int): HExpr {
+    var k = c.types.kindOf(declared)
+    if (k is Ty.Any || (k is Ty.Optional && c.types.isUnboxed(k.inner))) {
+        return hexpr(HKind.BoxVal(h), narrowed)
+    }
+    return retype(h, narrowed)
+}
+
+pub fun readLocal(c: Checker, slot: int): HExpr {
+    var declared = c.ctx().locals[slot]
+    var e = local(slot, declared)
+    var n = c.ctx().narrow[slot]
+    if (n != null && n != declared) {
+        return payloadConv(c, e, declared, n)
+    }
+    return e
+}
+
+pub fun narrowable(c: Checker, declared: int, value: int): bool {
+    if (declared == value) {
+        return false
+    }
+    var dk = c.types.kindOf(declared)
+    if (!(dk is Ty.Any || dk is Ty.Optional || dk is Ty.Interface || dk is Ty.Record)) {
+        return false
+    }
+    var vk = c.types.kindOf(value)
+    if (vk is Ty.Null || vk is Ty.Any || vk is Ty.Optional || vk is Ty.Error || vk is Ty.Void) {
+        return false
+    }
+    if (dk is Ty.Any) {
+        return true
+    }
+    if (dk is Ty.Optional) {
+        return dk.inner == value || c.types.implements(value, dk.inner)
+    }
+    return c.types.implements(value, declared)
+}
+
+pub fun declaredOf(c: Checker, key: int): int {
+    if (key >= GLOBAL_KEY) {
+        return c.globals[key - GLOBAL_KEY].ty ?? T_ERROR
+    }
+    return c.ctx().locals[key]
+}
+
+pub fun invalidateGlobals(c: Checker) {
+    if (len(c.fx) == 0) {
+        return
+    }
+    var ctx = c.ctx()
+    for k in keys(ctx.narrow) {
+        var drop = false
+        if (k >= GLOBAL_KEY) {
+            drop = true
+        } else if (k >= FACT_KEY) {
+            var f = c.facts[k - FACT_KEY]
+            if (f is Fact.Dead && f.target >= GLOBAL_KEY) {
+                drop = true
+            }
+        }
+        if (drop) {
+            remove(ctx.narrow, k)
+        }
+    }
+}
+
+pub fun readGlobal(c: Checker, g: int, t: int): HExpr {
+    var e = hexpr(HKind.Global(g), t)
+    if (len(c.fx) == 0) {
+        return e
+    }
+    var n = c.ctx().narrow[GLOBAL_KEY + g]
+    if (n != null && n != t) {
+        return payloadConv(c, e, t, n)
+    }
+    return e
+}
+
+pub fun narrowAfterAssign(c: Checker, slot: int, value: int) {
+    clearFacts(c, slot)
+    if (slot < GLOBAL_KEY && has(c.ctx().cells, slot)) {
+        return
+    }
+    var declared = declaredOf(c, slot)
+    if (narrowable(c, declared, value)) {
+        c.ctx().narrow[slot] = value
+    } else {
+        remove(c.ctx().narrow, slot)
+    }
+}
+
+pub fun needsStd(c: Checker, span: SrcSpan, what: string) {
+    if (c.loaded.noStd && !c.isDry()) {
+        c.stdUses.push(StdUse { span: span, what: what })
+    }
+}
+
+fun u64Bits(digits: string): int {
+    var v = 0
+    for ch in digits {
+        v = wrappingAdd(wrappingMul(v, 10), charCode(ch) - 48)
+    }
+    return v
+}
+
+pub fun exprOf(c: Checker, e: Expr, expected: int?): HExpr {
+    var span = c.sp(e.span)
+    var k = e.kind
+    if (k is ExprKind.Int) {
+        if (expected == T_FLOAT) {
+            return hexpr(HKind.Float(toFloat(k.value)), T_FLOAT)
+        }
+        if (expected != null && expected != T_INT && numIndex(c, expected) >= 0) {
+            return typedLit(c, wideFromInt(k.value), expected, span)
+        }
+        return hint(k.value)
+    }
+    if (k is ExprKind.BigInt) {
+        if (expected == T_U64) {
+            return hexpr(HKind.Int(u64Bits(k.digits)), T_U64)
+        }
+        if (expected != null && isFloating(c, expected)) {
+            return hexpr(HKind.Float(toFloat(k.digits)), expected)
+        }
+        if (k.hex) {
+            return hint(u64Bits(k.digits))
+        }
+        var d = c.errorDiag(span, "`${k.digits}` does not fit in int")
+        d.diag.helps.push("int holds values up to 9223372036854775807; numbers up to 18446744073709551615 fit in `uint64`")
+        c.emit(d)
+        return errExpr()
+    }
+    if (k is ExprKind.Float) {
+        if (expected == T_F32) {
+            return hexpr(HKind.Float((k.value as float32) as float), T_F32)
+        }
+        return hexpr(HKind.Float(k.value), T_FLOAT)
+    }
+    if (k is ExprKind.Str) {
+        return c.strLit(k.value)
+    }
+    if (k is ExprKind.Template) {
+        HExpr? acc = null
+        for p in k.parts {
+            HExpr piece = errExpr()
+            if (p is TplExpr.Lit) {
+                piece = c.strLit(p.text)
+            } else if (p is TplExpr.Code) {
+                var h = exprOf(c, p.value, null)
+                if (h.ty == T_VOID) {
+                    c.error(c.sp(p.value.span), "cannot put a value of type void into a string")
+                }
+                piece = stringify(c, h)
+            }
+            var a = acc
+            if (a == null) {
+                acc = piece
+            } else {
+                acc = concat(c, a, piece)
+            }
+        }
+        return acc ?? c.strLit("")
+    }
+    if (k is ExprKind.Bool) {
+        return hexpr(HKind.Bool(k.value), T_BOOL)
+    }
+    if (k is ExprKind.Null) {
+        if (expected != null && c.types.isNullable(expected)) {
+            return hexpr(HKind.Null, expected)
+        }
+        return hexpr(HKind.Null, T_NULL)
+    }
+    if (k is ExprKind.Ident) {
+        return identExpr(c, k.name, span)
+    }
+    if (k is ExprKind.Unary) {
+        if (k.op == UnOp.Neg) {
+            return negExpr(c, k.operand, expected, span)
+        }
+        if (k.op == UnOp.BitNot) {
+            return bitNotExpr(c, k.operand, expected, span)
+        }
+        return condOf(c, e).value
+    }
+    if (k is ExprKind.Binary) {
+        if (k.op == BinOp.And || k.op == BinOp.Or) {
+            return condOf(c, e).value
+        }
+        return binaryExpr(c, k.op, k.left, k.right, span, expected)
+    }
+    if (k is ExprKind.Assign) {
+        return assignExpr(c, k.target, k.op, k.value, span)
+    }
+    if (k is ExprKind.Call) {
+        return callExpr(c, k.callee, k.args, span, expected)
+    }
+    if (k is ExprKind.Field) {
+        return fieldExpr(c, k.obj, k.name, span)
+    }
+    if (k is ExprKind.Index) {
+        return indexExpr(c, k.obj, k.index, span)
+    }
+    if (k is ExprKind.Array) {
+        return arrayLit(c, k.items, expected, span)
+    }
+    if (k is ExprKind.StructLit) {
+        return structLit(c, k.ty, k.fields, expected, span)
+    }
+    if (k is ExprKind.MapLit) {
+        return mapLit(c, k.pairs, expected, span)
+    }
+    if (k is ExprKind.Is) {
+        var h = exprRaw(c, k.value)
+        var t = c.resolveType(k.ty)
+        return isCheck(c, h, t, span)
+    }
+    if (k is ExprKind.As) {
+        return asExpr(c, k.value, k.ty, span)
+    }
+    if (k is ExprKind.Await) {
+        needsStd(c, span, "`await`")
+        var h = exprOf(c, k.value, null)
+        var hk = c.types.kindOf(h.ty)
+        if (hk is Ty.Future) {
+            return rt("Await", [h], hk.inner)
+        }
+        if (hk is Ty.Error) {
+            return h
+        }
+        c.errorDetail(span, "`await` needs a Future, but this is ${c.show(h.ty)}", "only calls to `async fun` functions produce futures")
+        return h
+    }
+    if (k is ExprKind.Lambda) {
+        return lambdaExpr(c, k.decl)
+    }
+    if (k is ExprKind.NotNull) {
+        return notNullExpr(c, k.value, span)
+    }
+    if (k is ExprKind.New) {
+        c.notPorted("`new`")
+        return errExpr()
+    }
+    if (k is ExprKind.SafeGet || k is ExprKind.Coalesce || k is ExprKind.SafeAs) {
+        c.notPorted("`?.`, `??` and `as?`")
+        return errExpr()
+    }
+    c.notPorted("`match`")
+    return errExpr()
+}
+
+fun negExpr(c: Checker, x: Expr, expected: int?, span: SrcSpan): HExpr {
+    var xk = x.kind
+    if (xk is ExprKind.Int && expected != null && expected != T_INT && expected != T_FLOAT && numIndex(c, expected) >= 0) {
+        return typedLit(c, wideNeg(wideFromInt(xk.value)), expected, span)
+    }
+    int? want = null
+    if (expected != null && isNumeric(c, expected)) {
+        want = expected
+    }
+    var h = exprOf(c, x, want)
+    var hk = c.types.kindOf(h.ty)
+    if (hk is Ty.Num) {
+        return numNeg(c, h, span)
+    }
+    if (hk is Ty.Int) {
+        var k = h.kind
+        if (k is HKind.Int) {
+            if (k.value == -9223372036854775807 - 1) {
+                c.error(span, "this negation overflows `int`")
+                return errExpr()
+            }
+            return hint(-k.value)
+        }
+        var l = c.loc(span)
+        return hexpr(HKind.Unary(HUnOp.INeg(l), h), T_INT)
+    }
+    if (hk is Ty.Float) {
+        return hexpr(HKind.Unary(HUnOp.FNeg, h), T_FLOAT)
+    }
+    if (hk is Ty.Error) {
+        return h
+    }
+    c.error(span, "cannot negate a value of type ${c.show(h.ty)}")
+    return errExpr()
+}
+
+fun bitNotExpr(c: Checker, x: Expr, expected: int?, span: SrcSpan): HExpr {
+    var want = T_INT
+    if (expected != null && c.types.isInteger(expected)) {
+        want = expected
+    }
+    var h = exprOf(c, x, want)
+    var hk = c.types.kindOf(h.ty)
+    if (hk is Ty.Num && hk.code != 7) {
+        return numBitnot(c, h)
+    }
+    if (hk is Ty.Int) {
+        var k = h.kind
+        if (k is HKind.Int) {
+            return hint(~k.value)
+        }
+        return hexpr(HKind.Unary(HUnOp.BitNot, h), T_INT)
+    }
+    if (hk is Ty.Error) {
+        return h
+    }
+    if (hk is Ty.Bool) {
+        var inner = c.srcText(c.sp(x.span))
+        var d = c.errorDiag(span, "`~` flips the bits of an int; use `!` to negate a bool")
+        addFix(d.diag, "use `!`", span.start, span.end, "!${inner}", true)
+        c.emit(d)
+        return errExpr()
+    }
+    c.error(span, "cannot apply `~` to a value of type ${c.show(h.ty)}")
+    return errExpr()
+}
+
+fun notNullExpr(c: Checker, x: Expr, span: SrcSpan): HExpr {
+    var h = exprRaw(c, x)
+    var hk = c.types.kindOf(h.ty)
+    if (hk is Ty.Optional) {
+        var l = c.locExpr(span)
+        return rt("Unwrap", [h, tid(h.ty), l], hk.inner)
+    }
+    if (hk is Ty.Any) {
+        c.error(span, "`!!` cannot be used on `any`; cast it with `as` instead")
+        return errExpr()
+    }
+    if (hk is Ty.Error) {
+        return h
+    }
+    var inner = c.srcText(c.sp(x.span))
+    var d = c.warnAt(span, "unnecessary `!!`: a value of type ${c.show(h.ty)} is never null")
+    addFix(d.diag, "remove the `!!`", span.start, span.end, inner, true)
+    c.emit(d)
+    return h
+}
+
+fun outerLocalExists(c: Checker, name: string): bool {
+    var n = len(c.fx)
+    if (n < 2) {
+        return false
+    }
+    for i in 0..n - 1 {
+        var f = c.fx[i]
+        if (!f.isInit) {
+            for s in f.scopes {
+                if (has(s, name)) {
+                    return true
+                }
+            }
+        }
+    }
+    return false
+}
+
+/** `self_field`: `[struct type, field index, field type]` of a field of the enclosing struct. */
+pub fun selfField(c: Checker, name: string): [int]? {
+    var st = c.enclosingSelf()
+    if (st == null) {
+        return null
+    }
+    var rec = c.types.recordOf(st)
+    if (rec == null) {
+        return null
+    }
+    var i = fieldIndex(rec, name)
+    if (i < 0) {
+        return null
+    }
+    return [st, i, rec.fields[i].ty]
+}
+
+pub fun identExpr(c: Checker, name: string, span: SrcSpan): HExpr {
+    var l = c.lookupLocal(name)
+    if (l != null) {
+        checkAlive(c, l.slot, name, span)
+        return readLocal(c, l.slot)
+    }
+    var sf = selfField(c, name)
+    if (sf != null) {
+        var rec = c.types.recordOf(sf[0])
+        if (rec != null) {
+            checkFieldAccess(c, rec, sf[1], span)
+        }
+        return hexpr(HKind.GetField(c.selfExpr(sf[0]), sf[1]), sf[2])
+    }
+    var owner = staticOwnerRec(c)
+    if (owner != null) {
+        var rec = c.types.recordOf(owner)
+        if (rec != null && has(rec.staticVals, name)) {
+            var sv = staticValue(c, rec, name, span)
+            if (sv != null) {
+                if (sv[1] == T_ERROR) {
+                    return errExpr()
+                }
+                return readGlobal(c, sv[0], sv[1])
+            }
+        }
+    }
+    var m = c.curModule()
+    var sym = c.lookupValue(name, span)
+    if (sym is ValSym.Global) {
+        var gi = c.globals[sym.id]
+        var gt = gi.ty
+        if (gt != null) {
+            checkAlive(c, GLOBAL_KEY + sym.id, name, span)
+            return readGlobal(c, sym.id, gt)
+        }
+        c.error(span, "`${name}` is used before it is declared")
+        return errExpr()
+    }
+    if (sym is ValSym.Func) {
+        funcType(c, sym.id)
+        if (c.funcs[sym.id].isAsync) {
+            c.error(span, "async functions cannot be used as values yet; call them directly")
+        }
+        return funcValue(c, sym.id)
+    }
+    if (c.valueAmbiguous(m, name)) {
+    } else if (lookupGenericFn(c, name) != null) {
+        c.errorNote(span, "`${name}` has type parameters, so it cannot be used as a value", "call it, or wrap the call in a lambda with concrete types")
+    } else if (c.lookupTypeName(m, name, span) != null) {
+        c.error(span, "`${name}` is a type, not a value")
+    } else if (name == "self") {
+        c.error(span, "`self` can only be used inside struct methods")
+    } else if (outerLocalExists(c, name)) {
+        c.error(span, "lambdas cannot capture the local variable `${name}`; pass it as a parameter instead")
+    } else if (isBuiltin(name)) {
+        c.error(span, "built-in function `${name}` must be called, e.g. `${name}(...)`")
+    } else if (c.isPrivateElsewhere(m, name)) {
+        c.error(span, "`${name}` is private to its module")
+    } else {
+        [string] cands = []
+        if (len(c.fx) > 0) {
+            for s in c.ctx().scopes {
+                for n in keys(s) {
+                    cands.push(n)
+                }
+            }
+        }
+        for n in keys(c.mods[m].values) {
+            cands.push(n)
+        }
+        for imp in c.mods[m].imports {
+            for n in keys(c.mods[imp].values) {
+                var e = c.mods[imp].values[n]
+                if (e != null && e.vis != Vis.Priv) {
+                    cands.push(n)
+                }
+            }
+        }
+        for n in BUILTIN_NAMES {
+            cands.push(n)
+        }
+        var s = suggest(name, cands)
+        if (s != null) {
+            c.errorFix(span, "cannot find `${name}` in this scope", s)
+        } else {
+            c.error(span, "cannot find `${name}` in this scope")
+        }
+    }
+    return errExpr()
+}
+
+fun isBitOp(op: BinOp): bool {
+    return op == BinOp.BitAnd || op == BinOp.BitOr || op == BinOp.BitXor || op == BinOp.Shl || op == BinOp.Shr || op == BinOp.UShr
+}
+
+fun checkedInt(op: BinOp, a: int, b: int): int? {
+    if (op == BinOp.Add) {
+        var s = wrappingAdd(a, b)
+        if ((a >= 0) == (b >= 0) && (s >= 0) != (a >= 0)) {
+            return null
+        }
+        return s
+    }
+    if (op == BinOp.Sub) {
+        var s = wrappingSub(a, b)
+        if ((a >= 0) != (b >= 0) && (s >= 0) != (a >= 0)) {
+            return null
+        }
+        return s
+    }
+    if (op == BinOp.Mul) {
+        var w = wideMul(wideFromInt(a), wideFromInt(b))
+        if (w == null || !wideFitsI64(w)) {
+            return null
+        }
+        return wideToI64(w)
+    }
+    if (a == -9223372036854775807 - 1 && b == -1) {
+        return null
+    }
+    return a / b
+}
+
+pub fun arith(c: Checker, op: BinOp, l: HExpr, r: HExpr, span: SrcSpan): HExpr {
+    var lt = l.ty
+    var rtt = r.ty
+    if (lt == T_ERROR || rtt == T_ERROR) {
+        return errExpr()
+    }
+    if (isBitOp(op)) {
+        return bitwise(c, op, l, r, span)
+    }
+    if (op == BinOp.Add && (lt == T_STR || rtt == T_STR)) {
+        if (lt == T_VOID || rtt == T_VOID) {
+            c.error(span, "cannot concatenate a value of type void")
+            return errExpr()
+        }
+        return concat(c, l, r)
+    }
+    if (op == BinOp.Add) {
+        var a = c.types.kindOf(lt)
+        var b = c.types.kindOf(rtt)
+        if (a is Ty.Array && b is Ty.Array && a.elem == b.elem) {
+            return rt("ArrConcat", [l, r], lt)
+        }
+    }
+    if (!(isNumeric(c, lt) && isNumeric(c, rtt))) {
+        string? hint = null
+        if (lt == T_ANY || rtt == T_ANY) {
+            hint = "values of type `any` must be narrowed with `is` or cast with `as` before doing math"
+        } else if (c.types.isNullable(lt) || c.types.isNullable(rtt)) {
+            hint = "one side may be null; check it with `!= null` first"
+        }
+        var msg = "cannot apply `${symbolOf(op)}` to ${c.show(lt)} and ${c.show(rtt)}"
+        if (hint != null) {
+            c.errorNote(span, msg, hint)
+        } else {
+            c.error(span, msg)
+        }
+        return errExpr()
+    }
+    var left = l
+    var right = r
+    if (c.types.isInteger(lt) && c.types.isInteger(rtt) && !(lt == T_INT && rtt == T_INT)) {
+        var u = unifyInts(c, l, r, "apply `${symbolOf(op)}` to", span)
+        if (u == null) {
+            return errExpr()
+        }
+        if (u.ty != T_INT) {
+            return sizedArith(c, op, u.left, u.right, u.ty, span)
+        }
+        left = u.left
+        right = u.right
+        lt = T_INT
+        rtt = T_INT
+    }
+    if (lt == T_INT && rtt == T_INT) {
+        var lk = left.kind
+        var rk = right.kind
+        if (lk is HKind.Int && rk is HKind.Int) {
+            var a = lk.value
+            var b = rk.value
+            var folds = op == BinOp.Add || op == BinOp.Sub || op == BinOp.Mul || ((op == BinOp.Div || op == BinOp.Mod) && b != 0)
+            if (folds) {
+                int? v = null
+                if (op == BinOp.Mod) {
+                    v = wrappingRem(a, b)
+                } else {
+                    v = checkedInt(op, a, b)
+                }
+                if (v != null) {
+                    return hint(v)
+                }
+                var d = c.errorDiag(span, "`${a} ${symbolOf(op)} ${b}` overflows `int`")
+                d.diag.helps.push("`int` holds values from -9223372036854775808 to 9223372036854775807; use `float` for larger numbers")
+                c.emit(d)
+                return errExpr()
+            }
+        }
+        var loc = c.loc(span)
+        HBinOp bop = HBinOp.IMod(loc)
+        if (op == BinOp.Add) {
+            bop = HBinOp.IAdd(loc)
+        } else if (op == BinOp.Sub) {
+            bop = HBinOp.ISub(loc)
+        } else if (op == BinOp.Mul) {
+            bop = HBinOp.IMul(loc)
+        } else if (op == BinOp.Div) {
+            bop = HBinOp.IDiv(c.loc(span))
+        } else {
+            bop = HBinOp.IMod(c.loc(span))
+        }
+        return binary(bop, left, right, T_INT)
+    }
+    var ft = floatKind(c, lt, rtt)
+    var a = retype(coerce(c, left, ft, span), T_FLOAT)
+    var b = retype(coerce(c, right, ft, span), T_FLOAT)
+    HExpr e = rt("FMod", [a, b], T_FLOAT)
+    if (op != BinOp.Mod) {
+        HBinOp fop = HBinOp.FSub
+        if (op == BinOp.Add) {
+            fop = HBinOp.FAdd
+        } else if (op == BinOp.Mul) {
+            fop = HBinOp.FMul
+        } else if (op == BinOp.Div) {
+            fop = HBinOp.FDiv
+        }
+        e = binary(fop, a, b, T_FLOAT)
+    }
+    if (ft == T_F32) {
+        return f32Round(e)
+    }
+    return e
+}
+
+fun bitwise(c: Checker, op: BinOp, l: HExpr, r: HExpr, span: SrcSpan): HExpr {
+    var lt = l.ty
+    var rtt = r.ty
+    var shift = op == BinOp.Shl || op == BinOp.Shr || op == BinOp.UShr
+    var left = l
+    var right = r
+    if (c.types.isInteger(lt) && c.types.isInteger(rtt) && !(lt == T_INT && rtt == T_INT)) {
+        if (lt != T_INT) {
+            return sizedBits(c, op, l, r, span)
+        }
+        if (shift) {
+            right = retype(r, T_INT)
+        } else {
+            var u = unifyInts(c, l, r, "apply `${symbolOf(op)}` to", span)
+            if (u == null) {
+                return errExpr()
+            }
+            if (u.ty != T_INT) {
+                return sizedBits(c, op, u.left, u.right, span)
+            }
+            left = u.left
+            right = u.right
+        }
+        lt = T_INT
+        rtt = T_INT
+    }
+    if (lt == T_INT && rtt == T_INT) {
+        var rk = right.kind
+        if (rk is HKind.Int) {
+            var b = rk.value
+            if (shift && (b < 0 || b >= 64)) {
+                var d = c.errorDiag(span, "cannot shift by ${b}")
+                d.diag.helps.push("the shift amount must be from 0 to 63")
+                c.emit(d)
+                return errExpr()
+            }
+            var lk = left.kind
+            if (lk is HKind.Int) {
+                var a = lk.value
+                if (op == BinOp.BitAnd) {
+                    return hint(a & b)
+                }
+                if (op == BinOp.BitOr) {
+                    return hint(a | b)
+                }
+                if (op == BinOp.BitXor) {
+                    return hint(a ^ b)
+                }
+                if (op == BinOp.Shl) {
+                    return hint(a << b)
+                }
+                if (op == BinOp.Shr) {
+                    return hint(a >> b)
+                }
+                return hint(a >>> b)
+            }
+        }
+        var loc = NO_LOC
+        if (!(rk is HKind.Int)) {
+            loc = c.loc(span)
+        }
+        HBinOp bop = HBinOp.UShr(loc)
+        if (op == BinOp.BitAnd) {
+            bop = HBinOp.BitAnd
+        } else if (op == BinOp.BitOr) {
+            bop = HBinOp.BitOr
+        } else if (op == BinOp.BitXor) {
+            bop = HBinOp.BitXor
+        } else if (op == BinOp.Shl) {
+            bop = HBinOp.Shl(loc)
+        } else if (op == BinOp.Shr) {
+            bop = HBinOp.Shr(loc)
+        }
+        return binary(bop, left, right, T_INT)
+    }
+    var msg = "cannot apply `${symbolOf(op)}` to ${c.show(lt)} and ${c.show(rtt)}"
+    if (lt == T_BOOL && rtt == T_BOOL) {
+        var hint = "shifts work on ints"
+        if (op == BinOp.BitAnd) {
+            hint = "`&` works on the bits of ints; use `&&` to combine bools"
+        } else if (op == BinOp.BitOr) {
+            hint = "`|` works on the bits of ints; use `||` to combine bools"
+        } else if (op == BinOp.BitXor) {
+            hint = "`^` works on the bits of ints; use `!=` to check that exactly one bool is true"
+        }
+        c.errorNote(span, msg, hint)
+    } else if (isFloating(c, lt) || isFloating(c, rtt)) {
+        c.errorNote(span, msg, "bit operations only work on ints; convert with `as int` first")
+    } else {
+        c.error(span, msg)
+    }
+    return errExpr()
+}
+
+fun binaryExpr(c: Checker, op: BinOp, l: Expr, r: Expr, span: SrcSpan, expected: int?): HExpr {
+    if (op == BinOp.Eq || op == BinOp.Ne) {
+        var rNull = r.kind is ExprKind.Null
+        var lNull = l.kind is ExprKind.Null
+        HExpr a = errExpr()
+        if (rNull) {
+            a = exprRaw(c, l)
+        } else {
+            a = exprOf(c, l, null)
+        }
+        int? rexp = a.ty
+        if (a.ty == T_NULL || a.ty == T_ERROR) {
+            rexp = null
+        }
+        HExpr b = errExpr()
+        if (lNull) {
+            b = exprRaw(c, r)
+        } else {
+            b = exprOf(c, r, rexp)
+        }
+        return equality(c, op == BinOp.Eq, a, b, span)
+    }
+    if (op == BinOp.Lt || op == BinOp.Gt || op == BinOp.Le || op == BinOp.Ge) {
+        var a = exprOf(c, l, null)
+        int? rexp = null
+        if (isNumeric(c, a.ty)) {
+            rexp = a.ty
+        }
+        var b = exprOf(c, r, rexp)
+        return comparison(c, op, a, b, span)
+    }
+    int? lexp = null
+    if (expected != null && isNumeric(c, expected)) {
+        lexp = expected
+    }
+    var a = exprOf(c, l, lexp)
+    int? rexp = null
+    if (isNumeric(c, a.ty)) {
+        rexp = a.ty
+    }
+    var b = exprOf(c, r, rexp)
+    if ((op == BinOp.BitAnd || op == BinOp.BitOr) && (a.ty == T_BOOL || b.ty == T_BOOL)) {
+        var between = SrcSpan { file: span.file, start: l.span.end, end: r.span.start }
+        var text = c.srcText(between)
+        var sym = symbolOf(op)
+        var logical = "||"
+        if (op == BinOp.BitAnd) {
+            logical = "&&"
+        }
+        var d = c.errorDiag(span, "`${sym}` works on the bits of ints; use `${logical}` to combine bools")
+        var i = byteIndexOf(text, sym)
+        if (i >= 0) {
+            addFix(d.diag, "use `${logical}`", between.start + i, between.start + i + 1, logical, true)
+        }
+        c.emit(d)
+        return errExpr()
+    }
+    return arith(c, op, a, b, span)
+}
+
+/** The byte offset of `part` in `text`, or -1, like `str::find`. */
+pub fun byteIndexOf(text: string, part: string): int {
+    var t = text.bytes()
+    var p = part.bytes()
+    var i = 0
+    while (i + len(p) <= len(t)) {
+        var same = true
+        for k in 0..len(p) {
+            if (t[i + k] != p[k]) {
+                same = false
+                break
+            }
+        }
+        if (same) {
+            return i
+        }
+        i += 1
+    }
+    return -1
+}
+
+fun isNullExpr(h: HExpr): bool {
+    return h.kind is HKind.Null
+}
+
+pub fun equality(c: Checker, eq: bool, a: HExpr, b: HExpr, span: SrcSpan): HExpr {
+    var cmp = Cmp.Ne
+    if (eq) {
+        cmp = Cmp.Eq
+    }
+    var at = a.ty
+    var bt = b.ty
+    if (at == T_ERROR || bt == T_ERROR) {
+        return hexpr(HKind.Bool(false), T_BOOL)
+    }
+    if (at == T_NULL || bt == T_NULL || isNullExpr(a) || isNullExpr(b)) {
+        var other = a
+        var ot = at
+        if (at == T_NULL || isNullExpr(a)) {
+            other = b
+            ot = bt
+        }
+        if (!c.types.isNullable(ot) && !(c.types.kindOf(ot) is Ty.Interface)) {
+            c.error(span, "a value of type ${c.show(ot)} can never be null")
+        }
+        return binary(HBinOp.ICmp(cmp), other, hexpr(HKind.Null, ot), T_BOOL)
+    }
+    var ak = c.types.kindOf(at)
+    if (isNumeric(c, at) && isNumeric(c, bt)) {
+        if (at == T_INT && bt == T_INT) {
+            return binary(HBinOp.ICmp(cmp), a, b, T_BOOL)
+        }
+        return numCompare(c, cmp, a, b, span)
+    }
+    if (at == bt && (ak is Ty.Bool || ak is Ty.Enum)) {
+        return binary(HBinOp.ICmp(cmp), a, b, T_BOOL)
+    }
+    if (at == T_STR && bt == T_STR) {
+        var e = rt("StrEq", [a, b], T_BOOL)
+        if (eq) {
+            return e
+        }
+        return hexpr(HKind.Unary(HUnOp.Not, e), T_BOOL)
+    }
+    var x = a
+    var y = b
+    var t = at
+    if (at != bt) {
+        var b2 = tryCoerce(c, b, at)
+        if (b2 != null) {
+            y = b2
+        } else {
+            var a2 = tryCoerce(c, a, bt)
+            if (a2 != null) {
+                x = a2
+                t = bt
+            } else {
+                c.error(span, "cannot compare ${c.show(a.ty)} with ${c.show(b.ty)}")
+                return hexpr(HKind.Bool(false), T_BOOL)
+            }
+        }
+    }
+    var e = rt("Eq", [x, y, tid(t)], T_BOOL)
+    if (eq) {
+        return e
+    }
+    return hexpr(HKind.Unary(HUnOp.Not, e), T_BOOL)
+}
+
+pub fun comparison(c: Checker, op: BinOp, a: HExpr, b: HExpr, span: SrcSpan): HExpr {
+    var cmp = Cmp.Ge
+    if (op == BinOp.Lt) {
+        cmp = Cmp.Lt
+    } else if (op == BinOp.Gt) {
+        cmp = Cmp.Gt
+    } else if (op == BinOp.Le) {
+        cmp = Cmp.Le
+    }
+    var at = a.ty
+    var bt = b.ty
+    if (at == T_ERROR || bt == T_ERROR) {
+        return hexpr(HKind.Bool(false), T_BOOL)
+    }
+    if (isNumeric(c, at) && isNumeric(c, bt)) {
+        if (at == T_INT && bt == T_INT) {
+            return binary(HBinOp.ICmp(cmp), a, b, T_BOOL)
+        }
+        return numCompare(c, cmp, a, b, span)
+    }
+    if (at == T_STR && bt == T_STR) {
+        return binary(HBinOp.ICmp(cmp), rt("StrCmp", [a, b], T_INT), hint(0), T_BOOL)
+    }
+    if (at == bt && c.types.kindOf(at) is Ty.Enum) {
+        return binary(HBinOp.ICmp(cmp), a, b, T_BOOL)
+    }
+    c.error(span, "cannot order ${c.show(at)} and ${c.show(bt)} with `${symbolOf(op)}`")
+    return hexpr(HKind.Bool(false), T_BOOL)
+}
+
+fun hoist(c: Checker, h: HExpr, pre: [HStmt]): HExpr {
+    if (!hasSideEffects(h)) {
+        return h
+    }
+    var slot = c.newLocal(h.ty)
+    pre.push(HStmt.Eval(setLocal(slot, h, h.ty)))
+    return local(slot, h.ty)
+}
+
+fun hoistIf(c: Checker, h: HExpr, yes: bool, pre: [HStmt]): HExpr {
+    if (yes) {
+        return hoist(c, h, pre)
+    }
+    return h
+}
+
+pub fun placeOf(c: Checker, target: Expr, doHoist: bool, pre: [HStmt]): Place {
+    var tspan = c.sp(target.span)
+    var k = target.kind
+    if (k is ExprKind.Ident) {
+        var name = k.name
+        var l = c.lookupLocal(name)
+        if (l != null) {
+            if (l.isConst) {
+                var d = c.errorDiag(tspan, "cannot assign to constant `${name}`")
+                var kw = c.keywordBefore(l.span, "const")
+                if (kw != null) {
+                    addFix(d.diag, "make `${name}` a variable", kw.start, kw.end, "var", false)
+                }
+                c.emit(d)
+            }
+            return Place.Local(l.slot, c.ctx().locals[l.slot])
+        }
+        var sf = selfField(c, name)
+        if (sf != null) {
+            var rec = c.types.recordOf(sf[0])
+            if (rec != null) {
+                checkFieldAccess(c, rec, sf[1], tspan)
+            }
+            return Place.Field(c.selfExpr(sf[0]), sf[1], sf[2])
+        }
+        var owner = staticOwnerRec(c)
+        if (owner != null) {
+            var rec = c.types.recordOf(owner)
+            if (rec != null && has(rec.staticVals, name)) {
+                return staticPlace(c, rec, name, tspan)
+            }
+        }
+        var sym = c.lookupValue(name, tspan)
+        if (sym is ValSym.Global) {
+            var gi = c.globals[sym.id]
+            if (gi.isConst) {
+                c.error(tspan, "cannot assign to constant `${name}`")
+            }
+            var gt = gi.ty
+            if (gt != null) {
+                return Place.Global(sym.id, gt)
+            }
+            c.error(tspan, "`${name}` is used before it is declared")
+            return Place.Error
+        }
+        if (sym is ValSym.Func) {
+            c.error(tspan, "cannot assign to function `${name}`")
+            return Place.Error
+        }
+        identExpr(c, name, tspan)
+        return Place.Error
+    }
+    if (k is ExprKind.Field) {
+        var name = k.name
+        var nspan = c.sp(name.span)
+        var t = typeIdent(c, k.obj)
+        if (t != null) {
+            var tk = c.types.kindOf(t)
+            if (tk is Ty.Record) {
+                var rec = c.types.records[tk.index]
+                if (has(rec.staticVals, name.name)) {
+                    return staticPlace(c, rec, name.name, nspan)
+                }
+                c.error(nspan, "${rec.name} has no static value `${name.name}`")
+                return Place.Error
+            }
+            if (t != T_ERROR) {
+                c.error(tspan, "cannot assign `${name.name}` on type ${c.show(t)}")
+            }
+            return Place.Error
+        }
+        var o = hoistIf(c, exprOf(c, k.obj, null), doHoist, pre)
+        var ok = c.types.kindOf(o.ty)
+        if (ok is Ty.Record) {
+            var rec = c.types.records[ok.index]
+            var i = fieldIndex(rec, name.name)
+            if (i >= 0) {
+                checkFieldAccess(c, rec, i, nspan)
+                var obj = o
+                if (rec.isClass) {
+                    obj = aliveWrap(c, o, nspan)
+                }
+                return Place.Field(obj, i, rec.fields[i].ty)
+            }
+            c.error(nspan, "${rec.name} has no field `${name.name}`")
+            return Place.Error
+        }
+        if (ok is Ty.Error) {
+            return Place.Error
+        }
+        if (ok is Ty.Optional) {
+            c.errorNote(c.sp(k.obj.span), "cannot assign a field of a value that may be null", "check it with `if (x != null)` first")
+            return Place.Error
+        }
+        c.error(tspan, "cannot assign field `${name.name}` on a value of type ${c.show(o.ty)}")
+        return Place.Error
+    }
+    if (k is ExprKind.Index) {
+        var o = exprOf(c, k.obj, null)
+        var ok = c.types.kindOf(o.ty)
+        if (ok is Ty.Array) {
+            var obj = hoistIf(c, o, doHoist, pre)
+            var i = hoistIf(c, exprTo(c, k.index, T_INT), doHoist, pre)
+            var l = c.loc(tspan)
+            return Place.Index(obj, i, ok.elem, l)
+        }
+        if (ok is Ty.Map) {
+            var obj = hoistIf(c, o, doHoist, pre)
+            var key = hoistIf(c, exprTo(c, k.index, ok.key), doHoist, pre)
+            return Place.MapKey(obj, key, ok.value)
+        }
+        if (ok is Ty.Str) {
+            c.error(tspan, "strings are immutable; build a new string instead")
+            return Place.Error
+        }
+        if (ok is Ty.Error) {
+            return Place.Error
+        }
+        c.error(tspan, "cannot assign by index into a value of type ${c.show(o.ty)}")
+        return Place.Error
+    }
+    c.error(tspan, "invalid assignment target")
+    return Place.Error
+}
+
+fun staticPlace(c: Checker, rec: RecordDef, name: string, span: SrcSpan): Place {
+    var sv = staticValue(c, rec, name, span)
+    if (sv != null && sv[1] != T_ERROR) {
+        if (c.globals[sv[0]].isConst) {
+            c.error(span, "cannot assign to constant `${rec.name}.${name}`")
+        }
+        return Place.Global(sv[0], sv[1])
+    }
+    return Place.Error
+}
+
+pub fun readPlace(c: Checker, p: Place): HExpr {
+    return match p {
+        Place.Local(slot, ty) => readLocal(c, slot)
+        Place.Global(id, ty) => readGlobal(c, id, ty)
+        Place.Field(obj, index, ty) => hexpr(HKind.GetField(obj, index), ty)
+        Place.Index(obj, index, ty, loc) => hexpr(HKind.Index(obj, index, loc), ty)
+        Place.MapKey(obj, key, ty) => rt("MapGet", [obj, key, hint(NO_LOC)], ty)
+        Place.Error => errExpr()
+    }
+}
+
+pub fun writePlace(c: Checker, p: Place, v: HExpr, span: SrcSpan): HExpr {
+    if (p is Place.Local) {
+        var vt = v.ty
+        var x = coerce(c, v, p.ty, span)
+        narrowAfterAssign(c, p.slot, vt)
+        return setLocal(p.slot, x, p.ty)
+    }
+    if (p is Place.Global) {
+        var vt = v.ty
+        var x = coerce(c, v, p.ty, span)
+        narrowAfterAssign(c, GLOBAL_KEY + p.id, vt)
+        return hexpr(HKind.SetGlobal(p.id, x), p.ty)
+    }
+    if (p is Place.Field) {
+        var x = coerce(c, v, p.ty, span)
+        return hexpr(HKind.SetField(p.obj, p.index, x), p.ty)
+    }
+    if (p is Place.Index) {
+        var x = coerce(c, v, p.ty, span)
+        return hexpr(HKind.SetIndex(p.obj, p.index, x, p.loc), p.ty)
+    }
+    if (p is Place.MapKey) {
+        var x = coerce(c, v, p.ty, span)
+        return rt("MapSet", [p.obj, p.key, x], p.ty)
+    }
+    return errExpr()
+}
+
+fun placeTy(p: Place): int? {
+    return match p {
+        Place.Local(slot, ty) => ty
+        Place.Global(id, ty) => ty
+        Place.Field(obj, index, ty) => ty
+        Place.Index(obj, index, ty, loc) => ty
+        Place.MapKey(obj, key, ty) => ty
+        Place.Error => null
+    }
+}
+
+fun assignExpr(c: Checker, target: Expr, op: BinOp?, value: Expr, span: SrcSpan): HExpr {
+    [HStmt] pre = []
+    var p = placeOf(c, target, op != null, pre)
+    var pt = placeTy(p)
+    var v = errExpr()
+    if (op == null) {
+        v = exprOf(c, value, pt)
+        if (v.ty == T_VOID) {
+            c.error(c.sp(value.span), "cannot assign the result of a function that returns nothing")
+        }
+    } else {
+        var cur = readPlace(c, p)
+        int? rexp = null
+        if (isNumeric(c, cur.ty)) {
+            rexp = cur.ty
+        }
+        var r = exprOf(c, value, rexp)
+        v = arith(c, op, cur, r, span)
+    }
+    var w = writePlace(c, p, v, c.sp(value.span))
+    if (len(pre) == 0) {
+        return w
+    }
+    return hexpr(HKind.Seq(pre, w), w.ty)
+}
+
+pub fun tryJoin(c: Checker, ts: [int]): int? {
+    var t = joinTypes(c, ts)
+    if (t != T_ANY || contains(ts, T_ANY)) {
+        return t
+    }
+    return null
+}
+
+fun conflictOf(c: Checker, ts: [int]): [int]? {
+    int? first = null
+    for t in ts {
+        if (first == null && t != T_NULL && t != T_ERROR) {
+            first = t
+        }
+    }
+    if (first == null) {
+        return null
+    }
+    var cur = first
+    for i in 0..len(ts) {
+        var t = ts[i]
+        if (t == T_NULL || t == T_ERROR) {
+            continue
+        }
+        var ok = t == cur || (isNumeric(c, cur) && isNumeric(c, t)) || commonAncestor(c, cur, t) != null || commonIface(c, cur, t) != null || c.types.unwrapOptional(cur) == t || c.types.unwrapOptional(t) == cur
+        if (!ok) {
+            return [i, cur, t]
+        }
+        cur = t
+    }
+    return null
+}
+
+pub fun joinTypes(c: Checker, ts: [int]): int {
+    int? cur = null
+    var nullable = false
+    for t in ts {
+        if (t == T_NULL) {
+            nullable = true
+            continue
+        }
+        if (t == T_ERROR) {
+            continue
+        }
+        var prev = cur
+        if (prev == null || prev == t) {
+            cur = t
+        } else if (isNumeric(c, prev) && isNumeric(c, t)) {
+            cur = T_FLOAT
+        } else {
+            var anc = commonAncestor(c, prev, t)
+            if (anc != null) {
+                cur = anc
+            } else {
+                var common = commonIface(c, prev, t)
+                if (common != null) {
+                    cur = common
+                } else if (c.types.unwrapOptional(prev) == t) {
+                    cur = prev
+                } else if (c.types.unwrapOptional(t) == prev) {
+                    cur = t
+                } else {
+                    cur = T_ANY
+                }
+            }
+        }
+    }
+    var result = cur
+    if (result == null) {
+        return T_ANY
+    }
+    if (nullable) {
+        return c.types.optional(result)
+    }
+    return result
+}
+
+fun mixedError(c: Checker, tys: [int], spans: [SrcSpan], what: string, anyForm: string) {
+    var conflict = conflictOf(c, tys)
+    if (conflict != null) {
+        var d = c.errorDiag(spans[conflict[0]], "${what} ${c.show(conflict[1])} and ${c.show(conflict[2])}")
+        d.diag.helps.push("use values of one type; if the mix is intended, declare the type as `${anyForm}`")
+        c.emit(d)
+        return
+    }
+    var cut = what
+    var bytes = what.bytes()
+    var i = len(bytes) - 1
+    while (i >= 0) {
+        if (bytes[i] == 32) {
+            cut = fromBytes(slice(bytes, 0, i))
+            break
+        }
+        i -= 1
+    }
+    var d = c.errorDiag(spans[0], "cannot tell the type of ${cut}: it only holds `null`")
+    d.diag.helps.push("declare the type, for example `var items: [string?] = [null]`")
+    c.emit(d)
+}
+
+pub fun commonAncestor(c: Checker, a: int, b: int): int? {
+    var ak = c.types.kindOf(a)
+    var bk = c.types.kindOf(b)
+    if (!(ak is Ty.Record && bk is Ty.Record)) {
+        return null
+    }
+    [int] xa = [ak.index]
+    for r in c.types.ancestors(ak.index) {
+        xa.push(r)
+    }
+    [int] xb = [bk.index]
+    for r in c.types.ancestors(bk.index) {
+        xb.push(r)
+    }
+    for r in xa {
+        if (contains(xb, r)) {
+            return c.types.records[r].ty
+        }
+    }
+    return null
+}
+
+pub fun commonType(c: Checker, a: int, b: int): int? {
+    return commonAncestor(c, a, b) ?? commonIface(c, a, b)
+}
+
+pub fun commonIface(c: Checker, a: int, b: int): int? {
+    var ak = c.types.kindOf(a)
+    [int] ia = []
+    if (ak is Ty.Record) {
+        ia = c.types.records[ak.index].implements
+    } else if (ak is Ty.Interface) {
+        ia = [ak.index]
+    } else {
+        return null
+    }
+    for i in ia {
+        var it = c.types.ifaces[i].ty
+        if ((a == it || c.types.implements(a, it)) && (b == it || c.types.implements(b, it))) {
+            return it
+        }
+    }
+    return null
+}
+
+fun arrayLit(c: Checker, items: [Expr], expected: int?, span: SrcSpan): HExpr {
+    int? et = null
+    if (expected != null) {
+        var k = c.types.kindOf(expected)
+        if (k is Ty.Array) {
+            et = k.elem
+        } else if (k is Ty.Optional) {
+            var inner = c.types.kindOf(k.inner)
+            if (inner is Ty.Array) {
+                et = inner.elem
+            }
+        }
+    }
+    if (et != null) {
+        [HExpr] elems = []
+        for i in items {
+            elems.push(exprTo(c, i, et))
+        }
+        var at = c.types.array(et)
+        return hexpr(HKind.NewArray(at, elems), at)
+    }
+    [HExpr] hs = []
+    [int] tys = []
+    for i in items {
+        var h = exprOf(c, i, null)
+        hs.push(h)
+        tys.push(h.ty)
+    }
+    if (len(hs) == 0) {
+        var d = c.errorDiag(span, "cannot tell what this empty array will hold")
+        d.diag.helps.push("give it a type, for example `var items: [int] = []` or `[string] names = []`")
+        c.emit(d)
+        var at = c.types.array(T_ERROR)
+        return hexpr(HKind.NewArray(at, []), at)
+    }
+    var joined = tryJoin(c, tys)
+    var elem = T_ERROR
+    if (joined != null) {
+        elem = joined
+    } else {
+        [SrcSpan] spans = []
+        for i in items {
+            spans.push(c.sp(i.span))
+        }
+        mixedError(c, tys, spans, "this array mixes", "[any]")
+    }
+    if (elem == T_VOID) {
+        c.error(c.sp(items[0].span), "arrays cannot contain void values")
+    }
+    [HExpr] elems = []
+    for k in 0..len(hs) {
+        elems.push(coerce(c, hs[k], elem, c.sp(items[k].span)))
+    }
+    var at = c.types.array(elem)
+    return hexpr(HKind.NewArray(at, elems), at)
+}
+
+fun visibleRecords(c: Checker): [int] {
+    var m = c.curModule()
+    [int] out = []
+    [int] ms = [m]
+    for i in c.mods[m].imports {
+        ms.push(i)
+    }
+    for mi in ms {
+        var entries: [TypeEntry] = []
+        for n in keys(c.mods[mi].types) {
+            var e = c.mods[mi].types[n]
+            if (e != null) {
+                entries.push(e)
+            }
+        }
+        for a in 0..len(entries) {
+            for b in a + 1..len(entries) {
+                var x = entries[a]
+                var y = entries[b]
+                if (y.span.file < x.span.file || (y.span.file == x.span.file && y.span.start < x.span.start)) {
+                    entries[a] = y
+                    entries[b] = x
+                }
+            }
+        }
+        for e in entries {
+            if ((mi == m || e.vis != Vis.Priv) && !contains(out, e.sym)) {
+                out.push(e.sym)
+            }
+        }
+    }
+    return out
+}
+
+fun structLit(c: Checker, ty: Ident?, fields: [FieldInit], expected: int?, span: SrcSpan): HExpr {
+    {string: bool} seen = {}
+    for f in fields {
+        if (has(seen, f.name.name)) {
+            c.error(c.sp(f.name.span), "field `${f.name.name}` is given twice")
+        }
+        seen[f.name.name] = true
+    }
+    int? target = null
+    if (ty != null) {
+        target = genericTargetNamed(c, ty, expected, fields)
+        if (target == null) {
+            var t = c.lookupTypeName(c.curModule(), ty.name, c.sp(ty.span))
+            if (t != null) {
+                target = t
+            } else {
+                target = c.resolveType(TypeExpr { kind: TypeKind.Named(ty.name, []), span: ty.span })
+            }
+        }
+    } else if (expected != null) {
+        var u = c.types.unwrapOptional(expected)
+        var uk = c.types.kindOf(u)
+        if (uk is Ty.Record || uk is Ty.Map) {
+            target = u
+        } else {
+            target = expected
+        }
+    }
+    if (target != null) {
+        var tk = c.types.kindOf(target)
+        if (tk is Ty.Record && c.types.records[tk.index].isClass) {
+            var n = c.types.records[tk.index].name
+            c.errorNote(span, "`${n}` is a struct, so its objects are created with `new`", "write `new ${n}(...)`")
+            for f in fields {
+                exprOf(c, f.value, null)
+            }
+            return errExpr()
+        }
+        if (tk is Ty.Record) {
+            return buildRecord(c, tk.index, fields, span)
+        }
+        if (tk is Ty.Map && ty == null) {
+            if (tk.key != T_STR && tk.key != T_ANY && len(fields) > 0) {
+                c.error(span, "cannot use field syntax for a map of type ${c.show(target)}")
+            }
+            [MapEntry] pairs = []
+            for f in fields {
+                var key = coerce(c, c.strLit(f.name.name), tk.key, c.sp(f.name.span))
+                pairs.push(MapEntry { key: key, value: exprTo(c, f.value, tk.value) })
+            }
+            return buildMap(c, target, pairs)
+        }
+        if (tk is Ty.Error) {
+            for f in fields {
+                exprOf(c, f.value, null)
+            }
+            return errExpr()
+        }
+        var loose = (tk is Ty.Any || tk is Ty.Interface || tk is Ty.Optional) && ty == null
+        if (!loose && ty != null) {
+            c.error(span, "${c.show(target)} is not a record type and cannot be built with `{ ... }`")
+            for f in fields {
+                exprOf(c, f.value, null)
+            }
+            return errExpr()
+        }
+    }
+    if (len(fields) == 0) {
+        c.error(span, "cannot infer the type of `{}`; add a type annotation")
+        return errExpr()
+    }
+    [HExpr] hs = []
+    for f in fields {
+        hs.push(exprOf(c, f.value, null))
+    }
+    [int] matches = []
+    for t in visibleRecords(c) {
+        var tk = c.types.kindOf(t)
+        if (!(tk is Ty.Record)) {
+            continue
+        }
+        var rec = c.types.records[tk.index]
+        if (rec.isClass || rec.anon || len(rec.fields) != len(hs)) {
+            continue
+        }
+        var ok = true
+        for k in 0..len(fields) {
+            var i = fieldIndex(rec, fields[k].name.name)
+            if (i < 0) {
+                ok = false
+                break
+            }
+            var ft = rec.fields[i].ty
+            var ht = hs[k].ty
+            var fits = ht == ft || ht == T_ERROR || (ht == T_INT && ft == T_FLOAT) || (ht == T_NULL && c.types.isNullable(ft)) || ft == T_ANY || c.types.unwrapOptional(ft) == ht
+            if (!fits) {
+                ok = false
+                break
+            }
+        }
+        if (ok) {
+            matches.push(tk.index)
+        }
+    }
+    if (len(matches) == 1) {
+        var rec = c.types.records[matches[0]]
+        [HExpr?] vals = []
+        for f in rec.fields {
+            vals.push(null)
+        }
+        for k in 0..len(fields) {
+            var i = fieldIndex(rec, fields[k].name.name)
+            vals[i] = coerce(c, hs[k], rec.fields[i].ty, c.sp(fields[k].value.span))
+        }
+        [HExpr] out = []
+        for v in vals {
+            out.push(v ?? errExpr())
+        }
+        return hexpr(HKind.NewStruct(rec.ty, out), rec.ty)
+    }
+    [string] keyParts = []
+    [HExpr] vals = []
+    [FieldDef] defs = []
+    for k in 0..len(fields) {
+        var n = fields[k].name.name
+        var h = hs[k]
+        var sp = c.sp(fields[k].value.span)
+        var t = h.ty
+        if (h.ty == T_NULL) {
+            var d = c.errorDiag(sp, "cannot tell the type of `${n}` from `null`")
+            d.diag.helps.push("declare a type with this field, for example `def type Name { string? field }`")
+            c.emit(d)
+            t = T_ERROR
+        }
+        if (t == T_VOID) {
+            c.error(sp, "a field cannot hold a void value")
+        }
+        vals.push(coerce(c, h, t, sp))
+        keyParts.push("${n}:${t}")
+        defs.push(FieldDef { name: n, ty: t, value: null, private: false, span: span })
+    }
+    var key = joinWith(keyParts, ",")
+    var t = c.anon[key]
+    if (t == null) {
+        var rec = newRecordDef("", c.curModule(), span)
+        rec.fields = defs
+        rec.anon = true
+        var ri = c.types.newRecord(rec)
+        t = c.types.records[ri].ty
+        c.anon[key] = t
+    }
+    return hexpr(HKind.NewStruct(t, vals), t)
+}
+
+fun buildRecord(c: Checker, ri: int, fields: [FieldInit], span: SrcSpan): HExpr {
+    var rec = c.types.records[ri]
+    [HExpr?] vals = []
+    for f in rec.fields {
+        vals.push(null)
+    }
+    for f in fields {
+        var i = fieldIndex(rec, f.name.name)
+        var nspan = c.sp(f.name.span)
+        if (i >= 0) {
+            checkFieldAccess(c, rec, i, nspan)
+            vals[i] = exprTo(c, f.value, rec.fields[i].ty)
+        } else {
+            [string] cands = []
+            for x in rec.fields {
+                cands.push(x.name)
+            }
+            var rn = c.show(rec.ty)
+            var s = suggest(f.name.name, cands)
+            if (s != null) {
+                c.errorFix(nspan, "${rn} has no field `${f.name.name}`", s)
+            } else {
+                c.error(nspan, "${rn} has no field `${f.name.name}`")
+            }
+            exprOf(c, f.value, null)
+        }
+    }
+    [HExpr] out = []
+    [string] missing = []
+    for i in 0..len(vals) {
+        var v = vals[i]
+        if (v != null) {
+            out.push(v)
+            continue
+        }
+        var f = rec.fields[i]
+        var d = f.value
+        if (d != null) {
+            out.push(defaultExpr(c, d, f.ty, rec.module))
+        } else {
+            var z = zeroOf(c, f.ty)
+            if (z != null) {
+                out.push(z)
+            } else {
+                missing.push("`${f.name}`")
+                out.push(errExpr())
+            }
+        }
+    }
+    if (len(missing) > 0) {
+        var s = "s"
+        if (len(missing) == 1) {
+            s = ""
+        }
+        c.error(span, "missing field${s} ${joinWith(missing, ", ")} in ${c.show(rec.ty)}")
+    }
+    return hexpr(HKind.NewStruct(rec.ty, out), rec.ty)
+}
+
+pub def type MapEntry {
+    HExpr key
+    HExpr value
+}
+
+pub fun buildMap(c: Checker, t: int, pairs: [MapEntry]): HExpr {
+    var slot = c.newLocal(t)
+    [HStmt] stmts = [HStmt.Eval(setLocal(slot, rt("MapNew", [tid(t)], t), t))]
+    for p in pairs {
+        stmts.push(HStmt.Eval(rt("MapSet", [local(slot, t), p.key, p.value], p.value.ty)))
+    }
+    return hexpr(HKind.Seq(stmts, local(slot, t)), t)
+}
+
+fun mapLit(c: Checker, pairs: [MapPair], expected: int?, span: SrcSpan): HExpr {
+    if (expected != null) {
+        var mk = c.types.kindOf(c.types.unwrapOptional(expected))
+        if (mk is Ty.Map) {
+            [MapEntry] pre = []
+            for p in pairs {
+                var key = exprTo(c, p.key, mk.key)
+                pre.push(MapEntry { key: key, value: exprTo(c, p.value, mk.value) })
+            }
+            return buildMap(c, c.types.mapOf(mk.key, mk.value), pre)
+        }
+    }
+    [HExpr] ks = []
+    [HExpr] vs = []
+    [int] kts = []
+    [int] vts = []
+    for p in pairs {
+        var a = exprOf(c, p.key, null)
+        var b = exprOf(c, p.value, null)
+        ks.push(a)
+        vs.push(b)
+        kts.push(a.ty)
+        vts.push(b.ty)
+    }
+    var k = T_ERROR
+    var kj = tryJoin(c, kts)
+    if (kj != null) {
+        k = kj
+    } else {
+        [SrcSpan] spans = []
+        for p in pairs {
+            spans.push(c.sp(p.key.span))
+        }
+        mixedError(c, kts, spans, "the keys of this map mix", "{any: any}")
+    }
+    var v = T_ERROR
+    var vj = tryJoin(c, vts)
+    if (vj != null) {
+        v = vj
+    } else {
+        [SrcSpan] spans = []
+        for p in pairs {
+            spans.push(c.sp(p.value.span))
+        }
+        mixedError(c, vts, spans, "the values of this map mix", "{string: any}")
+    }
+    c.checkMapKey(k, span)
+    [MapEntry] out = []
+    for i in 0..len(pairs) {
+        var key = coerce(c, ks[i], k, c.sp(pairs[i].key.span))
+        out.push(MapEntry { key: key, value: coerce(c, vs[i], v, c.sp(pairs[i].value.span)) })
+    }
+    return buildMap(c, c.types.mapOf(k, v), out)
+}
+
+pub fun isCheck(c: Checker, h: HExpr, t: int, span: SrcSpan): HExpr {
+    var from = h.ty
+    if (from == T_ERROR || t == T_ERROR) {
+        return hexpr(HKind.Bool(false), T_BOOL)
+    }
+    if (t == T_NULL) {
+        if (!c.types.isNullable(from)) {
+            c.error(span, "a value of type ${c.show(from)} can never be null")
+        }
+        return binary(HBinOp.ICmp(Cmp.Eq), h, hexpr(HKind.Null, from), T_BOOL)
+    }
+    if (from == t || (c.types.kindOf(from) is Ty.Record && c.types.implements(from, t))) {
+        if (hasSideEffects(h)) {
+            return hexpr(HKind.Seq([HStmt.Eval(h)], hexpr(HKind.Bool(true), T_BOOL)), T_BOOL)
+        }
+        return hexpr(HKind.Bool(true), T_BOOL)
+    }
+    var fk = c.types.kindOf(from)
+    var ok = false
+    if (fk is Ty.Any) {
+        ok = true
+    } else if (fk is Ty.Optional) {
+        ok = fk.inner == t || c.types.implements(t, fk.inner)
+    } else if (fk is Ty.Interface || fk is Ty.Record) {
+        ok = c.types.implements(t, from)
+    }
+    if (!ok) {
+        c.error(span, "a value of type ${c.show(from)} can never be ${c.show(t)}")
+        return hexpr(HKind.Bool(false), T_BOOL)
+    }
+    return rt("IsType", [h, tid(from), tid(t)], T_BOOL)
+}
+
+pub fun rawVar(c: Checker, e: Expr): HExpr? {
+    var k = e.kind
+    if (!(k is ExprKind.Ident)) {
+        return null
+    }
+    var l = c.lookupLocal(k.name)
+    if (l != null) {
+        return local(l.slot, c.ctx().locals[l.slot])
+    }
+    if (selfField(c, k.name) != null) {
+        return null
+    }
+    var entry = c.lookupValueEntry(c.curModule(), k.name)
+    if (entry != null) {
+        var sym = entry.sym
+        if (sym is ValSym.Global) {
+            var t = c.globals[sym.id].ty
+            if (t != null) {
+                return hexpr(HKind.Global(sym.id), t)
+            }
+        }
+    }
+    return null
+}
+
+pub fun exprRaw(c: Checker, e: Expr): HExpr {
+    return rawVar(c, e) ?? exprOf(c, e, null)
+}
+
+fun asExpr(c: Checker, x: Expr, te: TypeExpr, span: SrcSpan): HExpr {
+    var t = c.resolveType(te)
+    int? exp = t
+    if (isNumeric(c, t) && !(x.kind is ExprKind.BigInt)) {
+        exp = null
+    }
+    var h = exprOf(c, x, exp)
+    var from = h.ty
+    if (from == t || t == T_ERROR || from == T_ERROR) {
+        if (t == T_ERROR) {
+            return retype(h, from)
+        }
+        return retype(h, t)
+    }
+    var fk = c.types.kindOf(from)
+    var tk = c.types.kindOf(t)
+    if (isNumeric(c, from) && isNumeric(c, t)) {
+        return convertNum(c, h, t, span)
+    }
+    if (fk is Ty.Float && tk is Ty.Int) {
+        return hexpr(HKind.Conv(Conv.FloatToInt, h), T_INT)
+    }
+    if (fk is Ty.Int && tk is Ty.Float) {
+        return coerce(c, h, T_FLOAT, span)
+    }
+    if ((fk is Ty.Bool && tk is Ty.Int) || (fk is Ty.Enum && tk is Ty.Int) || (fk is Ty.Int && tk is Ty.Enum)) {
+        return retype(h, t)
+    }
+    if (tk is Ty.Str && !(fk is Ty.Any || fk is Ty.Optional)) {
+        return stringify(c, h)
+    }
+    var ok = tryCoerce(c, h, t)
+    if (ok != null) {
+        return ok
+    }
+    var down = false
+    if (fk is Ty.Any) {
+        down = true
+    } else if (fk is Ty.Optional) {
+        down = fk.inner == t || c.types.implements(t, fk.inner)
+    } else if (fk is Ty.Interface || fk is Ty.Record) {
+        down = c.types.implements(t, from)
+    }
+    if (down) {
+        var l = c.locExpr(span)
+        return rt("Cast", [h, tid(from), tid(t), l], t)
+    }
+    c.error(span, "cannot cast ${c.show(from)} to ${c.show(t)}")
+    return errExpr()
+}

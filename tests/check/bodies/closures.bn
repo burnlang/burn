@@ -1,0 +1,28 @@
+fun counter(): fun(): int {
+    var n = 0
+    return fun(): int {
+        n += 1
+        return n
+    }
+}
+
+fun apply(xs: [int], f: fun(int): int): [int] {
+    [int] out = []
+    for x in xs {
+        out.push(f(x))
+    }
+    return out
+}
+
+fun twice(x: int): int {
+    return x * 2
+}
+
+var next = counter()
+next()
+var base = 10
+var shifted = apply([1, 2, 3], fun(x: int): int {
+    return x + base
+})
+var doubled = apply(shifted, twice)
+print("${next()} ${doubled}")

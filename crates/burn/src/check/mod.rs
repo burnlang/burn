@@ -4,6 +4,7 @@ pub mod closures;
 mod declsdump;
 pub mod expr;
 pub mod generics;
+mod hirdump;
 pub mod init_order;
 pub mod libs;
 pub mod matching;
@@ -329,6 +330,10 @@ pub fn declarations(loaded: &Loaded) -> String {
     let mut c = new_checker(loaded, CheckOptions::default());
     c.declare(loaded);
     declsdump::dump(&c, loaded)
+}
+
+pub fn checked(loaded: &Loaded) -> String {
+    hirdump::dump(loaded)
 }
 
 pub fn edit_distance(a: &str, b: &str) -> usize {

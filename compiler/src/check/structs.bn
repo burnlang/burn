@@ -1,0 +1,211 @@
+import "../diag/diag.bn"
+import "../syntax/ast.bn"
+import "body.bn"
+import "calls.bn"
+import "check.bn"
+import "expr.bn"
+import "hir.bn"
+import "types.bn"
+
+pub def type MethodSig {
+    [int] params
+    int ret
+    bool isAsync
+    SrcSpan span
+}
+
+pub fun warnDeprecatedFunc(c: Checker, fid: int, span: SrcSpan) {
+    if (c.isDry()) {
+        return
+    }
+    var msg = c.funcs[fid].deprecated
+    if (msg != null) {
+        var name = c.funcs[fid].name
+        if (msg == "") {
+            c.warn(span, "`${name}` is deprecated")
+        } else {
+            c.warn(span, "`${name}` is deprecated: ${msg}")
+        }
+    }
+}
+
+pub fun staticOwnerRec(c: Checker): int? {
+    if (len(c.fx) == 0) {
+        return null
+    }
+    var x = c.ctx()
+    if (has(c.extFuncs, x.func)) {
+        return null
+    }
+    var st = x.selfTy
+    if (st != null) {
+        return st
+    }
+    return staticOwner(c)
+}
+
+pub fun staticValue(c: Checker, rec: RecordDef, name: string, span: SrcSpan): [int]? {
+    var found = rec.staticVals[name]
+    if (found == null) {
+        return null
+    }
+    int g = found
+    if (has(c.staticPrivate, g)) {
+        var owner = staticOwnerRec(c)
+        var inside = owner != null && (owner == rec.ty || c.types.implements(owner, rec.ty))
+        if (!inside) {
+            c.error(span, "`${name}` is private to struct `${rec.name}`")
+        }
+    }
+    var gt = c.globals[g].ty
+    if (gt != null) {
+        return [g, gt]
+    }
+    c.errorNote(span, "`${rec.name}.${name}` is used before it is initialized", "give it a type, e.g. `static var x: int = ...`, or move the use after the struct")
+    return [g, T_ERROR]
+}
+
+pub fun methodSig(c: Checker, ri: int, name: string): MethodSig? {
+    var fid = c.types.records[ri].methods[name]
+    if (fid != null) {
+        var ret = funcRet(c, fid)
+        var info = c.funcs[fid]
+        [int] ps = []
+        for i in 1..len(info.params) {
+            ps.push(info.params[i].ty)
+        }
+        return MethodSig { params: ps, ret: ret, isAsync: info.isAsync, span: info.span }
+    }
+    var s = c.abstractSig(ri, name)
+    if (s == null) {
+        return null
+    }
+    return MethodSig { params: s.params, ret: s.ret, isAsync: s.isAsync, span: s.span }
+}
+
+pub fun virtualCall(c: Checker, ri: int, slot: int, name: Ident, recv: HExpr, args: [Expr], span: SrcSpan): HExpr {
+    var rec = c.types.records[ri]
+    var nspan = c.sp(name.span)
+    var sig = methodSig(c, ri, name.name)
+    if (sig == null) {
+        sig = MethodSig { params: [], ret: T_ERROR, isAsync: false, span: rec.span }
+    }
+    var fid = rec.methods[name.name]
+    if (fid != null) {
+        warnDeprecatedFunc(c, fid, nspan)
+        var info = c.funcs[fid]
+        if (info.private && info.selfTy != staticOwnerRec(c)) {
+            c.error(nspan, "method `${name.name}` is private")
+        }
+    }
+    if (sig.isAsync) {
+        c.error(nspan, "async methods cannot be called through an abstract struct yet")
+    }
+    [int] ps = [rec.ty]
+    for p in sig.params {
+        ps.push(p)
+    }
+    var r = aliveWrap(c, recv, nspan)
+    var hargs = checkArgs(c, ps, args, r, span, "`${name.name}`")
+    invalidateGlobals(c)
+    return hexpr(HKind.CallIface(slot, hargs), sig.ret)
+}
+
+pub fun structMethod(c: Checker, ri: int, name: Ident, recv: HExpr, args: [Expr], span: SrcSpan): HExpr? {
+    var slot = c.vslots["${ri} ${name.name}"]
+    if (slot != null) {
+        return virtualCall(c, ri, slot, name, recv, args, span)
+    }
+    var fid = c.types.records[ri].methods[name.name]
+    if (fid == null) {
+        return null
+    }
+    return directCall(c, fid, recv, args, span, c.sp(name.span))
+}
+
+/** The indexes of the facts known at this point, in the order they were added. */
+pub fun factEntries(c: Checker): [int] {
+    [int] out = []
+    if (len(c.fx) == 0) {
+        return out
+    }
+    for k in keys(c.ctx().narrow) {
+        if (k >= FACT_KEY && k < GLOBAL_KEY) {
+            out.push(k - FACT_KEY)
+        }
+    }
+    sort(out)
+    return out
+}
+
+pub fun extMethod(c: Checker, key: int, name: string): int? {
+    int? best = null
+    for i in factEntries(c) {
+        var f = c.facts[i]
+        if (f is Fact.Ext && f.target == key && f.name == name) {
+            best = f.fid
+        }
+    }
+    return best
+}
+
+pub fun deadFact(c: Checker, key: int): SrcSpan? {
+    if (!c.anyDead) {
+        return null
+    }
+    for i in factEntries(c) {
+        var f = c.facts[i]
+        if (f is Fact.Dead && f.target == key) {
+            return f.span
+        }
+    }
+    return null
+}
+
+fun factTarget(f: Fact): int {
+    if (f is Fact.Ext) {
+        return f.target
+    }
+    if (f is Fact.Dead) {
+        return f.target
+    }
+    return -1
+}
+
+pub fun clearFacts(c: Checker, key: int) {
+    if (len(c.facts) == 0 || len(c.fx) == 0) {
+        return
+    }
+    var narrow = c.ctx().narrow
+    for k in keys(narrow) {
+        if (k >= FACT_KEY && k < GLOBAL_KEY && factTarget(c.facts[k - FACT_KEY]) == key) {
+            remove(narrow, k)
+        }
+    }
+}
+
+pub fun addFact(c: Checker, f: Fact, value: int) {
+    var i = len(c.facts)
+    c.facts.push(f)
+    c.ctx().narrow[FACT_KEY + i] = value
+}
+
+pub fun checkAlive(c: Checker, key: int, name: string, span: SrcSpan) {
+    var d = deadFact(c, key)
+    if (d != null) {
+        var l = c.lineOf(d)
+        c.errorNote(span, "`${name}` was destroyed on line ${l} and can no longer be used", "assign a new object to `${name}` before using it again")
+    }
+}
+
+pub fun aliveWrap(c: Checker, o: HExpr, span: SrcSpan): HExpr {
+    if (!c.hasDestroy) {
+        return o
+    }
+    var k = o.kind
+    if (k is HKind.Local && k.slot == 0 && len(c.fx) > 0 && c.ctx().selfTy != null) {
+        return o
+    }
+    var l = c.locExpr(span)
+    return rt("Alive", [o, l], o.ty)
+}

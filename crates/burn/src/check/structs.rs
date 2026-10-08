@@ -878,7 +878,7 @@ impl<'a> Checker<'a> {
     }
 
     pub fn fact_entries(&self) -> Vec<(usize, &Fact)> {
-        match self.fx.last() {
+        let mut out: Vec<(usize, &Fact)> = match self.fx.last() {
             Some(c) => c
                 .narrow
                 .keys()
@@ -886,7 +886,9 @@ impl<'a> Checker<'a> {
                 .map(|k| ((k - FACT_KEY) as usize, &self.facts[(k - FACT_KEY) as usize]))
                 .collect(),
             None => Vec::new(),
-        }
+        };
+        out.sort_by_key(|x| x.0);
+        out
     }
 
     pub fn ext_method(&self, key: u32, name: &str) -> Option<FuncId> {

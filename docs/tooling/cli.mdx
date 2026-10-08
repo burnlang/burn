@@ -43,6 +43,7 @@ This page lists every subcommand of `burn`. The shorter toolchain commands map o
 | `burn dump --project <paths...>` | print the project and workspace found from each path, and where each of its packages resolves |
 | `burn dump --modules <files...>` | print every module a program loads, its imports and the import errors |
 | `burn dump --decls <files...>` | print every type, function and global the checker declares for a program, before it checks any body |
+| `burn dump --checked <files...>` | print the checked program of each file (types, functions, globals, strings and source locations), or the errors the checker reports |
 | `burn version`, `burn help` | information |
 
 The older flags still work: `-r`, `-e`, `-exe <file> [name]` and `-d`.
