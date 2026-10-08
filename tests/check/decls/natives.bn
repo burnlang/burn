@@ -1,0 +1,13 @@
+fun noBody()
+
+@Native
+fun clock(): int
+
+@Native
+fun beep()
+
+@Native(name: "host_print")
+fun hostPrint(string text): void
+
+@Native fun tick(int a,
+    int b)

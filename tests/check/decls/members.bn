@@ -1,0 +1,68 @@
+def struct Counter(int start) {
+    int value = 0
+    static var made = 0
+    static const LIMIT = 10
+    static var made = 1
+    static var ratio = -1.5
+    static var label = "x"
+    static var flag = true
+    static var other = start
+    static var typed: [int] = []
+    priv static var hidden = 2
+
+    fun init(int x) {
+        value = x
+    }
+
+    fun init() {}
+
+    fun value(): int {
+        return 1
+    }
+
+    fun get(): int {
+        return value
+    }
+
+    fun get(): int {
+        return 0
+    }
+
+    static fun make(): Counter {
+        return new Counter(0)
+    }
+
+    static fun init() {}
+
+    fun made(): int {
+        return 0
+    }
+
+    priv fun secret() {}
+
+    async fun later(): int {
+        return 1
+    }
+}
+
+def abstract struct Shape {
+    abstract fun area(): float
+    abstract fun area(): int
+    abstract async fun load(string path): string
+    fun describe(): string {
+        return "shape"
+    }
+}
+
+def static struct Tools {
+    static fun help(): string {
+        return "help"
+    }
+    static var uses = 0
+}
+
+pub fun exported() {}
+pub fun bodyless()
+priv fun hidden() {}
+pub var shared = 1
+priv const SECRET = 2

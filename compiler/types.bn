@@ -1,0 +1,394 @@
+import "ast.bn"
+
+/** A byte range in one of the loaded files. The checker's spans carry the file, unlike the parser's. */
+pub def type SrcSpan {
+    int file
+    int start
+    int end
+}
+
+pub fun srcSpan(file: int, s: Span): SrcSpan {
+    return SrcSpan { file: file, start: s.start, end: s.end }
+}
+
+pub fun sameSpan(a: SrcSpan, b: SrcSpan): bool {
+    return a.file == b.file && a.start == b.start && a.end == b.end
+}
+
+/** Joins texts with a separator; `join` from `ast.bn` shadows the built-in one in modules that import it. */
+pub fun joinWith(parts: [string], sep: string): string {
+    var out = ""
+    for i in 0..len(parts) {
+        if (i > 0) {
+            out += sep
+        }
+        out += parts[i]
+    }
+    return out
+}
+
+pub const T_ERROR = 0
+pub const T_VOID = 1
+pub const T_NULL = 2
+pub const T_INT = 3
+pub const T_FLOAT = 4
+pub const T_BOOL = 5
+pub const T_STR = 6
+pub const T_ANY = 7
+pub const T_ARR_ANY = 8
+pub const T_MAP_STR_ANY = 9
+pub const T_ARR_STR = 10
+pub const T_ARR_INT = 11
+pub const T_I8 = 12
+pub const T_U8 = 13
+pub const T_I16 = 14
+pub const T_U16 = 15
+pub const T_I32 = 16
+pub const T_U32 = 17
+pub const T_U64 = 18
+pub const T_F32 = 19
+
+/** The sized number types, in the order of `Num::ALL`. */
+pub const NUM_NAMES = ["int8", "uint8", "int16", "uint16", "int32", "uint32", "uint64", "float32"]
+
+/** A type. The variants match `Ty` in `types.rs`; `Num` holds the index into `NUM_NAMES`. */
+pub def enum Ty {
+    Error,
+    Void,
+    Null,
+    Int,
+    Float,
+    Bool,
+    Str,
+    Any,
+    Num(code: int),
+    Array(elem: int),
+    Map(key: int, value: int),
+    Optional(inner: int),
+    Func(params: [int], ret: int),
+    Future(inner: int),
+    Record(index: int),
+    Interface(index: int),
+    Enum(index: int)
+}
+
+fun idList(ids: [int]): string {
+    var out = ""
+    for i in 0..len(ids) {
+        if (i > 0) {
+            out += ","
+        }
+        out += "${ids[i]}"
+    }
+    return out
+}
+
+/** A text form of a type that is the same for equal types, used to intern them. */
+pub fun tyKey(t: Ty): string {
+    return match t {
+        Ty.Error => "error"
+        Ty.Void => "void"
+        Ty.Null => "null"
+        Ty.Int => "int"
+        Ty.Float => "float"
+        Ty.Bool => "bool"
+        Ty.Str => "str"
+        Ty.Any => "any"
+        Ty.Num(code) => "num ${code}"
+        Ty.Array(elem) => "array ${elem}"
+        Ty.Map(key, value) => "map ${key} ${value}"
+        Ty.Optional(inner) => "optional ${inner}"
+        Ty.Func(params, ret) => "func (${idList(params)}) ${ret}"
+        Ty.Future(inner) => "future ${inner}"
+        Ty.Record(index) => "record ${index}"
+        Ty.Interface(index) => "interface ${index}"
+        Ty.Enum(index) => "enum ${index}"
+    }
+}
+
+pub def type FieldDef {
+    string name
+    int ty
+    Expr? value
+    bool private
+    SrcSpan span
+}
+
+pub def type RecordDef {
+    string name
+    [FieldDef] fields
+    bool isClass
+    bool isAbstract
+    bool isStatic
+    int? parent
+    int? ctor
+    {string: int} staticVals
+    bool anon
+    [int] implements
+    {string: int} methods
+    {string: int} statics
+    int? init
+    int module
+    SrcSpan span
+    int ty
+}
+
+pub fun newRecordDef(name: string, module: int, span: SrcSpan): RecordDef {
+    return RecordDef {
+        name: name,
+        fields: [],
+        isClass: false,
+        isAbstract: false,
+        isStatic: false,
+        parent: null,
+        ctor: null,
+        staticVals: {},
+        anon: false,
+        implements: [],
+        methods: {},
+        statics: {},
+        init: null,
+        module: module,
+        span: span,
+        ty: 0
+    }
+}
+
+pub fun fieldIndex(r: RecordDef, name: string): int {
+    for i in 0..len(r.fields) {
+        if (r.fields[i].name == name) {
+            return i
+        }
+    }
+    return -1
+}
+
+pub def type IfaceMethod {
+    string name
+    [int] params
+    int ret
+    bool isAsync
+    SrcSpan span
+    int slot
+}
+
+pub def type EnumVariant {
+    string name
+    SrcSpan span
+    int record
+}
+
+pub def type IfaceDef {
+    string name
+    [IfaceMethod] methods
+    int module
+    SrcSpan span
+    int ty
+    [EnumVariant] variants
+}
+
+pub def type EnumCase {
+    string name
+    SrcSpan span
+}
+
+pub def type EnumDef {
+    string name
+    [EnumCase] variants
+    int module
+    SrcSpan span
+    int ty
+}
+
+/** Every type of a program, numbered in the order they are first used, like `Types` in `types.rs`. */
+pub def struct Types() {
+    [Ty] kinds = []
+    {string: int} ids = {}
+    [RecordDef] records = []
+    [IfaceDef] ifaces = []
+    [EnumDef] enums = []
+
+    fun init() {
+        for k in [Ty.Error, Ty.Void, Ty.Null, Ty.Int, Ty.Float, Ty.Bool, Ty.Str, Ty.Any] {
+            intern(k)
+        }
+        intern(Ty.Array(T_ANY))
+        intern(Ty.Map(T_STR, T_ANY))
+        intern(Ty.Array(T_STR))
+        intern(Ty.Array(T_INT))
+        for n in 0..len(NUM_NAMES) {
+            intern(Ty.Num(n))
+        }
+    }
+
+    fun intern(k: Ty): int {
+        var key = tyKey(k)
+        var hit = ids[key]
+        if (hit != null) {
+            return hit
+        }
+        var id = len(kinds)
+        kinds.push(k)
+        ids[key] = id
+        return id
+    }
+
+    fun kindOf(id: int): Ty {
+        return kinds[id]
+    }
+
+    fun count(): int {
+        return len(kinds)
+    }
+
+    fun array(e: int): int {
+        return intern(Ty.Array(e))
+    }
+
+    fun mapOf(k: int, v: int): int {
+        return intern(Ty.Map(k, v))
+    }
+
+    fun optional(t: int): int {
+        var k = kindOf(t)
+        if (k is Ty.Optional || k is Ty.Any || k is Ty.Null || k is Ty.Error) {
+            return t
+        }
+        return intern(Ty.Optional(t))
+    }
+
+    fun future(t: int): int {
+        return intern(Ty.Future(t))
+    }
+
+    fun func(params: [int], ret: int): int {
+        return intern(Ty.Func(params, ret))
+    }
+
+    fun newRecord(d: RecordDef): int {
+        var idx = len(records)
+        d.ty = intern(Ty.Record(idx))
+        records.push(d)
+        return idx
+    }
+
+    fun newIface(d: IfaceDef): int {
+        var idx = len(ifaces)
+        d.ty = intern(Ty.Interface(idx))
+        ifaces.push(d)
+        return idx
+    }
+
+    fun newEnum(d: EnumDef): int {
+        var idx = len(enums)
+        d.ty = intern(Ty.Enum(idx))
+        enums.push(d)
+        return idx
+    }
+
+    fun variantsOf(t: int): IfaceDef? {
+        var k = kindOf(t)
+        if (k is Ty.Interface && len(ifaces[k.index].variants) > 0) {
+            return ifaces[k.index]
+        }
+        return null
+    }
+
+    fun recordOf(t: int): RecordDef? {
+        var k = kindOf(t)
+        if (k is Ty.Record) {
+            return records[k.index]
+        }
+        return null
+    }
+
+    fun isNullable(t: int): bool {
+        var k = kindOf(t)
+        return k is Ty.Optional || k is Ty.Any || k is Ty.Null || k is Ty.Error
+    }
+
+    fun isInteger(t: int): bool {
+        var k = kindOf(t)
+        return k is Ty.Int || (k is Ty.Num && k.code != 7)
+    }
+
+    fun unwrapOptional(t: int): int {
+        var k = kindOf(t)
+        if (k is Ty.Optional) {
+            return k.inner
+        }
+        return t
+    }
+
+    fun ancestors(r: int): [int] {
+        [int] out = []
+        var cur = records[r].parent
+        while (cur != null) {
+            var c = cur
+            if (contains(out, c) || c == r) {
+                break
+            }
+            out.push(c)
+            cur = records[c].parent
+        }
+        return out
+    }
+
+    fun display(t: int): string {
+        return match kindOf(t) {
+            Ty.Error => "<error>"
+            Ty.Void => "void"
+            Ty.Null => "null"
+            Ty.Int => "int"
+            Ty.Float => "float"
+            Ty.Bool => "bool"
+            Ty.Str => "string"
+            Ty.Any => "any"
+            Ty.Num(code) => NUM_NAMES[code]
+            Ty.Array(elem) => "[${display(elem)}]"
+            Ty.Map(key, value) => "{${display(key)}: ${display(value)}}"
+            Ty.Optional(inner) => optionalText(inner)
+            Ty.Func(params, ret) => funcText(params, ret)
+            Ty.Future(inner) => "Future<${display(inner)}>"
+            Ty.Record(index) => recordText(index)
+            Ty.Interface(index) => ifaces[index].name
+            Ty.Enum(index) => enums[index].name
+        }
+    }
+
+    fun optionalText(inner: int): string {
+        if (kindOf(inner) is Ty.Func) {
+            return "(${display(inner)})?"
+        }
+        return "${display(inner)}?"
+    }
+
+    fun funcText(params: [int], ret: int): string {
+        var ps = ""
+        for i in 0..len(params) {
+            if (i > 0) {
+                ps += ", "
+            }
+            ps += display(params[i])
+        }
+        if (ret == T_VOID) {
+            return "fun(${ps})"
+        }
+        return "fun(${ps}): ${display(ret)}"
+    }
+
+    fun recordText(index: int): string {
+        var r = records[index]
+        if (!r.anon) {
+            return r.name
+        }
+        var parts = ""
+        for i in 0..len(r.fields) {
+            if (i > 0) {
+                parts += ", "
+            }
+            parts += "${r.fields[i].name}: ${display(r.fields[i].ty)}"
+        }
+        return "{ ${parts} }"
+    }
+}

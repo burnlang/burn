@@ -1,0 +1,95 @@
+def annotation Route {
+    string path
+    int weight = 1
+    float? scale = null
+    bool open = "yes"
+}
+
+def annotation Plain {}
+
+@Getter
+fun notAStruct() {}
+
+@Deprecated("old")
+@Deprecated
+fun old() {}
+
+@Deprecated(message: 5)
+fun wrongType() {}
+
+@Deprecated(reason: "x")
+fun wrongKey() {}
+
+@Export(1, 2)
+fun badExport() {}
+
+@Native
+fun nativeWithBody(): int {
+    return 1
+}
+
+@Inject(at: "middle")
+fun inject() {}
+
+@Overwrite(target: "a", target: "b")
+fun overwrite() {}
+
+@Redirect(target: "x")
+fun redirect() {}
+
+@Inject(target: "f", cancellable: true, priority: 2, at: "head")
+fun goodInject() {}
+
+@Route("/x", weight: 2.5)
+fun route() {}
+
+@Route(path: "/y", nothing: 1)
+fun routeExtra() {}
+
+@Route
+fun routeMissing() {}
+
+@Route("/a", 1, 2.0, true, 5)
+fun routeMany() {}
+
+@Route(path: "/z", path: "/w")
+fun routeTwice() {}
+
+@Route(path: 1 + 2)
+fun routeExpr() {}
+
+@Route(path: "/n", scale: 2)
+fun routeScale() {}
+
+@Rout("/typo")
+fun typo() {}
+
+@Unknownthing
+fun unknown() {}
+
+@Plain
+@Plain(1)
+fun plain() {}
+
+@Point
+fun notAnAnnotation() {}
+
+def type Point { int x }
+
+@Getter
+def type Holder {
+    @Setter
+    @Deprecated
+    int value
+}
+
+@Deprecated("use Point")
+def type OldPoint { int x }
+
+def type UsesOld {
+    OldPoint p
+}
+
+fun takesOld(OldPoint p): OldPoint {
+    return p
+}

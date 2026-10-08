@@ -1,0 +1,16 @@
+def alias Id = int
+def alias Ids = [Id]
+def alias Lookup = {string: Ids}
+def alias Later = Sooner
+def alias Sooner = Later
+def alias Self = [Self]
+def alias Broken = Nothing
+def alias Handler = fun(Lookup): bool
+def alias MaybeHandler = Handler?
+
+def type Uses {
+    Ids a
+    Lookup b
+    Later c
+    MaybeHandler d
+}

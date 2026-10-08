@@ -1,0 +1,2 @@
+pub def type Shared { string s }
+pub def type Only { int c }

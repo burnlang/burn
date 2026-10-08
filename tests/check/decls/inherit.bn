@@ -1,0 +1,15 @@
+def struct Loop1 : Loop2(1) {}
+def struct Loop2(int a) : Loop1 {}
+
+def struct Parent(int id, string label) {
+    int count = 0
+}
+
+def struct Kid(string id, string label) : Parent(1, label) {
+    int count = 1
+    string extra = ""
+}
+
+def struct NoArgs : Parent {}
+
+def struct Grand(int id, string label) : Kid(id, label) {}

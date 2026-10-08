@@ -1,0 +1,39 @@
+def type Box<T> { T value }
+def type Box<U> { U other }
+def type Box { int plain }
+def type Pair<A, A> { A first }
+def struct Base(int a) {}
+def struct Child<T> : Base(1) {
+    T item
+    static var count = 0
+}
+def abstract struct Shape<T> {}
+def type int<T> { T x }
+
+fun ident<T>(T x): T {
+    return x
+}
+
+fun ident<T>(T y): T {
+    return y
+}
+
+fun unused<T, U>(T x): T {
+    return x
+}
+
+fun noBody<T>(T x): T
+
+def type Uses {
+    Box<int> a
+    Box<int> b
+    Box<string, int> c
+    Box d
+    Box<Nope> e
+    Box<[int]> f
+    Pair<int, string> g
+}
+
+fun take(Box<float> b): Box<bool> {
+    return b
+}

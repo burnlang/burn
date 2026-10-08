@@ -29,6 +29,10 @@ pub fun errorAt(start: int, end: int, message: string): Diag {
     return Diag { severity: Severity.Error, start: start, end: end, message: message, notes: [], helps: [], suggestions: [] }
 }
 
+pub fun warningAt(start: int, end: int, message: string): Diag {
+    return Diag { severity: Severity.Warning, start: start, end: end, message: message, notes: [], helps: [], suggestions: [] }
+}
+
 pub fun addFix(d: Diag, message: string, start: int, end: int, text: string, applicable: bool) {
     d.suggestions.push(Suggestion { message: message, edits: [Edit { start: start, end: end, text: text }], applicable: applicable })
 }

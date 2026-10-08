@@ -140,3 +140,13 @@ pub fn modules(file: &Path) -> String {
     }
     out
 }
+
+pub fn declarations(file: &Path) -> String {
+    let mut loader = crate::loader::Loader::new();
+    let root = match loader.load_file(file) {
+        Ok(r) => r,
+        Err(e) => return format!("error {}\n", e),
+    };
+    let loaded = loader.finish(root);
+    crate::check::declarations(&loaded)
+}

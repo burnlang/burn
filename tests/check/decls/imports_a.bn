@@ -1,0 +1,6 @@
+pub def type Shared { int a }
+priv def type Hidden { int b }
+pub fun helper(): int {
+    return 1
+}
+priv fun secret() {}

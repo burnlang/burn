@@ -1,0 +1,362 @@
+import "ast.bn"
+import "astdump.bn"
+import "check.bn"
+import "diag.bn"
+import "hir.bn"
+import "loader.bn"
+import "project.bn"
+import "types.bn"
+
+fun optTy(c: Checker, t: int?): string {
+    if (t == null) {
+        return "-"
+    }
+    return "${t} ${c.show(t)}"
+}
+
+fun optNum(v: int?): string {
+    if (v == null) {
+        return "-"
+    }
+    return "${v}"
+}
+
+fun visText(v: Vis): string {
+    if (v == Vis.Pub) {
+        return "pub"
+    }
+    if (v == Vis.Priv) {
+        return "priv"
+    }
+    return "default"
+}
+
+fun spanText(s: SrcSpan): string {
+    return "${s.file}:${s.start}-${s.end}"
+}
+
+fun constText(v: Const): string {
+    return match v {
+        Const.Int(value) => "int ${value}"
+        Const.Float(value) => "float ${value}"
+        Const.Bool(value) => "bool ${value}"
+        Const.Str(text) => "str ${quoted(text)}"
+        Const.Null => "null"
+    }
+}
+
+fun annotationLines(pad: string, anns: [HirAnnotation]): string {
+    var out = ""
+    for a in anns {
+        [string] args = []
+        for x in a.args {
+            args.push("${x.key}=${constText(x.value)}")
+        }
+        out += "${pad}@${a.name} ty=${optNum(a.ty)} span=${spanText(a.span)} [${joinWith(args, ", ")}]\n"
+    }
+    return out
+}
+
+fun idsText(ids: [int], sep: string): string {
+    [string] parts = []
+    for i in ids {
+        parts.push("${i}")
+    }
+    return joinWith(parts, sep)
+}
+
+fun kindText(t: Ty): string {
+    return match t {
+        Ty.Error => "Error"
+        Ty.Void => "Void"
+        Ty.Null => "Null"
+        Ty.Int => "Int"
+        Ty.Float => "Float"
+        Ty.Bool => "Bool"
+        Ty.Str => "Str"
+        Ty.Any => "Any"
+        Ty.Num(code) => "Num ${NUM_NAMES[code]}"
+        Ty.Array(elem) => "Array ${elem}"
+        Ty.Map(key, value) => "Map ${key} ${value}"
+        Ty.Optional(inner) => "Optional ${inner}"
+        Ty.Func(params, ret) => "Func (${idsText(params, ",")}) ${ret}"
+        Ty.Future(inner) => "Future ${inner}"
+        Ty.Record(index) => "Record ${index}"
+        Ty.Interface(index) => "Interface ${index}"
+        Ty.Enum(index) => "Enum ${index}"
+    }
+}
+
+fun sortedKeys(names: [string]): [string] {
+    var out = slice(names, 0, len(names))
+    sort(out)
+    return out
+}
+
+fun sortedInts(ids: [int]): [int] {
+    var out = slice(ids, 0, len(ids))
+    sort(out)
+    return out
+}
+
+fun lessIds(a: [int], b: [int]): bool {
+    for i in 0..len(a) {
+        if (i >= len(b)) {
+            return false
+        }
+        if (a[i] != b[i]) {
+            return a[i] < b[i]
+        }
+    }
+    return len(a) < len(b)
+}
+
+fun recordLines(c: Checker): string {
+    var out = ""
+    for i in 0..len(c.types.records) {
+        var r = c.types.records[i]
+        out += "record ${i} ${r.name} ty=${r.ty} module=${r.module} span=${spanText(r.span)} class=${r.isClass} abstract=${r.isAbstract} static=${r.isStatic} anon=${r.anon} parent=${optNum(r.parent)} ctor=${optNum(r.ctor)} init=${optNum(r.init)}\n"
+        for f in r.fields {
+            out += "  field ${f.name} ${optTy(c, f.ty)} private=${f.private} default=${f.value != null} span=${spanText(f.span)}\n"
+        }
+        out += "  implements [${idsText(r.implements, ", ")}]\n"
+        for n in sortedKeys(keys(r.methods)) {
+            out += "  method ${n} ${r.methods[n] ?? -1}\n"
+        }
+        for n in sortedKeys(keys(r.statics)) {
+            out += "  static ${n} ${r.statics[n] ?? -1}\n"
+        }
+        for n in sortedKeys(keys(r.staticVals)) {
+            out += "  static_val ${n} ${r.staticVals[n] ?? -1}\n"
+        }
+    }
+    return out
+}
+
+fun ifaceLines(c: Checker): string {
+    var out = ""
+    for i in 0..len(c.types.ifaces) {
+        var f = c.types.ifaces[i]
+        out += "iface ${i} ${f.name} ty=${f.ty} module=${f.module} span=${spanText(f.span)}\n"
+        for m in f.methods {
+            out += "  method ${m.name} (${idsText(m.params, ",")}) ${m.ret} async=${m.isAsync} slot=${m.slot} span=${spanText(m.span)}\n"
+        }
+        for v in f.variants {
+            out += "  variant ${v.name} record=${v.record} span=${spanText(v.span)}\n"
+        }
+    }
+    for i in 0..len(c.types.enums) {
+        var e = c.types.enums[i]
+        out += "enum ${i} ${e.name} ty=${e.ty} module=${e.module} span=${spanText(e.span)}\n"
+        for v in e.variants {
+            out += "  variant ${v.name} span=${spanText(v.span)}\n"
+        }
+    }
+    return out
+}
+
+fun typeEntryLines(c: Checker, label: string, table: {string: TypeEntry}, withType: bool): string {
+    var out = ""
+    for n in sortedKeys(keys(table)) {
+        var e = table[n]
+        if (e == null) {
+            continue
+        }
+        var what = "${e.sym}"
+        if (withType) {
+            what = optTy(c, e.sym)
+        }
+        out += "  ${label} ${n} ${what} ${visText(e.vis)} span=${spanText(e.span)}\n"
+    }
+    return out
+}
+
+fun moduleLines(c: Checker): string {
+    var out = ""
+    for i in 0..len(c.mods) {
+        var m = c.mods[i]
+        out += "module ${i} file=${m.file} init=${m.init} std=${m.stdName ?? "-"} snippet=${m.snippet} import_at=${m.importAt},${m.importSeen} imports=[${idsText(m.imports, ", ")}]\n"
+        for n in sortedKeys(keys(m.values)) {
+            var e = m.values[n]
+            if (e == null) {
+                continue
+            }
+            var sym = e.sym
+            var what = ""
+            if (sym is ValSym.Func) {
+                what = "func ${sym.id}"
+            } else if (sym is ValSym.Global) {
+                what = "global ${sym.id}"
+            }
+            out += "  value ${n} ${what} ${visText(e.vis)} span=${spanText(e.span)}\n"
+        }
+        out += typeEntryLines(c, "type", m.types, true)
+        out += typeEntryLines(c, "gfunc", m.gfuncs, false)
+        out += typeEntryLines(c, "gtype", m.gtypes, false)
+    }
+    return out
+}
+
+fun funcLines(c: Checker): string {
+    var out = ""
+    for i in 0..len(c.funcs) {
+        var f = c.funcs[i]
+        var ext = "-"
+        var x = f.external
+        if (x is External.Native) {
+            ext = "native ${x.name}"
+        } else if (x is External.Lib) {
+            ext = "lib ${x.lib} ${x.name}"
+        }
+        var state = "pending"
+        if (f.state == FnState.InProgress) {
+            state = "in_progress"
+        } else if (f.state == FnState.Done) {
+            state = "done"
+        }
+        var dep = "-"
+        var d = f.deprecated
+        if (d != null) {
+            dep = quoted(d)
+        }
+        out += "func ${i} ${f.name} module=${f.module} span=${spanText(f.span)} ret=${optTy(c, f.ret)} async=${f.isAsync} static=${f.isStatic} private=${f.private} self=${optTy(c, f.selfTy)} state=${state} body=${f.decl != null} deprecated=${dep} external=${ext}\n"
+        for p in f.params {
+            out += "  param ${p.name}: ${optTy(c, p.ty)} ${spanText(p.span)}\n"
+        }
+        var env = f.tenv
+        if (env != null) {
+            for n in sortedKeys(keys(env)) {
+                out += "  tparam ${n} ${optTy(c, env[n])}\n"
+            }
+        }
+        out += annotationLines("  ", f.annotations)
+    }
+    return out
+}
+
+fun genericLines(c: Checker): string {
+    var out = ""
+    for i in 0..len(c.genericFns) {
+        var g = c.genericFns[i]
+        out += "generic_fn ${i} ${g.decl.name.name} module=${g.module} private=${g.private}\n"
+    }
+    for i in 0..len(c.genericTypes) {
+        var g = c.genericTypes[i]
+        out += "generic_type ${i} ${defName(g.d).name} module=${g.module}\n"
+        var inst = slice(g.instances, 0, len(g.instances))
+        for a in 0..len(inst) {
+            for b in a + 1..len(inst) {
+                if (lessIds(inst[b].targs, inst[a].targs)) {
+                    var tmp = inst[a]
+                    inst[a] = inst[b]
+                    inst[b] = tmp
+                }
+            }
+        }
+        for x in inst {
+            out += "  instance [${idsText(x.targs, ",")}] ${x.target}\n"
+        }
+    }
+    for p in c.pendingInstances {
+        out += "pending ${p.gid} record=${p.record} [${idsText(p.targs, ",")}] span=${spanText(p.span)}\n"
+    }
+    return out
+}
+
+fun annotationTables(c: Checker): string {
+    var out = ""
+    for t in sortedInts(keys(c.annotationTypes)) {
+        out += "annotation_type ${t}\n"
+    }
+    for t in sortedInts(keys(c.typeAnns)) {
+        out += "type_annotations ${t}\n"
+        out += annotationLines("  ", c.typeAnns[t] ?? [])
+    }
+    for t in sortedInts(keys(c.deprecatedTypes)) {
+        out += "deprecated_type ${t} ${quoted(c.deprecatedTypes[t] ?? "")}\n"
+    }
+    return out
+}
+
+fun structLines(c: Checker): string {
+    var out = ""
+    for ri in sortedInts(keys(c.structDecls)) {
+        var d = c.structDecls[ri]
+        if (d == null) {
+            continue
+        }
+        [string] ps = []
+        for p in d.params {
+            ps.push("${p.name}: ${p.ty}")
+        }
+        [string] pf = []
+        for b in d.paramFields {
+            pf.push("${b}")
+        }
+        var sa = "-"
+        var args = d.superArgs
+        if (args != null) {
+            sa = "${len(args)}"
+        }
+        out += "struct_decl ${ri} module=${d.module} params=[${joinWith(ps, ", ")}] super_args=${sa} super_span=${spanText(d.superSpan)} own_start=${d.ownStart} param_fields=[${joinWith(pf, ",")}] statics=${len(d.statics)}\n"
+    }
+    var sigs = slice(c.abstractSigs, 0, len(c.abstractSigs))
+    for a in 0..len(sigs) {
+        for b in a + 1..len(sigs) {
+            var x = sigs[a]
+            var y = sigs[b]
+            if (y.record < x.record || (y.record == x.record && y.name < x.name)) {
+                sigs[a] = y
+                sigs[b] = x
+            }
+        }
+    }
+    for s in sigs {
+        out += "abstract ${s.record} ${s.name} (${idsText(s.params, ",")}) ${s.ret} async=${s.isAsync} span=${spanText(s.span)}\n"
+    }
+    for i in sortedInts(keys(c.ifaceSlotBase)) {
+        out += "slot_base ${i} ${c.ifaceSlotBase[i] ?? 0}\n"
+    }
+    return out
+}
+
+/** The checker's state after it declared everything, as `burn dump --decls` prints it. */
+pub fun dumpDeclarations(file: string): string {
+    var loader = new Loader()
+    var err = new Problem()
+    var root = loader.loadFile(file, err)
+    if (root < 0) {
+        return "error ${err.message}\n"
+    }
+    var loaded = loader.finish(root)
+    var c = new Checker(loaded)
+    c.declare()
+    var out = ""
+    for t in 0..c.types.count() {
+        out += "type ${t} ${kindText(c.types.kindOf(t))} = ${c.show(t)}\n"
+    }
+    out += recordLines(c)
+    out += ifaceLines(c)
+    out += moduleLines(c)
+    out += funcLines(c)
+    for i in 0..len(c.globals) {
+        var g = c.globals[i]
+        out += "global ${i} ${g.name} ty=${optTy(c, g.ty)} const=${g.isConst} module=${g.module} span=${spanText(g.span)} private=${has(c.staticPrivate, i)}\n"
+    }
+    for i in 0..len(c.slots) {
+        var s = c.slots[i]
+        [string] impls = []
+        for x in s.impls {
+            impls.push("${x.ty}:${x.func}")
+        }
+        out += "slot ${i} ${s.name} argc=${s.argc} impls=[${joinWith(impls, ", ")}]\n"
+    }
+    out += genericLines(c)
+    out += annotationTables(c)
+    out += structLines(c)
+    out += "root ${loaded.root} no_std=${loaded.noStd}\n"
+    for d in c.diags {
+        out += render(loaded.files[d.file], d.diag)
+    }
+    return out
+}

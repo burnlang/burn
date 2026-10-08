@@ -1,4 +1,5 @@
 import "astdump.bn"
+import "declsdump.bn"
 import "diag.bn"
 import "lexer.bn"
 import "loaddump.bn"
@@ -67,7 +68,7 @@ fun diagnostics(name: string, src: string): string {
 fun main() {
     var files = args()
     var mode = "--tokens"
-    var modes = ["--tokens", "--ast", "--diagnostics", "--toml", "--project", "--modules"]
+    var modes = ["--tokens", "--ast", "--diagnostics", "--toml", "--project", "--modules", "--decls"]
     if (len(files) > 0 && contains(modes, files[0])) {
         mode = files[0]
         files = slice(files, 1, len(files))
@@ -82,6 +83,10 @@ fun main() {
         }
         if (mode == "--modules") {
             write(dumpModules(f))
+            continue
+        }
+        if (mode == "--decls") {
+            write(dumpDeclarations(f))
             continue
         }
         var src = readFile(f)

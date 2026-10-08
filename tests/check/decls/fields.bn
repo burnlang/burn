@@ -1,0 +1,19 @@
+def type Bad {
+    void a
+    int b
+    string b
+}
+
+def struct Params(int x, void y, string x) {
+    int x
+}
+
+def interface Shape {
+    fun area(): float
+    fun area(): int
+    fun name(void v): string
+}
+
+def enum Event { Click(x: int, x: int), Key(code: void) }
+
+fun takes(void v, int a, string a): void {}

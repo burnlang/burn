@@ -1,0 +1,11 @@
+import "imports_a.bn"
+import "imports_b.bn"
+
+def type Uses {
+    Shared a
+    Hidden b
+    Only c
+    Hiddne d
+}
+
+fun use(Hidden h, Only o) {}

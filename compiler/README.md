@@ -14,6 +14,7 @@ The Rust compiler can print every stage in a fixed text form. The Burn port prin
 | `burn.toml` and `burn.lock` as TOML | `crates/burn/src/project.rs` | `compiler/toml.bn` | `burn dump --toml <files...>` |
 | Projects, workspaces and package resolution | `crates/burn/src/project.rs` | `compiler/project.bn`, `compiler/paths.bn` | `burn dump --project <paths...>` |
 | Every module a program loads, and import errors | `crates/burn/src/loader.rs` | `compiler/loader.bn`, `compiler/stdlib.bn` | `burn dump --modules <files...>` |
+| Declared types, functions, globals and their errors | `crates/burn/src/types.rs`, `check/` up to `declare` | `compiler/types.bn`, `compiler/check.bn`, `compiler/hir.bn` | `burn dump --decls <files...>` |
 
 Run the comparison by hand with:
 
@@ -58,7 +59,8 @@ The inputs include the error-recovery fixtures in `tests/lexer` and `tests/parse
      - `paths.bn` makes paths absolute and removes `.` and `..` without following symbolic links;
      - importing a package's bytecode (`import "<package>.bvmc"`) uses the file in its `build/` folder if there is one, and building it needs the checker and code generation.
 5. **Checker.** The largest part (about 10,000 lines). Split it into PRs, roughly one per Rust file:
-   - declarations and types
+   - declarations and types (done): `compiler/check.bn` runs everything `run` does before it checks struct bodies, and `burn dump --decls` prints the type table, every record, interface, enum, module scope, function signature and global, and the errors found so far. The fixtures in `tests/check/decls` cover each of those errors.
+     Importing bytecode libraries (`check/libs.rs`) needs a reader for bvm modules and is not ported yet; the Burn checker reports an error for each library import.
    - expressions
    - statements and flow narrowing
    - structs and interfaces

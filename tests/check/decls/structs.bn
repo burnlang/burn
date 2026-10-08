@@ -1,0 +1,32 @@
+def interface Named {
+    fun name(): string
+}
+
+def interface Aged {
+    fun age(): int
+}
+
+def type Plain { int x }
+def enum Mode { On, Off }
+def abstract struct Animal(string kind) {}
+def static struct Registry {}
+def struct Base(int id) {}
+def struct Other(int id) {}
+
+def struct A : Named {}
+def struct B :: Base(1) {}
+def struct C : Base(1), Other(2) {}
+def struct D : Base(1) :: Named, Base(1) {}
+def struct E :: Named(1) {}
+def struct F : Plain {}
+def struct G : Registry {}
+def static struct H : Base(1) {}
+def struct I : Animal("cat") {}
+def struct J : Mode {}
+def struct K : Nmaed {}
+def struct L : Missing {}
+def static struct M(int x) :: Named {}
+def struct N : Base(1), Named, Aged {}
+def struct O : Base {}
+def struct P : Base(1) :: Named, Other(1) {}
+def struct Q :: Animal("dog"), Aged {}
