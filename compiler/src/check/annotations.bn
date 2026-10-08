@@ -1,0 +1,211 @@
+import "body.bn"
+import "check.bn"
+import "expr.bn"
+import "hir.bn"
+import "types.bn"
+
+fun constExpr(c: Checker, v: Const, fieldTy: int): HExpr {
+    if (v is Const.Int) {
+        return hexpr(HKind.Int(v.value), T_INT)
+    }
+    if (v is Const.Float) {
+        return hexpr(HKind.Float(v.value), T_FLOAT)
+    }
+    if (v is Const.Bool) {
+        return hexpr(HKind.Bool(v.value), T_BOOL)
+    }
+    if (v is Const.Str) {
+        return c.strLit(v.text)
+    }
+    return hexpr(HKind.Null, T_NULL)
+}
+
+fun annotationInstance(c: Checker, a: HirAnnotation): HExpr? {
+    var t = a.ty
+    if (t == null) {
+        return null
+    }
+    var rec = c.types.recordOf(t)
+    if (rec == null) {
+        return null
+    }
+    [HExpr] fields = []
+    for f in rec.fields {
+        var v = constArg(a, f.name) ?? Const.Null
+        var e = constExpr(c, v, f.ty)
+        fields.push(tryCoerce(c, e, f.ty) ?? e)
+    }
+    return coerce(c, hexpr(HKind.NewStruct(t, fields), t), T_ANY, a.span)
+}
+
+fun annotationsArray(c: Checker, t: int): HExpr {
+    [HExpr] items = []
+    for a in c.typeAnns[t] ?? [] {
+        var inst = annotationInstance(c, a)
+        if (inst != null) {
+            items.push(inst)
+        }
+    }
+    return hexpr(HKind.NewArray(T_ARR_ANY, items), T_ARR_ANY)
+}
+
+/** `annotationsOf(value)`: the annotations of the value's type, chosen at run time when the type is not known. */
+pub fun annotationsOf(c: Checker, h: HExpr): HExpr {
+    var t = c.types.unwrapOptional(h.ty)
+    var k = c.types.kindOf(t)
+    if (k is Ty.Record && !c.types.isNullable(h.ty) && !hasSideEffects(h)) {
+        return annotationsArray(c, t)
+    }
+    [int] annotated = []
+    for at in keys(c.typeAnns) {
+        for a in c.typeAnns[at] ?? [] {
+            if (a.ty != null) {
+                annotated.push(at)
+                break
+            }
+        }
+    }
+    sort(annotated)
+    var from = h.ty
+    var slot = c.newLocal(from)
+    var res = c.newLocal(T_ARR_ANY)
+    [HStmt] stmts = [HStmt.Eval(setLocal(slot, h, from)), HStmt.Eval(setLocal(res, hexpr(HKind.NewArray(T_ARR_ANY, []), T_ARR_ANY), T_ARR_ANY))]
+    var simple = k is Ty.Int || k is Ty.Float || k is Ty.Bool || k is Ty.Str || k is Ty.Enum || k is Ty.Func
+    if (!simple) {
+        for rt in annotated {
+            var could = from == T_ANY || t == rt || c.types.implements(rt, t) || k is Ty.Any
+            if (!could) {
+                continue
+            }
+            var test = hexpr(HKind.Rt("IsType", [local(slot, from), tid(from), tid(rt)]), T_BOOL)
+            var arr = annotationsArray(c, rt)
+            stmts.push(HStmt.If(test, [HStmt.Eval(setLocal(res, arr, T_ARR_ANY))], []))
+        }
+    }
+    return hexpr(HKind.Seq(stmts, local(res, T_ARR_ANY)), T_ARR_ANY)
+}
+
+def type Hook {
+    int func
+    HirAnnotation ann
+}
+
+def type Want {
+    [int] params
+    int? ret
+    string what
+}
+
+fun funcNamed(c: Checker, name: string): int? {
+    for i in 0..len(c.funcs) {
+        if (c.funcs[i].name == name) {
+            return i
+        }
+    }
+    return null
+}
+
+fun paramTys(c: Checker, f: int): [int] {
+    [int] out = []
+    for p in c.funcs[f].params {
+        out.push(p.ty)
+    }
+    return out
+}
+
+fun showAll(c: Checker, ts: [int]): string {
+    [string] out = []
+    for t in ts {
+        out.push(c.show(t))
+    }
+    return joinWith(out, ", ")
+}
+
+fun hookWant(c: Checker, hook: int, a: HirAnnotation, target: string, tf: int): Want? {
+    if (a.name == "Redirect") {
+        var call = strArg(a, "call")
+        if (call == null) {
+            return null
+        }
+        var cf = funcNamed(c, call)
+        if (cf == null) {
+            return null
+        }
+        var ret = funcRet(c, cf)
+        return Want { params: paramTys(c, cf), ret: ret, what: "`${call}`" }
+    }
+    var ret = funcRet(c, tf)
+    var params = paramTys(c, tf)
+    var at = strArg(a, "at") ?? "head"
+    var cv = constArg(a, "cancellable")
+    var cancellable = cv is Const.Bool && cv.value
+    if (a.name == "Overwrite") {
+        return Want { params: params, ret: ret, what: "`${target}`" }
+    }
+    if (a.name == "Inject" && at == "return") {
+        if (len(c.funcs[hook].params) == len(params) + 1) {
+            params.push(ret)
+            return Want { params: params, ret: ret, what: "`${target}` plus its result" }
+        }
+        return Want { params: params, ret: null, what: "`${target}`" }
+    }
+    if (cancellable) {
+        var r = ret
+        if (ret == T_VOID) {
+            r = T_BOOL
+        } else if (!c.types.isUnboxed(ret)) {
+            r = c.types.optional(ret)
+        }
+        return Want { params: params, ret: r, what: "`${target}`" }
+    }
+    return Want { params: params, ret: null, what: "`${target}`" }
+}
+
+/** Checks that every `@Inject`, `@Overwrite` and `@Redirect` function has the shape its target needs. */
+pub fun checkMixins(c: Checker) {
+    [Hook] hooks = []
+    for i in 0..len(c.funcs) {
+        for a in c.funcs[i].annotations {
+            if (a.name == "Inject" || a.name == "Overwrite" || a.name == "Redirect") {
+                hooks.push(Hook { func: i, ann: a })
+            }
+        }
+    }
+    for h in hooks {
+        var a = h.ann
+        var target = strArg(a, "target")
+        if (target == null) {
+            continue
+        }
+        var tf = funcNamed(c, target)
+        if (tf == null) {
+            continue
+        }
+        if (tf == h.func) {
+            c.error(a.span, "a mixin cannot target itself")
+            continue
+        }
+        var want = hookWant(c, h.func, a, target, tf)
+        if (want == null) {
+            continue
+        }
+        var hp = paramTys(c, h.func)
+        var hname = c.funcs[h.func].name
+        if (!sameInts(hp, want.params)) {
+            c.errorDetail(a.span, "the mixin `${hname}` must take the parameters of ${want.what}", "expected (${showAll(c, want.params)}) but `${hname}` takes (${showAll(c, hp)})")
+            continue
+        }
+        var wr = want.ret
+        if (wr != null) {
+            var got = funcRet(c, h.func)
+            var ok = got == wr || (wr != T_VOID && c.types.unwrapOptional(wr) == got && c.types.isNullable(wr) && got != T_VOID)
+            if (!ok) {
+                var shown = c.show(got)
+                if (got == T_VOID) {
+                    shown = "nothing"
+                }
+                c.errorDetail(a.span, "the mixin `${hname}` must return ${c.show(wr)}", "it returns ${shown}")
+            }
+        }
+    }
+}

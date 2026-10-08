@@ -69,24 +69,18 @@ The inputs include the error-recovery fixtures in `tests/lexer` and `tests/parse
    - `src/syntax/ast.bn` uses enums with data for every node kind.
 3. **Diagnostics** (done).
    - `src/diag/diag.bn` ports the diagnostic type, line and column lookup, and the `-->` snippet renderer with notes, helps and fix suggestions.
-   - It renders every lexer and parser error the same way `burn check` does without colours. Checker errors are compared once the checker is ported.
+   - It renders every lexer and parser error the same way `burn check` does without colours. Checker errors are compared by `burn dump --checked`.
 4. **Loader and projects** (done).
    - `src/project/toml.bn` ports the TOML reader, `src/project/project.bn` the manifest, lock file, workspaces and package resolution, and `src/project/loader.bn` the module loader with `@/` imports, `mod.bn` folders, packages and the standard library.
    - Burn has no way yet to resolve symbolic links or read file times, and stage0 must still build these sources. Until a later stage0 adds them:
      - `src/project/paths.bn` makes paths absolute and removes `.` and `..` without following symbolic links;
      - importing a package's bytecode (`import "<package>.bvmc"`) uses the file in its `build/` folder if there is one, and building it needs the checker and code generation.
-5. **Checker.** The largest part (about 10,000 lines). Split it into PRs, roughly one per Rust file:
-   - declarations and types (done): `src/check/check.bn` runs everything `run` does before it checks struct bodies, and `burn dump --decls` prints the type table, every record, interface, enum, module scope, function signature and global, and the errors found so far. The fixtures in `tests/check/decls` cover each of those errors.
+5. **Checker** (done). `src/check/` ports `check/` file by file:
+   - declarations and types: `src/check/check.bn` runs everything `run` does before it checks struct bodies, and `burn dump --decls` prints the type table, every record, interface, enum, module scope, function signature and global, and the errors found so far. The fixtures in `tests/check/decls` cover each of those errors.
      Importing bytecode libraries (`check/libs.rs`) needs a reader for bvm modules and is not ported yet; the Burn checker reports an error for each library import.
-   - function bodies (done for programs without the parts listed below): `src/check/body.bn` checks every function and top-level statement, and `burn dump --checked` prints the checked program (types, functions with their statements and expressions, globals, strings, source locations and interface slots) or the errors.
-     The files next to it port the matching Rust files: `expr.bn`, `calls.bn`, `builtins.bn`, `stmt.bn`, `closures.bn`, `generics.bn`, `numeric.bn` (with `wide.bn` for 128-bit constant folding), `structs.bn`, `matching.bn` (`match`), `nullsafe.bn` (`?.`, `??` and `as?`) and `init_order.bn`.
-     Parts that are not ported yet make the Burn checker print `not ported yet: ...` instead of a program: `annotationsOf` and mixins.
-     The suite compares every Burn file in the repository that is fully ported, and `tests/check/checked.txt` lists the files that must stay ported. The fixtures in `tests/check/bodies` cover closures, generic functions, return types, initialization order, sized numbers, `match`, the nullable operators and structs.
-   - `match` and the nullable operators `?.`, `??` and `as?` (done)
-   - structs and interfaces (done): constructors, inheritance, abstract methods, virtual calls and their devirtualization, static values, `new`, generic structs, adding functions to objects and `destroy`
-   - annotations
-
-   Compare `burn dump --checked`.
+   - function bodies: `src/check/body.bn` checks every function and top-level statement, and `burn dump --checked` prints the checked program (types, functions with their statements and expressions, globals, strings, source locations and interface slots) or the errors.
+     The files next to it port the matching Rust files: `expr.bn`, `calls.bn`, `builtins.bn`, `stmt.bn`, `closures.bn`, `generics.bn`, `numeric.bn` (with `wide.bn` for 128-bit constant folding), `matching.bn` (`match`), `nullsafe.bn` (`?.`, `??` and `as?`), `structs.bn` (constructors, inheritance, abstract methods, virtual calls and their devirtualization, static values, `new`, generic structs, adding functions to objects and `destroy`), `annotations.bn` (`annotationsOf` and mixins) and `init_order.bn`.
+     The suite compares `burn dump --checked` on every Burn file in the repository. The fixtures in `tests/check/bodies` cover closures, generic functions, return types, initialization order, sized numbers, `match`, the nullable operators and structs.
 6. **Ownership.** Port `own.rs` and compare the HIR after ownership.
 7. **bvm code generation.** Port `vm/compile.rs` and compare `burn dump --bytecode`.
 8. **Bootstrap** (see *Stage0* below).

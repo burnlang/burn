@@ -1,6 +1,7 @@
 import "../diag/diag.bn"
 import "../project/loader.bn"
 import "../syntax/ast.bn"
+import "annotations.bn"
 import "builtins.bn"
 import "check.bn"
 import "closures.bn"
@@ -445,13 +446,7 @@ fun finishChecking(c: Checker) {
     for ri in 0..len(c.types.records) {
         checkRecordConformance(c, ri)
     }
-    for f in c.funcs {
-        for a in f.annotations {
-            if (a.name == "Inject" || a.name == "Overwrite" || a.name == "Redirect") {
-                c.notPorted("mixins")
-            }
-        }
-    }
+    checkMixins(c)
     buildCtors(c)
     c.structsReady = true
     completeInstances(c)

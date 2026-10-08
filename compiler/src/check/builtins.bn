@@ -1,5 +1,6 @@
 import "../diag/diag.bn"
 import "../syntax/ast.bn"
+import "annotations.bn"
 import "check.bn"
 import "expr.bn"
 import "hir.bn"
@@ -1032,9 +1033,7 @@ fun builtinWith(c: Checker, name: string, recv: HExpr?, recvSpan: SrcSpan, args:
         if (!arity(c, name, n, 1, 1, span)) {
             return errExpr()
         }
-        barg(c, xs[0], null)
-        c.notPorted("`annotationsOf`")
-        return errExpr()
+        return annotationsOf(c, barg(c, xs[0], null))
     }
     if (name == "panic") {
         if (!arity(c, name, n, 0, 1, span)) {
