@@ -1,4 +1,5 @@
 import "ast.bn"
+import "diag.bn"
 import "lexer.bn"
 import "parser.bn"
 

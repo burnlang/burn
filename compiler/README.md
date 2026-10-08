@@ -10,6 +10,7 @@ The Rust compiler can print every stage in a fixed text form. The Burn port prin
 | --- | --- | --- | --- |
 | Tokens | `crates/burn/src/lexer.rs` | `compiler/lexer.bn` | `burn dump --tokens <files...>` |
 | Syntax tree and parse errors | `crates/burn/src/parser.rs`, `ast.rs` | `compiler/parser.bn`, `compiler/ast.bn` | `burn dump --ast <files...>` |
+| Rendered errors with snippets and fixes | `crates/burn/src/diag.rs`, `source.rs` | `compiler/diag.bn` | `burn dump --diagnostics <files...>` |
 
 Run the comparison by hand with:
 
@@ -19,7 +20,7 @@ burn compiler/dump.bn --tokens examples/*.bn > burn.txt
 diff rust.txt burn.txt
 ```
 
-The same works with `--ast`. The suite test `compiler_written_in_burn_matches_the_compiler` compares every stage on bvm and on a native build.
+The same works with `--ast` and `--diagnostics`. The suite test `compiler_written_in_burn_matches_the_compiler` compares every stage on bvm and on a native build.
 
 The inputs include the error-recovery fixtures in `tests/lexer` and `tests/parser`. On bvm, the Burn version lexes and parses all of the repository's Burn files in about half a second.
 
@@ -29,6 +30,8 @@ The inputs include the error-recovery fixtures in `tests/lexer` and `tests/parse
 - A bug found while porting is fixed in the Rust compiler in the same PR, with a fixture in `tests/`. The lexer port found two:
   - a stray non-ASCII symbol (`→`) hung the lexer;
   - an unknown escape before a multi-byte character (`"\é"`) crashed it.
+
+  The diagnostics port found one in the checker: a pattern binding with the same name as a function (`Kind.Big(digits)` next to `fun digits`) was compared against the function instead of binding.
 - Every stage gets a `burn dump` form before it is ported, so the comparison never depends on parsing human-readable output.
 
 ## Roadmap
@@ -41,9 +44,9 @@ The inputs include the error-recovery fixtures in `tests/lexer` and `tests/parse
      - speculative parsing
      - `@Getter`/`@Setter` expansion
    - `compiler/ast.bn` uses enums with data for every node kind.
-3. **Diagnostics.**
-   - Port the source map, line and column lookup, and the `-->` snippet renderer.
-   - Compare `burn check` output on `tests/errors`.
+3. **Diagnostics** (done).
+   - `compiler/diag.bn` ports the diagnostic type, line and column lookup, and the `-->` snippet renderer with notes, helps and fix suggestions.
+   - It renders every lexer and parser error the same way `burn check` does without colours. Checker errors are compared once the checker is ported.
 4. **Loader and projects.**
    - Port imports, the standard library modules (read from `lib/std`), `burn.toml` and `burn.lock` parsing, and package resolution.
    - Include the project layout (`@/` imports, source roots, `mod.bn`, `src/bin`) and workspaces.

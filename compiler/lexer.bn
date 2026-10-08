@@ -1,3 +1,4 @@
+import "diag.bn"
 import "std/strings"
 
 /** The kind of a token. The names match the variants of `Tok` in the Rust lexer. */
@@ -30,13 +31,6 @@ pub def type Token {
 pub def enum Part {
     Lit(text: string),
     Code(tokens: [Token], start: int, end: int)
-}
-
-/** A lexer error at a byte range of the source. */
-pub def type Diag {
-    int start
-    int end
-    string message
 }
 
 /** The tokens of a source file, ending with `Eof`, and the errors found while reading them. */
@@ -247,14 +241,14 @@ def struct Lexer(src: string, bytes: [uint8], pos: int, stop: int) {
         if (end > limit) {
             end = limit
         }
-        diags.push(Diag { start: start, end: end, message: message })
+        diags.push(errorAt(start, end, message))
     }
 
     fun unexpected(start: int) {
         var n = charLen(bytes[pos] as int)
         var ch = text(pos, pos + n)
         pos += n
-        diags.push(Diag { start: start, end: pos, message: "unexpected character `${ch}`" })
+        diags.push(errorAt(start, pos, "unexpected character `${ch}`"))
     }
 
     fun run(): void {

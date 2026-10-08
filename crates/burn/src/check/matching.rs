@@ -540,7 +540,10 @@ impl<'a> Checker<'a> {
                     }
                     match &a.kind {
                         A::Ident(n) if n == "_" => {}
-                        A::Ident(n) if self.peek_local(n).is_none() && self.lookup_value_entry(self.cur_module(), n).is_none() => {
+                        A::Ident(n)
+                            if self.peek_local(n).is_none()
+                                && !matches!(self.lookup_value_entry(self.cur_module(), n), Some(e) if !matches!(e.sym, ValSym::Func(_))) =>
+                        {
                             binds.push((ast::Ident { name: n.clone(), span: a.span }, f.ty, Some(got)));
                         }
                         _ => {

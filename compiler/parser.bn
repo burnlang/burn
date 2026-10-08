@@ -1,4 +1,5 @@
 import "ast.bn"
+import "diag.bn"
 import "lexer.bn"
 
 /** The source text of a token kind that has no value, like `+=` or `fun`. */
@@ -258,8 +259,12 @@ def struct Parser(toks: [Token]) {
     }
 
     fun err(span: Span, message: string) {
+        report(errorAt(span.start, span.end, message))
+    }
+
+    fun report(d: Diag) {
         if (speculative == 0) {
-            diags.push(Diag { start: span.start, end: span.end, message: message })
+            diags.push(d)
         }
     }
 
@@ -272,7 +277,18 @@ def struct Parser(toks: [Token]) {
         if (t.nl && pos > 0) {
             span = prevSpan()
         }
-        err(span, "expected ${what} but found ${describe(t)}")
+        var d = errorAt(span.start, span.end, "expected ${what} but found ${describe(t)}")
+        var closer = ""
+        if (k == Kind.RParen) {
+            closer = ")"
+        } else if (k == Kind.RBracket) {
+            closer = "]"
+        }
+        if (closer != "" && t.nl && pos > 0) {
+            var end = prevSpan().end
+            addFix(d, "add the missing `${closer}`", end, end, closer, false)
+        }
+        report(d)
         return null
     }
 
@@ -476,7 +492,9 @@ def struct Parser(toks: [Token]) {
                 kind = ItemKind.Definition(d)
             }
         } else if (t.kind == Kind.Ident && isOldDefWord(t.text) && peekAt(1).kind == Kind.Ident && !peekAt(1).nl) {
-            err(spanOf(t), "definitions use the `def` keyword")
+            var oldDef = errorAt(t.start, t.end, "definitions use the `def` keyword")
+            addFix(oldDef, "write `def ${t.text} ${peekAt(1).text}`", t.start, t.start, "def ", true)
+            report(oldDef)
             var d = definition()
             if (d == null) {
                 return null
@@ -804,7 +822,10 @@ def struct Parser(toks: [Token]) {
         }
         if (kw == "struct" || kw == "class") {
             if (kw == "class") {
-                err(kwSpan, "classes are now structs")
+                var d = errorAt(kwSpan.start, kwSpan.end, "classes are now structs")
+                d.helps.push("write `def struct ${name.name}(...)` and create objects with `new ${name.name}(...)`")
+                addFix(d, "declare it as a struct", kwSpan.start, kwSpan.end, "struct", false)
+                report(d)
             }
             return structDef(name, kind, tparams)
         }

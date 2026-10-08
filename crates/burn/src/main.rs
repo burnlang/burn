@@ -867,8 +867,8 @@ fn main() -> ExitCode {
         }
         "test" => cmd_test(rest),
         "build" | "-exe" | "--executable" => cmd_build(rest),
-        "dump" | "-d" | "--debug" if rest.first().map(|w| w == "--tokens" || w == "--ast").unwrap_or(false) => {
-            let ast = rest[0] == "--ast";
+        "dump" | "-d" | "--debug" if rest.first().map(|w| w == "--tokens" || w == "--ast" || w == "--diagnostics").unwrap_or(false) => {
+            let mode = rest[0].clone();
             let mut code = ExitCode::SUCCESS;
             for f in &rest[1..] {
                 match std::fs::read_to_string(f) {
@@ -876,7 +876,12 @@ fn main() -> ExitCode {
                         if rest.len() > 2 {
                             println!("file {}", f);
                         }
-                        print!("{}", if ast { astdump::dump(&src) } else { lexer::dump(&src) });
+                        let out = match mode.as_str() {
+                            "--ast" => astdump::dump(&src),
+                            "--diagnostics" => astdump::diagnostics(f, &src),
+                            _ => lexer::dump(&src),
+                        };
+                        print!("{}", out);
                     }
                     Err(e) => {
                         eprintln!("error: cannot read `{}`: {}", f, e);
@@ -891,7 +896,7 @@ fn main() -> ExitCode {
                 [w, f] if w.starts_with("--") => (w.trim_start_matches("--").to_string(), f.clone()),
                 [f] => ("hir".to_string(), f.clone()),
                 _ => {
-                    eprintln!("usage: burn dump [--hir|--bytecode|--asm|--js] <file.bn>  |  burn dump --tokens|--ast <files...>");
+                    eprintln!("usage: burn dump [--hir|--bytecode|--asm|--js] <file.bn>  |  burn dump --tokens|--ast|--diagnostics <files...>");
                     return ExitCode::from(2);
                 }
             };

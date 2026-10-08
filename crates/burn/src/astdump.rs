@@ -455,3 +455,12 @@ pub fn dump(src: &str) -> String {
     }
     w.out
 }
+
+pub fn diagnostics(name: &str, src: &str) -> String {
+    let mut sm = crate::source::SourceMap::default();
+    let file = sm.add(name.to_string(), None, src.to_string());
+    let (toks, mut diags) = crate::lexer::lex(src, file);
+    let (_, pd) = crate::parser::parse_module(toks, file);
+    diags.extend(pd);
+    diags.iter().map(|d| crate::diag::render(&sm, d, false)).collect()
+}
