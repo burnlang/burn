@@ -1,0 +1,598 @@
+import "ast.bn"
+import "lexer.bn"
+import "parser.bn"
+
+/** Writes text the way `burn dump` does: quoted, with control characters escaped. */
+pub fun quoted(s: string): string {
+    var out = "\""
+    for c in s {
+        var code = charCode(c)
+        if (c == "\\") {
+            out += "\\\\"
+        } else if (c == "\"") {
+            out += "\\\""
+        } else if (c == "\n") {
+            out += "\\n"
+        } else if (c == "\t") {
+            out += "\\t"
+        } else if (c == "\r") {
+            out += "\\r"
+        } else if (code < 32 || code == 127) {
+            out += "\\u{${toString(code, 16)}}"
+        } else {
+            out += c
+        }
+    }
+    return out + "\""
+}
+
+fun sp(s: Span): string {
+    return "@${s.start}..${s.end}"
+}
+
+fun id(i: Ident): string {
+    return i.name + sp(i.span)
+}
+
+fun visName(v: Vis): string {
+    return match v {
+        Vis.Default => "default"
+        Vis.Pub => "pub"
+        Vis.Priv => "priv"
+    }
+}
+
+fun unopName(o: UnOp): string {
+    return match o {
+        UnOp.Neg => "-"
+        UnOp.Not => "!"
+        UnOp.BitNot => "~"
+    }
+}
+
+def struct Writer() {
+    string out = ""
+    int depth = 0
+
+    fun line(label: string, text: string) {
+        out += repeat("  ", depth)
+        if (len(label) > 0) {
+            out += label + ": "
+        }
+        out += text + "\n"
+    }
+
+    fun open(label: string, text: string) {
+        line(label, text)
+        depth += 1
+    }
+
+    fun close() {
+        depth -= 1
+    }
+
+    fun annotations(anns: [Annotation]): void {
+        for a in anns {
+            open("ann", "${id(a.name)} ${sp(a.span)}")
+            for arg in a.args {
+                var label = "arg"
+                var k = arg.key
+                if (k != null) {
+                    label = "arg ${id(k)}"
+                }
+                expr(label, arg.value)
+            }
+            close()
+        }
+    }
+
+    fun module(m: Module) {
+        open("", "Module destroy=${m.hasDestroy}")
+        for it in m.items {
+            item(it)
+        }
+        close()
+    }
+
+    fun item(it: Item): void {
+        open("", "Item ${visName(it.vis)} ${sp(it.span)}")
+        annotations(it.annotations)
+        match it.kind {
+            ItemKind.Import(paths) => {
+                open("", "Import")
+                for p in paths {
+                    line("path", quoted(p.path) + sp(p.span))
+                }
+                close()
+            }
+            ItemKind.Fun(f) => fun_("", f)
+            ItemKind.Definition(d) => definition(d)
+            ItemKind.Statement(s) => stmt("", s)
+        }
+        close()
+    }
+
+    fun tparams(ts: [Ident]) {
+        for t in ts {
+            line("tparam", id(t))
+        }
+    }
+
+    fun params(ps: [Param]): void {
+        for p in ps {
+            open("param", id(p.name))
+            ty("", p.ty)
+            close()
+        }
+    }
+
+    fun fun_(label: string, f: FunDecl): void {
+        open(label, "Fun ${id(f.name)} ${sp(f.span)} async=${f.isAsync} static=${f.isStatic} abstract=${f.isAbstract} bodyless=${f.bodyless}")
+        annotations(f.annotations)
+        tparams(f.tparams)
+        params(f.params)
+        var r = f.ret
+        if (r != null) {
+            ty("ret", r)
+        }
+        block("body", f.body)
+        close()
+    }
+
+    fun fields(fs: [Field]): void {
+        for f in fs {
+            open("field", "${id(f.name)} ${visName(f.vis)}")
+            annotations(f.annotations)
+            ty("type", f.ty)
+            var d = f.value
+            if (d != null) {
+                expr("default", d)
+            }
+            close()
+        }
+    }
+
+    fun superRef(label: string, r: SuperRef): void {
+        open(label, id(r.name))
+        var args = r.args
+        if (args != null) {
+            open("args", toString(len(args)))
+            for a in args {
+                expr("", a)
+            }
+            close()
+        }
+        close()
+    }
+
+    fun definition(d: Def): void {
+        match d {
+            Def.Type(name, fs, ts) => {
+                open("", "Type ${id(name)}")
+                tparams(ts)
+                fields(fs)
+                close()
+            }
+            Def.Alias(name, t) => {
+                open("", "Alias ${id(name)}")
+                ty("", t)
+                close()
+            }
+            Def.Interface(name, methods) => {
+                open("", "Interface ${id(name)}")
+                for m in methods {
+                    open("method", "${id(m.name)} async=${m.isAsync}")
+                    params(m.params)
+                    var r = m.ret
+                    if (r != null) {
+                        ty("ret", r)
+                    }
+                    close()
+                }
+                close()
+            }
+            Def.Struct(s) => structDef(s)
+            Def.Enum(name, variants) => {
+                open("", "Enum ${id(name)}")
+                for v in variants {
+                    open("variant", id(v.name))
+                    var fs = v.fields
+                    if (fs != null) {
+                        open("fields", toString(len(fs)))
+                        params(fs)
+                        close()
+                    }
+                    close()
+                }
+                close()
+            }
+            Def.Annotation(name, fs) => {
+                open("", "Annotation ${id(name)}")
+                fields(fs)
+                close()
+            }
+        }
+    }
+
+    fun structDef(s: StructDef): void {
+        var k = match s.kind {
+            StructKind.Normal => "normal"
+            StructKind.Abstract => "abstract"
+            StructKind.Static => "static"
+        }
+        open("", "Struct ${id(s.name)} ${k} colon_extra=${s.colonExtra}")
+        tparams(s.tparams)
+        params(s.params)
+        for i in 0..len(s.paramAnns) {
+            if (len(s.paramAnns[i]) > 0) {
+                open("param_anns", toString(i))
+                annotations(s.paramAnns[i])
+                close()
+            }
+        }
+        var e = s.extends
+        if (e != null) {
+            superRef("extends", e)
+        }
+        for r in s.supers {
+            superRef("super", r)
+        }
+        fields(s.fields)
+        for v in s.statics {
+            open("static", "${id(v.name)} ${visName(v.vis)} const=${v.isConst}")
+            var t = v.ty
+            if (t != null) {
+                ty("type", t)
+            }
+            expr("init", v.init)
+            close()
+        }
+        for m in s.methods {
+            fun_("method ${visName(m.vis)}", m.decl)
+        }
+        close()
+    }
+
+    fun ty(label: string, t: TypeExpr): void {
+        var s = sp(t.span)
+        match t.kind {
+            TypeKind.Named(n, args) => {
+                open(label, "Named ${n} ${s}")
+                for a in args {
+                    ty("arg", a)
+                }
+                close()
+            }
+            TypeKind.Array(e) => {
+                open(label, "Array ${s}")
+                ty("", e)
+                close()
+            }
+            TypeKind.Optional(e) => {
+                open(label, "Optional ${s}")
+                ty("", e)
+                close()
+            }
+            TypeKind.Map(k, v) => {
+                open(label, "Map ${s}")
+                ty("key", k)
+                ty("value", v)
+                close()
+            }
+            TypeKind.Func(ps, r) => {
+                open(label, "Func ${s}")
+                for p in ps {
+                    ty("param", p)
+                }
+                if (r != null) {
+                    ty("ret", r)
+                }
+                close()
+            }
+        }
+    }
+
+    fun block(label: string, b: Block): void {
+        open(label, "Block ${sp(b.span)}")
+        for s in b.stmts {
+            stmt("", s)
+        }
+        close()
+    }
+
+    fun stmt(label: string, st: Stmt): void {
+        var s = sp(st.span)
+        match st.kind {
+            StmtKind.Var(name, t, init, isConst) => {
+                open(label, "Var ${id(name)} const=${isConst} ${s}")
+                if (t != null) {
+                    ty("type", t)
+                }
+                if (init != null) {
+                    expr("init", init)
+                }
+                close()
+            }
+            StmtKind.Eval(e) => {
+                open(label, "ExprStmt ${s}")
+                expr("", e)
+                close()
+            }
+            StmtKind.If(c, then, els) => {
+                open(label, "If ${s}")
+                expr("cond", c)
+                block("then", then)
+                if (els != null) {
+                    block("else", els)
+                }
+                close()
+            }
+            StmtKind.While(c, body) => {
+                open(label, "While ${s}")
+                expr("cond", c)
+                block("body", body)
+                close()
+            }
+            StmtKind.For(init, c, step, body) => {
+                open(label, "For ${s}")
+                if (init != null) {
+                    stmt("init", init)
+                }
+                if (c != null) {
+                    expr("cond", c)
+                }
+                if (step != null) {
+                    expr("step", step)
+                }
+                block("body", body)
+                close()
+            }
+            StmtKind.ForIn(binding, index, iter, body) => {
+                var idx = ""
+                if (index != null) {
+                    idx = " index=${id(index)}"
+                }
+                open(label, "ForIn ${id(binding)}${idx} ${s}")
+                match iter {
+                    ForIter.Range(a, b, inclusive) => {
+                        open("range", "inclusive=${inclusive}")
+                        expr("from", a)
+                        expr("to", b)
+                        close()
+                    }
+                    ForIter.Over(e) => expr("iter", e)
+                }
+                block("body", body)
+                close()
+            }
+            StmtKind.Return(v) => {
+                open(label, "Return ${s}")
+                if (v != null) {
+                    expr("", v)
+                }
+                close()
+            }
+            StmtKind.Break => line(label, "Break ${s}")
+            StmtKind.Continue => line(label, "Continue ${s}")
+            StmtKind.Nested(b) => {
+                open(label, "BlockStmt ${s}")
+                block("", b)
+                close()
+            }
+            StmtKind.Extend(target, f) => {
+                open(label, "Extend ${id(target)} ${s}")
+                fun_("", f)
+                close()
+            }
+            StmtKind.Destroy(target, args) => {
+                open(label, "Destroy ${id(target)} ${s}")
+                exprs("arg", args)
+                close()
+            }
+        }
+    }
+
+    fun exprs(label: string, xs: [Expr]) {
+        for x in xs {
+            expr(label, x)
+        }
+    }
+
+    fun expr(label: string, e: Expr): void {
+        var s = sp(e.span)
+        match e.kind {
+            ExprKind.Int(v) => line(label, "Int ${v} ${s}")
+            ExprKind.BigInt(digits, hex) => {
+                var b = "dec"
+                if (hex) {
+                    b = "hex"
+                }
+                line(label, "BigInt ${digits} ${b} ${s}")
+            }
+            ExprKind.Float(v) => line(label, "Float ${v} ${s}")
+            ExprKind.Str(v) => line(label, "Str ${quoted(v)} ${s}")
+            ExprKind.Template(parts) => {
+                open(label, "Template ${s}")
+                for p in parts {
+                    match p {
+                        TplExpr.Lit(t) => line("lit", quoted(t))
+                        TplExpr.Code(x) => expr("expr", x)
+                    }
+                }
+                close()
+            }
+            ExprKind.Bool(b) => line(label, "Bool ${b} ${s}")
+            ExprKind.Null => line(label, "Null ${s}")
+            ExprKind.Ident(n) => line(label, "Ident ${n} ${s}")
+            ExprKind.Unary(op, x) => {
+                open(label, "Unary ${unopName(op)} ${s}")
+                expr("", x)
+                close()
+            }
+            ExprKind.Binary(op, a, b) => {
+                open(label, "Binary ${symbolOf(op)} ${s}")
+                expr("", a)
+                expr("", b)
+                close()
+            }
+            ExprKind.Assign(target, op, value) => {
+                var o = "="
+                if (op != null) {
+                    o = symbolOf(op)
+                }
+                open(label, "Assign ${o} ${s}")
+                expr("target", target)
+                expr("value", value)
+                close()
+            }
+            ExprKind.Call(callee, args) => {
+                open(label, "Call ${s}")
+                expr("callee", callee)
+                exprs("arg", args)
+                close()
+            }
+            ExprKind.Field(obj, name) => {
+                open(label, "Field ${id(name)} ${s}")
+                expr("", obj)
+                close()
+            }
+            ExprKind.Index(obj, index) => {
+                open(label, "Index ${s}")
+                expr("obj", obj)
+                expr("index", index)
+                close()
+            }
+            ExprKind.Array(items) => {
+                open(label, "Array ${s}")
+                exprs("", items)
+                close()
+            }
+            ExprKind.StructLit(t, fs) => {
+                var name = "_"
+                if (t != null) {
+                    name = id(t)
+                }
+                open(label, "StructLit ${name} ${s}")
+                for f in fs {
+                    expr("field ${id(f.name)}", f.value)
+                }
+                close()
+            }
+            ExprKind.MapLit(pairs) => {
+                open(label, "MapLit ${s}")
+                for p in pairs {
+                    expr("key", p.key)
+                    expr("value", p.value)
+                }
+                close()
+            }
+            ExprKind.Is(x, t) => {
+                open(label, "Is ${s}")
+                expr("", x)
+                ty("type", t)
+                close()
+            }
+            ExprKind.As(x, t) => {
+                open(label, "As ${s}")
+                expr("", x)
+                ty("type", t)
+                close()
+            }
+            ExprKind.Await(x) => {
+                open(label, "Await ${s}")
+                expr("", x)
+                close()
+            }
+            ExprKind.Lambda(f) => {
+                open(label, "Lambda ${s}")
+                fun_("", f)
+                close()
+            }
+            ExprKind.NotNull(x) => {
+                open(label, "NotNull ${s}")
+                expr("", x)
+                close()
+            }
+            ExprKind.New(t, targs, args) => {
+                open(label, "New ${id(t)} ${s}")
+                for a in targs {
+                    ty("targ", a)
+                }
+                exprs("arg", args)
+                close()
+            }
+            ExprKind.SafeGet(obj, name, args) => {
+                open(label, "SafeGet ${id(name)} ${s}")
+                expr("obj", obj)
+                if (args != null) {
+                    open("args", toString(len(args)))
+                    exprs("", args)
+                    close()
+                }
+                close()
+            }
+            ExprKind.Coalesce(a, b) => {
+                open(label, "Coalesce ${s}")
+                expr("", a)
+                expr("", b)
+                close()
+            }
+            ExprKind.SafeAs(x, t) => {
+                open(label, "SafeAs ${s}")
+                expr("", x)
+                ty("type", t)
+                close()
+            }
+            ExprKind.Match(subject, arms) => {
+                open(label, "Match ${s}")
+                if (subject != null) {
+                    expr("subject", subject)
+                }
+                for a in arms {
+                    open("arm", sp(a.span))
+                    for p in a.patterns {
+                        match p {
+                            Pattern.Value(x) => expr("value", x)
+                            Pattern.Range(from, to, inclusive) => {
+                                open("range", "inclusive=${inclusive}")
+                                expr("from", from)
+                                expr("to", to)
+                                close()
+                            }
+                            Pattern.Is(t, bind) => {
+                                var b = "_"
+                                if (bind != null) {
+                                    b = id(bind)
+                                }
+                                open("is", b)
+                                ty("", t)
+                                close()
+                            }
+                        }
+                    }
+                    var g = a.guard
+                    if (g != null) {
+                        expr("guard", g)
+                    }
+                    match a.body {
+                        ArmBody.Value(x) => expr("body", x)
+                        ArmBody.Body(b) => block("body", b)
+                    }
+                    close()
+                }
+                close()
+            }
+        }
+    }
+}
+
+/** The `burn dump --ast` form of a source file. */
+pub fun dumpAst(src: string): string {
+    var parsed = parse(src)
+    var w = new Writer()
+    w.module(parsed.module)
+    for d in parsed.diags {
+        w.out += "error ${d.start} ${d.end} ${d.message}\n"
+    }
+    return w.out
+}

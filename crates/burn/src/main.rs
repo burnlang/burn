@@ -1,4 +1,5 @@
 mod ast;
+mod astdump;
 mod check;
 mod diag;
 mod doc;
@@ -631,7 +632,8 @@ fn main() -> ExitCode {
             cmd_check(rest)
         }
         "build" | "-exe" | "--executable" => cmd_build(rest),
-        "dump" | "-d" | "--debug" if rest.first().map(|w| w == "--tokens").unwrap_or(false) => {
+        "dump" | "-d" | "--debug" if rest.first().map(|w| w == "--tokens" || w == "--ast").unwrap_or(false) => {
+            let ast = rest[0] == "--ast";
             let mut code = ExitCode::SUCCESS;
             for f in &rest[1..] {
                 match std::fs::read_to_string(f) {
@@ -639,7 +641,7 @@ fn main() -> ExitCode {
                         if rest.len() > 2 {
                             println!("file {}", f);
                         }
-                        print!("{}", lexer::dump(&src));
+                        print!("{}", if ast { astdump::dump(&src) } else { lexer::dump(&src) });
                     }
                     Err(e) => {
                         eprintln!("error: cannot read `{}`: {}", f, e);
@@ -654,7 +656,7 @@ fn main() -> ExitCode {
                 [w, f] if w.starts_with("--") => (w.trim_start_matches("--").to_string(), f.clone()),
                 [f] => ("hir".to_string(), f.clone()),
                 _ => {
-                    eprintln!("usage: burn dump [--hir|--bytecode|--asm|--js] <file.bn>  |  burn dump --tokens <files...>");
+                    eprintln!("usage: burn dump [--hir|--bytecode|--asm|--js] <file.bn>  |  burn dump --tokens|--ast <files...>");
                     return ExitCode::from(2);
                 }
             };

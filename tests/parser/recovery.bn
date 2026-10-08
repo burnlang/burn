@@ -1,0 +1,44 @@
+fun a() {
+    var x = 1 +
+}
+fun b() {
+    var y: int
+    const z
+    var w
+}
+fun c() {
+    print(x y)
+}
+fun d() {
+    if (x) { } else
+}
+fun e() {
+    return )
+}
+fun f() {
+    pub var q = 1
+    def type Inner {}
+    import "x"
+}
+def interface I {
+    fun a(): int { return 1 }
+    fun
+    fun b(x: int): string
+}
+def type T { int a; string b = "x"; bad bad bad }
+x + = 2
+1 = 2
+pub print("x")
+@Ann print("y")
+var m = match x {
+    1 => "a" "b"
+}
+var t = "${1 +}"
+var u = "${a b}"
+var v = "${}"
+var n = new Box
+def struct S(a: int) {
+    fun m() {
+    int good = 1
+    bad bad bad
+}

@@ -1,30 +1,7 @@
+import "astdump.bn"
 import "lexer.bn"
 import "std/fs"
 import "std/process"
-
-/** Writes text the way `burn dump --tokens` does: quoted, with control characters escaped. */
-fun quoted(s: string): string {
-    var out = "\""
-    for c in s {
-        var code = charCode(c)
-        if (c == "\\") {
-            out += "\\\\"
-        } else if (c == "\"") {
-            out += "\\\""
-        } else if (c == "\n") {
-            out += "\\n"
-        } else if (c == "\t") {
-            out += "\\t"
-        } else if (c == "\r") {
-            out += "\\r"
-        } else if (code < 32 || code == 127) {
-            out += "\\u{${toString(code, 16)}}"
-        } else {
-            out += c
-        }
-    }
-    return out + "\""
-}
 
 fun flag(b: bool): int {
     if (b) {
@@ -77,10 +54,19 @@ fun dump(src: string): string {
 
 fun main() {
     var files = args()
+    var ast = false
+    if (len(files) > 0 && (files[0] == "--ast" || files[0] == "--tokens")) {
+        ast = files[0] == "--ast"
+        files = slice(files, 1, len(files))
+    }
     for f in files {
         if (len(files) > 1) {
             print("file ${f}")
         }
-        write(dump(readFile(f)))
+        if (ast) {
+            write(dumpAst(readFile(f)))
+        } else {
+            write(dump(readFile(f)))
+        }
     }
 }

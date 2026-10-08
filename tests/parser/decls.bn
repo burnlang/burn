@@ -1,0 +1,35 @@
+type Old { int a }
+class Older { }
+def class Klass(a: int) {}
+def abstract struct Shape(name: string) : Base(name), Mixin :: Area, Named(1) {
+    abstract fun area(): float
+    abstract fun bad(): int { return 1 }
+    static fun make(): Shape { return new Circle(1.0) }
+    static const PI = 3.14
+    static var count: int = 0
+    static int total = 5
+    priv var secret = 1
+    pub string label = "s"
+    @Getter @Setter int size
+    @Getter bool open = true
+}
+def static struct Util {
+    fun helper(): int { return 1 }
+    const X = 1
+    var y: string = "a"
+}
+@Getter @Setter def struct P(@Getter x: int, y: float) {
+    fun getX(): int { return 0 }
+}
+@Getter def type Bad { @Setter int v }
+def type Alias = [int]
+def type Gen<T> = T
+def record R<K, V> { K key; V value }
+def annotation Marker
+def annotation Info { string text = ""; int level }
+def enum E { A, B(x: int, y: [string]?), C(f: fun(int): string) }
+def fun later(a: int, b: string): {string: [int]} { return {} }
+@Native fun host(x: int): int
+async fun job(): Future<int> { return 1 }
+def unknown Thing {}
+def 5

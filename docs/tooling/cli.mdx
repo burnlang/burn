@@ -37,6 +37,7 @@ This page lists every subcommand of `burn`. The shorter toolchain commands map o
 | `burn sources` | write the sources of the standard library and the built-ins for reading and print the folder |
 | `burn dump --hir/--bytecode/--asm/--js <file.bn>` | show intermediate representations (`--bytecode` prints bvm assembly) |
 | `burn dump --tokens <files...>` | print the tokens and lexer errors of each file, one token per line with byte offsets |
+| `burn dump --ast <files...>` | print the syntax tree and parse errors of each file, one node per line with byte spans |
 | `burn version`, `burn help` | information |
 
 The older flags still work: `-r`, `-e`, `-exe <file> [name]` and `-d`.

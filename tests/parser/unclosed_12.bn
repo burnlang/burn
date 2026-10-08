@@ -1,0 +1,3 @@
+fun before() {}
+def struct Gen<T, > {}
+fun after() {}
