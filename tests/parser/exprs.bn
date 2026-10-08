@@ -1,0 +1,32 @@
+var a = -9223372036854775808 + -5 + -1.5 + -x + !y + ~z + await q
+var b = a ?? b ?? c
+var c = x is string && y !is int || !(z is Shape.Circle)
+var d = v as int + w as? string + (u as [int])
+var e = m.n.o(1, 2)[3]?.p?.q(4)!!.0.r
+var f = new Box<Map<string, [int]>>(1) + new Pair<int,int>(1, 2)
+var g: Map<string, Map<string, int>> = {}
+var h: [[int?]?] = []
+var i = { "a": 1, "b": [1, 2] }
+var j = Point { x: 1, y: 2 }
+var k = Point { x, y }
+var l = {}
+var m = fun(a: int, b: string): int { return a } + async fun() { }
+var n = x << 1 >> 2 >>> 3 & 4 | 5 ^ 6 % 7 / 8 * 9 - 10
+x += 1; x -= 1; x *= 2; x /= 2; x %= 2; x &= 1; x |= 1; x ^= 1; x <<= 1; x >>= 1; x >>>= 1
+a.b = c[d] = e
+var o = match v {
+    1, 2 => "low"
+    3..5 => "mid"
+    6..=9 if v > 7 => "high"
+    is string s => s
+    is null => "none"
+    Shape.Rect(w, h) => w
+    else => { return 1 }
+}
+var p = match {
+    a > 1 => 1
+    else => 2
+}
+var q = match x { 1 => 1, 2 => 2 }
+var r = "lit ${a} and ${b + "inner ${c}"} done"
+var s = 0x10 + 0b11 + 18446744073709551615 + 1e400

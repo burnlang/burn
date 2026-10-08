@@ -1,0 +1,26 @@
+fun main() {
+    for i in 0..10 { }
+    for i in 0..=10 { }
+    for (i in xs) { }
+    for k, v in m { }
+    for (k, v in m) { }
+    for (var i = 0; i < 10; i += 1) { }
+    for (int i = 0; i < 3; i++) { }
+    for (; ;) { break }
+    for var i = 0; i < 3; i += 1 { continue }
+    while (true) { break }
+    if (a) { } else if (b) { } else { }
+    { var inner = 1 }
+    destroy obj(1, 2)
+    Shape.describe(): string { return "s" }
+    int x = 1
+    const int y = 2
+    const z = 3
+    [int] list = []
+    Map<string, int> m = {}
+    fun(int): int f = g
+    Shape.Circle c = Shape.Circle(1.0) as Shape.Circle
+    {string: int} counts = {}
+    var w
+    return
+}

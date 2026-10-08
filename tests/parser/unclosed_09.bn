@@ -1,0 +1,3 @@
+fun before() {}
+var ty2: [int = 1
+fun after() {}

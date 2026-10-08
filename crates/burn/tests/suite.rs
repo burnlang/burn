@@ -239,7 +239,7 @@ fn repository_sources_import_the_standard_modules_they_use() {
 }
 
 #[test]
-fn lexer_written_in_burn_matches_the_compiler() {
+fn compiler_written_in_burn_matches_the_compiler() {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         for e in std::fs::read_dir(dir).unwrap() {
             let p = e.unwrap().path();
@@ -257,28 +257,31 @@ fn lexer_written_in_burn_matches_the_compiler() {
     }
     files.sort();
     assert!(files.len() > 100, "only {} files", files.len());
-    let (want, code) = output(burn().current_dir(&root).args(["dump", "--tokens"]).args(&files));
-    assert_eq!(code, 0, "{}", want);
-    let dir = temp_dir("selfhost-lexer");
+    let dir = temp_dir("selfhost");
     let exe = dir.join("dump");
     let (built, code) = output(burn().current_dir(&root).args(["build", "compiler/dump.bn", "-o"]).arg(&exe));
     assert_eq!(code, 0, "{}", built);
-    let mut bvm = burn();
-    bvm.current_dir(&root).arg("compiler/dump.bn").args(&files);
-    let mut native = Command::new(&exe);
-    native.current_dir(&root).args(&files);
-    for mut run in [bvm, native] {
-        let (got, code) = output(&mut run);
-        assert_eq!(code, 0, "{}", got);
-        if got != want {
-            let line = got.lines().zip(want.lines()).position(|(a, b)| a != b).unwrap_or(0);
-            let show = |s: &str| s.lines().skip(line.saturating_sub(3)).take(8).collect::<Vec<_>>().join("\n");
-            panic!(
-                "the Burn lexer differs from the compiler at line {}:\n--- burn\n{}\n--- rust\n{}",
-                line + 1,
-                show(&got),
-                show(&want)
-            );
+    for stage in ["--tokens", "--ast"] {
+        let (want, code) = output(burn().current_dir(&root).args(["dump", stage]).args(&files));
+        assert_eq!(code, 0, "{}", want);
+        let mut bvm = burn();
+        bvm.current_dir(&root).arg("compiler/dump.bn").arg(stage).args(&files);
+        let mut native = Command::new(&exe);
+        native.current_dir(&root).arg(stage).args(&files);
+        for mut run in [bvm, native] {
+            let (got, code) = output(&mut run);
+            assert_eq!(code, 0, "{}", got);
+            if got != want {
+                let line = got.lines().zip(want.lines()).position(|(a, b)| a != b).unwrap_or(0);
+                let show = |s: &str| s.lines().skip(line.saturating_sub(3)).take(8).collect::<Vec<_>>().join("\n");
+                panic!(
+                    "`burn dump {}` and the compiler written in Burn differ at line {}:\n--- burn\n{}\n--- rust\n{}",
+                    stage,
+                    line + 1,
+                    show(&got),
+                    show(&want)
+                );
+            }
         }
     }
     let _ = std::fs::remove_dir_all(&dir);

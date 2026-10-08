@@ -1,0 +1,282 @@
+/** A byte range of the source file. */
+pub def type Span {
+    int start
+    int end
+}
+
+/** The smallest span that covers both `a` and `b`. */
+pub fun join(a: Span, b: Span): Span {
+    var start = a.start
+    if (b.start < start) {
+        start = b.start
+    }
+    var end = a.end
+    if (b.end > end) {
+        end = b.end
+    }
+    return Span { start: start, end: end }
+}
+
+pub def type Ident {
+    string name
+    Span span
+}
+
+pub def enum Vis { Default, Pub, Priv }
+
+pub def enum StructKind { Normal, Abstract, Static }
+
+pub def enum UnOp { Neg, Not, BitNot }
+
+pub def enum BinOp { Add, Sub, Mul, Div, Mod, Eq, Ne, Lt, Gt, Le, Ge, And, Or, BitAnd, BitOr, BitXor, Shl, Shr, UShr }
+
+/** How a binary operator is written. */
+pub fun symbolOf(op: BinOp): string {
+    return match op {
+        BinOp.Add => "+"
+        BinOp.Sub => "-"
+        BinOp.Mul => "*"
+        BinOp.Div => "/"
+        BinOp.Mod => "%"
+        BinOp.Eq => "=="
+        BinOp.Ne => "!="
+        BinOp.Lt => "<"
+        BinOp.Gt => ">"
+        BinOp.Le => "<="
+        BinOp.Ge => ">="
+        BinOp.And => "&&"
+        BinOp.Or => "||"
+        BinOp.BitAnd => "&"
+        BinOp.BitOr => "|"
+        BinOp.BitXor => "^"
+        BinOp.Shl => "<<"
+        BinOp.Shr => ">>"
+        BinOp.UShr => ">>>"
+    }
+}
+
+pub def type Module {
+    [Item] items
+    bool hasDestroy
+}
+
+pub def type AnnArg {
+    Ident? key
+    Expr value
+}
+
+pub def type Annotation {
+    Ident name
+    [AnnArg] args
+    Span span
+}
+
+pub def type Item {
+    ItemKind kind
+    Vis vis
+    Span span
+    [Annotation] annotations
+}
+
+pub def type ImportPath {
+    string path
+    Span span
+}
+
+pub def enum ItemKind {
+    Import(paths: [ImportPath]),
+    Fun(decl: FunDecl),
+    Definition(d: Def),
+    Statement(stmt: Stmt)
+}
+
+pub def type Param {
+    Ident name
+    TypeExpr ty
+}
+
+pub def type FunDecl {
+    Ident name
+    [Param] params
+    TypeExpr? ret
+    Block body
+    bool isAsync
+    bool isStatic
+    Span span
+    [Annotation] annotations
+    bool bodyless
+    bool isAbstract
+    [Ident] tparams
+}
+
+pub def type FunSig {
+    Ident name
+    [Param] params
+    TypeExpr? ret
+    bool isAsync
+}
+
+pub def type Field {
+    Ident name
+    TypeExpr ty
+    Expr? value
+    Vis vis
+    [Annotation] annotations
+}
+
+pub def type SuperRef {
+    Ident name
+    [Expr]? args
+}
+
+pub def type StaticVal {
+    Ident name
+    TypeExpr? ty
+    Expr init
+    bool isConst
+    Vis vis
+}
+
+pub def type Method {
+    Vis vis
+    FunDecl decl
+}
+
+pub def type StructDef {
+    Ident name
+    StructKind kind
+    [Param] params
+    [[Annotation]] paramAnns
+    SuperRef? extends
+    [SuperRef] supers
+    int colonExtra
+    [Field] fields
+    [Method] methods
+    [StaticVal] statics
+    [Ident] tparams
+}
+
+pub def type Variant {
+    Ident name
+    [Param]? fields
+}
+
+pub def enum Def {
+    Type(name: Ident, fields: [Field], tparams: [Ident]),
+    Alias(name: Ident, ty: TypeExpr),
+    Interface(name: Ident, methods: [FunSig]),
+    Struct(s: StructDef),
+    Enum(name: Ident, variants: [Variant]),
+    Annotation(name: Ident, fields: [Field])
+}
+
+pub def type TypeExpr {
+    TypeKind kind
+    Span span
+}
+
+pub def enum TypeKind {
+    Named(name: string, args: [TypeExpr]),
+    Array(elem: TypeExpr),
+    Optional(inner: TypeExpr),
+    Map(key: TypeExpr, value: TypeExpr),
+    Func(params: [TypeExpr], ret: TypeExpr?)
+}
+
+pub def type Block {
+    [Stmt] stmts
+    Span span
+}
+
+pub def type Stmt {
+    StmtKind kind
+    Span span
+}
+
+pub def enum ForIter {
+    Range(from: Expr, to: Expr, inclusive: bool),
+    Over(value: Expr)
+}
+
+pub def enum StmtKind {
+    Var(name: Ident, ty: TypeExpr?, init: Expr?, isConst: bool),
+    Eval(value: Expr),
+    If(cond: Expr, then: Block, els: Block?),
+    While(cond: Expr, body: Block),
+    For(init: Stmt?, cond: Expr?, step: Expr?, body: Block),
+    ForIn(binding: Ident, index: Ident?, iter: ForIter, body: Block),
+    Return(value: Expr?),
+    Break,
+    Continue,
+    Nested(block: Block),
+    Extend(target: Ident, decl: FunDecl),
+    Destroy(target: Ident, args: [Expr])
+}
+
+pub def type Expr {
+    ExprKind kind
+    Span span
+}
+
+pub def type FieldInit {
+    Ident name
+    Expr value
+}
+
+pub def type MapPair {
+    Expr key
+    Expr value
+}
+
+pub def enum TplExpr {
+    Lit(text: string),
+    Code(value: Expr)
+}
+
+pub def enum Pattern {
+    Value(value: Expr),
+    Range(from: Expr, to: Expr, inclusive: bool),
+    Is(ty: TypeExpr, bind: Ident?)
+}
+
+pub def enum ArmBody {
+    Value(value: Expr),
+    Body(block: Block)
+}
+
+pub def type MatchArm {
+    [Pattern] patterns
+    Expr? guard
+    ArmBody body
+    Span span
+}
+
+pub def enum ExprKind {
+    Int(value: int),
+    BigInt(digits: string, hex: bool),
+    Float(value: float),
+    Str(value: string),
+    Template(parts: [TplExpr]),
+    Bool(value: bool),
+    Null,
+    Ident(name: string),
+    Unary(op: UnOp, operand: Expr),
+    Binary(op: BinOp, left: Expr, right: Expr),
+    Assign(target: Expr, op: BinOp?, value: Expr),
+    Call(callee: Expr, args: [Expr]),
+    Field(obj: Expr, name: Ident),
+    Index(obj: Expr, index: Expr),
+    Array(items: [Expr]),
+    StructLit(ty: Ident?, fields: [FieldInit]),
+    MapLit(pairs: [MapPair]),
+    Is(value: Expr, ty: TypeExpr),
+    As(value: Expr, ty: TypeExpr),
+    Await(value: Expr),
+    Lambda(decl: FunDecl),
+    NotNull(value: Expr),
+    New(ty: Ident, targs: [TypeExpr], args: [Expr]),
+    SafeGet(obj: Expr, name: Ident, args: [Expr]?),
+    Coalesce(left: Expr, right: Expr),
+    SafeAs(value: Expr, ty: TypeExpr),
+    Match(subject: Expr?, arms: [MatchArm])
+}

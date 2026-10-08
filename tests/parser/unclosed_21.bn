@@ -1,0 +1,3 @@
+fun before() {}
+@Ann(1, k: ) fun h() {}
+fun after() {}

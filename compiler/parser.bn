@@ -1,0 +1,2661 @@
+import "ast.bn"
+import "lexer.bn"
+
+/** The source text of a token kind that has no value, like `+=` or `fun`. */
+pub fun symbol(k: Kind): string {
+    return match k {
+        Kind.Fun => "fun"
+        Kind.Var => "var"
+        Kind.Const => "const"
+        Kind.Def => "def"
+        Kind.If => "if"
+        Kind.Else => "else"
+        Kind.While => "while"
+        Kind.For => "for"
+        Kind.In => "in"
+        Kind.Return => "return"
+        Kind.Break => "break"
+        Kind.Continue => "continue"
+        Kind.True => "true"
+        Kind.False => "false"
+        Kind.Null => "null"
+        Kind.Import => "import"
+        Kind.Pub => "pub"
+        Kind.Priv => "priv"
+        Kind.Async => "async"
+        Kind.Await => "await"
+        Kind.Is => "is"
+        Kind.As => "as"
+        Kind.Plus => "+"
+        Kind.Minus => "-"
+        Kind.Star => "*"
+        Kind.Slash => "/"
+        Kind.Percent => "%"
+        Kind.Assign => "="
+        Kind.PlusEq => "+="
+        Kind.MinusEq => "-="
+        Kind.StarEq => "*="
+        Kind.SlashEq => "/="
+        Kind.PercentEq => "%="
+        Kind.EqEq => "=="
+        Kind.NotEq => "!="
+        Kind.Lt => "<"
+        Kind.Gt => ">"
+        Kind.Le => "<="
+        Kind.Ge => ">="
+        Kind.AndAnd => "&&"
+        Kind.OrOr => "||"
+        Kind.Bang => "!"
+        Kind.LParen => "("
+        Kind.RParen => ")"
+        Kind.LBrace => "{"
+        Kind.RBrace => "}"
+        Kind.LBracket => "["
+        Kind.RBracket => "]"
+        Kind.Comma => ","
+        Kind.Semi => ";"
+        Kind.Colon => ":"
+        Kind.ColonColon => "::"
+        Kind.Dot => "."
+        Kind.DotDot => ".."
+        Kind.DotDotEq => "..="
+        Kind.Question => "?"
+        Kind.QuestionDot => "?."
+        Kind.QuestionQuestion => "??"
+        Kind.Arrow => "->"
+        Kind.At => "@"
+        Kind.Amp => "&"
+        Kind.Pipe => "|"
+        Kind.Caret => "^"
+        Kind.Tilde => "~"
+        Kind.Shl => "<<"
+        Kind.Shr => ">>"
+        Kind.UShr => ">>>"
+        Kind.AmpEq => "&="
+        Kind.PipeEq => "|="
+        Kind.CaretEq => "^="
+        Kind.ShlEq => "<<="
+        Kind.ShrEq => ">>="
+        Kind.UShrEq => ">>>="
+        Kind.FatArrow => "=>"
+        else => "?"
+    }
+}
+
+/** A float written the way Rust's `{}` formatting writes it: never with an exponent, and without a trailing `.0`. */
+fun plainFloat(f: float): string {
+    var s = toString(f)
+    if (s == "Infinity") {
+        return "inf"
+    }
+    if (s == "-Infinity") {
+        return "-inf"
+    }
+    if (s == "NaN") {
+        return s
+    }
+    var neg = startsWith(s, "-")
+    if (neg) {
+        s = substring(s, 1)
+    }
+    var e = indexOf(s, "e")
+    if (e < 0) {
+        if (endsWith(s, ".0")) {
+            s = substring(s, 0, len(s) - 2)
+        }
+    } else {
+        var mant = substring(s, 0, e)
+        var exp = toInt(substring(s, e + 1))
+        var point = indexOf(mant, ".")
+        if (point < 0) {
+            point = len(mant)
+        }
+        var digits = replace(mant, ".", "")
+        var at = point + exp
+        if (at >= len(digits)) {
+            s = digits + repeat("0", at - len(digits))
+        } else if (at <= 0) {
+            s = "0." + repeat("0", -at) + digits
+        } else {
+            s = substring(digits, 0, at) + "." + substring(digits, at)
+        }
+    }
+    if (neg) {
+        return "-" + s
+    }
+    return s
+}
+
+/** How an error message names a token, like ``identifier `x` `` or `` `)` ``. */
+pub fun describe(t: Token): string {
+    return match t.kind {
+        Kind.Ident => "identifier `${t.text}`"
+        Kind.Int => "number `${t.value}`"
+        Kind.BigInt => "number `${t.text}`"
+        Kind.Float => "number `${plainFloat(t.number)}`"
+        Kind.Str, Kind.Template => "string literal"
+        Kind.Eof => "end of file"
+        else => "`${symbol(t.kind)}`"
+    }
+}
+
+fun spanOf(t: Token): Span {
+    return Span { start: t.start, end: t.end }
+}
+
+fun tok(kind: Kind, start: int, end: int, nl: bool): Token {
+    return Token { kind: kind, start: start, end: end, nl: nl, text: "", value: 0, number: 0.0, parts: [] }
+}
+
+fun isOldDefWord(s: string): bool {
+    return s == "type" || s == "class" || s == "interface" || s == "enum"
+}
+
+fun expr(kind: ExprKind, span: Span): Expr {
+    return Expr { kind: kind, span: span }
+}
+
+fun ident(name: string, span: Span): Ident {
+    return Ident { name: name, span: span }
+}
+
+fun capitalized(s: string): string {
+    if (len(s) == 0) {
+        return s
+    }
+    return upper(substring(s, 0, 1)) + substring(s, 1)
+}
+
+fun annotationSpan(anns: [Annotation], name: string): Span? {
+    for a in anns {
+        if (a.name.name == name) {
+            return a.span
+        }
+    }
+    return null
+}
+
+fun startsUpper(s: string): bool {
+    if (len(s) == 0) {
+        return false
+    }
+    var c = charCode(s)
+    return c >= 65 && c <= 90
+}
+
+fun fun_(name: Ident, params: [Param], ret: TypeExpr?, body: Block, span: Span): FunDecl {
+    return FunDecl {
+        name: name,
+        params: params,
+        ret: ret,
+        body: body,
+        isAsync: false,
+        isStatic: false,
+        span: span,
+        annotations: [],
+        bodyless: false,
+        isAbstract: false,
+        tparams: []
+    }
+}
+
+def struct Parser(toks: [Token]) {
+    int pos = 0
+    [Diag] diags = []
+    int speculative = 0
+    bool noStruct = false
+    bool hasDestroy = false
+    [int] splits = []
+
+    fun last(): int {
+        return len(toks) - 1
+    }
+
+    fun peek(): Token {
+        if (pos < last()) {
+            return toks[pos]
+        }
+        return toks[last()]
+    }
+
+    fun peekAt(n: int): Token {
+        if (pos + n < last()) {
+            return toks[pos + n]
+        }
+        return toks[last()]
+    }
+
+    fun at(k: Kind): bool {
+        return peek().kind == k
+    }
+
+    fun atIdent(s: string): bool {
+        var t = peek()
+        return t.kind == Kind.Ident && t.text == s
+    }
+
+    fun advance(): Token {
+        var t = peek()
+        if (pos < last()) {
+            pos += 1
+        }
+        return t
+    }
+
+    fun eat(k: Kind): bool {
+        if (at(k)) {
+            advance()
+            return true
+        }
+        return false
+    }
+
+    fun prevSpan(): Span {
+        if (pos == 0) {
+            return spanOf(peek())
+        }
+        return spanOf(toks[pos - 1])
+    }
+
+    fun err(span: Span, message: string) {
+        if (speculative == 0) {
+            diags.push(Diag { start: span.start, end: span.end, message: message })
+        }
+    }
+
+    fun expect(k: Kind, what: string): Span? {
+        if (at(k)) {
+            return spanOf(advance())
+        }
+        var t = peek()
+        var span = spanOf(t)
+        if (t.nl && pos > 0) {
+            span = prevSpan()
+        }
+        err(span, "expected ${what} but found ${describe(t)}")
+        return null
+    }
+
+    fun expectGt(): Span? {
+        var t = peek()
+        var rest = match t.kind {
+            Kind.Shr => Kind.Gt
+            Kind.UShr => Kind.Shr
+            Kind.Ge => Kind.Assign
+            Kind.ShrEq => Kind.Ge
+            Kind.UShrEq => Kind.ShrEq
+            else => Kind.Eof
+        }
+        if (rest == Kind.Eof) {
+            return expect(Kind.Gt, "`>`")
+        }
+        var p = pos
+        if (p > last()) {
+            p = last()
+        }
+        toks[p] = tok(Kind.Gt, t.start, t.start + 1, t.nl)
+        insert(toks, p + 1, tok(rest, t.start + 1, t.end, false))
+        splits.push(p)
+        return spanOf(advance())
+    }
+
+    fun unsplit(mark: int) {
+        while (len(splits) > mark) {
+            var p = splits.pop()
+            var rest = remove(toks, p + 1)
+            var kind = match rest.kind {
+                Kind.Gt => Kind.Shr
+                Kind.Shr => Kind.UShr
+                Kind.Assign => Kind.Ge
+                Kind.Ge => Kind.ShrEq
+                else => Kind.UShrEq
+            }
+            var t = toks[p]
+            toks[p] = tok(kind, t.start, rest.end, t.nl)
+        }
+    }
+
+    fun ident(what: string): Ident? {
+        var t = peek()
+        if (t.kind == Kind.Ident) {
+            advance()
+            return Ident { name: t.text, span: spanOf(t) }
+        }
+        err(spanOf(t), "expected ${what} but found ${describe(t)}")
+        return null
+    }
+
+    fun sync() {
+        syncUntil(false)
+    }
+
+    fun syncStmt() {
+        syncUntil(true)
+    }
+
+    fun syncUntil(keepBrace: bool) {
+        var start = pos
+        var depth = 0
+        while (true) {
+            var t = peek()
+            if (t.kind == Kind.Eof) {
+                return
+            }
+            if (pos > start && depth == 0 && t.nl) {
+                return
+            }
+            if (t.kind == Kind.LBrace || t.kind == Kind.LParen || t.kind == Kind.LBracket) {
+                depth += 1
+            } else if (t.kind == Kind.RBrace || t.kind == Kind.RParen || t.kind == Kind.RBracket) {
+                if (depth == 0) {
+                    if (pos == start && !(keepBrace && t.kind == Kind.RBrace)) {
+                        advance()
+                    }
+                    return
+                }
+                depth -= 1
+            } else if (t.kind == Kind.Semi && depth == 0) {
+                advance()
+                return
+            }
+            advance()
+        }
+    }
+
+    fun endStmt() {
+        if (eat(Kind.Semi)) {
+            return
+        }
+        var t = peek()
+        if (t.nl || t.kind == Kind.RBrace || t.kind == Kind.Eof) {
+            return
+        }
+        err(spanOf(t), "expected end of statement but found ${describe(t)}")
+        sync()
+    }
+
+    fun items(): [Item] {
+        [Item] out = []
+        while (!at(Kind.Eof)) {
+            if (eat(Kind.Semi)) {
+                continue
+            }
+            var before = pos
+            var it = item()
+            if (it != null) {
+                out.push(it)
+            } else {
+                if (pos == before) {
+                    advance()
+                }
+                sync()
+            }
+        }
+        return out
+    }
+
+    fun annotations(): [Annotation]? {
+        [Annotation] out = []
+        while (at(Kind.At)) {
+            var start = spanOf(advance())
+            var name = ident("annotation name")
+            if (name == null) {
+                return null
+            }
+            [AnnArg] args = []
+            if (at(Kind.LParen) && !peek().nl) {
+                advance()
+                while (!at(Kind.RParen) && !at(Kind.Eof)) {
+                    Ident? key = null
+                    if (peek().kind == Kind.Ident && peekAt(1).kind == Kind.Colon) {
+                        key = ident("argument name")
+                        if (key == null) {
+                            return null
+                        }
+                        advance()
+                    }
+                    var value = expr()
+                    if (value == null) {
+                        return null
+                    }
+                    args.push(AnnArg { key: key, value: value })
+                    if (!eat(Kind.Comma)) {
+                        break
+                    }
+                }
+                if (expect(Kind.RParen, "`)` to close the annotation") == null) {
+                    return null
+                }
+            }
+            out.push(Annotation { name: name, args: args, span: join(start, prevSpan()) })
+        }
+        return out
+    }
+
+    fun item(): Item? {
+        var start = spanOf(peek())
+        var anns = annotations()
+        if (anns == null) {
+            return null
+        }
+        var vis = Vis.Default
+        if (eat(Kind.Pub)) {
+            vis = Vis.Pub
+        } else if (eat(Kind.Priv)) {
+            vis = Vis.Priv
+        }
+        ItemKind? kind = null
+        var t = peek()
+        if (t.kind == Kind.Import) {
+            advance()
+            var list = importList()
+            if (list == null) {
+                return null
+            }
+            kind = ItemKind.Import(list)
+        } else if ((t.kind == Kind.Fun || t.kind == Kind.Async) && !isLambdaStart()) {
+            var f = funDecl(false)
+            if (f == null) {
+                return null
+            }
+            kind = ItemKind.Fun(f)
+        } else if (t.kind == Kind.Def) {
+            advance()
+            if (at(Kind.Fun) || at(Kind.Async)) {
+                var f = funDecl(false)
+                if (f == null) {
+                    return null
+                }
+                kind = ItemKind.Fun(f)
+            } else {
+                var d = definition()
+                if (d == null) {
+                    return null
+                }
+                expandAccessors(d, anns)
+                kind = ItemKind.Definition(d)
+            }
+        } else if (t.kind == Kind.Ident && isOldDefWord(t.text) && peekAt(1).kind == Kind.Ident && !peekAt(1).nl) {
+            err(spanOf(t), "definitions use the `def` keyword")
+            var d = definition()
+            if (d == null) {
+                return null
+            }
+            kind = ItemKind.Definition(d)
+        } else {
+            if (vis != Vis.Default && !at(Kind.Var) && !at(Kind.Const) && !looksLikeTypedDecl()) {
+                err(spanOf(peek()), "`pub` and `priv` can only be used on declarations")
+            }
+            var s = stmt()
+            if (s == null) {
+                return null
+            }
+            kind = ItemKind.Statement(s)
+        }
+        if (kind == null) {
+            return null
+        }
+        ItemKind k = kind
+        var span = join(start, prevSpan())
+        var itemAnns = anns
+        match k {
+            ItemKind.Fun(f) => {
+                f.annotations = itemAnns
+                itemAnns = []
+            }
+            ItemKind.Definition(_) => {}
+            else => {
+                if (len(itemAnns) > 0) {
+                    err(itemAnns[0].span, "annotations can only be placed on definitions, functions, fields and methods")
+                }
+                itemAnns = []
+            }
+        }
+        return Item { kind: k, vis: vis, span: span, annotations: itemAnns }
+    }
+
+    fun getterSetterError(spans: [Span]) {
+        for s in spans {
+            err(s, "@Getter and @Setter generate methods, so they can only be used on structs and their fields")
+        }
+    }
+
+    fun expandAccessors(d: Def, anns: [Annotation]) {
+        var classGet = annotationSpan(anns, "Getter")
+        var classSet = annotationSpan(anns, "Setter")
+        match d {
+            Def.Struct(s) => {
+                [Method] extra = []
+                [Field] all = []
+                for i in 0..len(s.params) {
+                    var p = s.params[i]
+                    all.push(Field { name: p.name, ty: p.ty, value: null, vis: Vis.Default, annotations: s.paramAnns[i] })
+                }
+                for f in s.fields {
+                    all.push(f)
+                }
+                for f in all {
+                    var get = annotationSpan(f.annotations, "Getter") ?? classGet
+                    var set = annotationSpan(f.annotations, "Setter") ?? classSet
+                    var cap = capitalized(f.name.name)
+                    if (get != null) {
+                        var isBool = false
+                        match f.ty.kind {
+                            TypeKind.Named(n, args) => isBool = n == "bool" && len(args) == 0
+                            else => {}
+                        }
+                        var prefix = "get"
+                        if (isBool) {
+                            prefix = "is"
+                        }
+                        var name = prefix + cap
+                        if (!hasMethod(s.methods, name)) {
+                            var self_ = expr(ExprKind.Ident("self"), get)
+                            var read = expr(ExprKind.Field(self_, ident(f.name.name, get)), get)
+                            var body = Block { stmts: [Stmt { kind: StmtKind.Return(read), span: get }], span: get }
+                            extra.push(Method { vis: f.vis, decl: fun_(ident(name, get), [], f.ty, body, get) })
+                        }
+                    }
+                    if (set != null) {
+                        var name = "set" + cap
+                        if (!hasMethod(s.methods, name)) {
+                            var self_ = expr(ExprKind.Ident("self"), set)
+                            var target = expr(ExprKind.Field(self_, ident(f.name.name, set)), set)
+                            var value = expr(ExprKind.Ident(f.name.name), set)
+                            var assign = expr(ExprKind.Assign(target, null, value), set)
+                            var body = Block { stmts: [Stmt { kind: StmtKind.Eval(assign), span: set }], span: set }
+                            var param = Param { name: ident(f.name.name, set), ty: f.ty }
+                            extra.push(Method { vis: f.vis, decl: fun_(ident(name, set), [param], null, body, set) })
+                        }
+                    }
+                }
+                for m in extra {
+                    s.methods.push(m)
+                }
+            }
+            Def.Type(_, fields, _), Def.Annotation(_, fields) => {
+                getterSetterError(accessorSpans(anns))
+                [Span] spans = []
+                for f in fields {
+                    for s in accessorSpans(f.annotations) {
+                        spans.push(s)
+                    }
+                }
+                getterSetterError(spans)
+            }
+            else => getterSetterError(accessorSpans(anns))
+        }
+    }
+
+    fun accessorSpans(anns: [Annotation]): [Span] {
+        [Span] out = []
+        for a in anns {
+            if (a.name.name == "Getter" || a.name.name == "Setter") {
+                out.push(a.span)
+            }
+        }
+        return out
+    }
+
+    fun hasMethod(methods: [Method], name: string): bool {
+        for m in methods {
+            if (m.decl.name.name == name) {
+                return true
+            }
+        }
+        return false
+    }
+
+    fun isLambdaStart(): bool {
+        var i = 0
+        if (peekAt(0).kind == Kind.Async) {
+            i = 1
+        }
+        return peekAt(i).kind == Kind.Fun && peekAt(i + 1).kind == Kind.LParen
+    }
+
+    fun importList(): [ImportPath]? {
+        [ImportPath] out = []
+        if (eat(Kind.LParen)) {
+            while (!at(Kind.RParen) && !at(Kind.Eof)) {
+                var t = advance()
+                if (t.kind == Kind.Str) {
+                    out.push(ImportPath { path: t.text, span: spanOf(t) })
+                } else if (t.kind != Kind.Comma && t.kind != Kind.Semi) {
+                    err(spanOf(t), "expected import path string but found ${describe(t)}")
+                    return null
+                }
+            }
+            if (expect(Kind.RParen, "`)` to close import list") == null) {
+                return null
+            }
+        } else {
+            var t = advance()
+            if (t.kind != Kind.Str) {
+                err(spanOf(t), "expected import path string but found ${describe(t)}")
+                return null
+            }
+            out.push(ImportPath { path: t.text, span: spanOf(t) })
+        }
+        endStmt()
+        return out
+    }
+
+    fun funDecl(inClass: bool): FunDecl? {
+        var start = spanOf(peek())
+        var isStatic = false
+        if (inClass && atIdent("static")) {
+            advance()
+            isStatic = true
+        }
+        var isAsync = eat(Kind.Async)
+        if (expect(Kind.Fun, "`fun`") == null) {
+            return null
+        }
+        var name = ident("function name")
+        if (name == null) {
+            return null
+        }
+        var tparams = typeParams()
+        if (tparams == null) {
+            return null
+        }
+        var sig = signature()
+        if (sig == null) {
+            return null
+        }
+        var p = peek()
+        var bodyless = !at(Kind.LBrace) && (p.nl || p.kind == Kind.Eof || p.kind == Kind.Semi || p.kind == Kind.RBrace)
+        Block? body = null
+        if (bodyless) {
+            body = Block { stmts: [], span: prevSpan() }
+        } else {
+            body = block()
+        }
+        if (body == null) {
+            return null
+        }
+        return FunDecl {
+            name: name,
+            params: sig.params,
+            ret: sig.ret,
+            body: body,
+            isAsync: isAsync,
+            isStatic: isStatic,
+            span: join(start, prevSpan()),
+            annotations: [],
+            bodyless: bodyless,
+            isAbstract: false,
+            tparams: tparams
+        }
+    }
+
+    fun typeParams(): [Ident]? {
+        [Ident] out = []
+        if (!at(Kind.Lt) || peek().nl) {
+            return out
+        }
+        advance()
+        while (true) {
+            var t = ident("type parameter name")
+            if (t == null) {
+                return null
+            }
+            out.push(t)
+            if (!eat(Kind.Comma)) {
+                break
+            }
+        }
+        if (expectGt() == null) {
+            return null
+        }
+        return out
+    }
+
+    fun signature(): FunSig? {
+        if (expect(Kind.LParen, "`(` to start parameters") == null) {
+            return null
+        }
+        [Param] params = []
+        while (!at(Kind.RParen) && !at(Kind.Eof)) {
+            var p = param()
+            if (p == null) {
+                return null
+            }
+            params.push(p)
+            if (!eat(Kind.Comma)) {
+                break
+            }
+        }
+        if (expect(Kind.RParen, "`)` to close parameters") == null) {
+            return null
+        }
+        TypeExpr? ret = null
+        if (eat(Kind.Colon) || eat(Kind.Arrow)) {
+            ret = ty()
+            if (ret == null) {
+                return null
+            }
+        }
+        return FunSig { name: ident("", prevSpan()), params: params, ret: ret, isAsync: false }
+    }
+
+    fun param(): Param? {
+        if (at(Kind.LBrace) && (peekAt(1).nl || peekAt(1).kind == Kind.RBrace)) {
+            err(spanOf(peek()), "expected parameter name or `)` to close the parameter list")
+            return null
+        }
+        if (peek().kind == Kind.Ident && peekAt(1).kind == Kind.Colon) {
+            var name = ident("parameter name")
+            if (name == null) {
+                return null
+            }
+            advance()
+            var t = ty()
+            if (t == null) {
+                return null
+            }
+            return Param { name: name, ty: t }
+        }
+        var t = ty()
+        if (t == null) {
+            return null
+        }
+        var name = ident("parameter name")
+        if (name == null) {
+            return null
+        }
+        return Param { name: name, ty: t }
+    }
+
+    fun structWord(n: int): bool {
+        var t = peekAt(n)
+        return t.kind == Kind.Ident && (t.text == "struct" || t.text == "class")
+    }
+
+    fun definition(): Def? {
+        var kind = StructKind.Normal
+        if (atIdent("abstract") && structWord(1)) {
+            advance()
+            kind = StructKind.Abstract
+        }
+        if (atIdent("static") && structWord(1)) {
+            advance()
+            kind = StructKind.Static
+        }
+        var kt = peek()
+        if (kt.kind != Kind.Ident) {
+            err(spanOf(kt), "expected `type`, `interface`, `struct`, `enum`, `annotation` or `fun` after `def` but found ${describe(kt)}")
+            return null
+        }
+        var kw = kt.text
+        var kwSpan = spanOf(advance())
+        var name = ident("a name")
+        if (name == null) {
+            return null
+        }
+        [Ident] tparams = []
+        if (kw == "struct" || kw == "class" || kw == "type" || kw == "record") {
+            var tp = typeParams()
+            if (tp == null) {
+                return null
+            }
+            tparams = tp
+        }
+        if (kw == "struct" || kw == "class") {
+            if (kw == "class") {
+                err(kwSpan, "classes are now structs")
+            }
+            return structDef(name, kind, tparams)
+        }
+        if (kw == "type" || kw == "record" || kw == "annotation") {
+            if (kw != "annotation" && at(Kind.Assign)) {
+                if (len(tparams) > 0) {
+                    err(tparams[0].span, "type aliases cannot have type parameters")
+                }
+                advance()
+                var t = ty()
+                if (t == null) {
+                    return null
+                }
+                endStmt()
+                return Def.Alias(name, t)
+            }
+            [Field] fields = []
+            if (kw != "annotation" || at(Kind.LBrace)) {
+                if (expect(Kind.LBrace, "`{`") == null) {
+                    return null
+                }
+                while (!at(Kind.RBrace) && !at(Kind.Eof)) {
+                    if (eat(Kind.Comma) || eat(Kind.Semi)) {
+                        continue
+                    }
+                    var f = annotatedField()
+                    if (f != null) {
+                        fields.push(f)
+                    } else {
+                        syncMember()
+                    }
+                }
+                if (expect(Kind.RBrace, "`}`") == null) {
+                    return null
+                }
+            }
+            if (kw == "annotation") {
+                return Def.Annotation(name, fields)
+            }
+            return Def.Type(name, fields, tparams)
+        }
+        if (kw == "interface" || kw == "trait") {
+            if (expect(Kind.LBrace, "`{`") == null) {
+                return null
+            }
+            [FunSig] methods = []
+            while (!at(Kind.RBrace) && !at(Kind.Eof)) {
+                if (eat(Kind.Comma) || eat(Kind.Semi)) {
+                    continue
+                }
+                var m = interfaceMethod()
+                if (m != null) {
+                    methods.push(m)
+                } else {
+                    syncMember()
+                }
+            }
+            if (expect(Kind.RBrace, "`}`") == null) {
+                return null
+            }
+            return Def.Interface(name, methods)
+        }
+        if (kw == "enum") {
+            if (expect(Kind.LBrace, "`{`") == null) {
+                return null
+            }
+            [Variant] variants = []
+            while (!at(Kind.RBrace) && !at(Kind.Eof)) {
+                if (eat(Kind.Comma) || eat(Kind.Semi)) {
+                    continue
+                }
+                var v = ident("enum variant")
+                if (v == null) {
+                    return null
+                }
+                [Param]? fs = null
+                if (eat(Kind.LParen)) {
+                    [Param] ps = []
+                    while (!at(Kind.RParen) && !at(Kind.Eof)) {
+                        var p = param()
+                        if (p == null) {
+                            return null
+                        }
+                        ps.push(p)
+                        if (!eat(Kind.Comma)) {
+                            break
+                        }
+                    }
+                    if (expect(Kind.RParen, "`)` to close the variant's fields") == null) {
+                        return null
+                    }
+                    fs = ps
+                }
+                variants.push(Variant { name: v, fields: fs })
+            }
+            if (expect(Kind.RBrace, "`}`") == null) {
+                return null
+            }
+            return Def.Enum(name, variants)
+        }
+        err(kwSpan, "unknown definition kind `${kw}` (expected `type`, `interface`, `struct`, `enum`, `annotation` or `fun`)")
+        return null
+    }
+
+    fun annotatedField(): Field? {
+        var anns = annotations()
+        if (anns == null) {
+            return null
+        }
+        var f = field(Vis.Default)
+        if (f == null) {
+            return null
+        }
+        f.annotations = anns
+        return f
+    }
+
+    fun interfaceMethod(): FunSig? {
+        var isAsync = eat(Kind.Async)
+        if (expect(Kind.Fun, "`fun` in interface body") == null) {
+            return null
+        }
+        var name = ident("method name")
+        if (name == null) {
+            return null
+        }
+        var sig = signature()
+        if (sig == null) {
+            return null
+        }
+        if (at(Kind.LBrace)) {
+            err(spanOf(peek()), "interface methods cannot have a body")
+            if (block() == null) {
+                return null
+            }
+        }
+        return FunSig { name: name, params: sig.params, ret: sig.ret, isAsync: isAsync }
+    }
+
+    fun superArgs(): [Expr]? {
+        if (at(Kind.LParen) && !peek().nl) {
+            return callArgs()
+        }
+        return null
+    }
+
+    fun superRef(what: string): SuperRef? {
+        var s = ident(what)
+        if (s == null) {
+            return null
+        }
+        [Expr]? args = null
+        if (at(Kind.LParen) && !peek().nl) {
+            args = callArgs()
+            if (args == null) {
+                return null
+            }
+        }
+        return SuperRef { name: s, args: args }
+    }
+
+    fun structDef(name: Ident, kind: StructKind, tparams: [Ident]): Def? {
+        [Param] params = []
+        [[Annotation]] paramAnns = []
+        if (at(Kind.LParen) && !peek().nl) {
+            advance()
+            while (!at(Kind.RParen) && !at(Kind.Eof)) {
+                var a = annotations()
+                if (a == null) {
+                    return null
+                }
+                paramAnns.push(a)
+                var p = param()
+                if (p == null) {
+                    return null
+                }
+                params.push(p)
+                if (!eat(Kind.Comma)) {
+                    break
+                }
+            }
+            if (expect(Kind.RParen, "`)` to close the constructor parameters") == null) {
+                return null
+            }
+        }
+        SuperRef? extends = null
+        [SuperRef] supers = []
+        if (eat(Kind.Colon)) {
+            extends = superRef("the name of the struct to extend")
+            if (extends == null) {
+                return null
+            }
+            if (eat(Kind.Comma)) {
+                while (peek().kind == Kind.Ident) {
+                    var s = superRef("a name")
+                    if (s == null) {
+                        return null
+                    }
+                    supers.push(s)
+                    if (!eat(Kind.Comma)) {
+                        break
+                    }
+                }
+            }
+        }
+        var colonExtra = len(supers)
+        if (eat(Kind.ColonColon)) {
+            while (true) {
+                var s = superRef("an interface or abstract struct name")
+                if (s == null) {
+                    return null
+                }
+                supers.push(s)
+                if (!eat(Kind.Comma)) {
+                    break
+                }
+            }
+        }
+        if (expect(Kind.LBrace, "`{`") == null) {
+            return null
+        }
+        [Field] fields = []
+        [Method] methods = []
+        [StaticVal] statics = []
+        while (!at(Kind.RBrace) && !at(Kind.Eof)) {
+            if (eat(Kind.Comma) || eat(Kind.Semi)) {
+                continue
+            }
+            var memberAnns = annotations()
+            if (memberAnns == null) {
+                syncMember()
+                continue
+            }
+            var vis = Vis.Default
+            if (eat(Kind.Pub)) {
+                vis = Vis.Pub
+            } else if (eat(Kind.Priv)) {
+                vis = Vis.Priv
+            }
+            var next = peekAt(1).kind
+            if (atIdent("abstract") && (next == Kind.Fun || next == Kind.Async)) {
+                var absSpan = spanOf(advance())
+                var f = funDecl(true)
+                if (f == null) {
+                    syncMember()
+                    continue
+                }
+                if (!f.bodyless) {
+                    err(f.name.span, "abstract method `${f.name.name}` cannot have a body")
+                }
+                if (kind != StructKind.Abstract) {
+                    err(absSpan, "abstract methods can only be declared in an `abstract struct`")
+                }
+                f.bodyless = true
+                f.isAbstract = true
+                f.body.stmts = []
+                f.annotations = memberAnns
+                methods.push(Method { vis: vis, decl: f })
+                continue
+            }
+            var isMethod = at(Kind.Fun) || at(Kind.Async) || (atIdent("static") && (next == Kind.Fun || next == Kind.Async))
+            if (isMethod) {
+                var f = funDecl(true)
+                if (f == null) {
+                    syncMember()
+                    continue
+                }
+                if (kind == StructKind.Static) {
+                    f.isStatic = true
+                }
+                f.annotations = memberAnns
+                methods.push(Method { vis: vis, decl: f })
+                continue
+            }
+            if (kind == StructKind.Static || atIdent("static")) {
+                if (atIdent("static")) {
+                    advance()
+                }
+                var v = staticVal(vis)
+                if (v != null) {
+                    statics.push(v)
+                } else {
+                    syncMember()
+                }
+                continue
+            }
+            if (at(Kind.Var) || at(Kind.Const)) {
+                advance()
+            }
+            var f = field(vis)
+            if (f != null) {
+                f.annotations = memberAnns
+                fields.push(f)
+            } else {
+                syncMember()
+            }
+        }
+        if (expect(Kind.RBrace, "`}`") == null) {
+            return null
+        }
+        return Def.Struct(StructDef {
+            name: name,
+            kind: kind,
+            params: params,
+            paramAnns: paramAnns,
+            extends: extends,
+            supers: supers,
+            colonExtra: colonExtra,
+            fields: fields,
+            methods: methods,
+            statics: statics,
+            tparams: tparams
+        })
+    }
+
+    fun staticVal(vis: Vis): StaticVal? {
+        var hasKw = false
+        var isConst = false
+        if (at(Kind.Var) || at(Kind.Const)) {
+            hasKw = true
+            isConst = advance().kind == Kind.Const
+        }
+        Ident? name = null
+        TypeExpr? t = null
+        if (hasKw && !looksLikeTypedDecl()) {
+            name = ident("a name")
+            if (name == null) {
+                return null
+            }
+            if (eat(Kind.Colon)) {
+                t = ty()
+                if (t == null) {
+                    return null
+                }
+            }
+        } else if (peek().kind == Kind.Ident && peekAt(1).kind == Kind.Colon) {
+            name = ident("a name")
+            if (name == null) {
+                return null
+            }
+            advance()
+            t = ty()
+            if (t == null) {
+                return null
+            }
+        } else {
+            t = ty()
+            if (t == null) {
+                return null
+            }
+            name = ident("a name")
+            if (name == null) {
+                return null
+            }
+        }
+        if (!at(Kind.Assign)) {
+            err(name.span, "static value `${name.name}` needs an initial value")
+            return null
+        }
+        advance()
+        var init = expr()
+        if (init == null) {
+            return null
+        }
+        return StaticVal { name: name, ty: t, init: init, isConst: isConst, vis: vis }
+    }
+
+    fun syncMember() {
+        var depth = 0
+        var start = pos
+        while (true) {
+            var t = peek()
+            if (t.kind == Kind.Eof || (t.kind == Kind.RBrace && depth == 0)) {
+                return
+            }
+            if (pos > start && depth == 0 && t.nl) {
+                return
+            }
+            if (t.kind == Kind.LBrace || t.kind == Kind.LParen || t.kind == Kind.LBracket) {
+                depth += 1
+            } else if (t.kind == Kind.RBrace || t.kind == Kind.RParen || t.kind == Kind.RBracket) {
+                depth -= 1
+            }
+            advance()
+        }
+    }
+
+    fun field(vis: Vis): Field? {
+        Ident? name = null
+        TypeExpr? t = null
+        if (peek().kind == Kind.Ident && peekAt(1).kind == Kind.Colon) {
+            name = ident("field name")
+            if (name == null) {
+                return null
+            }
+            advance()
+            t = ty()
+            if (t == null) {
+                return null
+            }
+        } else {
+            t = ty()
+            if (t == null) {
+                return null
+            }
+            name = ident("field name")
+            if (name == null) {
+                return null
+            }
+        }
+        Expr? value = null
+        if (eat(Kind.Assign)) {
+            value = expr()
+            if (value == null) {
+                return null
+            }
+        }
+        return Field { name: name, ty: t, value: value, vis: vis, annotations: [] }
+    }
+
+    fun ty(): TypeExpr? {
+        var start = spanOf(peek())
+        var first = peek()
+        TypeExpr? t = null
+        if (first.kind == Kind.Ident) {
+            advance()
+            var name = first.text
+            if (at(Kind.Dot) && !peek().nl) {
+                var v = peekAt(1)
+                if (v.kind == Kind.Ident && startsUpper(v.text) && startsUpper(name)) {
+                    advance()
+                    advance()
+                    name = name + "." + v.text
+                }
+            }
+            [TypeExpr] args = []
+            if (at(Kind.Lt) && !peek().nl) {
+                advance()
+                while (true) {
+                    var a = ty()
+                    if (a == null) {
+                        return null
+                    }
+                    args.push(a)
+                    if (!eat(Kind.Comma)) {
+                        break
+                    }
+                }
+                if (expectGt() == null) {
+                    return null
+                }
+            }
+            t = TypeExpr { kind: TypeKind.Named(name, args), span: join(start, prevSpan()) }
+        } else if (first.kind == Kind.Null) {
+            advance()
+            t = TypeExpr { kind: TypeKind.Named("null", []), span: start }
+        } else if (first.kind == Kind.LBracket) {
+            advance()
+            var inner = ty()
+            if (inner == null) {
+                return null
+            }
+            if (expect(Kind.RBracket, "`]`") == null) {
+                return null
+            }
+            t = TypeExpr { kind: TypeKind.Array(inner), span: join(start, prevSpan()) }
+        } else if (first.kind == Kind.LBrace) {
+            advance()
+            var k = ty()
+            if (k == null) {
+                return null
+            }
+            if (expect(Kind.Colon, "`:` in map type") == null) {
+                return null
+            }
+            var v = ty()
+            if (v == null) {
+                return null
+            }
+            if (expect(Kind.RBrace, "`}`") == null) {
+                return null
+            }
+            t = TypeExpr { kind: TypeKind.Map(k, v), span: join(start, prevSpan()) }
+        } else if (first.kind == Kind.Fun) {
+            advance()
+            if (expect(Kind.LParen, "`(`") == null) {
+                return null
+            }
+            [TypeExpr] ps = []
+            while (!at(Kind.RParen) && !at(Kind.Eof)) {
+                if (peek().kind == Kind.Ident && peekAt(1).kind == Kind.Colon) {
+                    advance()
+                    advance()
+                }
+                var p = ty()
+                if (p == null) {
+                    return null
+                }
+                ps.push(p)
+                if (!eat(Kind.Comma)) {
+                    break
+                }
+            }
+            if (expect(Kind.RParen, "`)`") == null) {
+                return null
+            }
+            TypeExpr? ret = null
+            if (eat(Kind.Colon) || eat(Kind.Arrow)) {
+                ret = ty()
+                if (ret == null) {
+                    return null
+                }
+            }
+            t = TypeExpr { kind: TypeKind.Func(ps, ret), span: join(start, prevSpan()) }
+        } else {
+            err(spanOf(first), "expected a type but found ${describe(first)}")
+            return null
+        }
+        if (t == null) {
+            return null
+        }
+        var out = t
+        while (at(Kind.Question) && !peek().nl) {
+            advance()
+            out = TypeExpr { kind: TypeKind.Optional(out), span: join(start, prevSpan()) }
+        }
+        return out
+    }
+
+    fun block(): Block? {
+        var start = expect(Kind.LBrace, "`{`")
+        if (start == null) {
+            return null
+        }
+        var saved = noStruct
+        noStruct = false
+        [Stmt] stmts = []
+        while (!at(Kind.RBrace) && !at(Kind.Eof)) {
+            if (eat(Kind.Semi)) {
+                continue
+            }
+            var before = pos
+            var k = peek().kind
+            if (k == Kind.Pub || k == Kind.Priv || k == Kind.Import || k == Kind.Def || (k == Kind.Fun && !isLambdaStart())) {
+                err(spanOf(peek()), "declarations like this are only allowed at the top level")
+                sync()
+                continue
+            }
+            var s = stmt()
+            if (s != null) {
+                stmts.push(s)
+            } else {
+                if (pos == before && !at(Kind.RBrace)) {
+                    advance()
+                }
+                syncStmt()
+            }
+        }
+        noStruct = saved
+        if (expect(Kind.RBrace, "`}`") == null) {
+            return null
+        }
+        return Block { stmts: stmts, span: join(start, prevSpan()) }
+    }
+
+    fun looksLikeTypedDecl(): bool {
+        if (atIdent("match") && !peekAt(1).nl && looksLikeMatch()) {
+            return false
+        }
+        var t = peek()
+        if (t.kind != Kind.Ident && t.kind != Kind.LBracket && t.kind != Kind.Fun && t.kind != Kind.LBrace) {
+            return false
+        }
+        if (t.kind == Kind.Ident) {
+            var n = peekAt(1)
+            if (n.kind == Kind.Ident) {
+                if (t.text == "new" && peekAt(2).kind == Kind.LParen) {
+                    return false
+                }
+                return !n.nl
+            }
+            var third = peekAt(2)
+            var dotted = n.kind == Kind.Dot && startsUpper(t.text) && third.kind == Kind.Ident && startsUpper(third.text)
+            if (!dotted && n.kind != Kind.Question && n.kind != Kind.Lt) {
+                return false
+            }
+        }
+        if (at(Kind.Fun) && peekAt(1).kind != Kind.LParen) {
+            return false
+        }
+        var save = pos
+        var mark = len(splits)
+        speculative += 1
+        var ok = false
+        if (ty() != null && peek().kind == Kind.Ident && !peek().nl) {
+            var n = peekAt(1)
+            ok = n.nl || n.kind == Kind.Assign || n.kind == Kind.Semi || n.kind == Kind.RBrace || n.kind == Kind.Eof
+        }
+        speculative -= 1
+        pos = save
+        unsplit(mark)
+        return ok
+    }
+
+    fun stmt(): Stmt? {
+        var start = spanOf(peek())
+        var t = peek()
+        StmtKind? kind = null
+        if (t.kind == Kind.Var) {
+            advance()
+            kind = varRest(false)
+            if (kind == null) {
+                return null
+            }
+            endStmt()
+        } else if (t.kind == Kind.Const) {
+            advance()
+            if (looksLikeTypedDecl()) {
+                kind = typedDecl(true)
+            } else {
+                kind = varRest(true)
+            }
+            if (kind == null) {
+                return null
+            }
+            endStmt()
+        } else if (t.kind == Kind.If) {
+            kind = ifStmt()
+        } else if (t.kind == Kind.While) {
+            advance()
+            var c = cond()
+            if (c == null) {
+                return null
+            }
+            var body = block()
+            if (body == null) {
+                return null
+            }
+            kind = StmtKind.While(c, body)
+        } else if (t.kind == Kind.For) {
+            kind = forStmt()
+        } else if (t.kind == Kind.Return) {
+            advance()
+            var n = peek()
+            Expr? value = null
+            if (!(n.nl || n.kind == Kind.Semi || n.kind == Kind.RBrace || n.kind == Kind.Eof)) {
+                value = expr()
+                if (value == null) {
+                    return null
+                }
+            }
+            endStmt()
+            kind = StmtKind.Return(value)
+        } else if (t.kind == Kind.Break) {
+            advance()
+            endStmt()
+            kind = StmtKind.Break
+        } else if (t.kind == Kind.Continue) {
+            advance()
+            endStmt()
+            kind = StmtKind.Continue
+        } else if (t.kind == Kind.LBrace && !looksLikeTypedDecl()) {
+            var b = block()
+            if (b == null) {
+                return null
+            }
+            kind = StmtKind.Nested(b)
+        } else if (t.kind == Kind.Ident && t.text == "destroy" && peekAt(1).kind == Kind.Ident && !peekAt(1).nl && peekAt(2).kind == Kind.LParen) {
+            advance()
+            var target = ident("object name")
+            if (target == null) {
+                return null
+            }
+            var args = callArgs()
+            if (args == null) {
+                return null
+            }
+            endStmt()
+            hasDestroy = true
+            kind = StmtKind.Destroy(target, args)
+        } else if (t.kind == Kind.Ident && peekAt(1).kind == Kind.Dot && isExtension()) {
+            var target = ident("object name")
+            if (target == null) {
+                return null
+            }
+            advance()
+            var name = ident("function name")
+            if (name == null) {
+                return null
+            }
+            var sig = signature()
+            if (sig == null) {
+                return null
+            }
+            var body = block()
+            if (body == null) {
+                return null
+            }
+            kind = StmtKind.Extend(target, fun_(name, sig.params, sig.ret, body, join(name.span, prevSpan())))
+        } else if (looksLikeTypedDecl()) {
+            kind = typedDecl(false)
+            if (kind == null) {
+                return null
+            }
+            endStmt()
+        } else {
+            var e = expr()
+            if (e == null) {
+                return null
+            }
+            endStmt()
+            kind = StmtKind.Eval(e)
+        }
+        if (kind == null) {
+            return null
+        }
+        return Stmt { kind: kind, span: join(start, prevSpan()) }
+    }
+
+    fun isExtension(): bool {
+        if (peekAt(2).kind != Kind.Ident || peekAt(3).kind != Kind.LParen || peekAt(3).nl) {
+            return false
+        }
+        var save = pos
+        speculative += 1
+        advance()
+        advance()
+        advance()
+        var ok = signature() != null && at(Kind.LBrace) && !peek().nl
+        speculative -= 1
+        pos = save
+        return ok
+    }
+
+    fun typedDecl(isConst: bool): StmtKind? {
+        var t = ty()
+        if (t == null) {
+            return null
+        }
+        var name = ident("variable name")
+        if (name == null) {
+            return null
+        }
+        Expr? init = null
+        if (eat(Kind.Assign)) {
+            init = expr()
+            if (init == null) {
+                return null
+            }
+        }
+        if (isConst && init == null) {
+            err(name.span, "constants must be initialized")
+        }
+        return StmtKind.Var(name, t, init, isConst)
+    }
+
+    fun varRest(isConst: bool): StmtKind? {
+        var name = ident("variable name")
+        if (name == null) {
+            return null
+        }
+        TypeExpr? t = null
+        if (eat(Kind.Colon)) {
+            t = ty()
+            if (t == null) {
+                return null
+            }
+        }
+        Expr? init = null
+        if (eat(Kind.Assign)) {
+            init = expr()
+            if (init == null) {
+                return null
+            }
+        }
+        if (isConst && init == null) {
+            err(name.span, "constants must be initialized")
+        }
+        if (t == null && init == null) {
+            err(name.span, "cannot infer the type of `${name.name}`: add a type or an initial value")
+        }
+        return StmtKind.Var(name, t, init, isConst)
+    }
+
+    fun cond(): Expr? {
+        var saved = noStruct
+        noStruct = true
+        var r = expr()
+        noStruct = saved
+        return r
+    }
+
+    fun ifStmt(): StmtKind? {
+        advance()
+        var c = cond()
+        if (c == null) {
+            return null
+        }
+        var then = block()
+        if (then == null) {
+            return null
+        }
+        Block? els = null
+        if (eat(Kind.Else)) {
+            if (at(Kind.If)) {
+                var start = spanOf(peek())
+                var k = ifStmt()
+                if (k == null) {
+                    return null
+                }
+                var span = join(start, prevSpan())
+                els = Block { stmts: [Stmt { kind: k, span: span }], span: span }
+            } else {
+                els = block()
+                if (els == null) {
+                    return null
+                }
+            }
+        }
+        return StmtKind.If(c, then, els)
+    }
+
+    fun forInAhead(offset: int): bool {
+        var a = peekAt(offset)
+        if (a.kind != Kind.Ident) {
+            return false
+        }
+        var b = peekAt(offset + 1).kind
+        return b == Kind.In || (b == Kind.Comma && peekAt(offset + 2).kind == Kind.Ident && peekAt(offset + 3).kind == Kind.In)
+    }
+
+    fun forStmt(): StmtKind? {
+        advance()
+        var paren = at(Kind.LParen) && (forInAhead(1) || isCForParen())
+        if (paren) {
+            advance()
+        }
+        if (forInAhead(0)) {
+            var first = ident("loop variable")
+            if (first == null) {
+                return null
+            }
+            Ident? index = null
+            var binding = first
+            if (eat(Kind.Comma)) {
+                var second = ident("loop variable")
+                if (second == null) {
+                    return null
+                }
+                index = first
+                binding = second
+            }
+            if (expect(Kind.In, "`in`") == null) {
+                return null
+            }
+            var saved = noStruct
+            noStruct = !paren
+            var e = expr()
+            if (e == null) {
+                noStruct = saved
+                return null
+            }
+            ForIter? iter = null
+            if (at(Kind.DotDot) || at(Kind.DotDotEq)) {
+                var inclusive = advance().kind == Kind.DotDotEq
+                var end = expr()
+                noStruct = saved
+                if (end == null) {
+                    return null
+                }
+                iter = ForIter.Range(e, end, inclusive)
+            } else {
+                noStruct = saved
+                iter = ForIter.Over(e)
+            }
+            if (paren && expect(Kind.RParen, "`)`") == null) {
+                return null
+            }
+            var body = block()
+            if (body == null || iter == null) {
+                return null
+            }
+            return StmtKind.ForIn(binding, index, iter, body)
+        }
+        var saved = noStruct
+        noStruct = !paren
+        Stmt? init = null
+        if (!at(Kind.Semi)) {
+            var start = spanOf(peek())
+            StmtKind? k = null
+            if (eat(Kind.Var)) {
+                k = varRest(false)
+            } else if (looksLikeTypedDecl()) {
+                k = typedDecl(false)
+            } else {
+                var e = expr()
+                if (e != null) {
+                    k = StmtKind.Eval(e)
+                }
+            }
+            if (k == null) {
+                return null
+            }
+            init = Stmt { kind: k, span: join(start, prevSpan()) }
+        }
+        if (expect(Kind.Semi, "`;` after for-loop initializer") == null) {
+            return null
+        }
+        Expr? c = null
+        if (!at(Kind.Semi)) {
+            c = expr()
+            if (c == null) {
+                return null
+            }
+        }
+        if (expect(Kind.Semi, "`;` after for-loop condition") == null) {
+            return null
+        }
+        Expr? step = null
+        if (!at(Kind.RParen) && !at(Kind.LBrace)) {
+            step = expr()
+            if (step == null) {
+                return null
+            }
+        }
+        noStruct = saved
+        if (paren && expect(Kind.RParen, "`)`") == null) {
+            return null
+        }
+        var body = block()
+        if (body == null) {
+            return null
+        }
+        return StmtKind.For(init, c, step, body)
+    }
+
+    fun isCForParen(): bool {
+        var depth = 0
+        var i = pos
+        while (i < len(toks)) {
+            var k = toks[i].kind
+            if (k == Kind.LParen || k == Kind.LBracket || k == Kind.LBrace) {
+                depth += 1
+            } else if (k == Kind.RParen || k == Kind.RBracket || k == Kind.RBrace) {
+                depth -= 1
+                if (depth == 0) {
+                    return false
+                }
+            } else if (k == Kind.Semi && depth == 1) {
+                return true
+            } else if (k == Kind.Eof) {
+                return false
+            }
+            i += 1
+        }
+        return false
+    }
+
+    fun expr(): Expr? {
+        return assignment()
+    }
+
+    fun assignment(): Expr? {
+        var lhs = or()
+        if (lhs == null) {
+            return null
+        }
+        BinOp? op = null
+        var k = peek().kind
+        if (k == Kind.Assign) {
+            op = null
+        } else if (k == Kind.PlusEq) {
+            op = BinOp.Add
+        } else if (k == Kind.MinusEq) {
+            op = BinOp.Sub
+        } else if (k == Kind.StarEq) {
+            op = BinOp.Mul
+        } else if (k == Kind.SlashEq) {
+            op = BinOp.Div
+        } else if (k == Kind.PercentEq) {
+            op = BinOp.Mod
+        } else if (k == Kind.AmpEq) {
+            op = BinOp.BitAnd
+        } else if (k == Kind.PipeEq) {
+            op = BinOp.BitOr
+        } else if (k == Kind.CaretEq) {
+            op = BinOp.BitXor
+        } else if (k == Kind.ShlEq) {
+            op = BinOp.Shl
+        } else if (k == Kind.ShrEq) {
+            op = BinOp.Shr
+        } else if (k == Kind.UShrEq) {
+            op = BinOp.UShr
+        } else {
+            return lhs
+        }
+        var opSpan = spanOf(advance())
+        var target = false
+        match lhs.kind {
+            ExprKind.Ident(_), ExprKind.Field(_, _), ExprKind.Index(_, _) => target = true
+            else => {}
+        }
+        if (!target) {
+            err(join(lhs.span, opSpan), "invalid assignment target")
+        }
+        var value = assignment()
+        if (value == null) {
+            return null
+        }
+        return expr(ExprKind.Assign(lhs, op, value), join(lhs.span, value.span))
+    }
+
+    fun bin(lhs: Expr, op: BinOp, rhs: Expr): Expr {
+        return expr(ExprKind.Binary(op, lhs, rhs), join(lhs.span, rhs.span))
+    }
+
+    fun or(): Expr? {
+        var e = and()
+        if (e == null) {
+            return null
+        }
+        var cur = e
+        while (at(Kind.OrOr)) {
+            advance()
+            var r = and()
+            if (r == null) {
+                return null
+            }
+            cur = bin(cur, BinOp.Or, r)
+        }
+        return cur
+    }
+
+    fun and(): Expr? {
+        var e = equality()
+        if (e == null) {
+            return null
+        }
+        var cur = e
+        while (at(Kind.AndAnd)) {
+            advance()
+            var r = equality()
+            if (r == null) {
+                return null
+            }
+            cur = bin(cur, BinOp.And, r)
+        }
+        return cur
+    }
+
+    fun equality(): Expr? {
+        var e = coalesce()
+        if (e == null) {
+            return null
+        }
+        var cur = e
+        while (true) {
+            var k = peek().kind
+            var op = BinOp.Eq
+            if (k == Kind.EqEq) {
+                op = BinOp.Eq
+            } else if (k == Kind.NotEq) {
+                op = BinOp.Ne
+            } else {
+                return cur
+            }
+            advance()
+            var r = coalesce()
+            if (r == null) {
+                return null
+            }
+            cur = bin(cur, op, r)
+        }
+    }
+
+    fun coalesce(): Expr? {
+        var e = comparison()
+        if (e == null) {
+            return null
+        }
+        if (!at(Kind.QuestionQuestion)) {
+            return e
+        }
+        advance()
+        var r = coalesce()
+        if (r == null) {
+            return null
+        }
+        return expr(ExprKind.Coalesce(e, r), join(e.span, r.span))
+    }
+
+    fun comparison(): Expr? {
+        var e = bitOr()
+        if (e == null) {
+            return null
+        }
+        var cur = e
+        while (true) {
+            var t = peek()
+            var op = BinOp.Lt
+            if (t.kind == Kind.Lt) {
+                op = BinOp.Lt
+            } else if (t.kind == Kind.Gt) {
+                op = BinOp.Gt
+            } else if (t.kind == Kind.Le) {
+                op = BinOp.Le
+            } else if (t.kind == Kind.Ge) {
+                op = BinOp.Ge
+            } else if (t.kind == Kind.Is && !t.nl) {
+                advance()
+                var ty_ = ty()
+                if (ty_ == null) {
+                    return null
+                }
+                cur = expr(ExprKind.Is(cur, ty_), join(cur.span, ty_.span))
+                continue
+            } else if (t.kind == Kind.Bang && peekAt(1).kind == Kind.Is && !t.nl) {
+                var bang = spanOf(advance())
+                advance()
+                var ty_ = ty()
+                if (ty_ == null) {
+                    return null
+                }
+                var span = join(cur.span, ty_.span)
+                var is_ = expr(ExprKind.Is(cur, ty_), span)
+                cur = expr(ExprKind.Unary(UnOp.Not, is_), join(span, bang))
+                continue
+            } else {
+                return cur
+            }
+            advance()
+            var r = bitOr()
+            if (r == null) {
+                return null
+            }
+            cur = bin(cur, op, r)
+        }
+    }
+
+    fun bitOr(): Expr? {
+        var e = bitXor()
+        if (e == null) {
+            return null
+        }
+        var cur = e
+        while (at(Kind.Pipe)) {
+            advance()
+            var r = bitXor()
+            if (r == null) {
+                return null
+            }
+            cur = bin(cur, BinOp.BitOr, r)
+        }
+        return cur
+    }
+
+    fun bitXor(): Expr? {
+        var e = bitAnd()
+        if (e == null) {
+            return null
+        }
+        var cur = e
+        while (at(Kind.Caret)) {
+            advance()
+            var r = bitAnd()
+            if (r == null) {
+                return null
+            }
+            cur = bin(cur, BinOp.BitXor, r)
+        }
+        return cur
+    }
+
+    fun bitAnd(): Expr? {
+        var e = shift()
+        if (e == null) {
+            return null
+        }
+        var cur = e
+        while (at(Kind.Amp)) {
+            advance()
+            var r = shift()
+            if (r == null) {
+                return null
+            }
+            cur = bin(cur, BinOp.BitAnd, r)
+        }
+        return cur
+    }
+
+    fun shift(): Expr? {
+        var e = term()
+        if (e == null) {
+            return null
+        }
+        var cur = e
+        while (true) {
+            var k = peek().kind
+            var op = BinOp.Shl
+            if (k == Kind.Shl) {
+                op = BinOp.Shl
+            } else if (k == Kind.Shr) {
+                op = BinOp.Shr
+            } else if (k == Kind.UShr) {
+                op = BinOp.UShr
+            } else {
+                return cur
+            }
+            advance()
+            var r = term()
+            if (r == null) {
+                return null
+            }
+            cur = bin(cur, op, r)
+        }
+    }
+
+    fun term(): Expr? {
+        var e = factor()
+        if (e == null) {
+            return null
+        }
+        var cur = e
+        while (true) {
+            var t = peek()
+            var op = BinOp.Add
+            if (t.kind == Kind.Plus) {
+                op = BinOp.Add
+            } else if (t.kind == Kind.Minus && !t.nl) {
+                op = BinOp.Sub
+            } else {
+                return cur
+            }
+            advance()
+            var r = factor()
+            if (r == null) {
+                return null
+            }
+            cur = bin(cur, op, r)
+        }
+    }
+
+    fun factor(): Expr? {
+        var e = cast()
+        if (e == null) {
+            return null
+        }
+        var cur = e
+        while (true) {
+            var k = peek().kind
+            var op = BinOp.Mul
+            if (k == Kind.Star) {
+                op = BinOp.Mul
+            } else if (k == Kind.Slash) {
+                op = BinOp.Div
+            } else if (k == Kind.Percent) {
+                op = BinOp.Mod
+            } else {
+                return cur
+            }
+            advance()
+            var r = cast()
+            if (r == null) {
+                return null
+            }
+            cur = bin(cur, op, r)
+        }
+    }
+
+    fun cast(): Expr? {
+        var e = unary()
+        if (e == null) {
+            return null
+        }
+        var cur = e
+        while (at(Kind.As) && !peek().nl) {
+            advance()
+            var safe = at(Kind.Question) && !peek().nl
+            if (safe) {
+                advance()
+            }
+            var t = ty()
+            if (t == null) {
+                return null
+            }
+            var span = join(cur.span, t.span)
+            if (safe) {
+                cur = expr(ExprKind.SafeAs(cur, t), span)
+            } else {
+                cur = expr(ExprKind.As(cur, t), span)
+            }
+        }
+        return cur
+    }
+
+    fun unary(): Expr? {
+        var start = spanOf(peek())
+        var k = peek().kind
+        if (k == Kind.Minus) {
+            advance()
+            var e = unary()
+            if (e == null) {
+                return null
+            }
+            var span = join(start, e.span)
+            match e.kind {
+                ExprKind.Int(v) => {
+                    return expr(ExprKind.Int(0.wrappingSub(v)), span)
+                }
+                ExprKind.Float(v) => {
+                    return expr(ExprKind.Float(-v), span)
+                }
+                ExprKind.BigInt(digits, hex) => {
+                    if (!hex && digits == "9223372036854775808") {
+                        return expr(ExprKind.Int(-9223372036854775807 - 1), span)
+                    }
+                }
+                else => {}
+            }
+            return expr(ExprKind.Unary(UnOp.Neg, e), span)
+        }
+        if (k == Kind.Bang || k == Kind.Tilde || k == Kind.Await) {
+            advance()
+            var e = unary()
+            if (e == null) {
+                return null
+            }
+            var span = join(start, e.span)
+            if (k == Kind.Bang) {
+                return expr(ExprKind.Unary(UnOp.Not, e), span)
+            }
+            if (k == Kind.Tilde) {
+                return expr(ExprKind.Unary(UnOp.BitNot, e), span)
+            }
+            return expr(ExprKind.Await(e), span)
+        }
+        return postfix()
+    }
+
+    fun callArgs(): [Expr]? {
+        if (expect(Kind.LParen, "`(`") == null) {
+            return null
+        }
+        var saved = noStruct
+        noStruct = false
+        [Expr] args = []
+        while (!at(Kind.RParen) && !at(Kind.Eof)) {
+            var a = expr()
+            if (a == null) {
+                noStruct = saved
+                return null
+            }
+            args.push(a)
+            if (!eat(Kind.Comma)) {
+                break
+            }
+        }
+        noStruct = saved
+        if (expect(Kind.RParen, "`)` to close arguments") == null) {
+            return null
+        }
+        return args
+    }
+
+    fun postfix(): Expr? {
+        var e = primary()
+        if (e == null) {
+            return null
+        }
+        var cur = e
+        while (true) {
+            var t = peek()
+            if (t.kind == Kind.LParen && !t.nl) {
+                var args = callArgs()
+                if (args == null) {
+                    return null
+                }
+                cur = expr(ExprKind.Call(cur, args), join(cur.span, prevSpan()))
+            } else if (t.kind == Kind.LBracket && !t.nl) {
+                advance()
+                var saved = noStruct
+                noStruct = false
+                var index = expr()
+                noStruct = saved
+                if (index == null) {
+                    return null
+                }
+                if (expect(Kind.RBracket, "`]`") == null) {
+                    return null
+                }
+                cur = expr(ExprKind.Index(cur, index), join(cur.span, prevSpan()))
+            } else if (t.kind == Kind.Dot) {
+                advance()
+                var n = peek()
+                Ident? name = null
+                if (n.kind == Kind.Int) {
+                    advance()
+                    name = ident(toString(n.value), spanOf(n))
+                } else {
+                    name = ident("field or method name")
+                }
+                if (name == null) {
+                    return null
+                }
+                cur = expr(ExprKind.Field(cur, name), join(cur.span, name.span))
+            } else if (t.kind == Kind.QuestionDot) {
+                advance()
+                var name = ident("field or method name")
+                if (name == null) {
+                    return null
+                }
+                [Expr]? args = null
+                if (at(Kind.LParen) && !peek().nl) {
+                    args = callArgs()
+                    if (args == null) {
+                        return null
+                    }
+                }
+                cur = expr(ExprKind.SafeGet(cur, name, args), join(cur.span, prevSpan()))
+            } else if (t.kind == Kind.Bang && !t.nl && peekAt(1).kind == Kind.Bang) {
+                advance()
+                advance()
+                cur = expr(ExprKind.NotNull(cur), join(cur.span, prevSpan()))
+            } else {
+                return cur
+            }
+        }
+    }
+
+    fun template(parts: [Part]): [TplExpr] {
+        [TplExpr] out = []
+        for p in parts {
+            match p {
+                Part.Lit(text) => out.push(TplExpr.Lit(text))
+                Part.Code(tokens, start, end) => {
+                    var sub = newParser(tokens)
+                    var e = sub.expr()
+                    if (e != null && !sub.at(Kind.Eof)) {
+                        var t = sub.peek()
+                        sub.err(spanOf(t), "unexpected ${describe(t)} in string template")
+                    }
+                    if (speculative == 0) {
+                        for d in sub.diags {
+                            diags.push(d)
+                        }
+                    }
+                    if (e != null) {
+                        out.push(TplExpr.Code(e))
+                    } else {
+                        out.push(TplExpr.Code(expr(ExprKind.Str(""), Span { start: start, end: end })))
+                    }
+                }
+            }
+        }
+        return out
+    }
+
+    fun primary(): Expr? {
+        var t = peek()
+        var span = spanOf(t)
+        ExprKind? kind = null
+        if (t.kind == Kind.Int) {
+            advance()
+            kind = ExprKind.Int(t.value)
+        } else if (t.kind == Kind.BigInt) {
+            advance()
+            kind = ExprKind.BigInt(t.text, t.value == 1)
+        } else if (t.kind == Kind.Float) {
+            advance()
+            kind = ExprKind.Float(t.number)
+        } else if (t.kind == Kind.Str) {
+            advance()
+            kind = ExprKind.Str(t.text)
+        } else if (t.kind == Kind.Template) {
+            advance()
+            kind = ExprKind.Template(template(t.parts))
+        } else if (t.kind == Kind.True) {
+            advance()
+            kind = ExprKind.Bool(true)
+        } else if (t.kind == Kind.False) {
+            advance()
+            kind = ExprKind.Bool(false)
+        } else if (t.kind == Kind.Null) {
+            advance()
+            kind = ExprKind.Null
+        } else if (t.kind == Kind.Ident && t.text == "new" && peekAt(1).kind == Kind.Ident && !peekAt(1).nl) {
+            advance()
+            var name = ident("struct name")
+            if (name == null) {
+                return null
+            }
+            [TypeExpr] targs = []
+            if (at(Kind.Lt) && !peek().nl) {
+                advance()
+                while (true) {
+                    var a = ty()
+                    if (a == null) {
+                        return null
+                    }
+                    targs.push(a)
+                    if (!eat(Kind.Comma)) {
+                        break
+                    }
+                }
+                if (expectGt() == null) {
+                    return null
+                }
+            }
+            if (!at(Kind.LParen) || peek().nl) {
+                err(prevSpan(), "expected `(` after `new ${name.name}`")
+                return null
+            }
+            var args = callArgs()
+            if (args == null) {
+                return null
+            }
+            return expr(ExprKind.New(name, targs, args), join(span, prevSpan()))
+        } else if (t.kind == Kind.Ident && t.text == "match" && !peekAt(1).nl && looksLikeMatch()) {
+            return matchExpr()
+        } else if (t.kind == Kind.Ident) {
+            advance()
+            if (at(Kind.LBrace) && !noStruct && !peek().nl && braceIsStructLit()) {
+                var fields = structFields()
+                if (fields == null) {
+                    return null
+                }
+                return expr(ExprKind.StructLit(ident(t.text, span), fields), join(span, prevSpan()))
+            }
+            kind = ExprKind.Ident(t.text)
+        } else if (t.kind == Kind.LParen) {
+            advance()
+            var saved = noStruct
+            noStruct = false
+            var e = expr()
+            noStruct = saved
+            if (e == null) {
+                return null
+            }
+            if (expect(Kind.RParen, "`)`") == null) {
+                return null
+            }
+            e.span = join(span, prevSpan())
+            return e
+        } else if (t.kind == Kind.LBracket) {
+            advance()
+            var saved = noStruct
+            noStruct = false
+            [Expr] items = []
+            while (!at(Kind.RBracket) && !at(Kind.Eof)) {
+                var e = expr()
+                if (e == null) {
+                    noStruct = saved
+                    return null
+                }
+                items.push(e)
+                if (!eat(Kind.Comma)) {
+                    break
+                }
+            }
+            noStruct = saved
+            if (expect(Kind.RBracket, "`]` to close array") == null) {
+                return null
+            }
+            kind = ExprKind.Array(items)
+        } else if (t.kind == Kind.LBrace && !noStruct) {
+            if (braceIsStructLit()) {
+                var fields = structFields()
+                if (fields == null) {
+                    return null
+                }
+                kind = ExprKind.StructLit(null, fields)
+            } else {
+                advance()
+                [MapPair] pairs = []
+                while (!at(Kind.RBrace) && !at(Kind.Eof)) {
+                    var k = expr()
+                    if (k == null) {
+                        return null
+                    }
+                    if (expect(Kind.Colon, "`:` in map literal") == null) {
+                        return null
+                    }
+                    var v = expr()
+                    if (v == null) {
+                        return null
+                    }
+                    pairs.push(MapPair { key: k, value: v })
+                    if (!eat(Kind.Comma)) {
+                        break
+                    }
+                }
+                if (expect(Kind.RBrace, "`}` to close map literal") == null) {
+                    return null
+                }
+                kind = ExprKind.MapLit(pairs)
+            }
+        } else if (t.kind == Kind.Fun || t.kind == Kind.Async) {
+            var start = spanOf(peek())
+            var isAsync = eat(Kind.Async)
+            if (expect(Kind.Fun, "`fun`") == null) {
+                return null
+            }
+            var sig = signature()
+            if (sig == null) {
+                return null
+            }
+            var saved = noStruct
+            noStruct = false
+            var body = block()
+            noStruct = saved
+            if (body == null) {
+                return null
+            }
+            var f = fun_(ident("<lambda>", start), sig.params, sig.ret, body, join(start, prevSpan()))
+            f.isAsync = isAsync
+            kind = ExprKind.Lambda(f)
+        } else {
+            var s = span
+            if (t.nl && pos > 0) {
+                s = prevSpan()
+            }
+            err(s, "expected an expression but found ${describe(t)}")
+            return null
+        }
+        if (kind == null) {
+            return null
+        }
+        return expr(kind, join(span, prevSpan()))
+    }
+
+    fun looksLikeMatch(): bool {
+        if (peekAt(1).kind == Kind.LBrace) {
+            return true
+        }
+        var save = pos
+        var mark = len(splits)
+        var saved = noStruct
+        speculative += 1
+        advance()
+        noStruct = true
+        var ok = expr() != null && at(Kind.LBrace) && !peek().nl
+        noStruct = saved
+        speculative -= 1
+        pos = save
+        unsplit(mark)
+        return ok
+    }
+
+    fun matchExpr(): Expr? {
+        var start = spanOf(advance())
+        Expr? subject = null
+        if (!at(Kind.LBrace)) {
+            var saved = noStruct
+            noStruct = true
+            subject = expr()
+            noStruct = saved
+            if (subject == null) {
+                return null
+            }
+        }
+        if (expect(Kind.LBrace, "`{` to start the match arms") == null) {
+            return null
+        }
+        var saved = noStruct
+        noStruct = false
+        var arms = matchArms(subject != null)
+        noStruct = saved
+        if (arms == null) {
+            return null
+        }
+        if (expect(Kind.RBrace, "`}` to close the match") == null) {
+            return null
+        }
+        return expr(ExprKind.Match(subject, arms), join(start, prevSpan()))
+    }
+
+    fun matchArms(hasSubject: bool): [MatchArm]? {
+        [MatchArm] arms = []
+        while (true) {
+            while (eat(Kind.Semi)) {
+            }
+            if (at(Kind.RBrace) || at(Kind.Eof)) {
+                return arms
+            }
+            var start = spanOf(peek())
+            [Pattern] patterns = []
+            if (!eat(Kind.Else)) {
+                while (true) {
+                    var p = pattern(hasSubject)
+                    if (p == null) {
+                        return null
+                    }
+                    patterns.push(p)
+                    if (!eat(Kind.Comma)) {
+                        break
+                    }
+                }
+            }
+            Expr? guard = null
+            if (eat(Kind.If)) {
+                guard = expr()
+                if (guard == null) {
+                    return null
+                }
+            }
+            if (expect(Kind.FatArrow, "`=>` after the pattern") == null) {
+                return null
+            }
+            ArmBody? body = null
+            if (at(Kind.LBrace)) {
+                var b = block()
+                if (b == null) {
+                    return null
+                }
+                body = ArmBody.Body(b)
+            } else {
+                var e = expr()
+                if (e == null) {
+                    return null
+                }
+                body = ArmBody.Value(e)
+            }
+            if (body == null) {
+                return null
+            }
+            arms.push(MatchArm { patterns: patterns, guard: guard, body: body, span: join(start, prevSpan()) })
+            if (eat(Kind.Comma) || at(Kind.RBrace) || at(Kind.Semi) || peek().nl) {
+                continue
+            }
+            var t = peek()
+            err(spanOf(t), "expected a new line or `,` after the match arm but found ${describe(t)}")
+            return null
+        }
+    }
+
+    fun pattern(hasSubject: bool): Pattern? {
+        if (!hasSubject) {
+            var e = or()
+            if (e == null) {
+                return null
+            }
+            return Pattern.Value(e)
+        }
+        if (eat(Kind.Is)) {
+            var t = ty()
+            if (t == null) {
+                return null
+            }
+            Ident? bind = null
+            var n = peek()
+            if (n.kind == Kind.Ident && !n.nl) {
+                advance()
+                bind = ident(n.text, spanOf(n))
+            }
+            return Pattern.Is(t, bind)
+        }
+        var e = bitOr()
+        if (e == null) {
+            return null
+        }
+        var inclusive = false
+        if (at(Kind.DotDot)) {
+            inclusive = false
+        } else if (at(Kind.DotDotEq)) {
+            inclusive = true
+        } else {
+            return Pattern.Value(e)
+        }
+        advance()
+        var end = bitOr()
+        if (end == null) {
+            return null
+        }
+        return Pattern.Range(e, end, inclusive)
+    }
+
+    fun braceIsStructLit(): bool {
+        var a = peekAt(1).kind
+        var b = peekAt(2).kind
+        if (a == Kind.RBrace) {
+            return true
+        }
+        if (a == Kind.Ident) {
+            return b == Kind.Colon || b == Kind.Comma || b == Kind.RBrace
+        }
+        return false
+    }
+
+    fun structFields(): [FieldInit]? {
+        if (expect(Kind.LBrace, "`{`") == null) {
+            return null
+        }
+        var saved = noStruct
+        noStruct = false
+        [FieldInit] fields = []
+        while (!at(Kind.RBrace) && !at(Kind.Eof)) {
+            var name = ident("field name")
+            if (name == null) {
+                noStruct = saved
+                return null
+            }
+            Expr? value = null
+            if (eat(Kind.Colon)) {
+                value = expr()
+                if (value == null) {
+                    noStruct = saved
+                    return null
+                }
+            } else {
+                value = expr(ExprKind.Ident(name.name), name.span)
+            }
+            if (value == null) {
+                return null
+            }
+            fields.push(FieldInit { name: name, value: value })
+            if (!eat(Kind.Comma) && !eat(Kind.Semi) && !peek().nl) {
+                break
+            }
+        }
+        noStruct = saved
+        if (expect(Kind.RBrace, "`}` to close struct literal") == null) {
+            return null
+        }
+        return fields
+    }
+}
+
+fun newParser(toks: [Token]): Parser {
+    if (len(toks) == 0) {
+        return new Parser([tok(Kind.Eof, 0, 0, true)])
+    }
+    return new Parser(toks)
+}
+
+/** The parse of one file: its module and every lexer and parser error, in order. */
+pub def type Parsed {
+    Module module
+    [Diag] diags
+}
+
+/** Lexes and parses Burn source the same way the compiler written in Rust does. */
+pub fun parse(src: string): Parsed {
+    var lexed = lex(src)
+    var p = newParser(lexed.tokens)
+    var items = p.items()
+    [Diag] diags = []
+    for d in lexed.diags {
+        diags.push(d)
+    }
+    for d in p.diags {
+        diags.push(d)
+    }
+    return Parsed { module: Module { items: items, hasDestroy: p.hasDestroy }, diags: diags }
+}

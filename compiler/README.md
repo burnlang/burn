@@ -9,16 +9,19 @@ The Rust compiler can print every stage in a fixed text form. The Burn port prin
 | Stage | Rust | Burn | Printed by |
 | --- | --- | --- | --- |
 | Tokens | `crates/burn/src/lexer.rs` | `compiler/lexer.bn` | `burn dump --tokens <files...>` |
+| Syntax tree and parse errors | `crates/burn/src/parser.rs`, `ast.rs` | `compiler/parser.bn`, `compiler/ast.bn` | `burn dump --ast <files...>` |
 
 Run the comparison by hand with:
 
 ```sh
 burn dump --tokens examples/*.bn > rust.txt
-burn compiler/dump.bn examples/*.bn > burn.txt
+burn compiler/dump.bn --tokens examples/*.bn > burn.txt
 diff rust.txt burn.txt
 ```
 
-The suite test `lexer_written_in_burn_matches_the_compiler` does the same on bvm and on a native build. Lexing all 128 repository files with the Burn lexer takes about 0.2 s on bvm.
+The same works with `--ast`. The suite test `compiler_written_in_burn_matches_the_compiler` compares every stage on bvm and on a native build.
+
+The inputs include the error-recovery fixtures in `tests/lexer` and `tests/parser`. On bvm, the Burn version lexes and parses all of the repository's Burn files in about half a second.
 
 ## Rules for porting
 
@@ -31,9 +34,13 @@ The suite test `lexer_written_in_burn_matches_the_compiler` does the same on bvm
 ## Roadmap
 
 1. **Lexer** (done). Tokens, string templates, numbers in every base and lexer errors.
-2. **Parser and AST.**
-   - Port `parser.rs` and `ast.rs` (about 2,600 lines). The AST uses enums with data.
-   - Add `burn dump --ast`, a canonical tree printer, and compare it, including recovery after syntax errors.
+2. **Parser and AST** (done).
+   - `compiler/parser.bn` ports `parser.rs`, including:
+     - recovery after syntax errors
+     - splitting `>>` in generic types
+     - speculative parsing
+     - `@Getter`/`@Setter` expansion
+   - `compiler/ast.bn` uses enums with data for every node kind.
 3. **Diagnostics.**
    - Port the source map, line and column lookup, and the `-->` snippet renderer.
    - Compare `burn check` output on `tests/errors`.
