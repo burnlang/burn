@@ -44,13 +44,45 @@ kind = "lib"
 
 ## Versions
 
-- Tag releases with [semantic versions](https://semver.org): `v1.4.0`, with the `v`. `ash install` and the lock
-  file use the tags.
-- `version` in `burn.toml` is the same number without the `v`: `version = "1.4.0"`.
+A version has three numbers, `MAJOR.MINOR.PATCH`, and can end in a pre-release suffix. Tags add a `v` in front
+(`v1.4.0`); `version` in `burn.toml` is the same number without it (`version = "1.4.0"`). `ash install`, `burnup` and
+the lock file read the tags, and both schemes below compare the same way, number by number.
+
+### Semantic versions
+
+Most packages use [semantic versions](https://semver.org): `1.4.0`.
+
 - Bump the **major** version when code that used the package may stop compiling or behave differently, the
   **minor** version for new features, and the **patch** version for fixes.
-- Versions before `1.0.0` may change anything in a minor release. Pre-releases add a suffix:
-  `v2.0.0-beta.1`.
+- Versions before `1.0.0` may change anything in a minor release.
+- Pre-releases add a suffix: `2.0.0-beta.1`.
+
+### Yearly versions
+
+Burn itself and the toolchain released with it (the compiler, the standard library and bvm) use yearly versions:
+`YY.RELEASE.PATCH`.
+
+```text
+26.1.0-experimental-3
+│  │ │ └─────┬──────┘
+│  │ │   pre-release
+│  │ └── patch: fixes to that release
+│  └──── release: the first, second, … release of the year
+└─────── year: 2026
+```
+
+- **The first number is the year** of the release, written with two digits: `26` for 2026. A new year starts
+  again at release `1`: `27.1.0`.
+- **The second number counts the releases of that year**, and the third the fixes to one release: `26.1.2` is the
+  second fix of the first release of 2026.
+- **Pre-releases end in `-experimental-N`**, counting up from `1`, before the release is final: `26.1.0-experimental-3`
+  comes before `26.1.0`.
+- `burnup` also accepts short forms such as `26.1` and `^26.1`; see [installation](./tooling/installation.mdx).
+- Packages that move with the year, such as bindings that follow Burn's releases, can use yearly versions too.
+  Libraries with their own pace should use semantic versions, so the major number still says when code breaks.
+
+### Tags
+
 - Never move a tag after publishing it; tag a new version instead. `burn.lock` pins the exact commit, so a moved
   tag silently gives people different code.
 
