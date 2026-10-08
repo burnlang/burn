@@ -1,3 +1,4 @@
+import "build.bn"
 import "dump/checked.bn"
 import "dump/declarations.bn"
 import "dump/loading.bn"
@@ -5,8 +6,68 @@ import "dump/syntax.bn"
 import "std/fs"
 import "std/process"
 
+fun outputFor(file: string): string {
+    if (endsWith(file, ".bn")) {
+        return "${substring(file, 0, len(file) - 3)}.bvm"
+    }
+    return "${file}.bvm"
+}
+
+fun build(rest: [string]): int {
+    string? file = null
+    string? output = null
+    var i = 0
+    while (i < len(rest)) {
+        if (rest[i] == "-o" && i + 1 < len(rest)) {
+            output = rest[i + 1]
+            i += 2
+            continue
+        }
+        if (file != null) {
+            eprint("usage: main.bn build <file.bn> [-o <file.bvm>]")
+            return 2
+        }
+        file = rest[i]
+        i += 1
+    }
+    if (file == null) {
+        eprint("usage: main.bn build <file.bn> [-o <file.bvm>]")
+        return 2
+    }
+    var built = buildBvm(file)
+    if (built.diagnostics != "") {
+        eprint(trimEnd(built.diagnostics))
+    }
+    var text = built.module
+    if (text == null) {
+        return 1
+    }
+    var out = output ?? outputFor(file)
+    if (!writeFile(out, text)) {
+        eprint("error: cannot write ${out}")
+        return 1
+    }
+    print("wrote ${out}")
+    return 0
+}
+
+fun trimEnd(s: string): string {
+    var end = len(s)
+    while (end > 0 && substring(s, end - 1, end) == "\n") {
+        end -= 1
+    }
+    return substring(s, 0, end)
+}
+
 fun main() {
     var files = args()
+    if (len(files) > 0 && files[0] == "build") {
+        var code = build(slice(files, 1, len(files)))
+        if (code != 0) {
+            exit(code)
+        }
+        return
+    }
     var mode = "--tokens"
     var modes = ["--tokens", "--ast", "--diagnostics", "--toml", "--project", "--modules", "--decls", "--checked", "--owned", "--bvm"]
     if (len(files) > 0 && contains(modes, files[0])) {

@@ -1,0 +1,52 @@
+import "check/body.bn"
+import "check/check.bn"
+import "check/types.bn"
+import "diag/diag.bn"
+import "lower/own.bn"
+import "project/loader.bn"
+import "project/project.bn"
+import "vm/asm.bn"
+import "vm/compile.bn"
+
+/** What building a program produced: its rendered errors and warnings, and the module unless there were errors. */
+pub def type Built {
+    string diagnostics
+    string? module
+}
+
+/** The bvm module of a checked program in bvm assembly, after the ownership pass. */
+pub fun moduleText(c: Checker, p: HProgram): string {
+    [string] globals = []
+    for g in p.globals {
+        if (g.module == "") {
+            globals.push(g.name)
+        } else {
+            globals.push("${g.module}.${g.name}")
+        }
+    }
+    return disassemble(compileModule(c, p.name, lowerOwnership(c.types, p.funcs), globals, p.entry))
+}
+
+/** Loads, checks and compiles a program to bvm assembly, the text form that `burn <file.bvm>` runs. */
+pub fun buildBvm(file: string): Built {
+    var loader = new Loader()
+    var err = new Problem()
+    var root = loader.loadFile(file, err)
+    if (root < 0) {
+        return Built { diagnostics: "error: ${err.message}\n", module: null }
+    }
+    var loaded = loader.finish(root)
+    var r = checkProgram(loaded)
+    [string] out = []
+    for d in loaded.diags {
+        out.push(render(loaded.files[d.file], d.diag))
+    }
+    for d in r.diags {
+        out.push(render(loaded.files[d.file], d.diag))
+    }
+    var p = r.program
+    if (p == null) {
+        return Built { diagnostics: joinWith(out, ""), module: null }
+    }
+    return Built { diagnostics: joinWith(out, ""), module: moduleText(r.checker, p) }
+}
