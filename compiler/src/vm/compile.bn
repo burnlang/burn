@@ -1,0 +1,472 @@
+import "../check/check.bn"
+import "../check/hir.bn"
+import "../check/types.bn"
+import "bits.bn"
+import "module.bn"
+
+const NO_LOC = 4294967295
+const ALL_BITS = -1
+
+def type Fixup {
+    int at
+    int label
+}
+
+def type Builder {
+    int params
+    int locals
+    [Op] code
+    [int] labels
+    [Fixup] fixups
+    [Loop] loops
+}
+
+def type Loop {
+    int brk
+    int cont
+}
+
+fun newBuilder(params: int): Builder {
+    return Builder { params: params, locals: params, code: [], labels: [], fixups: [], loops: [] }
+}
+
+fun emit(b: Builder, op: Op) {
+    b.code.push(op)
+}
+
+fun label(b: Builder): int {
+    b.labels.push(-1)
+    return len(b.labels) - 1
+}
+
+fun bind(b: Builder, l: int) {
+    b.labels[l] = len(b.code)
+}
+
+fun here(b: Builder): int {
+    var l = label(b)
+    bind(b, l)
+    return l
+}
+
+fun jump(b: Builder, op: Op, l: int) {
+    b.fixups.push(Fixup { at: len(b.code), label: l })
+    b.code.push(op)
+}
+
+fun reachableEnd(b: Builder): bool {
+    if (len(b.code) == 0 || !isTerminator(b.code[len(b.code) - 1])) {
+        return true
+    }
+    return contains(b.labels, len(b.code))
+}
+
+fun finish(b: Builder, name: string): VFunc {
+    for f in b.fixups {
+        b.code[f.at] = withJumpTarget(b.code[f.at], b.labels[f.label])
+    }
+    return VFunc { name: name, params: b.params, locals: b.locals, names: [], code: b.code, external: false, sig: null }
+}
+
+fun stmts(b: Builder, ss: [HStmt]): void {
+    for s in ss {
+        stmt(b, s)
+    }
+}
+
+fun stmt(b: Builder, s: HStmt): void {
+    if (s is HStmt.Eval) {
+        exprDiscard(b, s.value)
+    } else if (s is HStmt.If) {
+        expr(b, s.cond)
+        var other = label(b)
+        jump(b, Op.Jz(0), other)
+        stmts(b, s.then)
+        if (len(s.els) == 0) {
+            bind(b, other)
+        } else {
+            var end = label(b)
+            jump(b, Op.Jmp(0), end)
+            bind(b, other)
+            stmts(b, s.els)
+            bind(b, end)
+        }
+    } else if (s is HStmt.Loop) {
+        var top = here(b)
+        var brk = label(b)
+        var cont = label(b)
+        var c = s.cond
+        if (c != null) {
+            expr(b, c)
+            jump(b, Op.Jz(0), brk)
+        }
+        b.loops.push(Loop { brk: brk, cont: cont })
+        stmts(b, s.body)
+        bind(b, cont)
+        stmts(b, s.step)
+        jump(b, Op.Jmp(0), top)
+        bind(b, brk)
+        b.loops = slice(b.loops, 0, len(b.loops) - 1)
+    } else if (s is HStmt.Return) {
+        var v = s.value
+        if (v != null) {
+            expr(b, v)
+            emit(b, Op.Ret)
+        } else {
+            emit(b, Op.RetVoid)
+        }
+    } else if (s is HStmt.Break) {
+        jump(b, Op.Jmp(0), b.loops[len(b.loops) - 1].brk)
+    } else if (s is HStmt.Continue) {
+        jump(b, Op.Jmp(0), b.loops[len(b.loops) - 1].cont)
+    }
+}
+
+fun exprDiscard(b: Builder, e: HExpr) {
+    var k = e.kind
+    if (k is HKind.SetLocal) {
+        expr(b, k.value)
+        emit(b, Op.Store(k.slot))
+    } else if (k is HKind.SetGlobal) {
+        expr(b, k.value)
+        emit(b, Op.GStore(k.id))
+    } else {
+        expr(b, e)
+        emit(b, Op.Pop)
+    }
+}
+
+fun args(b: Builder, xs: [HExpr]) {
+    for x in xs {
+        expr(b, x)
+    }
+}
+
+fun binOp(op: HBinOp): Op {
+    return match op {
+        HBinOp.IAdd(loc) => addOp(loc)
+        HBinOp.ISub(loc) => Op.ISubOv(loc)
+        HBinOp.IMul(loc) => Op.IMulOv(loc)
+        HBinOp.IDiv(loc) => Op.IDiv(loc)
+        HBinOp.IMod(loc) => Op.IRem(loc)
+        HBinOp.FAdd => Op.FAdd
+        HBinOp.FSub => Op.FSub
+        HBinOp.FMul => Op.FMul
+        HBinOp.FDiv => Op.FDiv
+        HBinOp.ICmp(cmp) => Op.ICmp(cmp)
+        HBinOp.UCmp(cmp) => Op.UCmp(cmp)
+        HBinOp.FCmp(cmp) => Op.FCmp(cmp)
+        HBinOp.WAdd => Op.IAdd
+        HBinOp.WSub => Op.ISub
+        HBinOp.WMul => Op.IMul
+        HBinOp.BitAnd => Op.And
+        HBinOp.BitOr => Op.Or
+        HBinOp.BitXor => Op.Xor
+        HBinOp.Shl(loc) => Op.Shl
+        HBinOp.Shr(loc) => Op.Shr
+        HBinOp.UShr(loc) => Op.UShr
+    }
+}
+
+fun addOp(loc: int): Op {
+    if (loc == NO_LOC) {
+        return Op.IAdd
+    }
+    return Op.IAddOv(loc)
+}
+
+fun shiftLoc(op: HBinOp): int? {
+    if (op is HBinOp.Shl) {
+        return op.loc
+    }
+    if (op is HBinOp.Shr) {
+        return op.loc
+    }
+    if (op is HBinOp.UShr) {
+        return op.loc
+    }
+    return null
+}
+
+fun expr(b: Builder, e: HExpr): void {
+    var k = e.kind
+    if (k is HKind.Int) {
+        emit(b, Op.Const(k.value))
+    } else if (k is HKind.TypeId) {
+        emit(b, Op.TypeConst(k.id))
+    } else if (k is HKind.LocId) {
+        emit(b, Op.LocConst(k.id))
+    } else if (k is HKind.Float) {
+        emit(b, Op.Const(floatToBits(k.value)))
+    } else if (k is HKind.Bool) {
+        var v = 0
+        if (k.value) {
+            v = 1
+        }
+        emit(b, Op.Const(v))
+    } else if (k is HKind.Str) {
+        emit(b, Op.Str(k.id))
+    } else if (k is HKind.Null) {
+        emit(b, Op.Const(0))
+    } else if (k is HKind.Local) {
+        emit(b, Op.Load(k.slot))
+    } else if (k is HKind.Global) {
+        emit(b, Op.GLoad(k.id))
+    } else if (k is HKind.SetLocal) {
+        expr(b, k.value)
+        emit(b, Op.Tee(k.slot))
+    } else if (k is HKind.SetGlobal) {
+        expr(b, k.value)
+        emit(b, Op.GTee(k.id))
+    } else if (k is HKind.Unary) {
+        expr(b, k.value)
+        var op = k.op
+        if (op is HUnOp.INeg) {
+            emit(b, Op.INegOv(op.loc))
+        } else if (op is HUnOp.FNeg) {
+            emit(b, Op.FNeg)
+        } else if (op is HUnOp.Not) {
+            emit(b, Op.Not)
+        } else {
+            emit(b, Op.Const(ALL_BITS))
+            emit(b, Op.Xor)
+        }
+    } else if (k is HKind.Binary) {
+        expr(b, k.left)
+        expr(b, k.right)
+        var l = shiftLoc(k.op)
+        if (l != null && l != NO_LOC) {
+            emit(b, Op.LocConst(l))
+            emit(b, Op.Rt("ShiftCheck"))
+        }
+        emit(b, binOp(k.op))
+    } else if (k is HKind.And) {
+        expr(b, k.left)
+        var end = label(b)
+        jump(b, Op.JzKeep(0), end)
+        emit(b, Op.Pop)
+        expr(b, k.right)
+        bind(b, end)
+    } else if (k is HKind.Or) {
+        expr(b, k.left)
+        var end = label(b)
+        jump(b, Op.JnzKeep(0), end)
+        emit(b, Op.Pop)
+        expr(b, k.right)
+        bind(b, end)
+    } else if (k is HKind.Conv) {
+        expr(b, k.value)
+        if (k.conv == Conv.IntToFloat) {
+            emit(b, Op.I2F)
+        } else {
+            emit(b, Op.F2I)
+        }
+    } else if (k is HKind.Call) {
+        args(b, k.args)
+        emit(b, Op.Call(k.func))
+    } else if (k is HKind.CallIndirect) {
+        args(b, k.args)
+        expr(b, k.callee)
+        emit(b, Op.CallInd(len(k.args)))
+    } else if (k is HKind.CallIface) {
+        args(b, k.args)
+        emit(b, Op.Dispatch(k.slot, len(k.args)))
+    } else if (k is HKind.Rt) {
+        args(b, k.args)
+        emit(b, Op.Rt(k.name))
+    } else if (k is HKind.Spawn) {
+        args(b, k.args)
+        emit(b, Op.Spawn(k.func, len(k.args), e.ty))
+    } else if (k is HKind.FuncRef) {
+        emit(b, Op.FuncRef(k.func))
+    } else if (k is HKind.NewStruct) {
+        args(b, k.args)
+        emit(b, Op.NewRecord(k.ty, len(k.args)))
+    } else if (k is HKind.GetField) {
+        expr(b, k.obj)
+        emit(b, Op.GetField(k.index))
+    } else if (k is HKind.SetField) {
+        expr(b, k.obj)
+        expr(b, k.value)
+        emit(b, Op.SetField(k.index))
+    } else if (k is HKind.NewArray) {
+        args(b, k.items)
+        emit(b, Op.NewArray(k.ty, len(k.items)))
+    } else if (k is HKind.Index) {
+        expr(b, k.obj)
+        expr(b, k.index)
+        emit(b, Op.Index(k.loc))
+    } else if (k is HKind.SetIndex) {
+        expr(b, k.obj)
+        expr(b, k.index)
+        expr(b, k.value)
+        emit(b, Op.SetIndex(k.loc))
+    } else if (k is HKind.ArrLen) {
+        expr(b, k.value)
+        emit(b, Op.Len)
+    } else if (k is HKind.BoxVal) {
+        expr(b, k.value)
+        emit(b, Op.Unbox)
+    } else if (k is HKind.Seq) {
+        stmts(b, k.stmts)
+        expr(b, k.value)
+    } else if (k is HKind.Retain) {
+        expr(b, k.value)
+        emit(b, Op.Rt("Retain"))
+    } else if (k is HKind.Release) {
+        expr(b, k.value)
+        emit(b, Op.Rt("Release"))
+    }
+}
+
+fun compileFunc(f: HFunc): VFunc {
+    var b = newBuilder(f.params)
+    if (len(f.locals) > b.locals) {
+        b.locals = len(f.locals)
+    }
+    stmts(b, f.body)
+    if (reachableEnd(b)) {
+        emit(b, Op.RetVoid)
+    }
+    return finish(b, f.name)
+}
+
+fun annotation(target: Target, a: HirAnnotation): VAnnotation {
+    [ValueArg] out = []
+    for x in a.args {
+        var v = x.value
+        if (v is Const.Int) {
+            out.push(ValueArg { key: x.key, value: Value.Int(v.value) })
+        } else if (v is Const.Float) {
+            out.push(ValueArg { key: x.key, value: Value.Float(v.value) })
+        } else if (v is Const.Bool) {
+            out.push(ValueArg { key: x.key, value: Value.Bool(v.value) })
+        } else if (v is Const.Str) {
+            out.push(ValueArg { key: x.key, value: Value.Str(v.text) })
+        }
+    }
+    return VAnnotation { target: target, name: a.name, args: out }
+}
+
+fun descOf(types: Types, t: int): Desc {
+    var k = types.kindOf(t)
+    return match k {
+        Ty.Error => Desc.Error
+        Ty.Void => Desc.Void
+        Ty.Null => Desc.Null
+        Ty.Int => Desc.Int
+        Ty.Float => Desc.Float
+        Ty.Bool => Desc.Bool
+        Ty.Str => Desc.Str
+        Ty.Any => Desc.Any
+        Ty.Num(code) => Desc.Num(code)
+        Ty.Array(elem) => Desc.Array(elem)
+        Ty.Map(key, value) => Desc.Map(key, value)
+        Ty.Optional(inner) => Desc.Optional(inner)
+        Ty.Func(params, ret) => Desc.Func
+        Ty.Future(inner) => Desc.Future(inner)
+        Ty.Record(index) => recordDesc(types, index)
+        Ty.Interface(index) => Desc.Interface(types.ifaces[index].name)
+        Ty.Enum(index) => enumDesc(types, index)
+    }
+}
+
+fun recordDesc(types: Types, index: int): Desc {
+    var r = types.records[index]
+    var name = r.name
+    if (r.anon) {
+        name = ""
+    }
+    [DescField] fields = []
+    for f in r.fields {
+        fields.push(DescField { name: f.name, ty: f.ty })
+    }
+    [int] impls = []
+    for i in r.implements {
+        impls.push(types.ifaces[i].ty)
+    }
+    for a in types.ancestors(index) {
+        impls.push(types.records[a].ty)
+    }
+    return Desc.Record(name, fields, r.isClass, impls)
+}
+
+fun enumDesc(types: Types, index: int): Desc {
+    var e = types.enums[index]
+    [string] vs = []
+    for v in e.variants {
+        vs.push(v.name)
+    }
+    return Desc.Enum(e.name, vs)
+}
+
+/** The bvm module of a program after ownership, like `compile` in `vm/compile.rs`. */
+pub fun compileModule(c: Checker, name: string, funcs: [HFunc], globals: [string], entry: int): VModule {
+    [Desc] types = []
+    for t in 0..c.types.count() {
+        types.push(descOf(c.types, t))
+    }
+    var m = VModule { name: name, types: types, strings: c.strings, locs: c.locs, globals: globals, imports: [], funcs: [], tables: [], annotations: [], entry: entry }
+    for i in 0..len(funcs) {
+        var f = funcs[i]
+        [int] ps = []
+        for p in 0..f.params {
+            if (p < len(f.locals)) {
+                ps.push(f.locals[p])
+            }
+        }
+        var sig = Sig { params: ps, ret: f.ret }
+        var ext = f.external
+        if (ext is External.Lib) {
+            m.funcs.push(VFunc { name: ext.name, params: f.params, locals: f.params, names: [], code: [], external: true, sig: sig })
+        } else if (ext is External.Native) {
+            var imp = -1
+            for k in 0..len(m.imports) {
+                if (m.imports[k].name == ext.name) {
+                    imp = k
+                    break
+                }
+            }
+            if (imp < 0) {
+                m.imports.push(Import { name: ext.name, argc: f.params })
+                imp = len(m.imports) - 1
+            }
+            var b = newBuilder(f.params)
+            for k in 0..f.params {
+                emit(b, Op.Load(k))
+            }
+            emit(b, Op.Host(imp))
+            emit(b, Op.Ret)
+            var out = finish(b, f.name)
+            out.sig = sig
+            m.funcs.push(out)
+        } else {
+            var out = compileFunc(f)
+            out.sig = sig
+            m.funcs.push(out)
+        }
+        for a in f.annotations {
+            m.annotations.push(annotation(Target.Func(i), a))
+        }
+    }
+    var annotated = keys(c.typeAnns)
+    sort(annotated)
+    for t in annotated {
+        for a in c.typeAnns[t] ?? [] {
+            m.annotations.push(annotation(Target.Type(t), a))
+        }
+    }
+    for s in c.slots {
+        [TableEntry] es = []
+        for im in s.impls {
+            es.push(TableEntry { ty: im.ty, func: im.func })
+        }
+        m.tables.push(Table { name: s.name, argc: s.argc, entries: es })
+    }
+    [VAnnotation] anns = [VAnnotation { target: Target.Module, name: "RefCounted", args: [] }]
+    for a in m.annotations {
+        anns.push(a)
+    }
+    m.annotations = anns
+    return m
+}

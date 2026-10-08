@@ -8,7 +8,7 @@ import "std/process"
 fun main() {
     var files = args()
     var mode = "--tokens"
-    var modes = ["--tokens", "--ast", "--diagnostics", "--toml", "--project", "--modules", "--decls", "--checked", "--owned"]
+    var modes = ["--tokens", "--ast", "--diagnostics", "--toml", "--project", "--modules", "--decls", "--checked", "--owned", "--bvm"]
     if (len(files) > 0 && contains(modes, files[0])) {
         mode = files[0]
         files = slice(files, 1, len(files))
@@ -23,6 +23,10 @@ fun main() {
         }
         if (mode == "--modules") {
             write(dumpModules(f))
+            continue
+        }
+        if (mode == "--bvm") {
+            write(dumpBvm(f))
             continue
         }
         if (mode == "--checked" || mode == "--owned") {

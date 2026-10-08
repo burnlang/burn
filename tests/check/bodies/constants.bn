@@ -1,0 +1,17 @@
+var tiny = 0.00001
+var small = 0.000123
+var smaller = 1.5e-7
+var huge = 1e20
+var exact = 10000000000000000.0
+var below = 9999999999999998.0
+var subnormal = 5e-324
+var negZero = -0.0
+var big = 9007199254740993
+var bigger = 4611686018427387904
+var most = 9223372036854775807
+var least = -9223372036854775807 - 1
+var negBig = -9007199254740993
+var pi = 3.141592653589793
+var third = 1.0 / 3.0
+float32 f = 0.1
+print(tiny, small, smaller, huge, exact, below, subnormal, negZero, big, bigger, most, least, negBig, pi, third, f)

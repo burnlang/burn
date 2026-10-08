@@ -333,11 +333,15 @@ pub fn declarations(loaded: &Loaded) -> String {
 }
 
 pub fn checked(loaded: &Loaded) -> String {
-    hirdump::dump(loaded, false)
+    hirdump::dump(loaded, hirdump::Form::Checked)
 }
 
 pub fn owned(loaded: &Loaded) -> String {
-    hirdump::dump(loaded, true)
+    hirdump::dump(loaded, hirdump::Form::Owned)
+}
+
+pub fn bytecode(loaded: &Loaded) -> String {
+    hirdump::dump(loaded, hirdump::Form::Bytecode)
 }
 
 pub fn edit_distance(a: &str, b: &str) -> usize {

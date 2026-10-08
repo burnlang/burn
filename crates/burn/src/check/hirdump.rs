@@ -179,15 +179,24 @@ fn program(out: &mut String, p: &Program) {
     }
 }
 
-pub fn dump(loaded: &Loaded, owned: bool) -> String {
+pub enum Form {
+    Checked,
+    Owned,
+    Bytecode,
+}
+
+pub fn dump(loaded: &Loaded, form: Form) -> String {
     let r = check(loaded, CheckOptions::default());
     let mut out = String::new();
     for d in &r.diags {
         out.push_str(&crate::diag::render(&loaded.sm, d, false));
     }
     match &r.program {
-        Some(p) if owned => program(&mut out, &crate::own::lower(p)),
-        Some(p) => program(&mut out, p),
+        Some(p) => match form {
+            Form::Checked => program(&mut out, p),
+            Form::Owned => program(&mut out, &crate::own::lower(p)),
+            Form::Bytecode => out.push_str(&bvm::asm::disassemble(&crate::vm::module(p))),
+        },
         None => out.push_str("no program\n"),
     }
     out

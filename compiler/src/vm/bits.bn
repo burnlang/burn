@@ -1,0 +1,156 @@
+const MIN_INT = -9223372036854775807 - 1
+const MANTISSA = 4503599627370495
+const TWO_52 = 4503599627370496.0
+
+fun scale(x: float, by: int): float {
+    var out = x
+    var n = by
+    while (n > 0) {
+        out *= 2.0
+        n -= 1
+    }
+    while (n < 0) {
+        out *= 0.5
+        n += 1
+    }
+    return out
+}
+
+fun isNan(f: float): bool {
+    return f != f
+}
+
+fun isInfinite(f: float): bool {
+    return !isNan(f) && (f - f) != 0.0
+}
+
+/** The IEEE 754 bits of a float as an int, like `f64::to_bits` in Rust. */
+pub fun floatToBits(f: float): int {
+    if (isNan(f)) {
+        return 9221120237041090560
+    }
+    var negative = f < 0.0 || (f == 0.0 && 1.0 / f < 0.0)
+    var sign = 0
+    if (negative) {
+        sign = MIN_INT
+    }
+    var a = f
+    if (negative) {
+        a = -f
+    }
+    if (isInfinite(a)) {
+        return sign | 9218868437227405312
+    }
+    if (a == 0.0) {
+        return sign
+    }
+    if (a < scale(1.0, -1022)) {
+        var m = toInt(scale(a, 1074))
+        return sign | m
+    }
+    var e = 0
+    var x = a
+    while (x >= 2.0) {
+        x *= 0.5
+        e += 1
+    }
+    while (x < 1.0) {
+        x *= 2.0
+        e -= 1
+    }
+    var m = toInt((x - 1.0) * TWO_52)
+    return sign | ((e + 1023) << 52) | m
+}
+
+/** The float with the given IEEE 754 bits, like `f64::from_bits` in Rust. */
+pub fun floatFromBits(bits: int): float {
+    var negative = bits < 0
+    var e = (bits >> 52) & 2047
+    var m = bits & MANTISSA
+    var out = 0.0
+    if (e == 2047) {
+        if (m != 0) {
+            return 0.0 / 0.0
+        }
+        out = 1.0 / 0.0
+    } else if (e == 0) {
+        out = scale(toFloat(m), -1074)
+    } else {
+        out = scale(1.0 + toFloat(m) / TWO_52, e - 1023)
+    }
+    if (negative) {
+        return -out
+    }
+    return out
+}
+
+fun digitsOf(text: string): string {
+    var out = ""
+    for ch in text {
+        if (ch >= "0" && ch <= "9") {
+            out += ch
+        }
+    }
+    return out
+}
+
+fun trimZeros(d: string): string {
+    var start = 0
+    while (start < len(d) - 1 && substring(d, start, start + 1) == "0") {
+        start += 1
+    }
+    var end = len(d)
+    while (end > start + 1 && substring(d, end - 1, end) == "0") {
+        end -= 1
+    }
+    return substring(d, start, end)
+}
+
+/** `{:?}` of a float in Rust: decimal from 1e-4 up to 1e16, otherwise the shortest exponent form. */
+pub fun debugFloat(f: float): string {
+    if (isNan(f)) {
+        return "NaN"
+    }
+    if (isInfinite(f)) {
+        if (f > 0.0) {
+            return "inf"
+        }
+        return "-inf"
+    }
+    var text = "${f}"
+    var a = f
+    if (f < 0.0) {
+        a = -f
+    }
+    if (a == 0.0 || (a >= 0.0001 && a < 10000000000000000.0)) {
+        return text
+    }
+    if (indexOf(text, "e") >= 0) {
+        return text
+    }
+    var sign = ""
+    if (f < 0.0) {
+        sign = "-"
+    }
+    var body = text
+    if (startsWith(body, "-")) {
+        body = substring(body, 1)
+    }
+    var dot = indexOf(body, ".")
+    var intPart = body
+    if (dot >= 0) {
+        intPart = substring(body, 0, dot)
+    }
+    var all = digitsOf(body)
+    var lead = 0
+    while (lead < len(all) && substring(all, lead, lead + 1) == "0") {
+        lead += 1
+    }
+    var exp = len(intPart) - 1 - lead
+    var sig = trimZeros(substring(all, lead))
+    var mant = substring(sig, 0, 1)
+    if (len(sig) > 1) {
+        mant = "${mant}.${substring(sig, 1)}"
+    }
+    return "${sign}${mant}e${exp}"
+}
