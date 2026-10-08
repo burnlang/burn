@@ -1,3 +1,4 @@
+import "../build.bn"
 import "../check/body.bn"
 import "../check/check.bn"
 import "../check/hir.bn"
@@ -6,8 +7,6 @@ import "../diag/diag.bn"
 import "../lower/own.bn"
 import "../project/loader.bn"
 import "../project/project.bn"
-import "../vm/asm.bn"
-import "../vm/compile.bn"
 import "declarations.bn"
 import "syntax.bn"
 
@@ -362,15 +361,6 @@ pub fun dumpBvm(file: string): string {
         out.push("no program\n")
         return joinWith(out, "")
     }
-    [string] globals = []
-    for g in p.globals {
-        if (g.module == "") {
-            globals.push(g.name)
-        } else {
-            globals.push("${g.module}.${g.name}")
-        }
-    }
-    var m = compileModule(c, p.name, lowerOwnership(c.types, p.funcs), globals, p.entry)
-    out.push(disassemble(m))
+    out.push(moduleText(c, p))
     return joinWith(out, "")
 }

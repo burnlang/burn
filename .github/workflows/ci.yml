@@ -43,3 +43,16 @@ jobs:
         run: burn build compiler/src/main.bn -o "$RUNNER_TEMP/stage1-dump"
       - name: Run it on every Burn file in the repository
         run: git ls-files -z '*.bn' | xargs -0 "$RUNNER_TEMP/stage1-dump" > "$RUNNER_TEMP/tokens.txt" && wc -l "$RUNNER_TEMP/tokens.txt"
+
+  bootstrap:
+    name: The Burn compiler builds itself
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/stage0
+      - name: Stage 1 builds stage 2, and both are the same module
+        run: sh scripts/bootstrap.sh --out "$RUNNER_TEMP/bootstrap"
+      - name: Stage 2 compiles a program that runs
+        run: |
+          burn "$RUNNER_TEMP/bootstrap/stage2.bvm" build examples/fib.bn -o "$RUNNER_TEMP/fib.bvm"
+          burn "$RUNNER_TEMP/fib.bvm"

@@ -336,8 +336,10 @@ examples are in [`examples/bvm/`](examples/bvm/).
 - `crates/bvm/`: the Burn Virtual Machine: instruction set, assembler, bytecode format, verifier, linker, mixins,
   archives, interpreter, the native bridge, the `bvm` command and the Ember example language
 - `crates/burn-runtime/`: runtime shared by bvm and native executables (memory, strings, collections, JSON, HTTP, tasks)
+- `compiler/`: the compiler written in Burn, which builds itself on bvm (see [compiler/README.md](compiler/README.md))
 - `tools/burnfmt/`: the formatter, written in Burn
 - `scripts/package.sh`: builds the toolchain into the layout burnup installs and releases ship
+- `scripts/bootstrap.sh`: builds the compiler written in Burn with itself and checks that the result is stable
 - `install.sh`: forwards to [burnup](https://github.com/burnlang/burnup), the installer
 - `assets/`: the logo
 - `lib/std/`: the standard library, written in Burn
@@ -374,5 +376,5 @@ This project is licensed under the GNU General Public License v3.0 - see the [LI
 ## Plans for Burn
 
 1. Native backends for Windows and ARM64
-2. Self-hosting the compiler
+2. Shipping the self-hosted compiler (it already builds itself, see [compiler/README.md](compiler/README.md))
 3. A documentation website built from `docs/`
