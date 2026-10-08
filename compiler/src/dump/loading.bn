@@ -1,8 +1,8 @@
-import "astdump.bn"
-import "diag.bn"
-import "loader.bn"
-import "project.bn"
-import "toml.bn"
+import "../diag/diag.bn"
+import "../project/loader.bn"
+import "../project/project.bn"
+import "../project/toml.bn"
+import "syntax.bn"
 
 fun shown(s: string?): string {
     return s ?? "-"

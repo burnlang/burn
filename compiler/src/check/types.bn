@@ -1,4 +1,4 @@
-import "ast.bn"
+import "../syntax/ast.bn"
 
 /** A byte range in one of the loaded files. The checker's spans carry the file, unlike the parser's. */
 pub def type SrcSpan {

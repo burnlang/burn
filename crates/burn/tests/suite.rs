@@ -196,10 +196,16 @@ fn formatter_is_idempotent() {
 fn repository_sources_are_formatted() {
     let root = root();
     let mut files = Vec::new();
-    for dir in ["tests/cases", "examples", "lib/std", "tests/modules", "compiler"] {
-        for e in std::fs::read_dir(root.join(dir)).unwrap() {
+    let mut dirs: Vec<PathBuf> = ["tests/cases", "examples", "lib/std", "tests/modules", "compiler/src"]
+        .iter()
+        .map(|d| root.join(d))
+        .collect();
+    while let Some(dir) = dirs.pop() {
+        for e in std::fs::read_dir(&dir).unwrap() {
             let p = e.unwrap().path();
-            if p.extension().map(|x| x == "bn").unwrap_or(false) {
+            if p.is_dir() && p.starts_with(root.join("compiler")) {
+                dirs.push(p);
+            } else if p.extension().map(|x| x == "bn").unwrap_or(false) {
                 files.push(p);
             }
         }
@@ -268,15 +274,15 @@ fn compiler_written_in_burn_matches_the_compiler() {
     places.extend(files.iter().filter(|f| f.starts_with(&projects)).cloned());
     places.extend([projects.clone(), projects.join("home"), projects.join("app/src/net")]);
     let home = projects.join("home");
-    let (generated, code) = output(burn().current_dir(&root).arg("compiler/genstd.bn"));
+    let (generated, code) = output(burn().current_dir(&root).arg("compiler/src/bin/genstd.bn"));
     assert_eq!(code, 0, "{}", generated);
     assert!(
-        generated == std::fs::read_to_string(root.join("compiler/stdlib.bn")).unwrap(),
-        "compiler/stdlib.bn is out of date; run `burn compiler/genstd.bn > compiler/stdlib.bn`"
+        generated == std::fs::read_to_string(root.join("compiler/src/project/stdlib.bn")).unwrap(),
+        "compiler/src/project/stdlib.bn is out of date; run `burn compiler/src/bin/genstd.bn > compiler/src/project/stdlib.bn`"
     );
     let dir = temp_dir("selfhost");
     let exe = dir.join("dump");
-    let (built, code) = output(burn().current_dir(&root).args(["build", "compiler/dump.bn", "-o"]).arg(&exe));
+    let (built, code) = output(burn().current_dir(&root).args(["build", "compiler/src/main.bn", "-o"]).arg(&exe));
     assert_eq!(code, 0, "{}", built);
     let stages: [(&str, &[PathBuf]); 7] = [
         ("--tokens", &files),
@@ -291,7 +297,11 @@ fn compiler_written_in_burn_matches_the_compiler() {
         let (want, code) = output(burn().current_dir(&root).env("BURN_HOME", &home).args(["dump", stage]).args(inputs));
         assert_eq!(code, 0, "{}", want);
         let mut bvm = burn();
-        bvm.current_dir(&root).env("BURN_HOME", &home).arg("compiler/dump.bn").arg(stage).args(inputs);
+        bvm.current_dir(&root)
+            .env("BURN_HOME", &home)
+            .arg("compiler/src/main.bn")
+            .arg(stage)
+            .args(inputs);
         let mut native = Command::new(&exe);
         native.current_dir(&root).env("BURN_HOME", &home).arg(stage).args(inputs);
         for mut run in [bvm, native] {

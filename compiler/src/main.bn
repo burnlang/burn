@@ -1,0 +1,42 @@
+import "dump/declarations.bn"
+import "dump/loading.bn"
+import "dump/syntax.bn"
+import "std/fs"
+import "std/process"
+
+fun main() {
+    var files = args()
+    var mode = "--tokens"
+    var modes = ["--tokens", "--ast", "--diagnostics", "--toml", "--project", "--modules", "--decls"]
+    if (len(files) > 0 && contains(modes, files[0])) {
+        mode = files[0]
+        files = slice(files, 1, len(files))
+    }
+    for f in files {
+        if (len(files) > 1) {
+            print("file ${f}")
+        }
+        if (mode == "--project") {
+            write(dumpProject(f))
+            continue
+        }
+        if (mode == "--modules") {
+            write(dumpModules(f))
+            continue
+        }
+        if (mode == "--decls") {
+            write(dumpDeclarations(f))
+            continue
+        }
+        var src = readFile(f)
+        if (mode == "--ast") {
+            write(dumpAst(src))
+        } else if (mode == "--diagnostics") {
+            write(dumpDiagnostics(f, src))
+        } else if (mode == "--toml") {
+            write(dumpToml(src))
+        } else {
+            write(dumpTokens(src))
+        }
+    }
+}

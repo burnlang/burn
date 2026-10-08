@@ -1,4 +1,4 @@
-import "diag.bn"
+import "../diag/diag.bn"
 import "std/strings"
 
 /** The kind of a token. The names match the variants of `Tok` in the Rust lexer. */
