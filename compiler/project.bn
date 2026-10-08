@@ -1,0 +1,711 @@
+import "paths.bn"
+import "std/fs"
+import "std/process"
+import "toml.bn"
+
+pub const MANIFEST = "burn.toml"
+pub const LOCKFILE = "burn.lock"
+
+/** Where a failed step puts its message, like the `Err(String)` of the Rust version. */
+pub def struct Problem() {
+    string message = ""
+
+    fun set(m: string) {
+        message = m
+    }
+
+    fun wrap(prefix: string) {
+        message = "${prefix}: ${message}"
+    }
+}
+
+pub def enum ProjectKind { App, Lib }
+
+pub def type Dependency {
+    string name
+    string? path
+}
+
+pub def type Manifest {
+    string name
+    string version
+    ProjectKind kind
+    string target
+    string main
+    string? output
+    bool std
+    [Dependency] dependencies
+}
+
+pub def type Locked {
+    string name
+    string rev
+    string source
+}
+
+pub def type Member {
+    string dir
+    string path
+    string? name
+}
+
+pub def type Workspace {
+    string root
+    string? name
+    [Member] members
+}
+
+pub def type WorkspaceManifest {
+    string? name
+    [string] members
+}
+
+pub def type Project {
+    string root
+    Manifest manifest
+    [Locked] lock
+    string lockRoot
+    Workspace? workspace
+}
+
+pub fun samePackage(a: string, b: string): bool {
+    return lower(a) == lower(b)
+}
+
+pub fun shortName(name: string): string {
+    var parts = split(name, "/")
+    return parts[len(parts) - 1]
+}
+
+fun isLowerOrDigit(c: int): bool {
+    return (c >= 97 && c <= 122) || (c >= 48 && c <= 57)
+}
+
+fun labelOk(l: string): bool {
+    if (l == "" || startsWith(l, "-")) {
+        return false
+    }
+    for c in l.bytes() {
+        if (!isLowerOrDigit(c) && c != 45) {
+            return false
+        }
+    }
+    return true
+}
+
+fun segmentOk(s: string): bool {
+    if (s == "" || startsWith(s, ".")) {
+        return false
+    }
+    for c in s.bytes() {
+        var alnum = isLowerOrDigit(c) || (c >= 65 && c <= 90)
+        if (!alnum && c != 45 && c != 95 && c != 46) {
+            return false
+        }
+    }
+    return true
+}
+
+pub fun validName(name: string): bool {
+    var parts = split(name, "/")
+    if (len(parts) < 3) {
+        return false
+    }
+    var labels = split(parts[0], ".")
+    if (len(labels) < 2) {
+        return false
+    }
+    for l in labels {
+        if (!labelOk(l)) {
+            return false
+        }
+    }
+    for c in labels[len(labels) - 1].bytes() {
+        if (c < 97 || c > 122) {
+            return false
+        }
+    }
+    for k in 1..len(parts) {
+        if (!segmentOk(parts[k])) {
+            return false
+        }
+    }
+    return true
+}
+
+/** A package name and the path inside it, split after the third part. */
+pub def type PackagePath {
+    string name
+    string sub
+}
+
+pub fun splitPackagePath(p: string): PackagePath? {
+    var parts = split(p, "/")
+    if (len(parts) < 3) {
+        return null
+    }
+    var name = join(slice(parts, 0, 3), "/")
+    if (!validName(name)) {
+        return null
+    }
+    return PackagePath { name: name, sub: join(slice(parts, 3, len(parts)), "/") }
+}
+
+pub fun splitKnown(p: string, project: Project?): PackagePath? {
+    var parts = split(p, "/")
+    var k = len(parts)
+    while (k >= 4) {
+        var name = join(slice(parts, 0, k), "/")
+        if (validName(name) && project != null && knows(project, name)) {
+            return PackagePath { name: name, sub: join(slice(parts, k, len(parts)), "/") }
+        }
+        k -= 1
+    }
+    return splitPackagePath(p)
+}
+
+fun strField(t: [TomlEntry], key: string, section: string, err: Problem): bool {
+    var v = lookup(t, key)
+    if (v != null && !(v is TomlValue.Str)) {
+        err.set("`${section}.${key}` must be text in quotes")
+        return false
+    }
+    return true
+}
+
+fun badName(name: string): string {
+    return "`${name}` is not a valid package name; names look like `github.com/owner/project`"
+}
+
+pub fun parseWorkspace(src: string, err: Problem): WorkspaceManifest? {
+    var doc = parseToml(src)
+    if (doc.error != "") {
+        err.set(doc.error)
+        return null
+    }
+    var ws = lookup(doc.table, "workspace")
+    if (ws == null) {
+        return null
+    }
+    var t = tableOf(ws)
+    if (t == null) {
+        err.set("`workspace` must be a table")
+        return null
+    }
+    if (!strField(t, "name", "workspace", err)) {
+        return null
+    }
+    var name = textOf(lookup(t, "name"))
+    if (name != null && !validName(name)) {
+        err.set(badName(name))
+        return null
+    }
+    [string] members = []
+    var list = lookup(t, "members")
+    if (list != null) {
+        if (!(list is TomlValue.Array)) {
+            err.set("`workspace.members` must be a list of folders, like [\"common\", \"app\"]")
+            return null
+        }
+        for it in list.items {
+            var s = textOf(it)
+            if (s == null) {
+                err.set("`workspace.members` must be a list of folders in quotes")
+                return null
+            }
+            members.push(s)
+        }
+    }
+    return WorkspaceManifest { name: name, members: members }
+}
+
+pub fun readError(path: string): string {
+    if (isDir(path)) {
+        return "cannot read ${path}: Is a directory (os error 21)"
+    }
+    return "cannot read ${path}: No such file or directory (os error 2)"
+}
+
+pub fun readText(path: string): string? {
+    if (!isFile(path)) {
+        return null
+    }
+    return readFile(path)
+}
+
+pub fun loadWorkspace(root: string, err: Problem): Workspace? {
+    var path = pathJoin(root, MANIFEST)
+    var src = readText(path)
+    if (src == null) {
+        err.set(readError(path))
+        return null
+    }
+    var wm = parseWorkspace(src, err)
+    if (wm == null) {
+        if (err.message != "") {
+            err.wrap(path)
+        }
+        return null
+    }
+    var base = canonical(root)
+    [Member] members = []
+    for p in wm.members {
+        var dir = canonical(pathJoin(base, p))
+        string? name = null
+        var msrc = readText(pathJoin(dir, MANIFEST))
+        if (msrc != null) {
+            var m = parseManifest(msrc, new Problem())
+            if (m != null) {
+                name = m.name
+            }
+        }
+        members.push(Member { dir: dir, path: p, name: name })
+    }
+    return Workspace { root: base, name: wm.name, members: members }
+}
+
+pub fun findWorkspace(start: string): Workspace? {
+    string? first = start
+    if (!isDir(start)) {
+        first = pathParent(start)
+    }
+    if (first == null) {
+        return null
+    }
+    string? cur = canonical(first)
+    while (cur != null) {
+        if (isFile(pathJoin(cur, MANIFEST))) {
+            var ws = loadWorkspace(cur, new Problem())
+            if (ws != null) {
+                return ws
+            }
+        }
+        cur = pathParent(cur)
+    }
+    return null
+}
+
+pub fun isWorkspaceOnly(root: string): bool {
+    var src = readText(pathJoin(root, MANIFEST))
+    if (src == null) {
+        return false
+    }
+    var doc = parseToml(src)
+    if (doc.error != "") {
+        return false
+    }
+    return lookup(doc.table, "workspace") != null && lookup(doc.table, "package") == null
+}
+
+pub fun memberNamed(ws: Workspace, name: string): Member? {
+    for m in ws.members {
+        var n = m.name
+        if (n != null && samePackage(n, name)) {
+            return m
+        }
+    }
+    return null
+}
+
+pub fun containsDir(ws: Workspace, dir: string): bool {
+    var c = canonical(dir)
+    for m in ws.members {
+        if (m.dir == c) {
+            return true
+        }
+    }
+    return false
+}
+
+pub fun parseManifest(src: string, err: Problem): Manifest? {
+    var doc = parseToml(src)
+    if (doc.error != "") {
+        err.set(doc.error)
+        return null
+    }
+    var pkg = tableOf(lookup(doc.table, "package"))
+    if (pkg == null) {
+        err.set("missing the `[package]` section")
+        return null
+    }
+    if (!strField(pkg, "name", "package", err)) {
+        return null
+    }
+    var name = textOf(lookup(pkg, "name"))
+    if (name == null) {
+        err.set("missing `name` in `[package]`")
+        return null
+    }
+    if (!validName(name)) {
+        err.set(badName(name))
+        return null
+    }
+    if (!strField(pkg, "kind", "package", err)) {
+        return null
+    }
+    var kindText = textOf(lookup(pkg, "kind"))
+    var kind = ProjectKind.App
+    if (kindText == "lib") {
+        kind = ProjectKind.Lib
+    } else if (kindText != null && kindText != "app") {
+        err.set("unknown kind `${kindText}`; use \"app\" or \"lib\"")
+        return null
+    }
+    if (!strField(pkg, "target", "package", err)) {
+        return null
+    }
+    var target = textOf(lookup(pkg, "target")) ?? "native"
+    if (target != "native" && target != "js" && target != "bvm") {
+        err.set("unknown target `${target}`; use \"native\", \"js\" or \"bvm\"")
+        return null
+    }
+    if (!strField(pkg, "main", "package", err)) {
+        return null
+    }
+    var main = textOf(lookup(pkg, "main"))
+    if (main == null) {
+        if (kind == ProjectKind.Lib) {
+            main = "src/lib.bn"
+        } else {
+            main = "src/main.bn"
+        }
+    }
+    var std = true
+    var stdValue = lookup(pkg, "std")
+    if (stdValue is TomlValue.Bool) {
+        std = stdValue.value
+    } else if (stdValue != null) {
+        err.set("`package.std` must be true or false")
+        return null
+    }
+    [Dependency] dependencies = []
+    var deps = lookup(doc.table, "dependencies")
+    if (deps != null) {
+        var dt = tableOf(deps)
+        if (dt == null) {
+            err.set("`dependencies` must be a table")
+            return null
+        }
+        for d in dt {
+            string? path = null
+            var v = d.value
+            if (v is TomlValue.Table) {
+                if (!strField(v.entries, "version", d.key, err) || !strField(v.entries, "git", d.key, err) || !strField(v.entries, "path", d.key, err)) {
+                    return null
+                }
+                path = textOf(lookup(v.entries, "path"))
+            } else if (!(v is TomlValue.Str)) {
+                err.set("the dependency `${d.key}` must be a version in quotes or a table")
+                return null
+            }
+            if (!validName(d.key)) {
+                err.set(badName(d.key))
+                return null
+            }
+            dependencies.push(Dependency { name: d.key, path: path })
+        }
+    }
+    var scripts = lookup(doc.table, "scripts")
+    if (scripts != null) {
+        var st = tableOf(scripts)
+        if (st == null) {
+            err.set("`scripts` must be a table")
+            return null
+        }
+        for s in st {
+            if (!(s.value is TomlValue.Str)) {
+                err.set("the script `${s.key}` must be a command in quotes")
+                return null
+            }
+        }
+    }
+    if (!strField(pkg, "version", "package", err) || !strField(pkg, "output", "package", err)) {
+        return null
+    }
+    return Manifest {
+        name: name,
+        version: textOf(lookup(pkg, "version")) ?? "0.1.0",
+        kind: kind,
+        target: target,
+        main: main,
+        output: textOf(lookup(pkg, "output")),
+        std: std,
+        dependencies: dependencies
+    }
+}
+
+pub fun parseLock(src: string, err: Problem): [Locked]? {
+    var doc = parseToml(src)
+    if (doc.error != "") {
+        err.set(doc.error)
+        return null
+    }
+    [Locked] out = []
+    var pkgs = lookup(doc.table, "package")
+    if (pkgs is TomlValue.Array) {
+        for it in pkgs.items {
+            var t = tableOf(it)
+            if (t == null) {
+                err.set("every `[[package]]` must be a table")
+                return null
+            }
+            out.push(Locked {
+                name: textOf(lookup(t, "name")) ?? "",
+                rev: textOf(lookup(t, "rev")) ?? "",
+                source: textOf(lookup(t, "source")) ?? ""
+            })
+        }
+    }
+    return out
+}
+
+pub fun findRoot(start: string): string? {
+    string? first = start
+    if (!isDir(start)) {
+        first = pathParent(start)
+    }
+    if (first == null) {
+        return null
+    }
+    var dir = first
+    if (dir == "") {
+        dir = currentDir()
+    }
+    string? cur = canonical(dir)
+    while (cur != null) {
+        if (isFile(pathJoin(cur, MANIFEST))) {
+            return cur
+        }
+        cur = pathParent(cur)
+    }
+    return null
+}
+
+pub fun loadProject(root: string, err: Problem): Project? {
+    var path = pathJoin(root, MANIFEST)
+    var src = readText(path)
+    if (src == null) {
+        err.set(readError(path))
+        return null
+    }
+    var doc = parseToml(src)
+    if (parseWorkspace(src, new Problem()) != null && doc.error == "" && lookup(doc.table, "package") == null) {
+        err.set("${root} is the root of a workspace, not a package\n  = help: run the command inside one of its members, or pick one with `-p <member>`")
+        return null
+    }
+    var manifest = parseManifest(src, err)
+    if (manifest == null) {
+        err.wrap(path)
+        return null
+    }
+    Workspace? workspace = null
+    var parent = pathParent(root)
+    if (parent != null) {
+        var outer = findWorkspace(parent)
+        if (outer != null && containsDir(outer, root)) {
+            workspace = outer
+        }
+    }
+    if (workspace == null) {
+        workspace = loadWorkspace(root, new Problem())
+    }
+    var lockRoot = root
+    if (workspace != null) {
+        lockRoot = workspace.root
+    }
+    var lockPath = pathJoin(lockRoot, LOCKFILE)
+    [Locked] lock = []
+    var lockSrc = readText(lockPath)
+    if (lockSrc != null) {
+        var parsed = parseLock(lockSrc, err)
+        if (parsed == null) {
+            err.wrap(lockPath)
+            return null
+        }
+        lock = parsed
+    }
+    return Project { root: root, manifest: manifest, lock: lock, lockRoot: lockRoot, workspace: workspace }
+}
+
+pub fun burnHome(): string {
+    var h = env("BURN_HOME")
+    if (h != "") {
+        return h
+    }
+    var home = env("HOME")
+    if (home == "") {
+        home = env("USERPROFILE")
+    }
+    return pathJoin(home, ".burn")
+}
+
+pub fun packageDir(projectRoot: string, l: Locked): string {
+    if (startsWith(l.source, "path+")) {
+        return pathJoin(projectRoot, substring(l.source, 5))
+    }
+    var rev = l.rev
+    if (len(rev) > 12) {
+        rev = substring(rev, 0, 12)
+    }
+    var dir = pathJoin(burnHome(), "packages")
+    var parts = split(l.name, "/")
+    var repo = len(parts)
+    if (repo > 3) {
+        repo = 3
+    }
+    for k in 0..repo {
+        if (k == repo - 1) {
+            dir = pathJoin(dir, "${parts[k]}@${rev}")
+        } else {
+            dir = pathJoin(dir, parts[k])
+        }
+    }
+    for k in repo..len(parts) {
+        dir = pathJoin(dir, parts[k])
+    }
+    return dir
+}
+
+pub fun locked(p: Project, name: string): Locked? {
+    for l in p.lock {
+        if (samePackage(l.name, name)) {
+            return l
+        }
+    }
+    return null
+}
+
+pub fun isSelf(p: Project, name: string): bool {
+    return samePackage(p.manifest.name, name)
+}
+
+fun declared(p: Project, name: string): Dependency? {
+    for d in p.manifest.dependencies {
+        if (samePackage(d.name, name)) {
+            return d
+        }
+    }
+    return null
+}
+
+pub fun member(p: Project, name: string): Member? {
+    var ws = p.workspace
+    if (ws == null) {
+        return null
+    }
+    return memberNamed(ws, name)
+}
+
+pub fun knows(p: Project, name: string): bool {
+    return isSelf(p, name) || declared(p, name) != null || locked(p, name) != null || member(p, name) != null
+}
+
+pub fun splitImport(p: Project, path: string): PackagePath? {
+    return splitKnown(path, p)
+}
+
+pub fun mainPath(p: Project): string {
+    return pathJoin(p.root, p.manifest.main)
+}
+
+pub fun sourceRootOf(dir: string, m: Manifest): string {
+    var parent = pathParent(m.main)
+    if (parent != null && parent != "") {
+        return pathJoin(dir, parent)
+    }
+    return dir
+}
+
+pub fun sourceRoot(p: Project): string {
+    return sourceRootOf(p.root, p.manifest)
+}
+
+/** The directory of a package the project can import. */
+pub fun resolvePackage(p: Project, name: string, err: Problem): string? {
+    if (isSelf(p, name)) {
+        return p.root
+    }
+    var m = member(p, name)
+    if (m != null) {
+        return m.dir
+    }
+    var dep = declared(p, name)
+    var lockedAs = locked(p, name)
+    string? depPath = null
+    if (dep != null) {
+        depPath = dep.path
+    }
+    if (lockedAs == null && depPath != null) {
+        var dir = pathJoin(p.root, depPath)
+        if (isFile(pathJoin(dir, MANIFEST))) {
+            return dir
+        }
+        err.set("the package `${name}` should be in ${dir}, but there is no burn.toml there")
+        return null
+    }
+    if (lockedAs != null) {
+        var dir = packageDir(p.lockRoot, lockedAs)
+        if (isFile(pathJoin(dir, MANIFEST))) {
+            return dir
+        }
+        err.set("the package `${name}` is in burn.lock but not downloaded; run `ash install`")
+        return null
+    }
+    if (dep != null) {
+        err.set("the package `${name}` is not installed yet; run `ash install`")
+        return null
+    }
+    err.set("the package `${name}` is not a dependency; add it with `ash install ${name}` (this project is `${p.manifest.name}` in ${pathJoin(p.root, MANIFEST)})")
+    return null
+}
+
+fun manifestIn(dir: string, err: Problem): Manifest? {
+    var path = pathJoin(dir, MANIFEST)
+    var src = readText(path)
+    if (src == null) {
+        err.set(readError(path))
+        return null
+    }
+    var m = parseManifest(src, err)
+    if (m == null) {
+        err.wrap(path)
+    }
+    return m
+}
+
+pub fun packageSourceRoot(dir: string, err: Problem): string? {
+    var m = manifestIn(dir, err)
+    if (m == null) {
+        return null
+    }
+    return sourceRootOf(dir, m)
+}
+
+pub fun packageMain(dir: string, err: Problem): string? {
+    var m = manifestIn(dir, err)
+    if (m == null) {
+        return null
+    }
+    return pathJoin(dir, m.main)
+}
+
+/** The file of a module path below `base`: `x.bn`, or `x/mod.bn` for a folder. */
+pub fun moduleFile(base: string, path: string, overrides: {string: string}): string? {
+    var p = path
+    while (endsWith(p, "/")) {
+        p = substring(p, 0, len(p) - 1)
+    }
+    [string] candidates = []
+    if (endsWith(p, ".bn")) {
+        candidates.push(pathJoin(base, p))
+    } else {
+        candidates.push(pathJoin(base, "${p}.bn"))
+        candidates.push(pathJoin(pathJoin(base, p), "mod.bn"))
+    }
+    for c in candidates {
+        if (isFile(c) || has(overrides, canonical(c))) {
+            return c
+        }
+    }
+    return null
+}

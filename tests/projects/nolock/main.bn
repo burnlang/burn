@@ -1,0 +1,6 @@
+import "github.com/fixture/other"
+import "@/main"
+
+fun main() {
+    print(0)
+}

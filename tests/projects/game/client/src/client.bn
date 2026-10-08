@@ -1,0 +1,7 @@
+import "github.com/fixture/game/common"
+import "github.com/fixture/game/common/math"
+import "github.com/fixture/game/server"
+
+fun main() {
+    print(twice(shared()))
+}

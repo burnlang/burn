@@ -1,0 +1,48 @@
+# Every kind of value the manifest parser reads.
+title = "Burn \"project\"\twith\\escapes\u00e9\u004A"
+literal = 'C:\path\no escapes'
+int = 42
+negative = -17
+plus = +5
+underscored = 1_000_000
+float = 3.25
+exp = 1e3
+negexp = -2.5E-3
+inf = inf
+nan = nan
+yes = true
+no = false
+empty = []
+list = [1, "two", 3.0, [4, 5], { six = 6 }]
+multiline = [
+    "a", # a comment
+    "b",
+
+    "c",
+]
+inline = { name = "x", nested = { deep = true }, list = [1] }
+"quoted key" = 1
+'literal key' = 2
+dotted.key.path = "deep"
+bare-key_2 = "ok"
+
+[table]
+a = 1
+sub.b = 2
+
+[table.child]
+c = 3
+
+[[items]]
+name = "first"
+
+[[items]]
+name = "second"
+[items.extra]
+flag = true
+
+[[items.parts]]
+id = 1
+
+[other]   # trailing comment
+x = "é ü 中文"

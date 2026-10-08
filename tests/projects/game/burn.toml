@@ -1,0 +1,3 @@
+[workspace]
+name = "github.com/fixture/game"
+members = ["common", "client", "missing"]

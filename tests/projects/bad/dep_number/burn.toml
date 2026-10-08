@@ -1,0 +1,4 @@
+[package]
+name = "github.com/a/b"
+[dependencies]
+"github.com/c/d" = 1

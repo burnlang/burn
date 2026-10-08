@@ -1,0 +1,4 @@
+[package]
+name = "github.com/a/b"
+[scripts]
+build = 1

@@ -1,0 +1,14 @@
+# An app with a path dependency, a downloaded one, and two that are missing.
+[package]
+name = "github.com/fixture/app"
+version = "1.2.3"
+output = "build/app-bin"
+
+[dependencies]
+"github.com/fixture/lib" = { path = "../lib" }
+"github.com/fixture/remote" = "^1.0"
+"github.com/fixture/absent" = "^2.0"
+"github.com/fixture/moved" = { path = "../nowhere" }
+
+[scripts]
+hello = "burn run"

@@ -1,0 +1,3 @@
+[package]
+name = "github.com/a/b"
+main = ["a"]

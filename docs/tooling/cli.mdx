@@ -39,6 +39,9 @@ This page lists every subcommand of `burn`. The shorter toolchain commands map o
 | `burn dump --tokens <files...>` | print the tokens and lexer errors of each file, one token per line with byte offsets |
 | `burn dump --ast <files...>` | print the syntax tree and parse errors of each file, one node per line with byte spans |
 | `burn dump --diagnostics <files...>` | print the lexer and parser errors of each file as `burn check` shows them, without colours |
+| `burn dump --toml <files...>` | print a TOML file (such as `burn.toml` or `burn.lock`) as the compiler reads it, or its first error |
+| `burn dump --project <paths...>` | print the project and workspace found from each path, and where each of its packages resolves |
+| `burn dump --modules <files...>` | print every module a program loads, its imports and the import errors |
 | `burn version`, `burn help` | information |
 
 The older flags still work: `-r`, `-e`, `-exe <file> [name]` and `-d`.

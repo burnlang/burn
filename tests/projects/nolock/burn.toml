@@ -1,0 +1,3 @@
+[package]
+name = "example.org/fixture/nolock"
+main = "main.bn"

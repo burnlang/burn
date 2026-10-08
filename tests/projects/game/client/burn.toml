@@ -1,0 +1,4 @@
+[package]
+name = "github.com/fixture/game/client"
+target = "js"
+main = "src/client.bn"

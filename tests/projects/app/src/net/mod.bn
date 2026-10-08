@@ -1,0 +1,5 @@
+import "http.bn"
+
+pub fun net(): int {
+    return 1
+}

@@ -1,0 +1,156 @@
+import "std/fs"
+import "std/process"
+
+/**
+ * Path operations with the meaning they have in Rust's `std::path`, so that paths print the same way in both compilers.
+ * Only `/` separates parts.
+ */
+def type Parts {
+    bool rooted
+    [string] names
+}
+
+fun partsOf(p: string): Parts {
+    [string] names = []
+    var rooted = startsWith(p, "/")
+    var first = true
+    for part in split(p, "/") {
+        if (part == "" || (part == "." && !first)) {
+            first = false
+            continue
+        }
+        first = false
+        names.push(part)
+    }
+    return Parts { rooted: rooted, names: names }
+}
+
+fun joined(rooted: bool, names: [string]): string {
+    var body = join(names, "/")
+    if (rooted) {
+        return "/" + body
+    }
+    return body
+}
+
+/** `base.join(child)`: an absolute child replaces the base. */
+pub fun pathJoin(base: string, child: string): string {
+    if (startsWith(child, "/") || base == "") {
+        return child
+    }
+    if (endsWith(base, "/")) {
+        return base + child
+    }
+    return base + "/" + child
+}
+
+/** `path.parent()`: the path without its last part, or null for `/` and the empty path. */
+pub fun pathParent(p: string): string? {
+    var parts = partsOf(p)
+    if (len(parts.names) == 0) {
+        return null
+    }
+    return joined(parts.rooted, slice(parts.names, 0, len(parts.names) - 1))
+}
+
+/** `path.file_name()`: the last part, unless it is `..`. */
+pub fun pathFileName(p: string): string? {
+    var parts = partsOf(p)
+    if (len(parts.names) == 0) {
+        return null
+    }
+    var last = parts.names[len(parts.names) - 1]
+    if (last == ".." || last == ".") {
+        return null
+    }
+    return last
+}
+
+fun dotAt(name: string): int {
+    if (name == "..") {
+        return -1
+    }
+    var bytes = name.bytes()
+    var k = len(bytes) - 1
+    while (k > 0) {
+        if (bytes[k] == 46) {
+            return k
+        }
+        k -= 1
+    }
+    return -1
+}
+
+/** `path.extension()`: the text after the last dot of the file name, if the dot is not its first character. */
+pub fun pathExtension(p: string): string? {
+    var name = pathFileName(p)
+    if (name == null) {
+        return null
+    }
+    var k = dotAt(name)
+    if (k < 0) {
+        return null
+    }
+    var bytes = name.bytes()
+    return fromBytes(slice(bytes, k + 1, len(bytes)))
+}
+
+/** `path.file_stem()`: the file name without its extension. */
+pub fun pathStem(p: string): string? {
+    var name = pathFileName(p)
+    if (name == null) {
+        return null
+    }
+    var k = dotAt(name)
+    if (k < 0) {
+        return name
+    }
+    return fromBytes(slice(name.bytes(), 0, k))
+}
+
+pub fun currentDir(): string {
+    return Process.cwd()
+}
+
+pub fun isFile(p: string): bool {
+    return p != "" && Files.isFile(p)
+}
+
+pub fun isDir(p: string): bool {
+    return p != "" && Files.isDir(p)
+}
+
+/** `fs::canonicalize(p)` without following symbolic links, or `p` itself when nothing is there. */
+pub fun canonical(p: string): string {
+    if (!isFile(p) && !isDir(p)) {
+        return p
+    }
+    var full = pathJoin(currentDir(), p)
+    var parts = partsOf(full)
+    [string] out = []
+    for name in parts.names {
+        if (name == "..") {
+            if (len(out) > 0) {
+                out = slice(out, 0, len(out) - 1)
+            }
+        } else if (name != ".") {
+            out.push(name)
+        }
+    }
+    return joined(true, out)
+}
+
+/** `path.strip_prefix(base)` for whole parts, or null when `base` is not a prefix. */
+pub fun stripPrefix(p: string, base: string): string? {
+    var a = partsOf(p)
+    var b = partsOf(base)
+    if (a.rooted != b.rooted || len(b.names) > len(a.names)) {
+        return null
+    }
+    for k in 0..len(b.names) {
+        if (a.names[k] != b.names[k]) {
+            return null
+        }
+    }
+    return join(slice(a.names, len(b.names), len(a.names)), "/")
+}

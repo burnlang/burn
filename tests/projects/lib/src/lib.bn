@@ -1,0 +1,5 @@
+import "shapes"
+
+pub fun area(): int {
+    return 3
+}
