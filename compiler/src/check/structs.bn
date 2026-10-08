@@ -4,7 +4,9 @@ import "body.bn"
 import "calls.bn"
 import "check.bn"
 import "expr.bn"
+import "generics.bn"
 import "hir.bn"
+import "stmt.bn"
 import "types.bn"
 
 pub def type MethodSig {
@@ -208,4 +210,757 @@ pub fun aliveWrap(c: Checker, o: HExpr, span: SrcSpan): HExpr {
     }
     var l = c.locExpr(span)
     return rt("Alive", [o, l], o.ty)
+}
+
+def type SlotName {
+    string name
+    int value
+}
+
+fun sortSlotNames(xs: [SlotName]): [SlotName] {
+    var out = slice(xs, 0, len(xs))
+    for a in 0..len(out) {
+        for b in a + 1..len(out) {
+            var x = out[a]
+            var y = out[b]
+            if (y.name < x.name || (y.name == x.name && y.value < x.value)) {
+                out[a] = y
+                out[b] = x
+            }
+        }
+    }
+    return out
+}
+
+/** The structs with a declaration, parents before children, like `struct_order` in Rust. */
+pub fun structOrder(c: Checker): [int] {
+    var order = keys(c.structDecls)
+    for a in 0..len(order) {
+        for b in a + 1..len(order) {
+            var x = order[a]
+            var y = order[b]
+            var dx = len(c.types.ancestors(x))
+            var dy = len(c.types.ancestors(y))
+            if (dy < dx || (dy == dx && y < x)) {
+                order[a] = y
+                order[b] = x
+            }
+        }
+    }
+    return order
+}
+
+fun sortedNames(m: {string: int}): [string] {
+    var names = keys(m)
+    sort(names)
+    return names
+}
+
+fun abstractNames(c: Checker, ri: int): [string] {
+    [string] out = []
+    for s in c.abstractSigs {
+        if (s.record == ri) {
+            out.push(s.name)
+        }
+    }
+    sort(out)
+    return out
+}
+
+fun inheritMembers(c: Checker, ri: int, p: int) {
+    var prec = c.types.records[p]
+    var rec = c.types.records[ri]
+    for n in sortedNames(prec.methods) {
+        if (!has(rec.methods, n) && c.abstractSig(ri, n) == null) {
+            rec.methods[n] = prec.methods[n] ?? 0
+        }
+    }
+    [AbstractSig] inherited = []
+    for s in c.abstractSigs {
+        if (s.record == p) {
+            inherited.push(s)
+        }
+    }
+    for s in inherited {
+        if (!has(rec.methods, s.name) && c.abstractSig(ri, s.name) == null) {
+            c.abstractSigs.push(AbstractSig { record: ri, name: s.name, params: s.params, ret: s.ret, isAsync: s.isAsync, span: s.span })
+        }
+    }
+    for n in keys(prec.statics) {
+        if (!has(rec.statics, n)) {
+            rec.statics[n] = prec.statics[n] ?? 0
+        }
+    }
+    for n in keys(prec.staticVals) {
+        if (!has(rec.staticVals, n)) {
+            rec.staticVals[n] = prec.staticVals[n] ?? 0
+        }
+    }
+}
+
+/** Inherited members, virtual slots and overriding rules, like `check_structs` in Rust. */
+pub fun checkStructs(c: Checker) {
+    var order = structOrder(c)
+    {int: bool} parents = {}
+    for ri in order {
+        var p = c.types.records[ri].parent
+        if (p != null) {
+            inheritMembers(c, ri, p)
+            parents[p] = true
+        }
+    }
+    for ri in order {
+        var rec = c.types.records[ri]
+        if (!rec.isAbstract && !has(parents, ri)) {
+            continue
+        }
+        [SlotName] names = []
+        for n in keys(rec.methods) {
+            names.push(SlotName { name: n, value: len(c.funcs[rec.methods[n] ?? 0].params) })
+        }
+        for s in c.abstractSigs {
+            if (s.record == ri) {
+                names.push(SlotName { name: s.name, value: len(s.params) + 1 })
+            }
+        }
+        for x in sortSlotNames(names) {
+            var slot = len(c.slots)
+            c.slots.push(IfaceSlot { name: "${rec.name}.${x.name}", argc: x.value, impls: [] })
+            c.vslots["${ri} ${x.name}"] = slot
+            c.vslotSet[slot] = true
+        }
+    }
+    for ri in order {
+        var rec = c.types.records[ri]
+        if (!rec.isAbstract && !rec.isStatic) {
+            [int] chain = [ri]
+            for a in c.types.ancestors(ri) {
+                chain.push(a)
+            }
+            for a in chain {
+                [SlotName] names = []
+                for key in keys(c.vslots) {
+                    var prefix = "${a} "
+                    if (startsWith(key, prefix)) {
+                        names.push(SlotName { name: substring(key, len(prefix)), value: c.vslots[key] ?? 0 })
+                    }
+                }
+                for x in sortSlotNames(names) {
+                    var fid = rec.methods[x.name]
+                    if (fid != null) {
+                        c.slots[x.value].impls.push(SlotImpl { ty: rec.ty, func: fid })
+                    }
+                }
+            }
+        }
+        var p = rec.parent
+        if (p == null) {
+            continue
+        }
+        [SlotName] own = []
+        for n in keys(rec.methods) {
+            var f = rec.methods[n] ?? 0
+            if (c.funcs[f].selfTy == rec.ty) {
+                own.push(SlotName { name: n, value: f })
+            }
+        }
+        for x in sortSlotNames(own) {
+            var sig = methodSig(c, p, x.name)
+            if (sig == null) {
+                continue
+            }
+            var ret = funcRet(c, x.value)
+            var info = c.funcs[x.value]
+            [int] ps = []
+            for i in 1..len(info.params) {
+                ps.push(info.params[i].ty)
+            }
+            if (!sameInts(ps, sig.params) || ret != sig.ret || info.isAsync != sig.isAsync) {
+                var want = methodSigStr(c, sig.params, sig.ret, sig.isAsync)
+                var got = methodSigStr(c, ps, ret, info.isAsync)
+                var pname = c.types.records[p].name
+                c.errorDetail(info.span, "`${rec.name}.${x.name}` does not match `${pname}.${x.name}`", "expected `${want}` but found `${got}`")
+            }
+        }
+        if (rec.isAbstract) {
+            continue
+        }
+        for n in abstractNames(c, ri) {
+            var sig = c.abstractSig(ri, n)
+            if (sig == null) {
+                continue
+            }
+            var owner = ""
+            var ancestors = c.types.ancestors(ri)
+            var i = len(ancestors) - 1
+            while (i >= 0) {
+                if (c.abstractSig(ancestors[i], n) != null) {
+                    owner = c.types.records[ancestors[i]].name
+                    break
+                }
+                i -= 1
+            }
+            var want = methodSigStr(c, sig.params, sig.ret, sig.isAsync)
+            var at = byteIndexOf(want, "fun(")
+            var add = want
+            if (at >= 0) {
+                add = "${substring(want, 0, at)}fun ${n}(${substring(want, at + 4)}"
+            }
+            c.errorNote(rec.span, "struct `${rec.name}` does not implement abstract method `${owner}.${n}`", "add `${add}` with a body")
+        }
+    }
+}
+
+pub fun buildCtors(c: Checker) {
+    for ri in structOrder(c) {
+        if (c.types.records[ri].ctor != null) {
+            buildCtor(c, ri)
+        }
+    }
+}
+
+pub fun buildCtor(c: Checker, ri: int) {
+    var rec = c.types.records[ri]
+    var fid = rec.ctor ?? 0
+    var t = rec.ty
+    var found = c.structDecls[ri]
+    if (found == null) {
+        return
+    }
+    StructDecl decl = found
+    var x = newCtx(c, fid, decl.module, false)
+    for p in decl.params {
+        x.locals.push(p.ty)
+    }
+    c.fx.push(x)
+    [HStmt] pre = []
+    [int] slots = []
+    for i in 0..len(decl.params) {
+        slots.push(i)
+    }
+    var vals = ctorValues(c, ri, slots, pre)
+    var obj = c.newLocal(t)
+    var body = pre
+    body.push(HStmt.Eval(setLocal(obj, hexpr(HKind.NewStruct(t, vals), t), t)))
+    [int] chain = [ri]
+    for a in c.types.ancestors(ri) {
+        chain.push(a)
+    }
+    var i = len(chain) - 1
+    while (i >= 0) {
+        var r = c.types.records[chain[i]]
+        var init = r.init
+        if (init != null) {
+            body.push(HStmt.Eval(hexpr(HKind.Call(init, [local(obj, r.ty)]), T_VOID)))
+        }
+        i -= 1
+    }
+    body.push(HStmt.Return(local(obj, t)))
+    var done = c.fx[len(c.fx) - 1]
+    c.fx = slice(c.fx, 0, len(c.fx) - 1)
+    var endLoc = c.loc(rec.span)
+    var info = c.funcs[fid]
+    info.hir = HFunc { name: info.name, params: len(info.params), locals: done.locals, ret: t, body: body, isAsync: false, span: info.span, endLoc: endLoc, annotations: [], external: null }
+    info.state = FnState.Done
+}
+
+fun ctorValues(c: Checker, ri: int, slots: [int], pre: [HStmt]): [HExpr] {
+    var rec = c.types.records[ri]
+    var found = c.structDecls[ri]
+    [HExpr] vals = []
+    if (found == null) {
+        return vals
+    }
+    StructDecl decl = found
+    {string: LocalSym} scope = {}
+    for i in 0..len(decl.params) {
+        var p = decl.params[i]
+        scope[p.name] = LocalSym { slot: slots[i], isConst: false, span: p.span }
+    }
+    var savedScopes = c.ctx().scopes
+    c.ctx().scopes = [scope]
+    var savedModule = c.ctx().module
+    c.ctx().module = decl.module
+    var p = rec.parent
+    if (p != null) {
+        var pfound = c.structDecls[p]
+        if (pfound != null) {
+            StructDecl pdecl = pfound
+            var pname = c.types.records[p].name
+            [Expr] args = decl.superArgs ?? []
+            if (decl.superArgs != null && len(args) != len(pdecl.params)) {
+                var n = len(pdecl.params)
+                var s = "s"
+                if (n == 1) {
+                    s = ""
+                }
+                c.error(decl.superSpan, "`${pname}` expects ${n} argument${s} but got ${len(args)}")
+            }
+            [int] pslots = []
+            for i in 0..len(pdecl.params) {
+                var pt = pdecl.params[i].ty
+                var v = errExpr()
+                if (i < len(args)) {
+                    v = exprTo(c, args[i], pt)
+                }
+                var s = c.newLocal(pt)
+                pre.push(HStmt.Eval(setLocal(s, v, pt)))
+                pslots.push(s)
+            }
+            for i in len(pdecl.params)..len(args) {
+                exprOf(c, args[i], null)
+            }
+            for v in ctorValues(c, p, pslots, pre) {
+                vals.push(v)
+            }
+        }
+    }
+    var fieldParams = 0
+    for i in 0..len(decl.params) {
+        if (decl.paramFields[i]) {
+            vals.push(local(slots[i], decl.params[i].ty))
+            fieldParams += 1
+        }
+    }
+    var start = decl.ownStart + fieldParams
+    for i in start..len(rec.fields) {
+        var f = rec.fields[i]
+        var d = f.value
+        if (d != null) {
+            vals.push(exprTo(c, d, f.ty))
+            continue
+        }
+        var z = zeroOf(c, f.ty)
+        if (z != null) {
+            vals.push(z)
+            continue
+        }
+        var ts = c.show(f.ty)
+        c.errorNote(f.span, "field `${f.name}` needs a default value", "write `${ts} ${f.name} = ...`, or make it a constructor parameter: `def struct ${rec.name}(${f.name}: ${ts})`")
+        vals.push(errExpr())
+    }
+    c.ctx().scopes = savedScopes
+    c.ctx().module = savedModule
+    return vals
+}
+
+pub fun staticInits(c: Checker, name: Ident): [HStmt] {
+    var m = c.curModule()
+    var e = c.mods[m].types[name.name]
+    if (e == null || !sameSpan(e.span, c.sp(name.span))) {
+        return []
+    }
+    var k = c.types.kindOf(e.sym)
+    if (!(k is Ty.Record)) {
+        return []
+    }
+    var ri = k.index
+    var found = c.structDecls[ri]
+    if (found == null) {
+        return []
+    }
+    [HStmt] out = []
+    for sv in found.statics {
+        var g = c.types.records[ri].staticVals[sv.name.name]
+        if (g == null || !sameSpan(c.globals[g].span, c.sp(sv.name.span))) {
+            continue
+        }
+        int? declared = null
+        var te = sv.ty
+        if (te != null) {
+            declared = c.resolveTypeIn(te, m)
+        }
+        var h = exprOf(c, sv.init, declared)
+        if (h.ty == T_VOID) {
+            c.error(c.sp(sv.init.span), "cannot assign the result of a function that returns nothing")
+        }
+        var target = h.ty
+        if (declared != null) {
+            target = declared
+        } else if (h.ty == T_NULL) {
+            var d = c.errorDiag(c.sp(sv.name.span), "cannot tell the type of `${sv.name.name}` from `null`")
+            d.diag.helps.push("give it a type, for example `static var ${sv.name.name}: string? = null`")
+            c.emit(d)
+            target = T_ERROR
+        }
+        var v = coerce(c, h, target, c.sp(sv.init.span))
+        c.globals[g].ty = target
+        out.push(HStmt.Eval(hexpr(HKind.SetGlobal(g, v), target)))
+    }
+    return out
+}
+
+fun evalArgs(c: Checker, args: [Expr]): HExpr {
+    for a in args {
+        exprOf(c, a, null)
+    }
+    return errExpr()
+}
+
+pub fun newExpr(c: Checker, ty: Ident, targs: [TypeExpr], args: [Expr], span: SrcSpan, expected: int?): HExpr {
+    var m = c.curModule()
+    var nspan = c.sp(ty.span)
+    var generic = genericTargetCall(c, ty, targs, expected, args)
+    if (generic == null && len(targs) > 0) {
+        c.error(nspan, "`${ty.name}` has no type parameters")
+    }
+    var found = generic
+    if (found == null) {
+        found = c.lookupTypeName(m, ty.name, nspan)
+    }
+    if (found == null) {
+        c.error(nspan, "unknown struct `${ty.name}`")
+        return evalArgs(c, args)
+    }
+    int t = found
+    var k = c.types.kindOf(t)
+    if (k is Ty.Error) {
+        return errExpr()
+    }
+    if (!(k is Ty.Record)) {
+        c.error(nspan, "`${c.show(t)}` is not a struct")
+        return evalArgs(c, args)
+    }
+    var rec = c.types.records[k.index]
+    if (!rec.isClass) {
+        return constructRecord(c, t, args, span, nspan)
+    }
+    if (rec.isAbstract) {
+        c.errorNote(nspan, "cannot create an object of abstract struct `${rec.name}`", "create an object of a struct that extends it instead")
+        return evalArgs(c, args)
+    }
+    if (rec.isStatic) {
+        c.errorNote(nspan, "`${rec.name}` is a static struct and has no objects", "use its members directly, e.g. `${rec.name}.name`")
+        return evalArgs(c, args)
+    }
+    var ctor = rec.ctor
+    if (ctor != null) {
+        return directCall(c, ctor, null, args, span, nspan)
+    }
+    return constructRecord(c, t, args, span, nspan)
+}
+
+fun objectKey(c: Checker, target: Ident): int? {
+    return localOf(c, Expr { kind: ExprKind.Ident(target.name), span: target.span })
+}
+
+fun hasMember(c: Checker, ri: int, name: string): bool {
+    var rec = c.types.records[ri]
+    return has(rec.methods, name) || c.abstractSig(ri, name) != null || fieldIndex(rec, name) >= 0
+}
+
+pub fun extendStmt(c: Checker, target: Ident, f: FunDecl): [HStmt] {
+    var key = objectKey(c, target)
+    var tspan = c.sp(target.span)
+    var h = identExpr(c, target.name, tspan)
+    if (h.ty == T_ERROR) {
+        return []
+    }
+    var t = h.ty
+    var k = c.types.kindOf(t)
+    if (!(k is Ty.Record) || !c.types.records[k.index].isClass || c.types.records[k.index].isStatic) {
+        c.error(tspan, "functions can only be added to struct objects, but `${target.name}` is ${c.show(t)}")
+        return []
+    }
+    var ri = k.index
+    if (key == null) {
+        c.error(tspan, "functions can only be added to objects stored in variables")
+        return []
+    }
+    var fname = f.name.name
+    var rec = c.types.records[ri]
+    var fspan = c.sp(f.name.span)
+    if (hasMember(c, ri, fname)) {
+        c.errorNote(fspan, "${rec.name} already has a member named `${fname}`", "functions added to an object cannot replace its members; pick another name")
+        return []
+    }
+    var owner = 0
+    if (len(c.fx) > 0) {
+        owner = c.ctx().func
+    }
+    var lkey = "${fspan.file}:${fspan.start}:${owner}"
+    var fid = c.lambdas[lkey]
+    if (fid == null) {
+        var nf = c.declareFun(c.curModule(), f, t, false, true)
+        c.funcs[nf].name = "${target.name}.${fname}"
+        c.lambdas[lkey] = nf
+        c.extFuncs[nf] = true
+        fid = nf
+    }
+    addFact(c, Fact.Ext(key, fname, fid), fid)
+    return []
+}
+
+pub fun destroyStmt(c: Checker, target: Ident, args: [Expr], span: SrcSpan): [HStmt] {
+    var key = objectKey(c, target)
+    var tspan = c.sp(target.span)
+    var h = identExpr(c, target.name, tspan)
+    if (h.ty == T_ERROR) {
+        evalArgs(c, args)
+        return []
+    }
+    var t = h.ty
+    var k = c.types.kindOf(t)
+    var isObject = k is Ty.Record && c.types.records[k.index].isClass && !c.types.records[k.index].isStatic
+    if (!isObject) {
+        if (k is Ty.Optional) {
+            c.errorNote(tspan, "`${target.name}` may be null", "check it with `if (x != null)` first")
+        } else {
+            c.error(tspan, "only struct objects can be destroyed, but `${target.name}` is ${c.show(t)}")
+        }
+        evalArgs(c, args)
+        return []
+    }
+    var ri = 0
+    if (k is Ty.Record) {
+        ri = k.index
+    }
+    if (key == null) {
+        c.error(tspan, "only objects stored in variables can be destroyed")
+        evalArgs(c, args)
+        return []
+    }
+    [HStmt] out = []
+    var dname = Ident { name: "destroy", span: target.span }
+    var hasDtor = has(c.types.records[ri].methods, "destroy") || has(c.vslots, "${ri} destroy")
+    if (hasDtor) {
+        var call = structMethod(c, ri, dname, h, args, span)
+        if (call != null) {
+            out.push(HStmt.Eval(call))
+        }
+    } else if (len(args) > 0) {
+        var rn = c.types.records[ri].name
+        c.errorNote(span, "`${rn}` has no `destroy` function, so `destroy ${target.name}()` takes no arguments", "add `fun destroy(...)` to `${rn}` to run code when its objects are destroyed")
+        evalArgs(c, args)
+    }
+    var l = c.locExpr(span)
+    out.push(HStmt.Eval(rt("Destroy", [h, l], T_VOID)))
+    c.anyDead = true
+    addFact(c, Fact.Dead(key, span), 0)
+    return out
+}
+
+def type CtorShape {
+    int ty
+    [HExpr] vals
+}
+
+def type Devirt {
+    {int: int} slots
+    {int: CtorShape} ctors
+}
+
+fun devirtStmts(ss: [HStmt], d: Devirt): [HStmt] {
+    [HStmt] out = []
+    for s in ss {
+        if (s is HStmt.Eval) {
+            out.push(HStmt.Eval(devirtExpr(s.value, d)))
+        } else if (s is HStmt.If) {
+            out.push(HStmt.If(devirtExpr(s.cond, d), devirtStmts(s.then, d), devirtStmts(s.els, d)))
+        } else if (s is HStmt.Loop) {
+            HExpr? cond = null
+            var sc = s.cond
+            if (sc != null) {
+                cond = devirtExpr(sc, d)
+            }
+            out.push(HStmt.Loop(cond, devirtStmts(s.body, d), devirtStmts(s.step, d)))
+        } else if (s is HStmt.Return) {
+            var v = s.value
+            if (v != null) {
+                out.push(HStmt.Return(devirtExpr(v, d)))
+            } else {
+                out.push(s)
+            }
+        } else {
+            out.push(s)
+        }
+    }
+    return out
+}
+
+fun devirtAll(xs: [HExpr], d: Devirt): [HExpr] {
+    [HExpr] out = []
+    for x in xs {
+        out.push(devirtExpr(x, d))
+    }
+    return out
+}
+
+fun devirtExpr(e: HExpr, d: Devirt): HExpr {
+    var k = e.kind
+    var t = e.ty
+    if (k is HKind.SetLocal) {
+        return hexpr(HKind.SetLocal(k.slot, devirtExpr(k.value, d)), t)
+    }
+    if (k is HKind.SetGlobal) {
+        return hexpr(HKind.SetGlobal(k.id, devirtExpr(k.value, d)), t)
+    }
+    if (k is HKind.Unary) {
+        return hexpr(HKind.Unary(k.op, devirtExpr(k.value, d)), t)
+    }
+    if (k is HKind.Conv) {
+        return hexpr(HKind.Conv(k.conv, devirtExpr(k.value, d)), t)
+    }
+    if (k is HKind.GetField) {
+        return hexpr(HKind.GetField(devirtExpr(k.obj, d), k.index), t)
+    }
+    if (k is HKind.ArrLen) {
+        return hexpr(HKind.ArrLen(devirtExpr(k.value, d)), t)
+    }
+    if (k is HKind.BoxVal) {
+        return hexpr(HKind.BoxVal(devirtExpr(k.value, d)), t)
+    }
+    if (k is HKind.Binary) {
+        return hexpr(HKind.Binary(k.op, devirtExpr(k.left, d), devirtExpr(k.right, d)), t)
+    }
+    if (k is HKind.And) {
+        return hexpr(HKind.And(devirtExpr(k.left, d), devirtExpr(k.right, d)), t)
+    }
+    if (k is HKind.Or) {
+        return hexpr(HKind.Or(devirtExpr(k.left, d), devirtExpr(k.right, d)), t)
+    }
+    if (k is HKind.SetField) {
+        return hexpr(HKind.SetField(devirtExpr(k.obj, d), k.index, devirtExpr(k.value, d)), t)
+    }
+    if (k is HKind.Index) {
+        return hexpr(HKind.Index(devirtExpr(k.obj, d), devirtExpr(k.index, d), k.loc), t)
+    }
+    if (k is HKind.SetIndex) {
+        return hexpr(HKind.SetIndex(devirtExpr(k.obj, d), devirtExpr(k.index, d), devirtExpr(k.value, d), k.loc), t)
+    }
+    if (k is HKind.Call) {
+        var args = devirtAll(k.args, d)
+        var shape = d.ctors[k.func]
+        if (shape != null) {
+            [HExpr] fields = []
+            var next = 0
+            for v in shape.vals {
+                if (v.kind is HKind.Local) {
+                    fields.push(args[next])
+                    next += 1
+                } else {
+                    fields.push(v)
+                }
+            }
+            return hexpr(HKind.NewStruct(shape.ty, fields), t)
+        }
+        return hexpr(HKind.Call(k.func, args), t)
+    }
+    if (k is HKind.Rt) {
+        return hexpr(HKind.Rt(k.name, devirtAll(k.args, d)), t)
+    }
+    if (k is HKind.Spawn) {
+        return hexpr(HKind.Spawn(k.func, devirtAll(k.args, d)), t)
+    }
+    if (k is HKind.NewStruct) {
+        return hexpr(HKind.NewStruct(k.ty, devirtAll(k.args, d)), t)
+    }
+    if (k is HKind.NewArray) {
+        return hexpr(HKind.NewArray(k.ty, devirtAll(k.items, d)), t)
+    }
+    if (k is HKind.CallIndirect) {
+        return hexpr(HKind.CallIndirect(devirtExpr(k.callee, d), devirtAll(k.args, d)), t)
+    }
+    if (k is HKind.CallIface) {
+        var args = devirtAll(k.args, d)
+        var f = d.slots[k.slot]
+        if (f != null) {
+            return hexpr(HKind.Call(f, args), t)
+        }
+        return hexpr(HKind.CallIface(k.slot, args), t)
+    }
+    if (k is HKind.Seq) {
+        return hexpr(HKind.Seq(devirtStmts(k.stmts, d), devirtExpr(k.value, d)), t)
+    }
+    return e
+}
+
+fun simpleCtor(h: HFunc): [HExpr]? {
+    if (len(h.body) != 2) {
+        return null
+    }
+    var s0 = h.body[0]
+    var s1 = h.body[1]
+    if (!(s0 is HStmt.Eval) || !(s1 is HStmt.Return)) {
+        return null
+    }
+    var set = s0.value.kind
+    var rv = s1.value
+    if (rv == null || !(set is HKind.SetLocal)) {
+        return null
+    }
+    var ret = rv.kind
+    if (!(ret is HKind.Local) || ret.slot != set.slot) {
+        return null
+    }
+    var made = set.value.kind
+    if (!(made is HKind.NewStruct)) {
+        return null
+    }
+    var next = 0
+    for v in made.args {
+        var vk = v.kind
+        if (vk is HKind.Local) {
+            if (vk.slot != next) {
+                return null
+            }
+            next += 1
+        } else if (vk is HKind.NewArray) {
+            if (len(vk.items) > 0) {
+                return null
+            }
+        } else if (!(vk is HKind.Int || vk is HKind.Float || vk is HKind.Bool || vk is HKind.Str || vk is HKind.Null || vk is HKind.TypeId)) {
+            return null
+        }
+    }
+    if (next != h.params) {
+        return null
+    }
+    return made.args
+}
+
+/** Calls through a slot with one implementation become direct calls, and simple constructors become `NewStruct`. */
+pub fun devirtualize(c: Checker) {
+    {int: int} slots = {}
+    for slot in keys(c.vslotSet) {
+        var impls = c.slots[slot].impls
+        if (len(impls) == 0) {
+            continue
+        }
+        var f = impls[0].func
+        var same = true
+        for im in impls {
+            if (im.func != f) {
+                same = false
+            }
+        }
+        if (same && !c.funcs[f].isAsync) {
+            slots[slot] = f
+        }
+    }
+    {int: CtorShape} ctors = {}
+    for r in c.types.records {
+        var ctor = r.ctor
+        if (ctor == null) {
+            continue
+        }
+        var h = c.funcs[ctor].hir
+        if (h == null) {
+            continue
+        }
+        var vals = simpleCtor(h)
+        if (vals != null) {
+            ctors[ctor] = CtorShape { ty: r.ty, vals: vals }
+        }
+    }
+    if (len(keys(slots)) == 0 && len(keys(ctors)) == 0) {
+        return
+    }
+    var d = Devirt { slots: slots, ctors: ctors }
+    for f in c.funcs {
+        var h = f.hir
+        if (h != null) {
+            h.body = devirtStmts(h.body, d)
+        }
+    }
 }

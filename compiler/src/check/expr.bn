@@ -500,8 +500,7 @@ pub fun exprOf(c: Checker, e: Expr, expected: int?): HExpr {
         return notNullExpr(c, k.value, span)
     }
     if (k is ExprKind.New) {
-        c.notPorted("`new`")
-        return errExpr()
+        return newExpr(c, k.ty, k.targs, k.args, span, expected)
     }
     if (k is ExprKind.SafeGet) {
         return safeGet(c, k.obj, k.name, k.args, span)

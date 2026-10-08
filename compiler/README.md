@@ -80,10 +80,10 @@ The inputs include the error-recovery fixtures in `tests/lexer` and `tests/parse
      Importing bytecode libraries (`check/libs.rs`) needs a reader for bvm modules and is not ported yet; the Burn checker reports an error for each library import.
    - function bodies (done for programs without the parts listed below): `src/check/body.bn` checks every function and top-level statement, and `burn dump --checked` prints the checked program (types, functions with their statements and expressions, globals, strings, source locations and interface slots) or the errors.
      The files next to it port the matching Rust files: `expr.bn`, `calls.bn`, `builtins.bn`, `stmt.bn`, `closures.bn`, `generics.bn`, `numeric.bn` (with `wide.bn` for 128-bit constant folding), `structs.bn`, `matching.bn` (`match`), `nullsafe.bn` (`?.`, `??` and `as?`) and `init_order.bn`.
-     Parts that are not ported yet make the Burn checker print `not ported yet: ...` instead of a program: `def struct` (constructors, inheritance, virtual calls, static values, `new`, adding functions to objects, `destroy`), generic structs, `annotationsOf` and mixins.
-     The suite compares every Burn file in the repository that is fully ported, and `tests/check/checked.txt` lists the files that must stay ported. The fixtures in `tests/check/bodies` cover closures, generic functions, return types, initialization order, sized numbers, `match` and the nullable operators.
+     Parts that are not ported yet make the Burn checker print `not ported yet: ...` instead of a program: `annotationsOf` and mixins.
+     The suite compares every Burn file in the repository that is fully ported, and `tests/check/checked.txt` lists the files that must stay ported. The fixtures in `tests/check/bodies` cover closures, generic functions, return types, initialization order, sized numbers, `match`, the nullable operators and structs.
    - `match` and the nullable operators `?.`, `??` and `as?` (done)
-   - structs and interfaces
+   - structs and interfaces (done): constructors, inheritance, abstract methods, virtual calls and their devirtualization, static values, `new`, generic structs, adding functions to objects and `destroy`
    - annotations
 
    Compare `burn dump --checked`.
