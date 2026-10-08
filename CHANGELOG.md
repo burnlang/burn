@@ -14,6 +14,7 @@ The release that ships the compiler written in Burn.
   - Members are named under the workspace (`github.com/you/game/common`), import each other directly and share one `burn.lock`.
   - At the root, `burn build`/`check`/`test` cover every member, and `-p <member>` picks one.
 - Self-hosting: the lexer, the parser, the diagnostic renderer, the `burn.toml` reader, the module loader and the declaration pass of the checker are ported to Burn (`compiler/`). They produce output identical to the Rust compiler's, checked by `burn dump --tokens`, `--ast`, `--diagnostics`, `--toml`, `--project`, `--modules` and `--decls` on every Burn file in the repository and on project fixtures.
+- Docs: [Burn standards](docs/standards.mdx) explains how to name packages, files and code, how to lay out a project and workspace, and the conventions for imports, visibility, formatting, errors, tests and releases.
 - Fixed: when several names were equally close to a misspelled one, "did you mean" (and `burn fix`) picked one at random on each run; it now picks the first in alphabetical order.
 - Fixed: a pattern binding named like a function (`Kind.Big(digits)` with a `fun digits` in scope) was compared against the function instead of binding a new name.
 - Fixed: a stray non-ASCII symbol made the lexer loop forever, and an unknown escape before a multi-byte character crashed it.

@@ -1,0 +1,183 @@
+---
+title: Burn standards
+description: How to name packages, files and code, how to lay out a project, and how to write Burn that reads like the rest of the ecosystem.
+order: 2
+---
+
+# Burn standards
+
+These are the conventions the standard library, the compiler written in Burn and the official packages follow.
+The compiler accepts code that breaks them, but sticking to them means every Burn project looks familiar: you
+know where the code is, what a name refers to and how to import it.
+
+## Package names
+
+A package is named after the place its code lives, so the name is also how to download it:
+
+```text
+github.com/owner/project
+└──┬─────┘ └─┬─┘ └──┬──┘
+ domain    owner  project
+```
+
+- **Use the real address of the repository.** `github.com/ada/colors`, `gitlab.com/team/parser` and
+  `git.example.org/tools/lint` are all valid. Never make up a domain: `ash` downloads from the name.
+- **The domain is lowercase** and has at least one dot (`github.com`, not `github`).
+- **Name the project in lowercase words joined by `-`**: `burn-colors`, `http-server`, `json5`. Avoid `_`, capital
+  letters and a `burn-` prefix unless the package is about Burn itself (a formatter plugin, an editor tool).
+- **Keep the owner as the host spells it**, `github.com/S42yt/burn-app` included; package names compare without
+  regard to case, so `ash` finds it either way.
+- **Name sub-packages after their folder.** A [workspace](./tooling/packages.mdx#workspaces) member is
+  `<workspace>/<folder>`, such as `github.com/ada/game/common`, and a package inside a repository is the repository
+  name plus the path to its folder.
+- **A name says what the package is, not how it is built.** Prefer `github.com/ada/markdown` over
+  `github.com/ada/markdown-lib` or `github.com/ada/burn-markdown-impl`.
+
+The manifest repeats the name:
+
+```toml
+[package]
+name = "github.com/ada/colors"
+version = "1.2.0"
+kind = "lib"
+```
+
+## Versions
+
+- Tag releases with [semantic versions](https://semver.org): `v1.4.0`, with the `v`. `ash install` and the lock
+  file use the tags.
+- `version` in `burn.toml` is the same number without the `v`: `version = "1.4.0"`.
+- Bump the **major** version when code that used the package may stop compiling or behave differently, the
+  **minor** version for new features, and the **patch** version for fixes.
+- Versions before `1.0.0` may change anything in a minor release. Pre-releases add a suffix:
+  `v2.0.0-beta.1`.
+- Never move a tag after publishing it; tag a new version instead. `burn.lock` pins the exact commit, so a moved
+  tag silently gives people different code.
+
+## Project layout
+
+Every project has the [standard layout](./tooling/packages.mdx#project-layout):
+
+```text
+colors/
+├── burn.toml
+├── burn.lock          written by ash; commit it
+├── README.md
+├── src/
+│   ├── lib.bn         the library (or main.bn for an app)
+│   ├── palette.bn     the module `palette`
+│   └── convert/
+│       ├── mod.bn     the module `convert`
+│       └── hsl.bn     the module `convert/hsl`
+├── tests/             one program per file, run by `burn test`
+├── examples/          small programs that show how to use it
+└── build/             output of `burn build`, never committed
+```
+
+- **`src/lib.bn` is the public face of a library**, and `src/main.bn` is the entry point of an app. Code that
+  imports the package by its name gets the `pub` declarations of `src/lib.bn`, so put the main API there.
+  Imports are not passed on: a module only sees what it imports itself.
+- **One topic per module.** A file holds the types and functions that belong together, such as
+  `palette.bn` for colours and `convert/hsl.bn` for one conversion. Split a file when it covers two
+  topics, not because it is long.
+- **Folders group related modules.** Give a folder a `mod.bn` with its main declarations when other code mostly
+  needs those, so it can write `import "@/convert"`; the other files stay importable by their own path
+  (`import "@/convert/hsl"`).
+- **Extra programs go in `src/bin/`**: one file for a small tool (`src/bin/migrate.bn`), or a folder with a
+  `main.bn` for a bigger one (`src/bin/server/main.bn`).
+- **Tests and examples are programs.** Name a test after what it covers (`tests/convert.bn`, `tests/parse_errors.bn`)
+  and an example after what it shows (`examples/gradient.bn`).
+- **Put shared code of several projects in a workspace**, with a `common` member that the others import, rather
+  than copying files between repositories.
+- **Never commit `build/`.** Add it to `.gitignore`.
+
+## Naming code
+
+| What | Style | Examples |
+| --- | --- | --- |
+| Files and folders | lowercase, words joined by `_` | `smart_casts.bn`, `src/bin/import_data.bn` |
+| Types, structs, interfaces, enums, annotations | `PascalCase` | `Point`, `HTTPResponse`, `Shape`, `@Route` |
+| Enum variants | `PascalCase` | `Color.Red`, `Token.Ident(name)` |
+| Functions, methods, variables, fields, parameters | `camelCase` | `readFile`, `toUpper`, `lineCount` |
+| Constants and `static const` values | `UPPER_SNAKE_CASE` | `PI`, `MAX_RETRIES`, `Limits.MAX_SIZE` |
+| Type parameters | one capital letter, or a short `PascalCase` word | `T`, `K`, `V`, `Item` |
+
+- **Acronyms keep their capitals**, as in the standard library: `HTTP`, `JSON`, `HTTPResponse`, `parseJSON`,
+  `userID`. A `camelCase` name that starts with one writes it in lowercase: `jsonText`, `httpStatus`.
+- **Functions say what they do** with a verb: `parse`, `readFile`, `addEdge`. Functions that only compute a value
+  can be named after it: `length`, `area`, `distanceTo`.
+- **Booleans read as a question**: `isEmpty`, `hasChildren`, `canRetry`, `fileExists`.
+- **Conversions name the result**: `toString`, `toPoint`, `asMap`; constructors from another value use
+  `from`: `Color.fromHex("#ff0000")`.
+- **Avoid abbreviations** except the usual short ones (`i` for an index, `n` for a count, `x`/`y` for
+  coordinates, `err` for an error).
+- **Don't repeat the type in its members**: `Point.distanceTo`, not `Point.pointDistanceTo`.
+
+## Types
+
+- **`def type` for plain data**, values made with `Name { field: value }` that have no behaviour of their own.
+- **`def struct` for objects**: values with methods, a constructor (`new Name(...)`), inheritance or a
+  destructor.
+- **`def interface` for an ability** that several types share (`Shape`, `Drawable`, `Reader`), and
+  **`def abstract struct`** when the types also share code.
+- **`def enum` for a fixed set of cases**; give the cases data (`Circle(radius: float)`) instead of keeping a kind
+  field next to optional fields.
+- **Prefer exact types to `any`.** Use `any` only at the edge of a program, such as parsed JSON, and convert it to a
+  real type as soon as possible.
+- **Make absence explicit with `T?`** and handle it where it happens with `if (x != null)`, `?.` or `??`.
+
+## Visibility
+
+- **Mark the API of a module `pub`** and leave helpers without a marker or `priv`, so callers only see what they
+  are meant to use (see [modules](./language/modules.mdx)).
+- **Keep fields `priv` when a struct has rules** about them, and expose methods that keep the rules.
+- **A library's `src/lib.bn` holds its main API.** Code that imports `github.com/ada/colors` should get what most
+  users need from that one import, and reach into the folders (`github.com/ada/colors/convert/hsl`) only for the
+  less common parts.
+
+## Imports
+
+- One import per line at the top of the file, sorted alphabetically.
+- Inside a project, import its own modules with `@/` (`import "@/convert/hsl"`), so moving a file does not break
+  the files that use it. Relative paths (`"../palette.bn"`) are fine inside one folder.
+- Import other packages by their full name (`import "github.com/ada/colors"`) and the standard library by
+  `std/<module>` (`import "std/fs"`).
+- Import only what a file uses; the compiler points out missing standard library imports and offers a fix.
+
+## Formatting and comments
+
+- **Run `burn fmt`** (or [burnfmt](./tooling/burnfmt.mdx)) before committing: four spaces, braces on the same
+  line, one statement per line. The language server formats files too, so editors can format on save.
+- **Keep lines readable**: the formatter does not wrap lines, so break long expressions and long argument lists
+  yourself when they get past about 120 characters.
+- **Document every `pub` declaration** with a [Burndoc](./tooling/burndoc.mdx) comment (`/** ... */`) that says
+  what it does, its parameters (`@param`) and result (`@return`), and shows an `@example` when the use is not
+  obvious. `burn doc` turns them into the documentation of the package.
+- **Write comments for the reason, not the mechanics.** Good names explain what code does; comments explain why it
+  does it that way.
+
+## Errors
+
+- **Report expected failures through the result**: return `T?` (`null` when there is nothing), a `bool` for
+  success, or a small `def type` with the value and an error message. The standard library never stops the
+  program on a failed file or network operation, and libraries should not either.
+- **Keep `panic` and `assert` for bugs**: states that should be impossible if the code is correct.
+- **Error messages say what went wrong and what to do**, in lowercase without a final period:
+  `cannot read config.toml: the file does not exist`.
+
+## Tests
+
+- Every library has tests in `tests/`; each file is a program that exits with an error when something is wrong,
+  usually through `assert` from `std/testing`.
+- A test checks one area and is named after it. Keep tests independent: one test must not rely on files or state
+  left behind by another.
+- Run `burn test` before tagging a release, and `burn check` to type-check every source, test and example.
+
+## Before you publish
+
+1. `burn fmt` has nothing to change, `burn check` reports nothing, and `burn test` passes.
+2. `burn.toml` has the right `name`, `version`, `kind` and `target`.
+3. Every `pub` declaration has a doc comment, and the README shows how to install and use the package.
+4. The repository is tagged with the version (`v1.4.0`) and the tag is pushed.
+
+See [projects and packages](./tooling/packages.mdx) for the manifest, workspaces and `ash`.
