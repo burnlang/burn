@@ -1,0 +1,168 @@
+import "../diag/diag.bn"
+import "../syntax/ast.bn"
+import "calls.bn"
+import "check.bn"
+import "expr.bn"
+import "hir.bn"
+import "types.bn"
+
+def type TempBinding {
+    int slot
+    Expr read
+    HStmt set
+}
+
+fun bindTemp(c: Checker, h: HExpr, narrowed: int?, span: Span): TempBinding {
+    var t = h.ty
+    var slot = c.newLocal(t)
+    var name = " tmp${slot}"
+    var scopes = c.ctx().scopes
+    scopes[len(scopes) - 1][name] = LocalSym { slot: slot, isConst: true, span: c.sp(span) }
+    if (narrowed != null) {
+        c.ctx().narrow[slot] = narrowed
+    }
+    return TempBinding { slot: slot, read: Expr { kind: ExprKind.Ident(name), span: span }, set: HStmt.Eval(setLocal(slot, h, t)) }
+}
+
+fun isNullCheck(slot: int, t: int): HExpr {
+    return binary(HBinOp.ICmp(Cmp.Eq), local(slot, t), hexpr(HKind.Null, t), T_BOOL)
+}
+
+fun opSpan(c: Checker, from: Span, to: Span, op: string): SrcSpan? {
+    var between = c.sp(Span { start: from.end, end: to.start })
+    var i = byteIndexOf(c.srcText(between), op)
+    if (i < 0) {
+        return null
+    }
+    return SrcSpan { file: between.file, start: between.start + i, end: between.start + i + len(op) }
+}
+
+fun pick(c: Checker, set: HStmt, cond: HExpr, yes: HExpr, no: HExpr, rt: int): HExpr {
+    var res = c.newLocal(rt)
+    var choice = HStmt.If(cond, [HStmt.Eval(setLocal(res, yes, rt))], [HStmt.Eval(setLocal(res, no, rt))])
+    return hexpr(HKind.Seq([set, choice], local(res, rt)), rt)
+}
+
+pub fun safeGet(c: Checker, obj: Expr, name: Ident, args: [Expr]?, span: SrcSpan): HExpr {
+    var o = exprOf(c, obj, null)
+    var t = o.ty
+    var k = c.types.kindOf(t)
+    int? inner = null
+    if (k is Ty.Optional) {
+        inner = k.inner
+    } else if (k is Ty.Any || k is Ty.Null) {
+        inner = null
+    } else if (k is Ty.Error) {
+        if (args != null) {
+            for x in args {
+                exprOf(c, x, null)
+            }
+        }
+        return errExpr()
+    } else {
+        var d = c.warnAt(span, "`?.` is not needed: a value of type ${c.show(t)} is never null")
+        var op = opSpan(c, obj.span, name.span, "?.")
+        if (op != null) {
+            addFix(d.diag, "use `.`", op.start, op.end, ".", true)
+        }
+        c.emit(d)
+        inner = t
+    }
+    var nullable = inner != t
+    int? narrowed = null
+    if (inner != null && inner != t) {
+        narrowed = inner
+    }
+    var tmp = bindTemp(c, o, narrowed, obj.span)
+    HExpr access = errExpr()
+    if (args == null) {
+        access = fieldExpr(c, tmp.read, name, span)
+    } else {
+        access = methodCall(c, tmp.read, name, args, span, null)
+    }
+    if (!nullable) {
+        return hexpr(HKind.Seq([tmp.set], access), access.ty)
+    }
+    if (access.ty == T_ERROR) {
+        return errExpr()
+    }
+    if (access.ty == T_VOID) {
+        var run = HStmt.If(isNullCheck(tmp.slot, t), [], [HStmt.Eval(access)])
+        return hexpr(HKind.Seq([tmp.set, run], hexpr(HKind.Int(0), T_VOID)), T_VOID)
+    }
+    var opt = c.types.optional(access.ty)
+    var res = c.newLocal(opt)
+    var value = coerce(c, access, opt, span)
+    var choice = HStmt.If(isNullCheck(tmp.slot, t), [HStmt.Eval(setLocal(res, hexpr(HKind.Null, opt), opt))], [HStmt.Eval(setLocal(res, value, opt))])
+    return hexpr(HKind.Seq([tmp.set, choice], local(res, opt)), opt)
+}
+
+pub fun coalesce(c: Checker, a: Expr, b: Expr, span: SrcSpan, expected: int?): HExpr {
+    int? hint = null
+    if (expected != null) {
+        hint = c.types.optional(expected)
+    }
+    var l = exprOf(c, a, hint)
+    var t = l.ty
+    var k = c.types.kindOf(t)
+    var inner = T_ANY
+    if (k is Ty.Optional) {
+        inner = k.inner
+    } else if (k is Ty.Any) {
+        inner = T_ANY
+    } else if (k is Ty.Null) {
+        return exprOf(c, b, expected)
+    } else if (k is Ty.Error) {
+        exprOf(c, b, null)
+        return errExpr()
+    } else {
+        var left = c.srcText(c.sp(a.span))
+        var d = c.warnAt(span, "`??` is not needed: a value of type ${c.show(t)} is never null")
+        addFix(d.diag, "remove the fallback", span.start, span.end, left, true)
+        c.emit(d)
+        exprOf(c, b, t)
+        return l
+    }
+    var r = exprOf(c, b, inner)
+    var rt = inner
+    if (r.ty == T_NULL || (c.types.isNullable(r.ty) && r.ty != T_ANY && inner != T_ANY)) {
+        rt = t
+    }
+    int? narrowed = null
+    if (inner != T_ANY) {
+        narrowed = inner
+    }
+    var tmp = bindTemp(c, l, narrowed, a.span)
+    var value = coerce(c, exprOf(c, tmp.read, null), rt, c.sp(a.span))
+    var fallback = coerce(c, r, rt, c.sp(b.span))
+    return pick(c, tmp.set, isNullCheck(tmp.slot, t), fallback, value, rt)
+}
+
+pub fun safeAs(c: Checker, x: Expr, te: TypeExpr, span: SrcSpan): HExpr {
+    var target = c.resolveType(te)
+    var h = exprOf(c, x, null)
+    var from = h.ty
+    if (from == T_ERROR || target == T_ERROR) {
+        return errExpr()
+    }
+    var opt = c.types.optional(target)
+    if (from == target || (!c.types.isNullable(from) && c.types.implements(from, target))) {
+        var d = c.warnAt(span, "`as?` always succeeds here: the value is already ${c.show(from)}")
+        var op = opSpan(c, x.span, te.span, "as?")
+        if (op != null) {
+            addFix(d.diag, "use `as`", op.start, op.end, "as", true)
+        }
+        c.emit(d)
+        return coerce(c, h, opt, span)
+    }
+    var tmp = bindTemp(c, h, null, x.span)
+    var raw = local(tmp.slot, from)
+    var check = isCheck(c, raw, target, span)
+    if (check.ty == T_ERROR) {
+        return errExpr()
+    }
+    var l = c.locExpr(span)
+    var cast = rt("Cast", [raw, tid(from), tid(target), l], target)
+    var value = coerce(c, cast, opt, span)
+    return pick(c, tmp.set, check, value, hexpr(HKind.Null, opt), opt)
+}

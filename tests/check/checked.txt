@@ -1,5 +1,6 @@
 compiler/src/check/wide.bn
 compiler/src/project/stdlib.bn
+compiler/src/syntax/ast.bn
 examples/const.bn
 examples/control_flow.bn
 examples/input.bn
@@ -16,6 +17,7 @@ tests/cases/collections.bn
 tests/cases/errors_runtime.bn
 tests/cases/functions.bn
 tests/cases/gc.bn
+tests/cases/matching.bn
 tests/cases/overflow_runtime.bn
 tests/cases/radix.bn
 tests/cases/strings.bn
@@ -23,6 +25,8 @@ tests/cases/types.bn
 tests/check/bodies/closures.bn
 tests/check/bodies/generics.bn
 tests/check/bodies/init_order.bn
+tests/check/bodies/matching.bn
+tests/check/bodies/nullsafe.bn
 tests/check/bodies/numbers.bn
 tests/check/bodies/returns.bn
 tests/check/decls/aliases.bn
@@ -42,6 +46,8 @@ tests/errors/bitnot_bool.bn
 tests/errors/bitor_float.bn
 tests/errors/const.bn
 tests/errors/empty_array.bn
+tests/errors/enum_pattern_arity.bn
+tests/errors/enum_payload_exhaustive.bn
 tests/errors/enum_payload_missing.bn
 tests/errors/enum_payload_type.bn
 tests/errors/enum_payload_unknown.bn
@@ -53,6 +59,9 @@ tests/errors/generic_infer.bn
 tests/errors/init_order.bn
 tests/errors/loops.bn
 tests/errors/map_lookup.bn
+tests/errors/match_arm_types.bn
+tests/errors/match_missing.bn
+tests/errors/match_pattern_type.bn
 tests/errors/mismatch.bn
 tests/errors/mixed_array.bn
 tests/errors/mixed_returns.bn

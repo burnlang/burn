@@ -4,6 +4,7 @@ import "check.bn"
 import "closures.bn"
 import "expr.bn"
 import "hir.bn"
+import "matching.bn"
 import "structs.bn"
 import "types.bn"
 
@@ -417,9 +418,9 @@ pub fun stmtOf(c: Checker, s: Stmt): [HStmt] {
     }
     if (k is StmtKind.Eval) {
         var e = k.value
-        if (e.kind is ExprKind.Match) {
-            c.notPorted("`match`")
-            return []
+        var mk = e.kind
+        if (mk is ExprKind.Match) {
+            return matchStmt(c, mk.subject, mk.arms, c.sp(e.span))
         }
         var h = exprOf(c, e, null)
         var compares = isIntEq(h) || isRt(h, "StrEq") || isRt(h, "Eq")

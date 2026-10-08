@@ -1,0 +1,85 @@
+def enum Shape {
+    Circle(radius: float),
+    Rect(w: float, h: float),
+    Empty
+}
+
+def enum Light { Red, Yellow, Green }
+
+def enum Tree {
+    Leaf(value: int),
+    Node(left: Tree, right: Tree)
+}
+
+fun area(s: Shape): float {
+    return match s {
+        Shape.Circle(r) => 3.14 * r * r
+        Shape.Rect(w, h) if w == h => w * w
+        Shape.Rect(w, h) => w * h
+        Shape.Empty => 0.0
+    }
+}
+
+fun sum(t: Tree): int {
+    return match t {
+        Tree.Leaf(v) => v
+        Tree.Node(Tree.Leaf(a), Tree.Leaf(b)) => a + b
+        Tree.Node(l, r) => sum(l) + sum(r)
+    }
+}
+
+fun describe(x: any): string {
+    match x {
+        is int n => {
+            return "int ${n}"
+        }
+        is string => {
+            return "string"
+        }
+        null => {
+            return "null"
+        }
+        else => {
+            return "other"
+        }
+    }
+}
+
+fun grade(score: int): string {
+    return match score {
+        90..=100 => "A"
+        80..90 => "B"
+        0, 1, 2 => "tiny"
+        else => "C"
+    }
+}
+
+fun following(l: Light?): Light {
+    return match l {
+        Red => Light.Green
+        Yellow => Light.Red
+        Green => Light.Yellow
+        null => Light.Red
+    }
+}
+
+fun word(w: string) {
+    match w {
+        "a" => print("first")
+        "a" => print("again")
+        "b", "c" => print("later")
+    }
+}
+
+var flag = true
+var text = match flag {
+    true => "yes"
+    false => "no"
+}
+var level = 5
+match {
+    level > 3 => print("high")
+    else => print("low")
+}
+print(area(Shape.Circle(1.0)), sum(Tree.Leaf(2)), describe(3), grade(85), following(null), text)
+word("a")
