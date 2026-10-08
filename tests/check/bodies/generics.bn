@@ -1,0 +1,24 @@
+fun first<T>(xs: [T]): T? {
+    if (len(xs) == 0) {
+        return null
+    }
+    return xs[0]
+}
+
+fun pair<A, B>(a: A, b: B): {string: any} {
+    return {"a": a, "b": b}
+}
+
+def type Box<T> {
+    T value
+}
+
+fun unbox<T>(b: Box<T>): T {
+    return b.value
+}
+
+var n = first([1, 2, 3])
+var s = first(["x"])
+var p = pair(1, "one")
+var b = Box { value: 2.5 }
+print("${n} ${s} ${p} ${unbox(b)}")

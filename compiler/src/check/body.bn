@@ -1,0 +1,639 @@
+import "../diag/diag.bn"
+import "../project/loader.bn"
+import "../syntax/ast.bn"
+import "builtins.bn"
+import "check.bn"
+import "closures.bn"
+import "expr.bn"
+import "hir.bn"
+import "init_order.bn"
+import "stmt.bn"
+import "types.bn"
+
+pub def type HGlobal {
+    string name
+    int ty
+    string module
+}
+
+pub def type HInit {
+    string key
+    int func
+}
+
+/** The checked program, like `hir::Program` in Rust. */
+pub def type HProgram {
+    string name
+    int entry
+    int? main
+    bool noStd
+    [HFunc] funcs
+    [HGlobal] globals
+    [HInit] inits
+}
+
+pub def type CheckResult {
+    Checker checker
+    HProgram? program
+    [LoadDiag] diags
+}
+
+pub fun funcRet(c: Checker, fid: int): int {
+    var r = c.funcs[fid].ret
+    if (r != null) {
+        return r
+    }
+    var state = c.funcs[fid].state
+    if (state == FnState.Pending) {
+        checkFunc(c, fid)
+        return c.funcs[fid].ret ?? T_ERROR
+    }
+    if (state == FnState.InProgress) {
+        if (!c.isDry()) {
+            var name = c.funcs[fid].name
+            c.errorNote(c.funcs[fid].span, "cannot infer the return type of `${name}` because it calls itself", "add a return type, for example `fun f(): int`")
+        }
+    }
+    return T_ERROR
+}
+
+pub fun funcType(c: Checker, fid: int): int {
+    var ret = funcRet(c, fid)
+    [int] ps = []
+    for p in c.funcs[fid].params {
+        ps.push(p.ty)
+    }
+    if (c.funcs[fid].isAsync) {
+        ret = c.types.future(ret)
+    }
+    return c.types.func(ps, ret)
+}
+
+pub fun newCtx(c: Checker, fid: int, module: int, dry: bool): FnCtx {
+    var info = c.funcs[fid]
+    {string: LocalSym} top = {}
+    return FnCtx {
+        func: fid,
+        module: module,
+        locals: [],
+        scopes: [top],
+        narrow: {},
+        ret: info.ret,
+        returns: [],
+        loops: 0,
+        selfTy: info.selfTy,
+        isInit: false,
+        dry: dry,
+        lambda: has(c.closures, fid),
+        cellNames: {},
+        cells: {},
+        captures: []
+    }
+}
+
+fun popCtx(c: Checker): FnCtx {
+    var x = c.fx[len(c.fx) - 1]
+    c.fx = slice(c.fx, 0, len(c.fx) - 1)
+    return x
+}
+
+pub fun checkFunc(c: Checker, fid: int) {
+    {string: int} env = c.funcs[fid].tenv ?? {}
+    c.tenv.push(env)
+    checkFuncInner(c, fid)
+    c.tenv = slice(c.tenv, 0, len(c.tenv) - 1)
+}
+
+fun bindParams(c: Checker, x: FnCtx, fid: int) {
+    var params = c.funcs[fid].params
+    for i in 0..len(params) {
+        x.locals.push(params[i].ty)
+        x.scopes[0][params[i].name] = LocalSym { slot: i, isConst: false, span: params[i].span }
+    }
+}
+
+fun paramTypes(info: FuncInfo): [int] {
+    [int] out = []
+    for p in info.params {
+        out.push(p.ty)
+    }
+    return out
+}
+
+fun checkFuncInner(c: Checker, fid: int) {
+    var found = c.funcs[fid].decl
+    if (found == null) {
+        return
+    }
+    FunDecl decl = found
+    if (decl.bodyless) {
+        var info = c.funcs[fid]
+        var ret = info.ret ?? T_VOID
+        info.ret = ret
+        info.hir = HFunc { name: info.name, params: len(info.params), locals: paramTypes(info), ret: ret, body: [], isAsync: info.isAsync, span: info.span, endLoc: 0, annotations: info.annotations, external: info.external }
+        info.state = FnState.Done
+        return
+    }
+    c.funcs[fid].state = FnState.InProgress
+    var module = c.funcs[fid].module
+    var isLambda = has(c.closures, fid)
+    if (c.funcs[fid].ret == null) {
+        var dryCtx = newCtx(c, fid, module, true)
+        bindParams(c, dryCtx, fid)
+        dryCtx.cellNames = cellNames(decl.body.stmts)
+        if (isLambda) {
+            dryCtx.locals.push(T_INT)
+        }
+        c.fx.push(dryCtx)
+        blockStmts(c, decl.body.stmts)
+        var done = popCtx(c)
+        c.funcs[fid].ret = joinReturns(c, done.returns, c.spanIn(module, decl.name.span))
+    }
+    var x = newCtx(c, fid, module, false)
+    bindParams(c, x, fid)
+    x.cellNames = cellNames(decl.body.stmts)
+    if (isLambda) {
+        x.locals.push(T_INT)
+    }
+    var nparams = len(c.funcs[fid].params)
+    c.fx.push(x)
+    [HStmt] prefix = []
+    for i in 0..nparams {
+        var pname = c.funcs[fid].params[i].name
+        if (pname != "self" && has(c.ctx().cellNames, pname)) {
+            var pt = c.ctx().locals[i]
+            var ct = makeCellLocal(c, i)
+            var cell = hexpr(HKind.NewStruct(ct, [local(i, pt)]), ct)
+            prefix.push(HStmt.Eval(setLocal(i, cell, pt)))
+        }
+    }
+    var body = blockStmts(c, decl.body.stmts)
+    var ret = c.funcs[fid].ret ?? T_VOID
+    if (ret != T_VOID && ret != T_ERROR && !diverges(body)) {
+        var bs = c.spanIn(module, decl.body.span)
+        var l = c.locExpr(SrcSpan { file: bs.file, start: bs.end - 1, end: bs.end })
+        body.push(HStmt.Eval(rt("ErrReturn", [l], T_VOID)))
+    }
+    var done = popCtx(c)
+    var locals = done.locals
+    for s in body {
+        prefix.push(s)
+    }
+    body = finishCells(prefix, locals, done.cells)
+    if (isLambda) {
+        [int] fields = []
+        [ClosureCapture] caps = []
+        for cap in done.captures {
+            var ty = locals[cap.inner]
+            fields.push(ty)
+            caps.push(ClosureCapture { outer: cap.outer, byCell: cap.byCell, ty: ty })
+        }
+        var cty = closureRecord(c, fields)
+        locals[nparams] = cty
+        [HStmt] loads = []
+        for k in 0..len(caps) {
+            var ty = caps[k].ty
+            var get = hexpr(HKind.GetField(local(nparams, cty), k + 1), ty)
+            loads.push(HStmt.Eval(setLocal(done.captures[k].inner, get, ty)))
+        }
+        for s in body {
+            loads.push(s)
+        }
+        body = loads
+        c.closures[fid] = ClosureInfo { ty: cty, captures: caps }
+    }
+    var endLoc = c.loc(c.spanIn(module, decl.span))
+    var info = c.funcs[fid]
+    var np = len(info.params)
+    if (isLambda) {
+        np += 1
+    }
+    info.hir = HFunc { name: info.name, params: np, locals: locals, ret: ret, body: body, isAsync: info.isAsync, span: info.span, endLoc: endLoc, annotations: info.annotations, external: info.external }
+    info.state = FnState.Done
+}
+
+pub fun joinReturns(c: Checker, rs: [int], span: SrcSpan): int {
+    int? cur = null
+    var nullable = false
+    for r in rs {
+        if (r == T_NULL) {
+            nullable = true
+            continue
+        }
+        if (r == T_ERROR) {
+            continue
+        }
+        var k = cur
+        if (k == null) {
+            cur = r
+        } else if (k == r) {
+            cur = k
+        } else if ((k == T_INT && r == T_FLOAT) || (k == T_FLOAT && r == T_INT)) {
+            cur = T_FLOAT
+        } else if (c.types.unwrapOptional(k) == r) {
+            cur = k
+        } else if (c.types.unwrapOptional(r) == k) {
+            cur = r
+        } else {
+            var common = commonType(c, k, r)
+            if (common != null) {
+                cur = common
+            } else {
+                var fname = c.srcText(span)
+                var d = c.errorDiag(span, "`${fname}` returns ${c.show(k)} on one path and ${c.show(r)} on another")
+                var at = c.paramsClose(span)
+                if (at != null) {
+                    addFix(d.diag, "declare what it returns, `any` if both are intended", at.start, at.end, ": any", false)
+                }
+                c.emit(d)
+                cur = T_ERROR
+            }
+        }
+    }
+    var t = cur
+    if (t == null) {
+        if (nullable) {
+            var fname = c.srcText(span)
+            var d = c.errorDiag(span, "cannot tell what `${fname}` returns: it only returns `null`")
+            d.diag.helps.push("declare the return type, for example `fun find(): string?`")
+            c.emit(d)
+            return T_ERROR
+        }
+        return T_VOID
+    }
+    if (nullable) {
+        return c.types.optional(t)
+    }
+    return t
+}
+
+fun methodSigStr(c: Checker, ps: [int], ret: int, isAsync: bool): string {
+    [string] p = []
+    for t in ps {
+        p.push(c.show(t))
+    }
+    var r = ""
+    if (ret != T_VOID) {
+        r = ": ${c.show(ret)}"
+    }
+    var a = ""
+    if (isAsync) {
+        a = "async "
+    }
+    return "${a}fun(${joinWith(p, ", ")})${r}"
+}
+
+fun sameInts(a: [int], b: [int]): bool {
+    if (len(a) != len(b)) {
+        return false
+    }
+    for i in 0..len(a) {
+        if (a[i] != b[i]) {
+            return false
+        }
+    }
+    return true
+}
+
+pub fun checkRecordConformance(c: Checker, ri: int) {
+    var rec = c.types.records[ri]
+    if (rec.isAbstract) {
+        return
+    }
+    for ii in rec.implements {
+        var iface = c.types.ifaces[ii]
+        for m in iface.methods {
+            var found = rec.methods[m.name]
+            if (found != null) {
+                int fid = found
+                var ret = funcRet(c, fid)
+                var info = c.funcs[fid]
+                [int] ps = []
+                for i in 1..len(info.params) {
+                    ps.push(info.params[i].ty)
+                }
+                if (!sameInts(ps, m.params) || ret != m.ret || info.isAsync != m.isAsync) {
+                    var want = methodSigStr(c, m.params, m.ret, m.isAsync)
+                    var got = methodSigStr(c, ps, ret, info.isAsync)
+                    c.errorDetail(info.span, "method `${m.name}` does not match interface `${iface.name}`", "expected `${want}` but found `${got}`")
+                }
+                c.slots[m.slot].impls.push(SlotImpl { ty: rec.ty, func: fid })
+            } else {
+                var want = methodSigStr(c, m.params, m.ret, m.isAsync)
+                var at = byteIndexOf(want, "fun(")
+                var add = want
+                if (at >= 0) {
+                    add = "${substring(want, 0, at)}fun ${m.name}(${substring(want, at + 4)}"
+                }
+                c.errorNote(rec.span, "struct `${rec.name}` does not implement `${iface.name}.${m.name}`", "add `${add}`")
+            }
+        }
+    }
+}
+
+pub fun completeInstances(c: Checker) {
+    while (len(c.pendingInstances) > 0) {
+        var p = c.pendingInstances[0]
+        c.pendingInstances = slice(c.pendingInstances, 1, len(c.pendingInstances))
+        completeInstance(c, p)
+    }
+}
+
+fun completeInstance(c: Checker, p: PendingInstance) {
+    var g = c.genericTypes[p.gid]
+    var mi = g.module
+    var t = c.types.records[p.record].ty
+    var names = defTparams(g.d)
+    {string: int} env = {}
+    for i in 0..len(names) {
+        if (i < len(p.targs)) {
+            env[names[i].name] = p.targs[i]
+        }
+    }
+    c.tenv.push(env)
+    c.fx.push(newCtx(c, c.mods[mi].init, mi, false))
+    c.fillDefFor(mi, g.d, t)
+    if (g.d is Def.Struct) {
+        c.notPorted("generic structs")
+    }
+    popCtx(c)
+    c.tenv = slice(c.tenv, 0, len(c.tenv) - 1)
+}
+
+fun checkInit(c: Checker, mi: int) {
+    var fid = c.mods[mi].init
+    var x = newCtx(c, fid, mi, false)
+    x.isInit = true
+    x.ret = T_VOID
+    var items = c.loaded.modules[mi].ast.items
+    [Stmt] top = []
+    for item in items {
+        var k = item.kind
+        if (k is ItemKind.Statement) {
+            top.push(k.stmt)
+        }
+    }
+    x.cellNames = cellNames(top)
+    c.fx.push(x)
+    [HStmt] body = []
+    for item in items {
+        var k = item.kind
+        if (k is ItemKind.Definition) {
+            var d = k.d
+            if (d is Def.Struct && len(d.s.statics) > 0) {
+                c.notPorted("static values")
+            }
+        }
+        if (k is ItemKind.Statement) {
+            var start = len(body)
+            for s in stmtOf(c, k.stmt) {
+                body.push(s)
+            }
+            c.initSpans.push(InitSpan { module: mi, start: start, end: len(body), span: c.spanIn(mi, item.span) })
+        }
+    }
+    var done = popCtx(c)
+    var locals = done.locals
+    body = finishCells(body, locals, done.cells)
+    var file = c.fileOf(mi)
+    var endLoc = c.loc(SrcSpan { file: file, start: 0, end: 0 })
+    var info = c.funcs[fid]
+    info.hir = HFunc { name: info.name, params: 0, locals: locals, ret: T_VOID, body: body, isAsync: false, span: info.span, endLoc: endLoc, annotations: [], external: null }
+}
+
+fun mainFunc(c: Checker): ValEntry? {
+    var e = c.mods[c.loaded.root].values["main"]
+    if (e != null && e.sym is ValSym.Func) {
+        return e
+    }
+    return null
+}
+
+fun finishChecking(c: Checker) {
+    for ri in 0..len(c.types.records) {
+        checkRecordConformance(c, ri)
+    }
+    for f in c.funcs {
+        for a in f.annotations {
+            if (a.name == "Inject" || a.name == "Overwrite" || a.name == "Redirect") {
+                c.notPorted("mixins")
+            }
+        }
+    }
+    c.structsReady = true
+    completeInstances(c)
+    for mi in c.loaded.order {
+        checkInit(c, mi)
+    }
+    var i = 0
+    while (i < len(c.funcs)) {
+        if (c.funcs[i].state == FnState.Pending) {
+            checkFunc(c, i)
+        }
+        i += 1
+    }
+    checkInitOrder(c)
+    var e = mainFunc(c)
+    if (e != null) {
+        var sym = e.sym
+        if (sym is ValSym.Func && len(c.funcs[sym.id].params) > 0) {
+            c.error(e.span, "`main` must not take parameters (use `args()` to read command line arguments)")
+        }
+    }
+}
+
+fun checkNoStd(c: Checker) {
+    if (!c.loaded.noStd) {
+        return
+    }
+    for f in c.funcs {
+        if (f.isAsync) {
+            c.stdUses.push(StdUse { span: f.span, what: "an `async fun`" })
+        }
+    }
+    var uses = c.stdUses
+    c.stdUses = []
+    {string: bool} seen = {}
+    for u in uses {
+        var std = false
+        for m in c.loaded.modules {
+            if (m.file == u.span.file) {
+                std = startsWith(m.key, "std:")
+                break
+            }
+        }
+        if (std) {
+            continue
+        }
+        var key = "${u.span.file}:${u.span.start}:${u.span.end}:${u.what}"
+        if (!has(seen, key)) {
+            seen[key] = true
+            var d = c.errorDiag(u.span, "${u.what} needs the standard library")
+            d.diag.helps.push(NO_STD_HELP)
+            c.emit(d)
+        }
+    }
+    for m in c.loaded.modules {
+        if (startsWith(m.key, "std:")) {
+            continue
+        }
+        for r in m.imports {
+            var target = c.loaded.modules[r.target]
+            if (startsWith(target.key, "std:")) {
+                var d = c.errorDiag(SrcSpan { file: m.file, start: r.start, end: r.end }, "`std/${substring(target.key, 4)}` is part of the standard library")
+                d.diag.helps.push(NO_STD_HELP)
+                c.emit(d)
+            }
+        }
+        for l in m.libs {
+            var d = c.errorDiag(SrcSpan { file: m.file, start: l.start, end: l.end }, "bytecode libraries need bvm, which is part of the standard library")
+            d.diag.helps.push(NO_STD_HELP)
+            c.emit(d)
+        }
+    }
+}
+
+fun fileStem(path: string): string {
+    var base = path
+    var i = len(path) - 1
+    while (i >= 0) {
+        var ch = substring(path, i, i + 1)
+        if (ch == "/" || ch == "\\") {
+            base = substring(path, i + 1)
+            break
+        }
+        i -= 1
+    }
+    var j = len(base) - 1
+    while (j > 0) {
+        if (substring(base, j, j + 1) == ".") {
+            return substring(base, 0, j)
+        }
+        j -= 1
+    }
+    return base
+}
+
+fun buildProgram(c: Checker): HProgram {
+    var entry = len(c.funcs)
+    [HStmt] body = []
+    for mi in c.loaded.order {
+        body.push(HStmt.Eval(hexpr(HKind.Call(c.mods[mi].init, []), T_VOID)))
+    }
+    int? main = null
+    var e = mainFunc(c)
+    if (e != null) {
+        var sym = e.sym
+        if (sym is ValSym.Func) {
+            var f = sym.id
+            main = f
+            if (len(c.funcs[f].params) == 0) {
+                var ret = c.funcs[f].ret ?? T_VOID
+                if (c.funcs[f].isAsync) {
+                    var sp = hexpr(HKind.Spawn(f, []), c.types.future(ret))
+                    body.push(HStmt.Eval(rt("Await", [sp], ret)))
+                } else {
+                    body.push(HStmt.Eval(hexpr(HKind.Call(f, []), ret)))
+                }
+            }
+        }
+    }
+    [HFunc] funcs = []
+    for f in c.funcs {
+        var h = f.hir
+        if (h != null) {
+            funcs.push(h)
+        } else {
+            funcs.push(HFunc { name: f.name, params: len(f.params), locals: paramTypes(f), ret: f.ret ?? T_VOID, body: [], isAsync: f.isAsync, span: f.span, endLoc: 0, annotations: f.annotations, external: f.external })
+        }
+    }
+    funcs.push(HFunc { name: "<entry>", params: 0, locals: [], ret: T_VOID, body: body, isAsync: false, span: SrcSpan { file: 0, start: 0, end: 0 }, endLoc: 0, annotations: [], external: null })
+    [HGlobal] globals = []
+    for g in c.globals {
+        globals.push(HGlobal { name: g.name, ty: g.ty ?? T_ERROR, module: c.loaded.modules[g.module].key })
+    }
+    [HInit] inits = []
+    for mi in c.loaded.order {
+        inits.push(HInit { key: c.loaded.modules[mi].key, func: c.mods[mi].init })
+    }
+    var root = c.loaded.modules[c.loaded.root].file
+    return HProgram { name: fileStem(c.loaded.files[root].name), entry: entry, main: main, noStd: c.loaded.noStd, funcs: funcs, globals: globals, inits: inits }
+}
+
+fun diagBefore(a: LoadDiag, b: LoadDiag): bool {
+    return a.file < b.file || (a.file == b.file && a.diag.start <= b.diag.start)
+}
+
+fun sortDiags(ds: [LoadDiag]): [LoadDiag] {
+    if (len(ds) <= 1) {
+        return ds
+    }
+    var mid = len(ds) / 2
+    var a = sortDiags(slice(ds, 0, mid))
+    var b = sortDiags(slice(ds, mid, len(ds)))
+    [LoadDiag] out = []
+    var i = 0
+    var j = 0
+    while (i < len(a) && j < len(b)) {
+        if (diagBefore(a[i], b[j])) {
+            out.push(a[i])
+            i += 1
+        } else {
+            out.push(b[j])
+            j += 1
+        }
+    }
+    while (i < len(a)) {
+        out.push(a[i])
+        i += 1
+    }
+    while (j < len(b)) {
+        out.push(b[j])
+        j += 1
+    }
+    return out
+}
+
+fun dedupDiags(ds: [LoadDiag]): [LoadDiag] {
+    [LoadDiag] out = []
+    for d in ds {
+        if (len(out) > 0) {
+            var p = out[len(out) - 1]
+            if (p.file == d.file && p.diag.start == d.diag.start && p.diag.end == d.diag.end && p.diag.message == d.diag.message) {
+                continue
+            }
+        }
+        out.push(d)
+    }
+    return out
+}
+
+fun anyErrors(ds: [LoadDiag]): bool {
+    for d in ds {
+        if (d.diag.severity == Severity.Error) {
+            return true
+        }
+    }
+    return false
+}
+
+/** Checks the loaded program, like `check` in `check/mod.rs`. */
+pub fun checkProgram(loaded: Loaded): CheckResult {
+    var c = new Checker(loaded)
+    for m in loaded.modules {
+        if (m.ast.hasDestroy) {
+            c.hasDestroy = true
+        }
+    }
+    c.declare()
+    if (len(keys(c.structDecls)) > 0) {
+        c.notPorted("`def struct`")
+    }
+    finishChecking(c)
+    checkNoStd(c)
+    HProgram? program = null
+    if (!anyErrors(loaded.diags) && !anyErrors(c.diags)) {
+        program = buildProgram(c)
+    }
+    return CheckResult { checker: c, program: program, diags: dedupDiags(sortDiags(c.diags)) }
+}

@@ -31,6 +31,7 @@ The Rust compiler can print every stage in a fixed text form. The Burn port prin
 | Projects, workspaces and package resolution | `crates/burn/src/project.rs` | `src/project/project.bn`, `src/project/paths.bn` | `burn dump --project <paths...>` |
 | Every module a program loads, and import errors | `crates/burn/src/loader.rs` | `src/project/loader.bn`, `src/project/stdlib.bn` | `burn dump --modules <files...>` |
 | Declared types, functions, globals and their errors | `crates/burn/src/types.rs`, `check/` up to `declare` | `src/check/types.bn`, `src/check/check.bn`, `src/check/hir.bn` | `burn dump --decls <files...>` |
+| Checked program (functions, statements and expressions after type checking) and checker errors | `crates/burn/src/check/` | `src/check/body.bn` and the files next to it | `burn dump --checked <files...>` |
 
 Run the comparison by hand with:
 
@@ -77,17 +78,16 @@ The inputs include the error-recovery fixtures in `tests/lexer` and `tests/parse
 5. **Checker.** The largest part (about 10,000 lines). Split it into PRs, roughly one per Rust file:
    - declarations and types (done): `src/check/check.bn` runs everything `run` does before it checks struct bodies, and `burn dump --decls` prints the type table, every record, interface, enum, module scope, function signature and global, and the errors found so far. The fixtures in `tests/check/decls` cover each of those errors.
      Importing bytecode libraries (`check/libs.rs`) needs a reader for bvm modules and is not ported yet; the Burn checker reports an error for each library import.
-   - expressions
-   - statements and flow narrowing
-   - structs and interfaces
-   - generics
-   - closures
+   - function bodies (done for programs without the parts listed below): `src/check/body.bn` checks every function and top-level statement, and `burn dump --checked` prints the checked program (types, functions with their statements and expressions, globals, strings, source locations and interface slots) or the errors.
+     The files next to it port the matching Rust files: `expr.bn`, `calls.bn`, `builtins.bn`, `stmt.bn`, `closures.bn`, `generics.bn`, `numeric.bn` (with `wide.bn` for 128-bit constant folding), `structs.bn` and `init_order.bn`.
+     Parts that are not ported yet make the Burn checker print `not ported yet: ...` instead of a program: `def struct` (constructors, inheritance, virtual calls, static values, `new`, adding functions to objects, `destroy`), generic structs, `match`, `?.`/`??`/`as?`, `annotationsOf` and mixins.
+     The suite compares every Burn file in the repository that is fully ported, and `tests/check/checked.txt` lists the files that must stay ported. The fixtures in `tests/check/bodies` cover closures, generic functions, return types, initialization order and sized numbers.
    - `match` and enums
-   - numbers
+   - nullable operators (`?.`, `??`, `as?`)
+   - structs and interfaces
    - annotations
-   - no-std rules
 
-   Compare `burn dump --hir`.
+   Compare `burn dump --checked`.
 6. **Ownership.** Port `own.rs` and compare the HIR after ownership.
 7. **bvm code generation.** Port `vm/compile.rs` and compare `burn dump --bytecode`.
 8. **Bootstrap** (see *Stage0* below).

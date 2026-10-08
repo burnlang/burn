@@ -1,0 +1,17 @@
+int8 a = 100
+uint8 b = 200
+int16 c = a + 20
+uint64 big = 18446744073709551615
+float32 f = 1.5
+var mixed = c * 2 + 1
+var shifted = b >> 2
+var masked = big & 255
+var wrapped = wrappingAdd(a, 100 as int8)
+var g = f * 2
+var h = 3 / 2
+var i = 7 % 3
+var j = -a
+var k = ~b
+var l = 1 << 70
+int8 m = 300
+print(mixed, shifted, masked, wrapped, g, h, i, j, k, l, m)

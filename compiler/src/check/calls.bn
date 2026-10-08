@@ -1,0 +1,743 @@
+import "../diag/diag.bn"
+import "../syntax/ast.bn"
+import "body.bn"
+import "builtins.bn"
+import "check.bn"
+import "closures.bn"
+import "expr.bn"
+import "generics.bn"
+import "hir.bn"
+import "stmt.bn"
+import "structs.bn"
+import "types.bn"
+
+pub fun checkArgs(c: Checker, params: [int], args: [Expr], recv: HExpr?, span: SrcSpan, what: string): [HExpr] {
+    return checkArgsSig(c, params, args, recv, span, what, null)
+}
+
+pub fun checkArgsSig(c: Checker, params: [int], args: [Expr], recv: HExpr?, span: SrcSpan, what: string, sig: string?): [HExpr] {
+    [HExpr] out = []
+    var offset = 0
+    if (recv != null) {
+        offset = 1
+        out.push(coerce(c, recv, params[0], span))
+    }
+    var used = offset
+    if (used > len(params)) {
+        used = len(params)
+    }
+    var expected = len(params) - used
+    if (len(args) != expected) {
+        var s = "s"
+        if (expected == 1) {
+            s = ""
+        }
+        var d = c.errorDiag(span, "${what} expects ${expected} argument${s} but got ${len(args)}")
+        if (sig != null) {
+            d.diag.notes.push("it is declared as `${sig}`")
+        }
+        c.emit(d)
+    }
+    for i in 0..len(args) {
+        if (i + offset < len(params)) {
+            out.push(exprTo(c, args[i], params[i + offset]))
+        } else {
+            exprOf(c, args[i], null)
+        }
+    }
+    while (len(out) < len(params)) {
+        out.push(errExpr())
+    }
+    return out
+}
+
+fun ownerOf(c: Checker, f: FuncInfo): int? {
+    var st = f.selfTy
+    if (st != null) {
+        return st
+    }
+    var dot = indexOf(f.name, ".")
+    if (dot < 0) {
+        return null
+    }
+    var e = c.mods[f.module].types[substring(f.name, 0, dot)]
+    if (e == null) {
+        return null
+    }
+    return e.sym
+}
+
+pub fun funcSignature(c: Checker, fid: int, ret: int): string {
+    var info = c.funcs[fid]
+    [string] ps = []
+    for p in info.params {
+        if (p.name != "self") {
+            ps.push("${p.name}: ${c.show(p.ty)}")
+        }
+    }
+    var r = ""
+    if (ret != T_VOID) {
+        r = ": ${c.show(ret)}"
+    }
+    var a = ""
+    if (info.isAsync) {
+        a = "async "
+    }
+    return "${a}fun ${info.name}(${joinWith(ps, ", ")})${r}"
+}
+
+pub fun directCall(c: Checker, fid: int, recv: HExpr?, args: [Expr], span: SrcSpan, nameSpan: SrcSpan): HExpr {
+    warnDeprecatedFunc(c, fid, nameSpan)
+    var ret = funcRet(c, fid)
+    var info = c.funcs[fid]
+    [int] params = []
+    for p in info.params {
+        params.push(p.ty)
+    }
+    var owner = ownerOf(c, info)
+    if (info.private && owner != null && staticOwnerRec(c) != owner) {
+        c.error(nameSpan, "method `${info.name}` is private")
+    }
+    var sig = funcSignature(c, fid, ret)
+    var r = recv
+    if (r != null && c.hasDestroy) {
+        var rec = c.types.recordOf(r.ty)
+        if (rec != null && rec.isClass) {
+            r = aliveWrap(c, r, nameSpan)
+        }
+    }
+    var hargs = checkArgsSig(c, params, args, r, span, "`${info.name}`", sig)
+    invalidateGlobals(c)
+    if (info.isAsync) {
+        var ft = c.types.future(ret)
+        return hexpr(HKind.Spawn(fid, hargs), ft)
+    }
+    return hexpr(HKind.Call(fid, hargs), ret)
+}
+
+pub fun staticOwner(c: Checker): int? {
+    if (len(c.fx) == 0) {
+        return null
+    }
+    var info = c.funcs[c.ctx().func]
+    var dot = indexOf(info.name, ".")
+    if (dot < 0) {
+        return null
+    }
+    var e = c.mods[info.module].types[substring(info.name, 0, dot)]
+    if (e == null) {
+        return null
+    }
+    return e.sym
+}
+
+pub fun indirectCall(c: Checker, callee: HExpr, args: [Expr], span: SrcSpan): HExpr {
+    var k = c.types.kindOf(callee.ty)
+    if (k is Ty.Func) {
+        var hargs = checkArgs(c, k.params, args, null, span, "this function")
+        invalidateGlobals(c)
+        return callValue(c, callee, hargs, k.ret)
+    }
+    if (k is Ty.Error) {
+        for a in args {
+            exprOf(c, a, null)
+        }
+        return errExpr()
+    }
+    if (k is Ty.Optional) {
+        c.errorNote(span, "this function value may be null", "check it with `!= null` first")
+        return errExpr()
+    }
+    c.error(span, "a value of type ${c.show(callee.ty)} cannot be called")
+    return errExpr()
+}
+
+pub fun typeIdent(c: Checker, e: Expr): int? {
+    var k = e.kind
+    if (!(k is ExprKind.Ident)) {
+        return null
+    }
+    if (c.peekLocal(k.name) != null || selfField(c, k.name) != null) {
+        return null
+    }
+    var m = c.curModule()
+    if (c.lookupValueEntry(m, k.name) != null) {
+        return null
+    }
+    return c.lookupTypeName(m, k.name, c.sp(e.span))
+}
+
+pub fun callExpr(c: Checker, callee: Expr, args: [Expr], span: SrcSpan, expected: int?): HExpr {
+    var ck = callee.kind
+    var cspan = c.sp(callee.span)
+    if (ck is ExprKind.Field) {
+        return methodCall(c, ck.obj, ck.name, args, span, expected)
+    }
+    if (!(ck is ExprKind.Ident)) {
+        var h = exprOf(c, callee, null)
+        return indirectCall(c, h, args, span)
+    }
+    var name = ck.name
+    var l = c.lookupLocal(name)
+    if (l != null) {
+        return indirectCall(c, readLocal(c, l.slot), args, span)
+    }
+    var st = c.enclosingSelf()
+    if (st != null) {
+        var rec = c.types.recordOf(st)
+        if (rec != null) {
+            var sk = c.types.kindOf(st)
+            var ri = 0
+            if (sk is Ty.Record) {
+                ri = sk.index
+            }
+            var method = rec.methods[name]
+            var vslot = c.vslots["${ri} ${name}"]
+            var stat = rec.statics[name]
+            var hasOuter = isBuiltin(name) || c.lookupValueEntry(c.curModule(), name) != null
+            if (vslot != null) {
+                var argc = c.slots[vslot].argc
+                if (!hasOuter || argc == len(args) + 1) {
+                    return virtualCall(c, ri, vslot, Ident { name: name, span: callee.span }, c.selfExpr(st), args, span)
+                }
+            }
+            if (method != null) {
+                if (!hasOuter || len(c.funcs[method].params) == len(args) + 1) {
+                    return directCall(c, method, c.selfExpr(st), args, span, cspan)
+                }
+            }
+            if (stat != null) {
+                if (!hasOuter || len(c.funcs[stat].params) == len(args)) {
+                    return directCall(c, stat, null, args, span, cspan)
+                }
+            }
+        }
+        if (selfField(c, name) != null) {
+            return indirectCall(c, identExpr(c, name, cspan), args, span)
+        }
+    }
+    var owner = staticOwner(c)
+    if (owner != null) {
+        var rec = c.types.recordOf(owner)
+        if (rec != null) {
+            var fid = rec.statics[name]
+            if (fid != null) {
+                return directCall(c, fid, null, args, span, cspan)
+            }
+        }
+    }
+    var m = c.curModule()
+    var gid = lookupGenericFn(c, name)
+    if (gid != null) {
+        return genericCall(c, gid, null, args, span, cspan, expected)
+    }
+    var gt = genericTargetCall(c, Ident { name: name, span: callee.span }, expected, args)
+    if (gt != null) {
+        if (gt == T_ERROR) {
+            return errExpr()
+        }
+        return construct(c, gt, args, span, cspan)
+    }
+    var entry = c.lookupValueEntry(m, name)
+    if (entry != null) {
+        var sym = entry.sym
+        if (sym is ValSym.Func) {
+            return directCall(c, sym.id, null, args, span, cspan)
+        }
+        return indirectCall(c, identExpr(c, name, cspan), args, span)
+    }
+    var t = c.lookupTypeName(m, name, cspan)
+    if (t != null) {
+        return construct(c, t, args, span, cspan)
+    }
+    var b = builtinCall(c, name, null, args, span, expected)
+    if (b != null) {
+        gateBuiltin(c, name, cspan)
+        return b
+    }
+    identExpr(c, name, cspan)
+    for a in args {
+        exprOf(c, a, null)
+    }
+    return errExpr()
+}
+
+pub fun construct(c: Checker, t: int, args: [Expr], span: SrcSpan, nameSpan: SrcSpan): HExpr {
+    var rec = c.types.recordOf(t)
+    if (rec != null && rec.isClass) {
+        return structCallError(c, rec, args, nameSpan)
+    }
+    return constructRecord(c, t, args, span, nameSpan)
+}
+
+fun structCallError(c: Checker, rec: RecordDef, args: [Expr], nameSpan: SrcSpan): HExpr {
+    if (rec.isStatic) {
+        c.errorNote(nameSpan, "`${rec.name}` is a static struct and has no objects", "use its members directly, e.g. `${rec.name}.name`")
+    } else {
+        var d = c.errorDiag(nameSpan, "`${rec.name}` is a struct, so its objects are created with `new`")
+        addFix(d.diag, "create the object with `new`", nameSpan.start, nameSpan.start, "new ", true)
+        c.emit(d)
+    }
+    for a in args {
+        exprOf(c, a, null)
+    }
+    return errExpr()
+}
+
+pub fun constructRecord(c: Checker, t: int, args: [Expr], span: SrcSpan, nameSpan: SrcSpan): HExpr {
+    var k = c.types.kindOf(t)
+    if (k is Ty.Error) {
+        return errExpr()
+    }
+    if (!(k is Ty.Record)) {
+        c.error(nameSpan, "`${c.show(t)}` cannot be constructed like a function")
+        return errExpr()
+    }
+    var rec = c.types.records[k.index]
+    if (len(args) > len(rec.fields)) {
+        var s = "s"
+        if (len(rec.fields) == 1) {
+            s = ""
+        }
+        c.error(span, "`${rec.name}` has ${len(rec.fields)} field${s} but ${len(args)} arguments were given")
+    }
+    [HExpr] vals = []
+    for i in 0..len(rec.fields) {
+        var f = rec.fields[i]
+        var d = f.value
+        if (i < len(args)) {
+            vals.push(exprTo(c, args[i], f.ty))
+        } else if (d != null) {
+            vals.push(defaultExpr(c, d, f.ty, rec.module))
+        } else {
+            var z = zeroOf(c, f.ty)
+            if (z != null) {
+                vals.push(z)
+            } else {
+                c.error(span, "missing value for field `${f.name}` of `${rec.name}`")
+                vals.push(errExpr())
+            }
+        }
+    }
+    return hexpr(HKind.NewStruct(t, vals), t)
+}
+
+pub fun defaultExpr(c: Checker, d: Expr, t: int, module: int): HExpr {
+    var ctx = c.ctx()
+    var saved = ctx.module
+    ctx.module = module
+    var h = exprTo(c, d, t)
+    ctx.module = saved
+    return h
+}
+
+fun evalAll(c: Checker, args: [Expr]) {
+    for a in args {
+        exprOf(c, a, null)
+    }
+}
+
+pub fun methodCall(c: Checker, obj: Expr, name: Ident, args: [Expr], span: SrcSpan, expected: int?): HExpr {
+    var nspan = c.sp(name.span)
+    var tt = typeIdent(c, obj)
+    if (tt != null) {
+        if (c.types.variantsOf(tt) != null) {
+            return variantValue(c, tt, name, args, true, span)
+        }
+        var tk = c.types.kindOf(tt)
+        if (tk is Ty.Record) {
+            var rec = c.types.records[tk.index]
+            var stat = rec.statics[name.name]
+            if (stat != null) {
+                return directCall(c, stat, null, args, span, nspan)
+            }
+            var meth = rec.methods[name.name]
+            if (meth != null) {
+                return directCall(c, meth, null, args, span, nspan)
+            }
+            if (fieldIndex(rec, name.name) >= 0) {
+                c.error(nspan, "`${name.name}` is a field; it needs an instance of ${rec.name}")
+            } else {
+                [string] cands = []
+                for n in keys(rec.statics) {
+                    cands.push(n)
+                }
+                for n in keys(rec.methods) {
+                    cands.push(n)
+                }
+                var s = suggest(name.name, cands)
+                if (s != null) {
+                    c.errorFix(nspan, "${rec.name} has no method `${name.name}`", s)
+                } else {
+                    c.error(nspan, "${rec.name} has no method `${name.name}`")
+                }
+            }
+        } else if (!(tk is Ty.Error)) {
+            c.error(nspan, "${c.show(tt)} has no method `${name.name}`")
+        }
+        evalAll(c, args)
+        return errExpr()
+    }
+    var o = exprOf(c, obj, null)
+    var t = o.ty
+    var k = c.types.kindOf(t)
+    if (k is Ty.Record) {
+        var rec = c.types.records[k.index]
+        if (rec.isClass && name.name == "destroy" && (has(rec.methods, "destroy") || has(c.vslots, "${k.index} ${name.name}"))) {
+            var d = c.errorDiag(nspan, "a destructor cannot be called directly")
+            var ok = obj.kind
+            if (ok is ExprKind.Ident) {
+                var rest = c.srcText(SrcSpan { file: span.file, start: nspan.end, end: span.end })
+                addFix(d.diag, "destroy the object instead, which runs the destructor", span.start, span.end, "destroy ${ok.name}${rest}", true)
+            } else {
+                d.diag.helps.push("store the object in a variable `x` and write `destroy x(...)`")
+            }
+            c.emit(d)
+            evalAll(c, args)
+            return errExpr()
+        }
+        var sm = structMethod(c, k.index, name, o, args, span)
+        if (sm != null) {
+            return sm
+        }
+        if (rec.isClass) {
+            var key = localOf(c, obj)
+            if (key != null) {
+                var ext = extMethod(c, key, name.name)
+                if (ext != null) {
+                    return directCall(c, ext, o, args, span, nspan)
+                }
+                var elsewhere = false
+                for f in c.facts {
+                    if (f is Fact.Ext && f.target == key && f.name == name.name) {
+                        elsewhere = true
+                    }
+                }
+                if (elsewhere) {
+                    c.errorNote(nspan, "`${name.name}` is not available here", "a function added with `x.name() { ... }` only exists after that line, and only on paths that always add it")
+                    evalAll(c, args)
+                    return errExpr()
+                }
+            }
+        }
+        var i = fieldIndex(rec, name.name)
+        if (i >= 0 && c.types.kindOf(rec.fields[i].ty) is Ty.Func) {
+            checkFieldAccess(c, rec, i, nspan)
+            var target = o
+            if (rec.isClass) {
+                target = aliveWrap(c, o, nspan)
+            }
+            return indirectCall(c, hexpr(HKind.GetField(target, i), rec.fields[i].ty), args, span)
+        }
+        if (has(rec.statics, name.name)) {
+            c.error(nspan, "`${name.name}` is a static method; call it as `${rec.name}.${name.name}(...)`")
+            return errExpr()
+        }
+    } else if (k is Ty.Interface) {
+        var iface = c.types.ifaces[k.index]
+        for m in iface.methods {
+            if (m.name != name.name) {
+                continue
+            }
+            if (m.isAsync) {
+                c.error(nspan, "async interface methods cannot be called through the interface yet")
+            }
+            [int] ps = [t]
+            for p in m.params {
+                ps.push(p)
+            }
+            var target = aliveWrap(c, o, nspan)
+            var hargs = checkArgs(c, ps, args, target, span, "`${m.name}`")
+            invalidateGlobals(c)
+            return hexpr(HKind.CallIface(m.slot, hargs), m.ret)
+        }
+        c.error(nspan, "interface ${c.show(t)} has no method `${name.name}`")
+        return errExpr()
+    } else if (k is Ty.Optional) {
+        var ospan = c.sp(obj.span)
+        var fixed = c.wrapSuffix(ospan, "!!")
+        var d = c.errorDiag(ospan, "cannot call `${name.name}` on a value that may be null")
+        d.diag.helps.push("check it with `if (x != null)` first")
+        addFix(d.diag, "or assert that it is not null (fails at runtime if it is)", ospan.start, ospan.end, fixed, false)
+        c.emit(d)
+        evalAll(c, args)
+        return errExpr()
+    } else if (k is Ty.Error) {
+        evalAll(c, args)
+        return errExpr()
+    }
+    var b = builtinCallRecv(c, name.name, o, c.sp(obj.span), args, span, expected)
+    if (b != null) {
+        gateBuiltin(c, name.name, nspan)
+        return b
+    }
+    var m = c.curModule()
+    var gid = lookupGenericFn(c, name.name)
+    if (gid != null && len(c.genericFns[gid].decl.params) > 0) {
+        return genericCall(c, gid, o, args, span, nspan, expected)
+    }
+    var entry = c.lookupValueEntry(m, name.name)
+    if (entry != null) {
+        var sym = entry.sym
+        if (sym is ValSym.Func && len(c.funcs[sym.id].params) > 0) {
+            var pt = c.funcs[sym.id].params[0].ty
+            if (pt == t || c.types.implements(t, pt) || pt == T_ANY) {
+                return directCall(c, sym.id, o, args, span, nspan)
+            }
+        }
+    }
+    if (t == T_ANY) {
+        c.errorNote(nspan, "cannot call `${name.name}` on a value of type any", "narrow it with `is` or cast it with `as` first")
+    } else {
+        c.error(nspan, "${c.show(t)} has no method `${name.name}`")
+    }
+    evalAll(c, args)
+    return errExpr()
+}
+
+pub fun checkFieldAccess(c: Checker, rec: RecordDef, i: int, span: SrcSpan) {
+    if (rec.fields[i].private && staticOwnerRec(c) != rec.ty) {
+        c.error(span, "field `${rec.fields[i].name}` of ${rec.name} is private")
+    }
+}
+
+pub fun variantValue(c: Checker, t: int, name: Ident, args: [Expr], called: bool, span: SrcSpan): HExpr {
+    var en = c.types.variantsOf(t)
+    if (en == null) {
+        return errExpr()
+    }
+    var nspan = c.sp(name.span)
+    EnumVariant? found = null
+    for v in en.variants {
+        if (found == null && v.name == name.name) {
+            found = v
+        }
+    }
+    if (found == null) {
+        [string] cands = []
+        for v in en.variants {
+            cands.push(v.name)
+        }
+        var s = suggest(name.name, cands)
+        if (s != null) {
+            c.errorFix(nspan, "enum ${en.name} has no variant `${name.name}`", s)
+        } else {
+            c.error(nspan, "enum ${en.name} has no variant `${name.name}`")
+        }
+        evalAll(c, args)
+        return errExpr()
+    }
+    var v = found
+    var rec = c.types.records[v.record]
+    [string] shape = []
+    for f in rec.fields {
+        shape.push("${f.name}: ${c.show(f.ty)}")
+    }
+    var shown = "${en.name}.${v.name}"
+    if (len(shape) > 0) {
+        shown = "${en.name}.${v.name}(${joinWith(shape, ", ")})"
+    }
+    [HExpr] vals = []
+    if (!called) {
+        if (len(rec.fields) > 0) {
+            var d = c.errorDiag(span, "`${en.name}.${v.name}` carries data, so it needs its fields")
+            d.diag.notes.push("it is declared as `${shown}`")
+            c.emit(d)
+            return errExpr()
+        }
+    } else {
+        if (len(rec.fields) == 0) {
+            var d = c.errorDiag(span, "`${en.name}.${v.name}` carries no data, so it takes no arguments")
+            d.diag.helps.push("write `${en.name}.${v.name}`")
+            c.emit(d)
+            evalAll(c, args)
+            return errExpr()
+        }
+        [int] params = []
+        for f in rec.fields {
+            params.push(f.ty)
+        }
+        vals = checkArgsSig(c, params, args, null, span, "`${en.name}.${v.name}`", shown)
+    }
+    return hexpr(HKind.NewStruct(rec.ty, vals), t)
+}
+
+fun lengthName(n: string): bool {
+    return n == "length" || n == "size" || n == "len"
+}
+
+pub fun fieldExpr(c: Checker, obj: Expr, name: Ident, span: SrcSpan): HExpr {
+    var nspan = c.sp(name.span)
+    var tt = typeIdent(c, obj)
+    if (tt != null) {
+        if (c.types.variantsOf(tt) != null) {
+            return variantValue(c, tt, name, [], false, span)
+        }
+        var tk = c.types.kindOf(tt)
+        if (tk is Ty.Enum) {
+            var en = c.types.enums[tk.index]
+            for i in 0..len(en.variants) {
+                if (en.variants[i].name == name.name) {
+                    return hexpr(HKind.Int(i), tt)
+                }
+            }
+            [string] cands = []
+            for v in en.variants {
+                cands.push(v.name)
+            }
+            var s = suggest(name.name, cands)
+            if (s != null) {
+                c.errorFix(nspan, "enum ${en.name} has no variant `${name.name}`", s)
+            } else {
+                c.error(nspan, "enum ${en.name} has no variant `${name.name}`")
+            }
+            return errExpr()
+        }
+        if (tk is Ty.Record) {
+            var rec = c.types.records[tk.index]
+            if (has(rec.staticVals, name.name)) {
+                var sv = staticValue(c, rec, name.name, nspan)
+                if (sv != null && sv[1] != T_ERROR) {
+                    return readGlobal(c, sv[0], sv[1])
+                }
+                return errExpr()
+            }
+            var fid = rec.statics[name.name]
+            if (fid != null) {
+                return funcValue(c, fid)
+            }
+            [string] cands = []
+            for n in keys(rec.staticVals) {
+                cands.push(n)
+            }
+            for n in keys(rec.statics) {
+                cands.push(n)
+            }
+            var s = suggest(name.name, cands)
+            if (s != null) {
+                c.errorFix(nspan, "${rec.name} has no static member `${name.name}`", s)
+            } else {
+                c.error(nspan, "${rec.name} has no static member `${name.name}`")
+            }
+            return errExpr()
+        }
+        if (tk is Ty.Error) {
+            return errExpr()
+        }
+        c.error(nspan, "${c.show(tt)} has no member `${name.name}`")
+        return errExpr()
+    }
+    var o = exprOf(c, obj, null)
+    var t = o.ty
+    var n = name.name
+    var k = c.types.kindOf(t)
+    if (k is Ty.Record) {
+        var rec = c.types.records[k.index]
+        var i = fieldIndex(rec, n)
+        if (i >= 0) {
+            checkFieldAccess(c, rec, i, nspan)
+            var target = o
+            if (rec.isClass) {
+                target = aliveWrap(c, o, nspan)
+            }
+            return hexpr(HKind.GetField(target, i), rec.fields[i].ty)
+        }
+        if (has(rec.staticVals, n)) {
+            c.error(nspan, "`${n}` is static; use `${rec.name}.${n}`")
+            return errExpr()
+        }
+        if (has(rec.methods, n)) {
+            c.error(nspan, "`${n}` is a method; call it with `${n}()`")
+            return errExpr()
+        }
+        [string] cands = []
+        for f in rec.fields {
+            cands.push(f.name)
+        }
+        var s = suggest(n, cands)
+        if (s != null) {
+            c.errorFix(nspan, "${c.show(t)} has no field `${n}`", s)
+        } else {
+            c.error(nspan, "${c.show(t)} has no field `${n}`")
+        }
+        return errExpr()
+    }
+    if (k is Ty.Str && lengthName(n)) {
+        return rt("StrLen", [o], T_INT)
+    }
+    if (k is Ty.Array && lengthName(n)) {
+        return hexpr(HKind.ArrLen(o), T_INT)
+    }
+    if (k is Ty.Map && lengthName(n)) {
+        return rt("MapLen", [o], T_INT)
+    }
+    if (k is Ty.Map && (n == "keys" || n == "values")) {
+        var et = k.value
+        var f = "MapValues"
+        if (n == "keys") {
+            et = k.key
+            f = "MapKeys"
+        }
+        var at = c.types.array(et)
+        return rt(f, [o, tid(at)], at)
+    }
+    if (k is Ty.Any) {
+        var key = c.strLit(n)
+        var l = c.locExpr(span)
+        return rt("AnyIndex", [o, key, tid(T_STR), l], T_ANY)
+    }
+    if (k is Ty.Optional) {
+        var ospan = c.sp(obj.span)
+        var fixed = c.wrapSuffix(ospan, "!!")
+        var d = c.errorDiag(ospan, "cannot read `${n}` from a value that may be null")
+        d.diag.helps.push("check it with `if (x != null)` first")
+        addFix(d.diag, "or assert that it is not null (fails at runtime if it is)", ospan.start, ospan.end, fixed, false)
+        c.emit(d)
+        return errExpr()
+    }
+    if (k is Ty.Error) {
+        return errExpr()
+    }
+    c.error(nspan, "${c.show(t)} has no field `${n}`")
+    return errExpr()
+}
+
+pub fun indexExpr(c: Checker, obj: Expr, index: Expr, span: SrcSpan): HExpr {
+    var o = exprOf(c, obj, null)
+    var k = c.types.kindOf(o.ty)
+    if (k is Ty.Array) {
+        var i = exprTo(c, index, T_INT)
+        var l = c.loc(span)
+        return hexpr(HKind.Index(o, i, l), k.elem)
+    }
+    if (k is Ty.Str) {
+        var i = exprTo(c, index, T_INT)
+        var l = c.locExpr(span)
+        return rt("StrIndex", [o, i, l], T_STR)
+    }
+    if (k is Ty.Map) {
+        var key = exprTo(c, index, k.key)
+        var t = c.types.optional(k.value)
+        return rt("MapFind", [o, key, tid(k.value)], t)
+    }
+    if (k is Ty.Any) {
+        var i = exprOf(c, index, null)
+        var l = c.locExpr(span)
+        return rt("AnyIndex", [o, i, tid(i.ty), l], T_ANY)
+    }
+    if (k is Ty.Error) {
+        exprOf(c, index, null)
+        return errExpr()
+    }
+    if (k is Ty.Optional) {
+        var ospan = c.sp(obj.span)
+        var fixed = c.wrapSuffix(ospan, "!!")
+        var d = c.errorDiag(ospan, "cannot index a value that may be null")
+        d.diag.helps.push("check it with `if (x != null)` first")
+        addFix(d.diag, "or assert that it is not null (fails at runtime if it is)", ospan.start, ospan.end, fixed, false)
+        c.emit(d)
+        return errExpr()
+    }
+    c.error(span, "a value of type ${c.show(o.ty)} cannot be indexed")
+    return errExpr()
+}

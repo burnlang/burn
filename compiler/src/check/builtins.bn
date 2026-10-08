@@ -1,0 +1,1107 @@
+import "../diag/diag.bn"
+import "../syntax/ast.bn"
+import "check.bn"
+import "expr.bn"
+import "hir.bn"
+import "numeric.bn"
+import "structs.bn"
+import "types.bn"
+
+pub const BUILTIN_NAMES = ["print", "println", "eprint", "write", "input", "readStdin", "toString", "str", "toInt", "toFloat", "parseInt", "parseFloat", "isInt", "isNumber", "len", "length", "size", "push", "append", "pop", "insert", "remove", "contains", "indexOf", "join", "reverse", "sort", "slice", "copy", "clear", "keys", "values", "has", "get", "substring", "charAt", "split", "trim", "upper", "lower", "toUpper", "toLower", "toUpperCase", "toLowerCase", "startsWith", "endsWith", "replace", "repeat", "chars", "charCode", "isLetter", "isDigit", "isAlphanumeric", "isWhitespace", "fromCharCode", "bytes", "fromBytes", "sqrt", "pow", "abs", "floor", "ceil", "round", "min", "max", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "log", "log10", "exp", "random", "randomInt", "seed", "now", "nowMs", "millis", "clock", "sleep", "typeOf", "annotationsOf", "parseJSON", "toJSON", "readFile", "writeFile", "appendFile", "fileExists", "env", "args", "exit", "panic", "assert", "gc", "wrappingAdd", "wrappingSub", "wrappingMul", "__localTime", "__httpRequest", "__exec", "__fsOp", "__listDir", "__cwd"]
+
+pub const NO_STD_HELP = "this program is built without the standard library (`std = false` in burn.toml, or `--no-std`); only the built-in core is available, so remove that setting to use it"
+
+pub fun isBuiltin(name: string): bool {
+    return contains(BUILTIN_NAMES, name)
+}
+
+pub fun homeModule(name: string): string? {
+    if (contains(["sqrt", "pow", "abs", "floor", "ceil", "round", "min", "max", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "log", "log10", "exp"], name)) {
+        return "math"
+    }
+    if (contains(["random", "randomInt", "seed"], name)) {
+        return "random"
+    }
+    if (contains(["now", "nowMs", "millis", "clock", "sleep"], name)) {
+        return "time"
+    }
+    if (name == "parseJSON" || name == "toJSON") {
+        return "json"
+    }
+    if (contains(["readFile", "writeFile", "appendFile", "fileExists"], name)) {
+        return "fs"
+    }
+    if (contains(["env", "args", "exit", "panic"], name)) {
+        return "process"
+    }
+    if (name == "assert") {
+        return "testing"
+    }
+    if (contains(["isLetter", "isDigit", "isAlphanumeric", "isWhitespace"], name)) {
+        return "strings"
+    }
+    return null
+}
+
+pub fun stdOnly(name: string): string? {
+    if (name == "parseJSON" || name == "toJSON") {
+        return "working with JSON"
+    }
+    if (name == "__httpRequest") {
+        return "making HTTP requests"
+    }
+    if (name == "__exec") {
+        return "running processes"
+    }
+    if (name == "__fsOp" || name == "__listDir") {
+        return "changing files and directories"
+    }
+    if (name == "__cwd") {
+        return "reading the working directory"
+    }
+    if (name == "__localTime") {
+        return "reading the local time zone"
+    }
+    return null
+}
+
+pub fun builtinSignature(name: string): string {
+    if (name == "print" || name == "println") {
+        return "print(values...): prints the values separated by spaces"
+    }
+    if (contains(["isLetter", "isDigit", "isAlphanumeric", "isWhitespace"], name)) {
+        return "isLetter(text: string): bool, true when every character is in the class"
+    }
+    if (name == "eprint") {
+        return "eprint(values...): prints the values to standard error"
+    }
+    if (name == "readStdin") {
+        return "readStdin(): string, all remaining standard input"
+    }
+    if (name == "write") {
+        return "write(value): prints without a newline"
+    }
+    if (name == "input") {
+        return "input(prompt: string = \"\"): string"
+    }
+    if (name == "toString" || name == "str") {
+        return "toString(value): string  |  toString(n: int, radix: int): string, n written in base 2 to 36"
+    }
+    if (name == "toInt" || name == "parseInt") {
+        return "toInt(value: string | float | int): int  |  toInt(text: string, radix: int): int, text read in base 2 to 36"
+    }
+    if (name == "isInt") {
+        return "isInt(text: string, radix: int = 10): bool"
+    }
+    if (name == "toFloat" || name == "parseFloat") {
+        return "toFloat(value: string | int | float): float"
+    }
+    if (name == "len" || name == "length" || name == "size") {
+        return "len(value: string | [T] | {K: V}): int"
+    }
+    if (name == "push") {
+        return "push(array: [T], value: T)"
+    }
+    if (name == "append") {
+        return "append(array: [T], value: T): [T]"
+    }
+    if (name == "pop") {
+        return "pop(array: [T]): T"
+    }
+    if (name == "insert") {
+        return "insert(array: [T], index: int, value: T)"
+    }
+    if (name == "remove") {
+        return "remove(array: [T], index: int): T  |  remove(map: {K: V}, key: K): bool"
+    }
+    if (name == "contains") {
+        return "contains(collection, value): bool"
+    }
+    if (name == "indexOf") {
+        return "indexOf(collection, value): int"
+    }
+    if (name == "join") {
+        return "join(array: [T], separator: string = \"\"): string"
+    }
+    if (name == "split") {
+        return "split(text: string, separator: string): [string]"
+    }
+    if (name == "substring") {
+        return "substring(text: string, start: int, end: int = length): string"
+    }
+    if (name == "sqrt") {
+        return "sqrt(x: float): float"
+    }
+    if (name == "pow") {
+        return "pow(base, exponent): int | float"
+    }
+    if (name == "bytes") {
+        return "bytes(text: string): [uint8], the UTF-8 bytes of the text"
+    }
+    if (name == "fromBytes") {
+        return "fromBytes(data: [uint8]): string, decoding UTF-8 (invalid bytes become \u{FFFD})"
+    }
+    if (name == "wrappingAdd" || name == "wrappingSub" || name == "wrappingMul") {
+        return "x.wrappingAdd(y): the result wraps around instead of failing on overflow"
+    }
+    if (name == "random") {
+        return "random(): float in [0, 1)"
+    }
+    if (name == "randomInt") {
+        return "randomInt(min: int, max: int): int (inclusive)"
+    }
+    if (name == "now") {
+        return "now(): float seconds since the Unix epoch"
+    }
+    if (name == "nowMs" || name == "millis") {
+        return "nowMs(): int milliseconds since the Unix epoch"
+    }
+    if (name == "sleep") {
+        return "sleep(ms: int)"
+    }
+    if (name == "typeOf") {
+        return "typeOf(value): string"
+    }
+    if (name == "annotationsOf") {
+        return "annotationsOf(value): [any], the annotations declared on the value's type"
+    }
+    if (name == "parseJSON") {
+        return "parseJSON(text: string): any"
+    }
+    if (name == "toJSON") {
+        return "toJSON(value): string"
+    }
+    if (name == "readFile") {
+        return "readFile(path: string): string"
+    }
+    if (name == "writeFile") {
+        return "writeFile(path: string, content: string): bool"
+    }
+    if (name == "exit") {
+        return "exit(code: int = 0)"
+    }
+    if (name == "panic") {
+        return "panic(message: string)"
+    }
+    if (name == "assert") {
+        return "assert(condition: bool, message: string = \"\")"
+    }
+    if (name == "args") {
+        return "args(): [string]"
+    }
+    return "built-in function"
+}
+
+/** An argument of a built-in: the receiver of a method call (already checked) or an expression. */
+def type BArg {
+    HExpr? h
+    Expr? e
+    SrcSpan span
+}
+
+fun barg(c: Checker, a: BArg, expected: int?): HExpr {
+    var h = a.h
+    if (h != null) {
+        return h
+    }
+    var e = a.e
+    if (e != null) {
+        return exprOf(c, e, expected)
+    }
+    return errExpr()
+}
+
+fun bargTo(c: Checker, a: BArg, t: int): HExpr {
+    var h = a.h
+    if (h != null) {
+        return coerce(c, h, t, a.span)
+    }
+    var e = a.e
+    if (e != null) {
+        return exprTo(c, e, t)
+    }
+    return errExpr()
+}
+
+fun arity(c: Checker, name: string, n: int, min: int, max: int, span: SrcSpan): bool {
+    if (n >= min && n <= max) {
+        return true
+    }
+    var want = "${min} to ${max}"
+    if (min == max) {
+        want = "${min}"
+    } else if (max == 1000000) {
+        want = "at least ${min}"
+    }
+    var s = "s"
+    if (max == 1) {
+        s = ""
+    }
+    c.errorNote(span, "`${name}` expects ${want} argument${s} but got ${n}", builtinSignature(name))
+    return false
+}
+
+fun floatArg(c: Checker, a: BArg): HExpr {
+    var h = barg(c, a, T_FLOAT)
+    if (h.ty == T_INT || h.ty == T_FLOAT || h.ty == T_ERROR) {
+        return coerce(c, h, T_FLOAT, a.span)
+    }
+    c.error(a.span, "expected a number but found ${c.show(h.ty)}")
+    return errExpr()
+}
+
+fun typeErr(c: Checker, a: BArg, what: string, h: HExpr): HExpr {
+    if (h.ty != T_ERROR) {
+        c.error(a.span, "expected ${what} but found ${c.show(h.ty)}")
+    }
+    return errExpr()
+}
+
+pub fun gateBuiltin(c: Checker, name: string, at: SrcSpan) {
+    var home = homeModule(name)
+    if (home == null) {
+        return
+    }
+    var m = c.curModule()
+    var scope = c.mods[m]
+    if (scope.stdName != null || scope.snippet) {
+        return
+    }
+    for i in scope.imports {
+        if (c.mods[i].stdName == home) {
+            return
+        }
+    }
+    var key = "${m} ${home}"
+    if (c.isDry() || has(c.gated, key)) {
+        return
+    }
+    c.gated[key] = true
+    if (c.loaded.noStd) {
+        var d = c.errorDiag(at, "`${name}` is in the standard library module `std/${home}`")
+        d.diag.helps.push(NO_STD_HELP)
+        c.emit(d)
+        return
+    }
+    var text = "import \"std/${home}\"\n\n"
+    if (scope.importSeen) {
+        text = "\nimport \"std/${home}\""
+    }
+    var d = c.errorDiag(at, "`${name}` is in the standard library module `std/${home}`")
+    addFix(d.diag, "import it with `import \"std/${home}\"`", scope.importAt, scope.importAt, text, true)
+    c.emit(d)
+}
+
+pub fun builtinCall(c: Checker, name: string, recv: HExpr?, args: [Expr], span: SrcSpan, expected: int?): HExpr? {
+    return builtinWith(c, name, recv, span, args, span, expected)
+}
+
+pub fun builtinCallRecv(c: Checker, name: string, recv: HExpr, recvSpan: SrcSpan, args: [Expr], span: SrcSpan, expected: int?): HExpr? {
+    return builtinWith(c, name, recv, recvSpan, args, span, expected)
+}
+
+fun minMaxOp(name: string, ints: bool): string {
+    if (ints) {
+        if (name == "pow") {
+            return "IPow"
+        }
+        if (name == "min") {
+            return "IMin"
+        }
+        return "IMax"
+    }
+    if (name == "pow") {
+        return "FPow"
+    }
+    if (name == "min") {
+        return "FMin"
+    }
+    if (name == "max") {
+        return "FMax"
+    }
+    return "FAtan2"
+}
+
+fun builtinWith(c: Checker, name: string, recv: HExpr?, recvSpan: SrcSpan, args: [Expr], span: SrcSpan, expected: int?): HExpr? {
+    if (!isBuiltin(name)) {
+        return null
+    }
+    if (recv != null) {
+        var generic = name == "toString" || name == "str" || name == "typeOf" || name == "toJSON"
+        var rk = c.types.kindOf(recv.ty)
+        if (!generic && (rk is Ty.Record || rk is Ty.Interface || rk is Ty.Enum || rk is Ty.Func || rk is Ty.Future)) {
+            return null
+        }
+        if (startsWith(name, "__")) {
+            return null
+        }
+    }
+    var what = stdOnly(name)
+    if (what != null) {
+        needsStd(c, span, what)
+    }
+    [BArg] xs = []
+    if (recv != null) {
+        xs.push(BArg { h: recv, e: null, span: recvSpan })
+    }
+    for a in args {
+        xs.push(BArg { h: null, e: a, span: c.sp(a.span) })
+    }
+    var n = len(xs)
+    if (name == "print" || name == "println" || name == "eprint") {
+        HExpr? acc = null
+        for a in xs {
+            var h = barg(c, a, null)
+            if (h.ty == T_VOID) {
+                c.error(a.span, "cannot print a value of type void")
+            }
+            var s = stringify(c, h)
+            var prev = acc
+            if (prev == null) {
+                acc = s
+            } else {
+                var sp = c.strLit(" ")
+                acc = concat(c, concat(c, prev, sp), s)
+            }
+        }
+        var out = acc ?? c.strLit("")
+        if (name == "eprint") {
+            return rt("PrintErr", [out], T_VOID)
+        }
+        return rt("Print", [out], T_VOID)
+    }
+    if (name == "write") {
+        if (!arity(c, name, n, 1, 1, span)) {
+            return errExpr()
+        }
+        return rt("PrintRaw", [stringify(c, barg(c, xs[0], null))], T_VOID)
+    }
+    if (name == "input") {
+        if (!arity(c, name, n, 0, 1, span)) {
+            return errExpr()
+        }
+        HExpr p = errExpr()
+        if (n == 1) {
+            p = stringify(c, barg(c, xs[0], null))
+        } else {
+            p = c.strLit("")
+        }
+        return rt("Input", [p], T_STR)
+    }
+    if (name == "toString" || name == "str") {
+        if (!arity(c, name, n, 1, 2, span)) {
+            return errExpr()
+        }
+        if (n == 2) {
+            var h = bargTo(c, xs[0], T_INT)
+            var r = bargTo(c, xs[1], T_INT)
+            var l = c.locExpr(span)
+            return rt("IntToStrRadix", [h, r, l], T_STR)
+        }
+        var h = barg(c, xs[0], null)
+        if (h.ty == T_VOID) {
+            c.error(xs[0].span, "cannot convert void to a string")
+        }
+        return stringify(c, h)
+    }
+    if (name == "toInt" || name == "parseInt") {
+        if (!arity(c, name, n, 1, 2, span)) {
+            return errExpr()
+        }
+        if (n == 2) {
+            var h = bargTo(c, xs[0], T_STR)
+            var r = bargTo(c, xs[1], T_INT)
+            var l = c.locExpr(span)
+            return rt("ParseIntRadix", [h, r, l], T_INT)
+        }
+        var h = barg(c, xs[0], null)
+        var k = c.types.kindOf(h.ty)
+        if (k is Ty.Str) {
+            var l = c.locExpr(span)
+            return rt("ParseInt", [h, l], T_INT)
+        }
+        if (k is Ty.Float) {
+            return hexpr(HKind.Conv(Conv.FloatToInt, h), T_INT)
+        }
+        if (k is Ty.Int) {
+            return h
+        }
+        if (k is Ty.Bool || k is Ty.Enum) {
+            return retype(h, T_INT)
+        }
+        if (k is Ty.Any) {
+            var l = c.locExpr(span)
+            return rt("Cast", [h, tid(h.ty), tid(T_INT), l], T_INT)
+        }
+        return typeErr(c, xs[0], "a string or number", h)
+    }
+    if (name == "toFloat" || name == "parseFloat") {
+        if (!arity(c, name, n, 1, 1, span)) {
+            return errExpr()
+        }
+        var h = barg(c, xs[0], null)
+        var k = c.types.kindOf(h.ty)
+        if (k is Ty.Str) {
+            var l = c.locExpr(span)
+            return rt("ParseFloat", [h, l], T_FLOAT)
+        }
+        if (k is Ty.Int) {
+            return coerce(c, h, T_FLOAT, span)
+        }
+        if (k is Ty.Float) {
+            return h
+        }
+        return typeErr(c, xs[0], "a string or number", h)
+    }
+    if (name == "isInt" || name == "isNumber") {
+        var most = 1
+        if (name == "isInt") {
+            most = 2
+        }
+        if (!arity(c, name, n, 1, most, span)) {
+            return errExpr()
+        }
+        if (n == 2) {
+            var h = bargTo(c, xs[0], T_STR)
+            var r = bargTo(c, xs[1], T_INT)
+            var l = c.locExpr(span)
+            return rt("IsIntRadix", [h, r, l], T_BOOL)
+        }
+        var h = bargTo(c, xs[0], T_STR)
+        if (name == "isInt") {
+            return rt("IsIntStr", [h], T_BOOL)
+        }
+        return rt("IsFloatStr", [h], T_BOOL)
+    }
+    if (name == "len" || name == "length" || name == "size") {
+        if (!arity(c, name, n, 1, 1, span)) {
+            return errExpr()
+        }
+        var h = barg(c, xs[0], null)
+        var k = c.types.kindOf(h.ty)
+        if (k is Ty.Str) {
+            return rt("StrLen", [h], T_INT)
+        }
+        if (k is Ty.Array) {
+            return hexpr(HKind.ArrLen(h), T_INT)
+        }
+        if (k is Ty.Map) {
+            return rt("MapLen", [h], T_INT)
+        }
+        if (k is Ty.Any) {
+            var l = c.locExpr(span)
+            return rt("AnyLen", [h, l], T_INT)
+        }
+        return typeErr(c, xs[0], "a string, array or map", h)
+    }
+    if (name == "push" || name == "append") {
+        if (!arity(c, name, n, 2, 2, span)) {
+            return errExpr()
+        }
+        var a = barg(c, xs[0], null)
+        var k = c.types.kindOf(a.ty)
+        if (k is Ty.Array) {
+            if (name == "push") {
+                var v = bargTo(c, xs[1], k.elem)
+                return rt("ArrPush", [a, v], T_VOID)
+            }
+            var v = bargTo(c, xs[1], k.elem)
+            var tmp = tempOf(c, a)
+            var body = hexpr(HKind.Seq([HStmt.Eval(rt("ArrPush", [tmp.value, v], T_VOID))], tmp.value), a.ty)
+            return withTemp(tmp, body)
+        }
+        return typeErr(c, xs[0], "an array", a)
+    }
+    if (name == "pop") {
+        if (!arity(c, name, n, 1, 1, span)) {
+            return errExpr()
+        }
+        var a = barg(c, xs[0], null)
+        var k = c.types.kindOf(a.ty)
+        if (k is Ty.Array) {
+            var l = c.locExpr(span)
+            return rt("ArrPop", [a, l], k.elem)
+        }
+        return typeErr(c, xs[0], "an array", a)
+    }
+    if (name == "insert") {
+        if (!arity(c, name, n, 3, 3, span)) {
+            return errExpr()
+        }
+        var a = barg(c, xs[0], null)
+        var k = c.types.kindOf(a.ty)
+        if (k is Ty.Array) {
+            var i = bargTo(c, xs[1], T_INT)
+            var v = bargTo(c, xs[2], k.elem)
+            var l = c.locExpr(span)
+            return rt("ArrInsert", [a, i, v, l], T_VOID)
+        }
+        return typeErr(c, xs[0], "an array", a)
+    }
+    if (name == "remove") {
+        if (!arity(c, name, n, 2, 2, span)) {
+            return errExpr()
+        }
+        var a = barg(c, xs[0], null)
+        var k = c.types.kindOf(a.ty)
+        if (k is Ty.Array) {
+            var i = bargTo(c, xs[1], T_INT)
+            var l = c.locExpr(span)
+            return rt("ArrRemove", [a, i, l], k.elem)
+        }
+        if (k is Ty.Map) {
+            var key = bargTo(c, xs[1], k.key)
+            return rt("MapRemove", [a, key], T_BOOL)
+        }
+        return typeErr(c, xs[0], "an array or map", a)
+    }
+    if (name == "contains" || name == "indexOf") {
+        if (!arity(c, name, n, 2, 2, span)) {
+            return errExpr()
+        }
+        var a = barg(c, xs[0], null)
+        var k = c.types.kindOf(a.ty)
+        if (k is Ty.Array) {
+            var v = bargTo(c, xs[1], k.elem)
+            if (name == "contains") {
+                return rt("ArrContains", [a, v, tid(k.elem)], T_BOOL)
+            }
+            return rt("ArrIndexOf", [a, v, tid(k.elem)], T_INT)
+        }
+        if (k is Ty.Str) {
+            var v = bargTo(c, xs[1], T_STR)
+            if (name == "contains") {
+                return rt("StrContains", [a, v], T_BOOL)
+            }
+            return rt("StrFind", [a, v], T_INT)
+        }
+        if (k is Ty.Map && name == "contains") {
+            var key = bargTo(c, xs[1], k.key)
+            return rt("MapHas", [a, key], T_BOOL)
+        }
+        return typeErr(c, xs[0], "an array, string or map", a)
+    }
+    if (name == "join") {
+        if (!arity(c, name, n, 1, 2, span)) {
+            return errExpr()
+        }
+        var a = barg(c, xs[0], null)
+        var k = c.types.kindOf(a.ty)
+        if (k is Ty.Array) {
+            HExpr sep = errExpr()
+            if (n == 2) {
+                sep = bargTo(c, xs[1], T_STR)
+            } else {
+                sep = c.strLit("")
+            }
+            return rt("ArrJoin", [a, sep, tid(k.elem)], T_STR)
+        }
+        return typeErr(c, xs[0], "an array", a)
+    }
+    if (name == "reverse" || name == "sort" || name == "copy" || name == "clear") {
+        if (!arity(c, name, n, 1, 1, span)) {
+            return errExpr()
+        }
+        var a = barg(c, xs[0], null)
+        var k = c.types.kindOf(a.ty)
+        if (k is Ty.Array) {
+            if (name == "reverse") {
+                return rt("ArrReverse", [a], T_VOID)
+            }
+            if (name == "copy") {
+                return rt("ArrCopy", [a], a.ty)
+            }
+            if (name == "clear") {
+                return rt("ArrClear", [a], T_VOID)
+            }
+            var ek = c.types.kindOf(k.elem)
+            if (!(ek is Ty.Int || ek is Ty.Float || ek is Ty.Num || ek is Ty.Str || ek is Ty.Bool || ek is Ty.Enum || ek is Ty.Any || ek is Ty.Error)) {
+                c.error(span, "cannot sort values of type ${c.show(k.elem)}")
+            }
+            return rt("ArrSort", [a, tid(k.elem)], T_VOID)
+        }
+        if (k is Ty.Str && name == "reverse") {
+            var chars = rt("StrChars", [a], T_ARR_STR)
+            var tmp = tempOf(c, chars)
+            var empty = c.strLit("")
+            var body = hexpr(HKind.Seq([HStmt.Eval(rt("ArrReverse", [tmp.value], T_VOID))], rt("ArrJoin", [tmp.value, empty, tid(T_STR)], T_STR)), T_STR)
+            return withTemp(tmp, body)
+        }
+        if (k is Ty.Map && (name == "copy" || name == "clear")) {
+            c.error(span, "`${name}` is not supported for maps yet")
+            return errExpr()
+        }
+        return typeErr(c, xs[0], "an array", a)
+    }
+    if (name == "slice" || name == "substring") {
+        if (!arity(c, name, n, 2, 3, span)) {
+            return errExpr()
+        }
+        var a = barg(c, xs[0], null)
+        var s = bargTo(c, xs[1], T_INT)
+        HExpr e = hint(9223372036854775807)
+        if (n == 3) {
+            e = bargTo(c, xs[2], T_INT)
+        }
+        var k = c.types.kindOf(a.ty)
+        if (k is Ty.Str) {
+            return rt("StrSub", [a, s, e], T_STR)
+        }
+        if (k is Ty.Array && name == "slice") {
+            return rt("ArrSlice", [a, s, e], a.ty)
+        }
+        if (name == "slice") {
+            return typeErr(c, xs[0], "an array or string", a)
+        }
+        return typeErr(c, xs[0], "a string", a)
+    }
+    if (name == "keys" || name == "values") {
+        if (!arity(c, name, n, 1, 1, span)) {
+            return errExpr()
+        }
+        var m = barg(c, xs[0], null)
+        var k = c.types.kindOf(m.ty)
+        if (k is Ty.Map) {
+            var et = k.value
+            var f = "MapValues"
+            if (name == "keys") {
+                et = k.key
+                f = "MapKeys"
+            }
+            var at = c.types.array(et)
+            return rt(f, [m, tid(at)], at)
+        }
+        return typeErr(c, xs[0], "a map", m)
+    }
+    if (name == "has") {
+        if (!arity(c, name, n, 2, 2, span)) {
+            return errExpr()
+        }
+        var m = barg(c, xs[0], null)
+        var k = c.types.kindOf(m.ty)
+        if (k is Ty.Map) {
+            var key = bargTo(c, xs[1], k.key)
+            return rt("MapHas", [m, key], T_BOOL)
+        }
+        return typeErr(c, xs[0], "a map", m)
+    }
+    if (name == "get") {
+        if (!arity(c, name, n, 2, 3, span)) {
+            return errExpr()
+        }
+        var m = barg(c, xs[0], null)
+        var k = c.types.kindOf(m.ty)
+        if (k is Ty.Map) {
+            var key = bargTo(c, xs[1], k.key)
+            if (n == 3) {
+                var d = bargTo(c, xs[2], k.value)
+                return rt("MapGetOr", [m, key, d], k.value)
+            }
+            var l = c.locExpr(span)
+            return rt("MapGet", [m, key, l], k.value)
+        }
+        if (k is Ty.Array) {
+            var i = bargTo(c, xs[1], T_INT)
+            var l = c.loc(span)
+            return hexpr(HKind.Index(m, i, l), k.elem)
+        }
+        return typeErr(c, xs[0], "a map", m)
+    }
+    if (name == "charAt") {
+        if (!arity(c, name, n, 2, 2, span)) {
+            return errExpr()
+        }
+        var s = bargTo(c, xs[0], T_STR)
+        var i = bargTo(c, xs[1], T_INT)
+        var tmp = tempOf(c, i)
+        var end = binary(HBinOp.IAdd(NO_LOC), tmp.value, hint(1), T_INT)
+        return withTemp(tmp, rt("StrSub", [s, tmp.value, end], T_STR))
+    }
+    if (name == "split") {
+        if (!arity(c, name, n, 1, 2, span)) {
+            return errExpr()
+        }
+        var s = bargTo(c, xs[0], T_STR)
+        HExpr sep = errExpr()
+        if (n == 2) {
+            sep = bargTo(c, xs[1], T_STR)
+        } else {
+            sep = c.strLit(" ")
+        }
+        return rt("StrSplit", [s, sep], T_ARR_STR)
+    }
+    if (contains(["trim", "upper", "lower", "toUpper", "toLower", "toUpperCase", "toLowerCase", "chars", "charCode", "bytes"], name)) {
+        if (!arity(c, name, n, 1, 1, span)) {
+            return errExpr()
+        }
+        var s = bargTo(c, xs[0], T_STR)
+        if (name == "trim") {
+            return rt("StrTrim", [s], T_STR)
+        }
+        if (name == "upper" || name == "toUpper" || name == "toUpperCase") {
+            return rt("StrUpper", [s], T_STR)
+        }
+        if (name == "lower" || name == "toLower" || name == "toLowerCase") {
+            return rt("StrLower", [s], T_STR)
+        }
+        if (name == "chars") {
+            return rt("StrChars", [s], T_ARR_STR)
+        }
+        if (name == "bytes") {
+            var t = c.types.array(T_U8)
+            return rt("StrToBytes", [s, tid(t)], t)
+        }
+        return rt("StrCode", [s], T_INT)
+    }
+    if (contains(["isLetter", "isDigit", "isAlphanumeric", "isWhitespace"], name)) {
+        if (!arity(c, name, n, 1, 1, span)) {
+            return errExpr()
+        }
+        var s = bargTo(c, xs[0], T_STR)
+        return rt("CharClass", [s, hint(indexOf(["isLetter", "isDigit", "isAlphanumeric", "isWhitespace"], name))], T_BOOL)
+    }
+    if (name == "fromBytes") {
+        if (!arity(c, name, n, 1, 1, span)) {
+            return errExpr()
+        }
+        var t = c.types.array(T_U8)
+        var a = bargTo(c, xs[0], t)
+        return rt("StrFromBytes", [a], T_STR)
+    }
+    if (name == "fromCharCode") {
+        if (!arity(c, name, n, 1, 1, span)) {
+            return errExpr()
+        }
+        return rt("StrFromCode", [bargTo(c, xs[0], T_INT)], T_STR)
+    }
+    if (name == "startsWith" || name == "endsWith" || name == "repeat") {
+        if (!arity(c, name, n, 2, 2, span)) {
+            return errExpr()
+        }
+        var s = bargTo(c, xs[0], T_STR)
+        if (name == "startsWith") {
+            return rt("StrStarts", [s, bargTo(c, xs[1], T_STR)], T_BOOL)
+        }
+        if (name == "endsWith") {
+            return rt("StrEnds", [s, bargTo(c, xs[1], T_STR)], T_BOOL)
+        }
+        return rt("StrRepeat", [s, bargTo(c, xs[1], T_INT)], T_STR)
+    }
+    if (name == "replace") {
+        if (!arity(c, name, n, 3, 3, span)) {
+            return errExpr()
+        }
+        var s = bargTo(c, xs[0], T_STR)
+        var a = bargTo(c, xs[1], T_STR)
+        var b = bargTo(c, xs[2], T_STR)
+        return rt("StrReplace", [s, a, b], T_STR)
+    }
+    var mathNames = ["sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "log", "log10", "exp"]
+    if (contains(mathNames, name)) {
+        if (!arity(c, name, n, 1, 1, span)) {
+            return errExpr()
+        }
+        var x = floatArg(c, xs[0])
+        var ops = [0, 5, 6, 7, 11, 12, 13, 8, 9, 10]
+        return rt("FMath", [hint(ops[indexOf(mathNames, name)]), x], T_FLOAT)
+    }
+    if (name == "floor" || name == "ceil" || name == "round") {
+        if (!arity(c, name, n, 1, 1, span)) {
+            return errExpr()
+        }
+        var h = barg(c, xs[0], null)
+        if (h.ty == T_INT) {
+            return h
+        }
+        var x = h
+        if (h.ty != T_FLOAT) {
+            x = coerce(c, h, T_FLOAT, xs[0].span)
+        }
+        var op = 3
+        if (name == "floor") {
+            op = 1
+        } else if (name == "ceil") {
+            op = 2
+        }
+        return hexpr(HKind.Conv(Conv.FloatToInt, rt("FMath", [hint(op), x], T_FLOAT)), T_INT)
+    }
+    if (name == "abs") {
+        if (!arity(c, name, n, 1, 1, span)) {
+            return errExpr()
+        }
+        var h = barg(c, xs[0], expected)
+        var k = c.types.kindOf(h.ty)
+        if (k is Ty.Int) {
+            return rt("IAbs", [h], T_INT)
+        }
+        if (k is Ty.Float) {
+            return rt("FMath", [hint(4), h], T_FLOAT)
+        }
+        if (k is Ty.Num && k.code == 7) {
+            return rt("FMath", [hint(4), h], T_F32)
+        }
+        if (k is Ty.Num && (k.code == 1 || k.code == 3 || k.code == 5 || k.code == 6)) {
+            return h
+        }
+        if (k is Ty.Num) {
+            return fitCheck(c, rt("IAbs", [h], h.ty), h.ty, span)
+        }
+        return typeErr(c, xs[0], "a number", h)
+    }
+    if (name == "pow" || name == "min" || name == "max" || name == "atan2") {
+        if (!arity(c, name, n, 2, 2, span)) {
+            return errExpr()
+        }
+        var a = barg(c, xs[0], expected)
+        var b = barg(c, xs[1], a.ty)
+        if (!(isNumeric(c, a.ty) || a.ty == T_ERROR)) {
+            return typeErr(c, xs[0], "a number", a)
+        }
+        if (!(isNumeric(c, b.ty) || b.ty == T_ERROR)) {
+            return typeErr(c, xs[1], "a number", b)
+        }
+        if (c.types.isInteger(a.ty) && c.types.isInteger(b.ty) && a.ty != b.ty && name != "atan2") {
+            var u = unifyInts(c, a, b, "pass to `${name}` both", span)
+            if (u == null) {
+                return errExpr()
+            }
+            a = u.left
+            b = u.right
+        }
+        if (a.ty == b.ty && c.types.isInteger(a.ty) && a.ty != T_INT && name != "atan2") {
+            var t = a.ty
+            if (t == T_U64 && name != "pow") {
+                var cmp = Cmp.Ge
+                if (name == "min") {
+                    cmp = Cmp.Le
+                }
+                var sa = c.newLocal(t)
+                var sb = c.newLocal(t)
+                var out = c.newLocal(t)
+                var test = binary(HBinOp.UCmp(cmp), local(sa, t), local(sb, t), T_BOOL)
+                [HStmt] body = [HStmt.Eval(setLocal(sa, a, t)), HStmt.Eval(setLocal(sb, b, t)), HStmt.If(test, [HStmt.Eval(setLocal(out, local(sa, t), t))], [HStmt.Eval(setLocal(out, local(sb, t), t))])]
+                return hexpr(HKind.Seq(body, local(out, t)), t)
+            }
+            var e = rt(minMaxOp(name, true), [a, b], t)
+            if (name == "pow") {
+                return fitCheck(c, e, t, span)
+            }
+            return e
+        }
+        if ((isFloating(c, a.ty) || isFloating(c, b.ty)) && floatKind(c, a.ty, b.ty) == T_F32 && name != "pow" && name != "atan2") {
+            var x = coerce(c, a, T_F32, span)
+            var y = coerce(c, b, T_F32, span)
+            var f = "FMax"
+            if (name == "min") {
+                f = "FMin"
+            }
+            return rt(f, [x, y], T_F32)
+        }
+        if (a.ty == T_INT && b.ty == T_INT && name != "atan2") {
+            return rt(minMaxOp(name, true), [a, b], T_INT)
+        }
+        var x = coerce(c, a, T_FLOAT, span)
+        var y = coerce(c, b, T_FLOAT, span)
+        return rt(minMaxOp(name, false), [x, y], T_FLOAT)
+    }
+    if (name == "wrappingAdd" || name == "wrappingSub" || name == "wrappingMul") {
+        if (!arity(c, name, n, 2, 2, span)) {
+            return errExpr()
+        }
+        var a = barg(c, xs[0], null)
+        if (!c.types.isInteger(a.ty)) {
+            if (a.ty == T_ERROR) {
+                return a
+            }
+            return typeErr(c, xs[0], "an integer", a)
+        }
+        var b = barg(c, xs[1], a.ty)
+        return wrappingOp(c, name, a, b, span)
+    }
+    if (name == "random") {
+        if (!arity(c, name, n, 0, 0, span)) {
+            return errExpr()
+        }
+        return rt("Random", [], T_FLOAT)
+    }
+    if (name == "randomInt") {
+        if (!arity(c, name, n, 2, 2, span)) {
+            return errExpr()
+        }
+        var a = bargTo(c, xs[0], T_INT)
+        var b = bargTo(c, xs[1], T_INT)
+        return rt("RandomInt", [a, b], T_INT)
+    }
+    if (name == "seed") {
+        if (!arity(c, name, n, 1, 1, span)) {
+            return errExpr()
+        }
+        return rt("Seed", [bargTo(c, xs[0], T_INT)], T_VOID)
+    }
+    var noArgs = ["now", "nowMs", "millis", "clock", "args", "gc", "readStdin", "__localTime"]
+    if (contains(noArgs, name)) {
+        if (!arity(c, name, n, 0, 0, span)) {
+            return errExpr()
+        }
+        if (name == "now") {
+            return rt("NowSec", [], T_FLOAT)
+        }
+        if (name == "nowMs" || name == "millis") {
+            return rt("NowMs", [], T_INT)
+        }
+        if (name == "clock") {
+            return rt("ClockNs", [], T_INT)
+        }
+        if (name == "args") {
+            return rt("Args", [], T_ARR_STR)
+        }
+        if (name == "gc") {
+            return rt("GcCollect", [], T_VOID)
+        }
+        if (name == "readStdin") {
+            return rt("ReadStdin", [], T_STR)
+        }
+        return rt("LocalTime", [], T_ARR_INT)
+    }
+    if (name == "sleep") {
+        if (!arity(c, name, n, 1, 1, span)) {
+            return errExpr()
+        }
+        var h = barg(c, xs[0], null)
+        HExpr ms = errExpr()
+        if (h.ty == T_FLOAT) {
+            ms = hexpr(HKind.Conv(Conv.FloatToInt, h), T_INT)
+        } else {
+            ms = coerce(c, h, T_INT, xs[0].span)
+        }
+        return rt("Sleep", [ms], T_VOID)
+    }
+    if (name == "typeOf" || name == "toJSON") {
+        if (!arity(c, name, n, 1, 1, span)) {
+            return errExpr()
+        }
+        var h = barg(c, xs[0], null)
+        if (name == "typeOf") {
+            return rt("TypeName", [h, tid(h.ty)], T_STR)
+        }
+        return rt("JsonStringify", [h, tid(h.ty)], T_STR)
+    }
+    if (name == "parseJSON" || name == "readFile") {
+        if (!arity(c, name, n, 1, 1, span)) {
+            return errExpr()
+        }
+        var s = bargTo(c, xs[0], T_STR)
+        var l = c.locExpr(span)
+        if (name == "parseJSON") {
+            return rt("JsonParse", [s, l], T_ANY)
+        }
+        return rt("ReadFile", [s, l], T_STR)
+    }
+    if (name == "writeFile" || name == "appendFile") {
+        if (!arity(c, name, n, 2, 2, span)) {
+            return errExpr()
+        }
+        var p = bargTo(c, xs[0], T_STR)
+        var content = stringify(c, barg(c, xs[1], null))
+        if (name == "writeFile") {
+            return rt("WriteFile", [p, content], T_BOOL)
+        }
+        return rt("AppendFile", [p, content], T_BOOL)
+    }
+    if (name == "fileExists" || name == "env") {
+        if (!arity(c, name, n, 1, 1, span)) {
+            return errExpr()
+        }
+        var p = bargTo(c, xs[0], T_STR)
+        if (name == "env") {
+            return rt("Env", [p], T_STR)
+        }
+        return rt("FileExists", [p], T_BOOL)
+    }
+    if (name == "exit") {
+        if (!arity(c, name, n, 0, 1, span)) {
+            return errExpr()
+        }
+        HExpr code = hint(0)
+        if (n == 1) {
+            code = bargTo(c, xs[0], T_INT)
+        }
+        return rt("ExitNow", [code], T_VOID)
+    }
+    if (name == "annotationsOf") {
+        if (!arity(c, name, n, 1, 1, span)) {
+            return errExpr()
+        }
+        barg(c, xs[0], null)
+        c.notPorted("`annotationsOf`")
+        return errExpr()
+    }
+    if (name == "panic") {
+        if (!arity(c, name, n, 0, 1, span)) {
+            return errExpr()
+        }
+        HExpr m = errExpr()
+        if (n == 1) {
+            m = stringify(c, barg(c, xs[0], null))
+        } else {
+            m = c.strLit("explicit panic")
+        }
+        var l = c.locExpr(span)
+        return rt("Panic", [m, l], T_VOID)
+    }
+    if (name == "assert") {
+        if (!arity(c, name, n, 1, 2, span)) {
+            return errExpr()
+        }
+        var cond = bargTo(c, xs[0], T_BOOL)
+        HExpr m = errExpr()
+        if (n == 2) {
+            m = stringify(c, barg(c, xs[1], null))
+        } else {
+            var text = "condition"
+            if (xs[0].e != null) {
+                text = c.srcText(xs[0].span)
+            }
+            m = c.strLit(text)
+        }
+        var l = c.locExpr(span)
+        return rt("Assert", [cond, m, l], T_VOID)
+    }
+    if (name == "__exec" || name == "__fsOp") {
+        if (!arity(c, name, n, 3, 3, span)) {
+            return errExpr()
+        }
+        var a = bargTo(c, xs[0], T_STR)
+        if (name == "__exec") {
+            var v = bargTo(c, xs[1], T_ARR_STR)
+            var cap = bargTo(c, xs[2], T_BOOL)
+            return rt("Exec", [a, v, cap], T_ARR_STR)
+        }
+        var x = bargTo(c, xs[1], T_STR)
+        var y = bargTo(c, xs[2], T_STR)
+        return rt("FsOp", [a, x, y], T_BOOL)
+    }
+    if (name == "__listDir") {
+        if (!arity(c, name, n, 1, 1, span)) {
+            return errExpr()
+        }
+        return rt("ListDir", [bargTo(c, xs[0], T_STR)], T_ARR_STR)
+    }
+    if (name == "__cwd") {
+        if (!arity(c, name, n, 0, 0, span)) {
+            return errExpr()
+        }
+        return rt("Cwd", [], T_STR)
+    }
+    if (name == "__httpRequest") {
+        if (!arity(c, name, n, 4, 4, span)) {
+            return errExpr()
+        }
+        var m = bargTo(c, xs[0], T_STR)
+        var u = bargTo(c, xs[1], T_STR)
+        var b = bargTo(c, xs[2], T_STR)
+        var h = bargTo(c, xs[3], T_ARR_STR)
+        return rt("HttpRequest", [m, u, b, h], T_ARR_STR)
+    }
+    return null
+}

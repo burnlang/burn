@@ -55,3 +55,158 @@ pub def type IfaceSlot {
     int argc
     [SlotImpl] impls
 }
+
+pub def enum Cmp { Eq, Ne, Lt, Le, Gt, Ge }
+
+/** An operator of the checked program; `loc` is the index of the source location used in runtime errors. */
+pub def enum HBinOp {
+    IAdd(loc: int),
+    ISub(loc: int),
+    IMul(loc: int),
+    IDiv(loc: int),
+    IMod(loc: int),
+    FAdd,
+    FSub,
+    FMul,
+    FDiv,
+    ICmp(cmp: Cmp),
+    UCmp(cmp: Cmp),
+    FCmp(cmp: Cmp),
+    WAdd,
+    WSub,
+    WMul,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl(loc: int),
+    Shr(loc: int),
+    UShr(loc: int)
+}
+
+pub def enum HUnOp {
+    INeg(loc: int),
+    FNeg,
+    Not,
+    BitNot
+}
+
+pub def enum Conv { IntToFloat, FloatToInt }
+
+/** An expression of the checked program, like `hir::Expr` in Rust. `Rt` calls a runtime function by the name of its `RtFn` variant. */
+pub def enum HKind {
+    Int(value: int),
+    TypeId(id: int),
+    LocId(id: int),
+    Float(value: float),
+    Bool(value: bool),
+    Str(id: int),
+    Null,
+    Local(slot: int),
+    Global(id: int),
+    SetLocal(slot: int, value: HExpr),
+    SetGlobal(id: int, value: HExpr),
+    Unary(op: HUnOp, value: HExpr),
+    Binary(op: HBinOp, left: HExpr, right: HExpr),
+    And(left: HExpr, right: HExpr),
+    Or(left: HExpr, right: HExpr),
+    Conv(conv: Conv, value: HExpr),
+    Call(func: int, args: [HExpr]),
+    CallIndirect(callee: HExpr, args: [HExpr]),
+    CallIface(slot: int, args: [HExpr]),
+    Rt(name: string, args: [HExpr]),
+    Spawn(func: int, args: [HExpr]),
+    FuncRef(func: int),
+    NewStruct(ty: int, args: [HExpr]),
+    GetField(obj: HExpr, index: int),
+    SetField(obj: HExpr, index: int, value: HExpr),
+    NewArray(ty: int, items: [HExpr]),
+    Index(obj: HExpr, index: HExpr, loc: int),
+    SetIndex(obj: HExpr, index: HExpr, value: HExpr, loc: int),
+    ArrLen(value: HExpr),
+    BoxVal(value: HExpr),
+    Seq(stmts: [HStmt], value: HExpr),
+    Retain(value: HExpr),
+    Release(value: HExpr)
+}
+
+pub def type HExpr {
+    HKind kind
+    int ty
+}
+
+pub def enum HStmt {
+    Eval(value: HExpr),
+    If(cond: HExpr, then: [HStmt], els: [HStmt]),
+    Loop(cond: HExpr?, body: [HStmt], step: [HStmt]),
+    Return(value: HExpr?),
+    Break,
+    Continue
+}
+
+/** `u32::MAX`, the location Rust uses when an operation cannot fail. */
+pub const NO_LOC = 4294967295
+
+pub fun hexpr(kind: HKind, ty: int): HExpr {
+    return HExpr { kind: kind, ty: ty }
+}
+
+pub fun hint(v: int): HExpr {
+    return HExpr { kind: HKind.Int(v), ty: T_INT }
+}
+
+pub fun rt(name: string, args: [HExpr], ty: int): HExpr {
+    return HExpr { kind: HKind.Rt(name, args), ty: ty }
+}
+
+pub fun tid(t: int): HExpr {
+    return HExpr { kind: HKind.TypeId(t), ty: T_INT }
+}
+
+pub fun retype(h: HExpr, t: int): HExpr {
+    return HExpr { kind: h.kind, ty: t }
+}
+
+pub fun local(slot: int, ty: int): HExpr {
+    return HExpr { kind: HKind.Local(slot), ty: ty }
+}
+
+pub fun setLocal(slot: int, value: HExpr, ty: int): HExpr {
+    return HExpr { kind: HKind.SetLocal(slot, value), ty: ty }
+}
+
+pub fun binary(op: HBinOp, a: HExpr, b: HExpr, ty: int): HExpr {
+    return HExpr { kind: HKind.Binary(op, a, b), ty: ty }
+}
+
+pub fun seq(stmts: [HStmt], value: HExpr): HExpr {
+    return HExpr { kind: HKind.Seq(stmts, value), ty: value.ty }
+}
+
+pub fun errExpr(): HExpr {
+    return HExpr { kind: HKind.Int(0), ty: T_ERROR }
+}
+
+pub fun isRt(h: HExpr, name: string): bool {
+    var k = h.kind
+    return k is HKind.Rt && k.name == name
+}
+
+/** Whether evaluating the expression can do more than read a value, like `has_side_effects` in `hir.rs`. */
+pub fun hasSideEffects(h: HExpr): bool {
+    var k = h.kind
+    return !(k is HKind.Int || k is HKind.TypeId || k is HKind.LocId || k is HKind.Float || k is HKind.Bool || k is HKind.Str || k is HKind.Null || k is HKind.Local || k is HKind.Global || k is HKind.FuncRef)
+}
+
+/** A function of the checked program. */
+pub def type HFunc {
+    string name
+    int params
+    [int] locals
+    int ret
+    [HStmt] body
+    bool isAsync
+    SrcSpan span
+    int endLoc
+    [HirAnnotation] annotations
+    External? external
+}

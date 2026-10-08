@@ -1,0 +1,39 @@
+fun sign(x: int) {
+    if (x < 0) {
+        return -1
+    }
+    if (x == 0) {
+        return 0
+    }
+    return 1.5
+}
+
+fun maybe(x: int) {
+    if (x > 0) {
+        return "yes"
+    }
+    return null
+}
+
+fun loop(n: int) {
+    return loop(n - 1)
+}
+
+fun mixed(x: bool) {
+    if (x) {
+        return "a"
+    }
+    return 1
+}
+
+fun nothing() {
+    return null
+}
+
+fun missing(x: int): int {
+    if (x > 0) {
+        return 1
+    }
+}
+
+print(sign(2), maybe(1))

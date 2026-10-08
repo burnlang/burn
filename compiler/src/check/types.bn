@@ -320,6 +320,40 @@ pub def struct Types() {
         return t
     }
 
+    fun isUnboxed(t: int): bool {
+        var k = kindOf(t)
+        return k is Ty.Int || k is Ty.Float || k is Ty.Num || k is Ty.Bool || k is Ty.Enum || k is Ty.Func || k is Ty.Void
+    }
+
+    fun implements(cls: int, iface: int): bool {
+        var a = kindOf(cls)
+        var b = kindOf(iface)
+        if (a is Ty.Record && b is Ty.Interface) {
+            return contains(records[a.index].implements, b.index)
+        }
+        if (a is Ty.Record && b is Ty.Record) {
+            return extends(a.index, b.index)
+        }
+        return false
+    }
+
+    fun extends(child: int, ancestor: int): bool {
+        var cur = records[child].parent
+        var steps = 0
+        while (cur != null) {
+            var c = cur
+            if (c == ancestor) {
+                return true
+            }
+            steps += 1
+            if (steps > len(records)) {
+                return false
+            }
+            cur = records[c].parent
+        }
+        return false
+    }
+
     fun ancestors(r: int): [int] {
         [int] out = []
         var cur = records[r].parent

@@ -1,0 +1,792 @@
+import "../diag/diag.bn"
+import "../syntax/ast.bn"
+import "check.bn"
+import "closures.bn"
+import "expr.bn"
+import "hir.bn"
+import "structs.bn"
+import "types.bn"
+
+/** A narrowing that holds when a condition is true or false: `slot` has type `ty`. */
+pub def type Narrow {
+    int slot
+    int ty
+}
+
+pub def type Cond {
+    HExpr value
+    [Narrow] whenTrue
+    [Narrow] whenFalse
+}
+
+fun isTrueLit(h: HExpr): bool {
+    var k = h.kind
+    return k is HKind.Bool && k.value
+}
+
+fun isIntEq(h: HExpr): bool {
+    var k = h.kind
+    if (!(k is HKind.Binary)) {
+        return false
+    }
+    var op = k.op
+    return op is HBinOp.ICmp && op.cmp == Cmp.Eq
+}
+
+fun stmtDiverges(s: HStmt): bool {
+    if (s is HStmt.Return || s is HStmt.Break || s is HStmt.Continue) {
+        return true
+    }
+    if (s is HStmt.If) {
+        return diverges(s.then) && diverges(s.els)
+    }
+    if (s is HStmt.Eval) {
+        return isRt(s.value, "ExitNow") || isRt(s.value, "Panic") || isRt(s.value, "ErrReturn")
+    }
+    if (s is HStmt.Loop) {
+        var c = s.cond
+        var infinite = c == null || isTrueLit(c)
+        return infinite && !hasBreak(s.body)
+    }
+    return false
+}
+
+pub fun hasBreak(stmts: [HStmt]): bool {
+    for s in stmts {
+        if (s is HStmt.Break) {
+            return true
+        }
+        if (s is HStmt.If && (hasBreak(s.then) || hasBreak(s.els))) {
+            return true
+        }
+    }
+    return false
+}
+
+pub fun diverges(stmts: [HStmt]): bool {
+    for s in stmts {
+        if (stmtDiverges(s)) {
+            return true
+        }
+    }
+    return false
+}
+
+fun collectAssigned(stmts: [Stmt], out: {string: bool}): void {
+    for s in stmts {
+        collectStmt(s, out)
+    }
+}
+
+fun collectStmt(s: Stmt, out: {string: bool}): void {
+    var k = s.kind
+    if (k is StmtKind.Var) {
+        var init = k.init
+        if (init != null) {
+            collectExpr(init, out)
+        }
+    } else if (k is StmtKind.Eval) {
+        collectExpr(k.value, out)
+    } else if (k is StmtKind.If) {
+        collectExpr(k.cond, out)
+        collectAssigned(k.then.stmts, out)
+        var els = k.els
+        if (els != null) {
+            collectAssigned(els.stmts, out)
+        }
+    } else if (k is StmtKind.While) {
+        collectExpr(k.cond, out)
+        collectAssigned(k.body.stmts, out)
+    } else if (k is StmtKind.For) {
+        var init = k.init
+        if (init != null) {
+            collectStmt(init, out)
+        }
+        var cond = k.cond
+        if (cond != null) {
+            collectExpr(cond, out)
+        }
+        var step = k.step
+        if (step != null) {
+            collectExpr(step, out)
+        }
+        collectAssigned(k.body.stmts, out)
+    } else if (k is StmtKind.ForIn) {
+        out[k.binding.name] = true
+        var idx = k.index
+        if (idx != null) {
+            out[idx.name] = true
+        }
+        var it = k.iter
+        if (it is ForIter.Range) {
+            collectExpr(it.from, out)
+            collectExpr(it.to, out)
+        } else if (it is ForIter.Over) {
+            collectExpr(it.value, out)
+        }
+        collectAssigned(k.body.stmts, out)
+    } else if (k is StmtKind.Return) {
+        var v = k.value
+        if (v != null) {
+            collectExpr(v, out)
+        }
+    } else if (k is StmtKind.Nested) {
+        collectAssigned(k.block.stmts, out)
+    }
+}
+
+fun collectAll(xs: [Expr], out: {string: bool}): void {
+    for x in xs {
+        collectExpr(x, out)
+    }
+}
+
+fun collectExpr(e: Expr, out: {string: bool}): void {
+    var k = e.kind
+    if (k is ExprKind.Assign) {
+        var tk = k.target.kind
+        if (tk is ExprKind.Ident) {
+            out[tk.name] = true
+        } else {
+            collectExpr(k.target, out)
+        }
+        collectExpr(k.value, out)
+    } else if (k is ExprKind.Unary) {
+        collectExpr(k.operand, out)
+    } else if (k is ExprKind.Await) {
+        collectExpr(k.value, out)
+    } else if (k is ExprKind.NotNull) {
+        collectExpr(k.value, out)
+    } else if (k is ExprKind.Is) {
+        collectExpr(k.value, out)
+    } else if (k is ExprKind.As) {
+        collectExpr(k.value, out)
+    } else if (k is ExprKind.SafeAs) {
+        collectExpr(k.value, out)
+    } else if (k is ExprKind.Coalesce) {
+        collectExpr(k.left, out)
+        collectExpr(k.right, out)
+    } else if (k is ExprKind.SafeGet) {
+        collectExpr(k.obj, out)
+        var args = k.args
+        if (args != null) {
+            collectAll(args, out)
+        }
+    } else if (k is ExprKind.Binary) {
+        collectExpr(k.left, out)
+        collectExpr(k.right, out)
+    } else if (k is ExprKind.Call) {
+        collectExpr(k.callee, out)
+        collectAll(k.args, out)
+    } else if (k is ExprKind.Field) {
+        collectExpr(k.obj, out)
+    } else if (k is ExprKind.Index) {
+        collectExpr(k.obj, out)
+        collectExpr(k.index, out)
+    } else if (k is ExprKind.Array) {
+        collectAll(k.items, out)
+    } else if (k is ExprKind.StructLit) {
+        for f in k.fields {
+            collectExpr(f.value, out)
+        }
+    } else if (k is ExprKind.MapLit) {
+        for p in k.pairs {
+            collectExpr(p.key, out)
+            collectExpr(p.value, out)
+        }
+    } else if (k is ExprKind.Template) {
+        for p in k.parts {
+            if (p is TplExpr.Code) {
+                collectExpr(p.value, out)
+            }
+        }
+    } else if (k is ExprKind.Match) {
+        var subject = k.subject
+        if (subject != null) {
+            collectExpr(subject, out)
+        }
+        for arm in k.arms {
+            for p in arm.patterns {
+                if (p is Pattern.Value) {
+                    collectExpr(p.value, out)
+                } else if (p is Pattern.Range) {
+                    collectExpr(p.from, out)
+                    collectExpr(p.to, out)
+                }
+            }
+            var g = arm.guard
+            if (g != null) {
+                collectExpr(g, out)
+            }
+            var body = arm.body
+            if (body is ArmBody.Value) {
+                collectExpr(body.value, out)
+            } else if (body is ArmBody.Body) {
+                collectAssigned(body.block.stmts, out)
+            }
+        }
+    }
+}
+
+pub fun copyNarrow(m: {int: int}): {int: int} {
+    {int: int} out = {}
+    for k in keys(m) {
+        out[k] = m[k] ?? 0
+    }
+    return out
+}
+
+pub fun applyNarrow(c: Checker, facts: [Narrow]) {
+    for f in facts {
+        if (f.slot < GLOBAL_KEY && has(c.ctx().cells, f.slot)) {
+            continue
+        }
+        c.ctx().narrow[f.slot] = f.ty
+    }
+}
+
+fun forgetAssigned(c: Checker, names: {string: bool}) {
+    for n in keys(names) {
+        var l = c.peekLocal(n)
+        if (l != null) {
+            remove(c.ctx().narrow, l.slot)
+            clearFacts(c, l.slot)
+            continue
+        }
+        var e = c.lookupValueEntry(c.curModule(), n)
+        if (e != null) {
+            var sym = e.sym
+            if (sym is ValSym.Global) {
+                remove(c.ctx().narrow, GLOBAL_KEY + sym.id)
+                clearFacts(c, GLOBAL_KEY + sym.id)
+            }
+        }
+    }
+}
+
+pub fun localOf(c: Checker, e: Expr): int? {
+    var k = e.kind
+    if (!(k is ExprKind.Ident)) {
+        return null
+    }
+    var l = c.lookupLocal(k.name)
+    if (l != null) {
+        return l.slot
+    }
+    if (selfField(c, k.name) != null) {
+        return null
+    }
+    var entry = c.lookupValueEntry(c.curModule(), k.name)
+    if (entry != null) {
+        var sym = entry.sym
+        if (sym is ValSym.Global && c.globals[sym.id].ty != null) {
+            return GLOBAL_KEY + sym.id
+        }
+    }
+    return null
+}
+
+fun joinNarrows(a: [Narrow], b: [Narrow]): [Narrow] {
+    var out = slice(a, 0, len(a))
+    for x in b {
+        out.push(x)
+    }
+    return out
+}
+
+pub fun condOf(c: Checker, e: Expr): Cond {
+    var k = e.kind
+    var span = c.sp(e.span)
+    if (k is ExprKind.Unary && k.op == UnOp.Not) {
+        var inner = condOf(c, k.operand)
+        var v = inner.value
+        var vk = v.kind
+        if (vk is HKind.Bool) {
+            v = hexpr(HKind.Bool(!vk.value), T_BOOL)
+        } else {
+            v = hexpr(HKind.Unary(HUnOp.Not, v), T_BOOL)
+        }
+        return Cond { value: v, whenTrue: inner.whenFalse, whenFalse: inner.whenTrue }
+    }
+    if (k is ExprKind.Binary && k.op == BinOp.And) {
+        var a = condOf(c, k.left)
+        var saved = copyNarrow(c.ctx().narrow)
+        applyNarrow(c, a.whenTrue)
+        var b = condOf(c, k.right)
+        c.ctx().narrow = saved
+        return Cond { value: hexpr(HKind.And(a.value, b.value), T_BOOL), whenTrue: joinNarrows(a.whenTrue, b.whenTrue), whenFalse: [] }
+    }
+    if (k is ExprKind.Binary && k.op == BinOp.Or) {
+        var a = condOf(c, k.left)
+        var saved = copyNarrow(c.ctx().narrow)
+        applyNarrow(c, a.whenFalse)
+        var b = condOf(c, k.right)
+        c.ctx().narrow = saved
+        return Cond { value: hexpr(HKind.Or(a.value, b.value), T_BOOL), whenTrue: [], whenFalse: joinNarrows(a.whenFalse, b.whenFalse) }
+    }
+    if (k is ExprKind.Is) {
+        var h = exprRaw(c, k.value)
+        var t = c.resolveType(k.ty)
+        [Narrow] whenTrue = []
+        [Narrow] whenFalse = []
+        var slot = localOf(c, k.value)
+        if (slot != null) {
+            var declared = declaredOf(c, slot)
+            if (t == T_NULL) {
+                var u = c.types.unwrapOptional(declared)
+                if (u != declared && narrowable(c, declared, u)) {
+                    whenFalse.push(Narrow { slot: slot, ty: u })
+                }
+            } else if (narrowable(c, declared, t)) {
+                whenTrue.push(Narrow { slot: slot, ty: t })
+            }
+        }
+        return Cond { value: isCheck(c, h, t, span), whenTrue: whenTrue, whenFalse: whenFalse }
+    }
+    if (k is ExprKind.Binary && (k.op == BinOp.Eq || k.op == BinOp.Ne)) {
+        Expr? nullSide = null
+        if (k.right.kind is ExprKind.Null) {
+            nullSide = k.left
+        } else if (k.left.kind is ExprKind.Null) {
+            nullSide = k.right
+        }
+        var h = exprOf(c, e, null)
+        [Narrow] whenTrue = []
+        [Narrow] whenFalse = []
+        if (nullSide != null) {
+            var slot = localOf(c, nullSide)
+            if (slot != null) {
+                var declared = declaredOf(c, slot)
+                var u = c.types.unwrapOptional(declared)
+                if (u != declared && narrowable(c, declared, u)) {
+                    if (k.op == BinOp.Ne) {
+                        whenTrue.push(Narrow { slot: slot, ty: u })
+                    } else {
+                        whenFalse.push(Narrow { slot: slot, ty: u })
+                    }
+                }
+            }
+        }
+        return Cond { value: h, whenTrue: whenTrue, whenFalse: whenFalse }
+    }
+    var h = exprOf(c, e, T_BOOL)
+    return Cond { value: coerce(c, h, T_BOOL, span), whenTrue: [], whenFalse: [] }
+}
+
+pub fun blockStmts(c: Checker, stmts: [Stmt]): [HStmt] {
+    {string: LocalSym} scope = {}
+    c.ctx().scopes.push(scope)
+    [HStmt] out = []
+    var warned = false
+    for s in stmts {
+        if (diverges(out) && !warned) {
+            c.warn(c.sp(s.span), "unreachable code")
+            warned = true
+        }
+        for x in stmtOf(c, s) {
+            out.push(x)
+        }
+    }
+    var scopes = c.ctx().scopes
+    c.ctx().scopes = slice(scopes, 0, len(scopes) - 1)
+    return out
+}
+
+fun mergeNarrow(a: {int: int}, b: {int: int}): {int: int} {
+    {int: int} out = {}
+    for k in keys(a) {
+        var x = a[k]
+        var y = b[k]
+        if (x != null && y != null && x == y) {
+            out[k] = x
+        }
+    }
+    return out
+}
+
+fun popScope(c: Checker) {
+    var scopes = c.ctx().scopes
+    c.ctx().scopes = slice(scopes, 0, len(scopes) - 1)
+}
+
+pub fun stmtOf(c: Checker, s: Stmt): [HStmt] {
+    var span = c.sp(s.span)
+    var k = s.kind
+    if (k is StmtKind.Var) {
+        return varDecl(c, k.name, k.ty, k.init, k.isConst, span)
+    }
+    if (k is StmtKind.Eval) {
+        var e = k.value
+        if (e.kind is ExprKind.Match) {
+            c.notPorted("`match`")
+            return []
+        }
+        var h = exprOf(c, e, null)
+        var compares = isIntEq(h) || isRt(h, "StrEq") || isRt(h, "Eq")
+        var ek = e.kind
+        if (compares && ek is ExprKind.Binary && ek.op == BinOp.Eq) {
+            var espan = c.sp(e.span)
+            var between = SrcSpan { file: espan.file, start: ek.left.span.end, end: ek.right.span.start }
+            var text = c.srcText(between)
+            var d = c.warnAt(espan, "comparison result is unused")
+            var i = byteIndexOf(text, "==")
+            if (i >= 0) {
+                addFix(d.diag, "to assign a value, use `=`", between.start + i, between.start + i + 2, "=", true)
+            }
+            c.emit(d)
+        }
+        return [HStmt.Eval(h)]
+    }
+    if (k is StmtKind.If) {
+        var cond = condOf(c, k.cond)
+        var before = copyNarrow(c.ctx().narrow)
+        applyNarrow(c, cond.whenTrue)
+        var tb = blockStmts(c, k.then.stmts)
+        var afterThen = c.ctx().narrow
+        c.ctx().narrow = copyNarrow(before)
+        applyNarrow(c, cond.whenFalse)
+        [HStmt] eb = []
+        var els = k.els
+        if (els != null) {
+            eb = blockStmts(c, els.stmts)
+        }
+        var afterElse = c.ctx().narrow
+        var td = diverges(tb)
+        var ed = diverges(eb)
+        if (td && ed) {
+            c.ctx().narrow = before
+        } else if (td) {
+            c.ctx().narrow = afterElse
+        } else if (ed) {
+            c.ctx().narrow = afterThen
+        } else {
+            c.ctx().narrow = mergeNarrow(afterThen, afterElse)
+        }
+        var ck = cond.value.kind
+        if (ck is HKind.Bool) {
+            if (ck.value) {
+                return tb
+            }
+            return eb
+        }
+        return [HStmt.If(cond.value, tb, eb)]
+    }
+    if (k is StmtKind.While) {
+        {string: bool} assigned = {}
+        collectExpr(k.cond, assigned)
+        collectAssigned(k.body.stmts, assigned)
+        forgetAssigned(c, assigned)
+        var cond = condOf(c, k.cond)
+        var before = copyNarrow(c.ctx().narrow)
+        applyNarrow(c, cond.whenTrue)
+        c.ctx().loops += 1
+        var b = blockStmts(c, k.body.stmts)
+        c.ctx().loops -= 1
+        c.ctx().narrow = before
+        if (!hasBreak(b)) {
+            applyNarrow(c, cond.whenFalse)
+        }
+        HExpr? cv = cond.value
+        if (isTrueLit(cond.value)) {
+            cv = null
+        }
+        return [HStmt.Loop(cv, b, [])]
+    }
+    if (k is StmtKind.For) {
+        {string: LocalSym} scope = {}
+        c.ctx().scopes.push(scope)
+        [HStmt] out = []
+        var init = k.init
+        if (init != null) {
+            for x in stmtOf(c, init) {
+                out.push(x)
+            }
+        }
+        {string: bool} assigned = {}
+        var cond = k.cond
+        if (cond != null) {
+            collectExpr(cond, assigned)
+        }
+        var step = k.step
+        if (step != null) {
+            collectExpr(step, assigned)
+        }
+        collectAssigned(k.body.stmts, assigned)
+        forgetAssigned(c, assigned)
+        var before = copyNarrow(c.ctx().narrow)
+        HExpr? cv = null
+        [Narrow] whenTrue = []
+        if (cond != null) {
+            var r = condOf(c, cond)
+            cv = r.value
+            whenTrue = r.whenTrue
+        }
+        applyNarrow(c, whenTrue)
+        c.ctx().loops += 1
+        var b = blockStmts(c, k.body.stmts)
+        c.ctx().loops -= 1
+        [HStmt] st = []
+        if (step != null) {
+            st = [HStmt.Eval(exprOf(c, step, null))]
+        }
+        c.ctx().narrow = before
+        popScope(c)
+        out.push(HStmt.Loop(cv, b, st))
+        return out
+    }
+    if (k is StmtKind.ForIn) {
+        return forIn(c, k.binding, k.index, k.iter, k.body, span)
+    }
+    if (k is StmtKind.Return) {
+        return returnStmt(c, k.value, span)
+    }
+    if (k is StmtKind.Break || k is StmtKind.Continue) {
+        var loops = 0
+        if (len(c.fx) > 0) {
+            loops = c.ctx().loops
+        }
+        var word = "continue"
+        if (k is StmtKind.Break) {
+            word = "break"
+        }
+        if (loops == 0) {
+            c.error(span, "`${word}` can only be used inside a loop")
+            return []
+        }
+        if (k is StmtKind.Break) {
+            return [HStmt.Break]
+        }
+        return [HStmt.Continue]
+    }
+    if (k is StmtKind.Nested) {
+        return blockStmts(c, k.block.stmts)
+    }
+    if (k is StmtKind.Extend) {
+        c.notPorted("adding functions to objects")
+        return []
+    }
+    c.notPorted("`destroy`")
+    return []
+}
+
+fun returnStmt(c: Checker, v: Expr?, span: SrcSpan): [HStmt] {
+    var isInit = true
+    if (len(c.fx) > 0) {
+        isInit = c.ctx().isInit
+    }
+    if (isInit) {
+        c.error(span, "`return` can only be used inside a function")
+        return []
+    }
+    var ret = c.ctx().ret
+    if (ret != null && v == null) {
+        if (ret != T_VOID && ret != T_ERROR) {
+            c.error(span, "this function must return a value of type ${c.show(ret)}")
+        }
+        return [HStmt.Return(null)]
+    }
+    if (ret != null && v != null) {
+        if (ret == T_VOID) {
+            var h = exprOf(c, v, null)
+            if (h.ty != T_VOID && h.ty != T_ERROR) {
+                var fi = c.ctx().func
+                var fname = c.funcs[fi].name
+                var ts = c.show(h.ty)
+                var d = c.errorDiag(c.sp(v.span), "`${fname}` does not declare a return type, but returns ${ts}")
+                var at = c.paramsClose(c.funcs[fi].span)
+                if (at != null) {
+                    addFix(d.diag, "declare that `${fname}` returns ${ts}", at.start, at.end, ": ${ts}", true)
+                } else {
+                    d.diag.helps.push("add `: ${ts}` after the parameter list")
+                }
+                c.emit(d)
+            }
+            return [HStmt.Eval(h), HStmt.Return(null)]
+        }
+        return [HStmt.Return(exprTo(c, v, ret))]
+    }
+    if (v == null) {
+        c.ctx().returns.push(T_VOID)
+        return [HStmt.Return(null)]
+    }
+    var h = exprOf(c, v, null)
+    c.ctx().returns.push(h.ty)
+    return [HStmt.Return(h)]
+}
+
+fun varDecl(c: Checker, name: Ident, ty: TypeExpr?, init: Expr?, isConst: bool, span: SrcSpan): [HStmt] {
+    var nspan = c.sp(name.span)
+    int? declared = null
+    if (ty != null) {
+        declared = c.resolveType(ty)
+    }
+    if (declared == T_VOID) {
+        c.error(nspan, "variables cannot have type void")
+    }
+    HExpr value = errExpr()
+    var vty = T_ERROR
+    if (init != null) {
+        var ispan = c.sp(init.span)
+        var h = exprOf(c, init, declared)
+        vty = h.ty
+        if (vty == T_VOID) {
+            c.error(ispan, "cannot assign the result of a function that returns nothing")
+        }
+        var target = vty
+        if (declared != null) {
+            target = declared
+        } else if (vty == T_NULL) {
+            c.errorNote(ispan, "cannot infer the type of `${name.name}` from `null`", "write `T? ${name.name} = null` or `var ${name.name}: T? = null`")
+            target = T_ERROR
+        }
+        value = coerce(c, h, target, ispan)
+    } else {
+        var d = declared ?? T_ERROR
+        vty = d
+        var z = zeroOf(c, d)
+        if (z != null) {
+            value = z
+        } else {
+            c.error(nspan, "`${name.name}` of type ${c.show(d)} must be initialized")
+            value = errExpr()
+        }
+    }
+    var t = declared ?? value.ty
+    var ctx = c.ctx()
+    var isGlobal = ctx.isInit && len(ctx.scopes) == 1
+    if (isGlobal) {
+        var m = c.curModule()
+        var e = c.mods[m].values[name.name]
+        if (e != null) {
+            var sym = e.sym
+            if (sym is ValSym.Global && sameSpan(e.span, nspan)) {
+                c.globals[sym.id].ty = t
+                if (narrowable(c, t, vty)) {
+                    ctx.narrow[GLOBAL_KEY + sym.id] = vty
+                }
+                return [HStmt.Eval(hexpr(HKind.SetGlobal(sym.id, value), t))]
+            }
+        }
+        return [HStmt.Eval(value)]
+    }
+    var prev = ctx.scopes[len(ctx.scopes) - 1][name.name]
+    if (prev != null) {
+        c.warn(nspan, "`${name.name}` shadows a variable declared on line ${c.lineOf(prev.span)} in the same block")
+    }
+    var slot = c.declareLocal(name.name, t, nspan, isConst)
+    if (has(ctx.cellNames, name.name)) {
+        var ct = makeCellLocal(c, slot)
+        var cell = hexpr(HKind.NewStruct(ct, [value]), ct)
+        return [HStmt.Eval(setLocal(slot, cell, t))]
+    }
+    if (narrowable(c, t, vty)) {
+        ctx.narrow[slot] = vty
+    }
+    return [HStmt.Eval(setLocal(slot, value, t))]
+}
+
+fun stepStmt(ctr: int): HStmt {
+    return HStmt.Eval(setLocal(ctr, binary(HBinOp.IAdd(NO_LOC), local(ctr, T_INT), hint(1), T_INT), T_INT))
+}
+
+fun forIn(c: Checker, binding: Ident, index: Ident?, iter: ForIter, body: Block, span: SrcSpan): [HStmt] {
+    {string: LocalSym} scope = {}
+    c.ctx().scopes.push(scope)
+    {string: bool} assigned = {}
+    collectAssigned(body.stmts, assigned)
+    forgetAssigned(c, assigned)
+    var before = copyNarrow(c.ctx().narrow)
+    var vspan = c.sp(binding.span)
+    [HStmt] out = []
+    if (iter is ForIter.Range) {
+        if (index != null) {
+            c.error(c.sp(index.span), "a range loop has only one loop variable")
+        }
+        var ha = exprTo(c, iter.from, T_INT)
+        var hb = exprTo(c, iter.to, T_INT)
+        var ctr = c.newLocal(T_INT)
+        var end = c.newLocal(T_INT)
+        out.push(HStmt.Eval(setLocal(ctr, ha, T_INT)))
+        out.push(HStmt.Eval(setLocal(end, hb, T_INT)))
+        var v = c.declareLocal(binding.name, T_INT, vspan, false)
+        var cmp = Cmp.Lt
+        if (iter.inclusive) {
+            cmp = Cmp.Le
+        }
+        var cond = binary(HBinOp.ICmp(cmp), local(ctr, T_INT), local(end, T_INT), T_BOOL)
+        c.ctx().loops += 1
+        [HStmt] b = [HStmt.Eval(setLocal(v, local(ctr, T_INT), T_INT))]
+        for x in blockStmts(c, body.stmts) {
+            b.push(x)
+        }
+        c.ctx().loops -= 1
+        out.push(HStmt.Loop(cond, b, [stepStmt(ctr)]))
+    } else if (iter is ForIter.Over) {
+        var e = iter.value
+        var espan = c.sp(e.span)
+        var h = exprOf(c, e, null)
+        var t = h.ty
+        var arr = h
+        var elem = T_ERROR
+        var mapSlot = -1
+        var mapTy = 0
+        var mapValue = 0
+        var k = c.types.kindOf(t)
+        if (k is Ty.Array) {
+            elem = k.elem
+        } else if (k is Ty.Str) {
+            arr = rt("StrChars", [h], T_ARR_STR)
+            elem = T_STR
+        } else if (k is Ty.Map) {
+            var at = c.types.array(k.key)
+            var slot = c.newLocal(t)
+            out.push(HStmt.Eval(setLocal(slot, h, t)))
+            arr = rt("MapKeys", [local(slot, t), tid(at)], at)
+            elem = k.key
+            mapSlot = slot
+            mapTy = t
+            mapValue = k.value
+        } else if (k is Ty.Error) {
+        } else if (k is Ty.Any) {
+            c.errorNote(espan, "cannot iterate over a value of type any", "cast it first, e.g. `for x in value as [any]`")
+        } else {
+            c.error(espan, "cannot iterate over a value of type ${c.show(t)}")
+        }
+        var at = arr.ty
+        var arrSlot = c.newLocal(at)
+        var ctr = c.newLocal(T_INT)
+        out.push(HStmt.Eval(setLocal(arrSlot, arr, at)))
+        out.push(HStmt.Eval(setLocal(ctr, hint(0), T_INT)))
+        var arrE = local(arrSlot, at)
+        var ctrE = local(ctr, T_INT)
+        var cond = binary(HBinOp.ICmp(Cmp.Lt), ctrE, hexpr(HKind.ArrLen(arrE), T_INT), T_BOOL)
+        [HStmt] b = []
+        var l = c.loc(span)
+        var item = hexpr(HKind.Index(arrE, ctrE, l), elem)
+        if (index != null && mapSlot >= 0) {
+            var key = c.declareLocal(index.name, elem, c.sp(index.span), false)
+            b.push(HStmt.Eval(setLocal(key, item, elem)))
+            var v = c.declareLocal(binding.name, mapValue, vspan, false)
+            var lx = c.locExpr(span)
+            var get = rt("MapGet", [local(mapSlot, mapTy), local(key, elem), lx], mapValue)
+            b.push(HStmt.Eval(setLocal(v, get, mapValue)))
+        } else if (index != null) {
+            var i = c.declareLocal(index.name, T_INT, c.sp(index.span), false)
+            b.push(HStmt.Eval(setLocal(i, ctrE, T_INT)))
+            var v = c.declareLocal(binding.name, elem, vspan, false)
+            b.push(HStmt.Eval(setLocal(v, item, elem)))
+        } else {
+            var v = c.declareLocal(binding.name, elem, vspan, false)
+            b.push(HStmt.Eval(setLocal(v, item, elem)))
+        }
+        c.ctx().loops += 1
+        for x in blockStmts(c, body.stmts) {
+            b.push(x)
+        }
+        c.ctx().loops -= 1
+        out.push(HStmt.Loop(cond, b, [stepStmt(ctr)]))
+    }
+    c.ctx().narrow = before
+    popScope(c)
+    return out
+}

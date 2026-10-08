@@ -1,5 +1,6 @@
 use super::*;
 use crate::diag::Diagnostic;
+use std::collections::BTreeSet;
 
 #[derive(Default, Clone)]
 struct Uses {
@@ -8,7 +9,7 @@ struct Uses {
     indirect: Vec<u32>,
 }
 
-fn walk_stmts(stmts: &[Stmt], u: &mut Uses, slots: &[IfaceSlot], taken: &mut HashSet<FuncId>) {
+fn walk_stmts(stmts: &[Stmt], u: &mut Uses, slots: &[IfaceSlot], taken: &mut BTreeSet<FuncId>) {
     for s in stmts {
         match s {
             Stmt::Expr(e) | Stmt::Return(Some(e)) => walk(e, u, slots, taken),
@@ -29,7 +30,7 @@ fn walk_stmts(stmts: &[Stmt], u: &mut Uses, slots: &[IfaceSlot], taken: &mut Has
     }
 }
 
-fn walk(e: &Expr, u: &mut Uses, slots: &[IfaceSlot], taken: &mut HashSet<FuncId>) {
+fn walk(e: &Expr, u: &mut Uses, slots: &[IfaceSlot], taken: &mut BTreeSet<FuncId>) {
     match &e.kind {
         ExprKind::Global(g) => u.reads.push(*g),
         ExprKind::FuncRef(f) => {
@@ -77,7 +78,7 @@ fn walk(e: &Expr, u: &mut Uses, slots: &[IfaceSlot], taken: &mut HashSet<FuncId>
 
 impl<'a> Checker<'a> {
     pub fn check_init_order(&mut self, loaded: &Loaded) {
-        let mut taken = HashSet::new();
+        let mut taken = BTreeSet::new();
         let mut uses: Vec<Uses> = Vec::with_capacity(self.funcs.len());
         for f in &self.funcs {
             let mut u = Uses::default();
@@ -111,7 +112,7 @@ impl<'a> Checker<'a> {
             let mut reported: HashSet<u32> = HashSet::new();
             for (i, s) in body.iter().enumerate() {
                 let mut u = Uses::default();
-                let mut scratch = HashSet::new();
+                let mut scratch = BTreeSet::new();
                 walk_stmts(std::slice::from_ref(s), &mut u, &self.slots, &mut scratch);
                 let late = |g: &u32| init_at.get(g).map(|at| *at >= i).unwrap_or(false);
                 let mut seen: HashSet<FuncId> = HashSet::new();

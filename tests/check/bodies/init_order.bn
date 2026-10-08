@@ -1,0 +1,14 @@
+fun total(): int {
+    return limit * 2
+}
+
+fun indirect(): int {
+    return total()
+}
+
+var early = indirect()
+var limit = 5
+var late = total()
+var f = total
+var viaRef = f()
+print(early, late, viaRef)

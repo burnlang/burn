@@ -1,0 +1,379 @@
+import "../diag/diag.bn"
+import "../syntax/ast.bn"
+import "body.bn"
+import "calls.bn"
+import "check.bn"
+import "expr.bn"
+import "hir.bn"
+import "types.bn"
+
+pub fun lookupGenericFn(c: Checker, name: string): int? {
+    [string] ambiguous = []
+    var e = c.visibleType(c.curModule(), name, 1, ambiguous)
+    if (e == null) {
+        return null
+    }
+    return e.sym
+}
+
+pub fun instantiateFn(c: Checker, gid: int, targs: [int], site: SrcSpan): int {
+    var g = c.genericFns[gid]
+    var hit = findInstance(g.instances, targs)
+    if (hit != null) {
+        return hit
+    }
+    var decl = g.decl
+    {string: int} env = {}
+    for i in 0..len(decl.tparams) {
+        if (i < len(targs)) {
+            env[decl.tparams[i].name] = targs[i]
+        }
+    }
+    c.tenv.push(env)
+    var fid = c.declareFun(g.module, decl, null, g.private, false)
+    c.tenv = slice(c.tenv, 0, len(c.tenv) - 1)
+    [string] shown = []
+    for t in targs {
+        shown.push(c.show(t))
+    }
+    c.funcs[fid].name = "${decl.name.name}<${joinWith(shown, ", ")}>"
+    c.instSites[fid] = InstanceSite { name: c.funcs[fid].name, span: site }
+    g.instances.push(GenericInstance { targs: targs, target: fid })
+    return fid
+}
+
+fun bindName(c: Checker, n: string, actual: int, binds: {string: int}) {
+    if (actual == T_NULL || actual == T_VOID) {
+        return
+    }
+    var prev = binds[n]
+    if (prev == null) {
+        binds[n] = actual
+        return
+    }
+    if (prev == actual) {
+        return
+    }
+    int? merged = null
+    if ((prev == T_INT && actual == T_FLOAT) || (prev == T_FLOAT && actual == T_INT)) {
+        merged = T_FLOAT
+    } else if (c.types.unwrapOptional(prev) == actual) {
+        merged = prev
+    } else if (c.types.unwrapOptional(actual) == prev) {
+        merged = actual
+    } else {
+        merged = commonType(c, prev, actual)
+    }
+    if (merged != null) {
+        binds[n] = merged
+    }
+}
+
+fun unifyNamed(c: Checker, n: string, args: [TypeExpr], actual: int, names: [string], binds: {string: int}) {
+    var inst = c.instanceOf[actual]
+    if (inst != null) {
+        var tn = defName(c.genericTypes[inst.gid].d).name
+        if (tn == n && len(inst.targs) == len(args)) {
+            for i in 0..len(args) {
+                unify(c, args[i], inst.targs[i], names, binds)
+            }
+        }
+        return
+    }
+    var k = c.types.kindOf(actual)
+    if (len(args) == 1) {
+        if ((n == "Future" || n == "Task" || n == "Promise") && k is Ty.Future) {
+            unify(c, args[0], k.inner, names, binds)
+        } else if ((n == "Array" || n == "List" || n == "array") && k is Ty.Array) {
+            unify(c, args[0], k.elem, names, binds)
+        } else if (n == "Optional" || n == "Option") {
+            if (k is Ty.Optional) {
+                unify(c, args[0], k.inner, names, binds)
+            } else {
+                unify(c, args[0], actual, names, binds)
+            }
+        }
+    } else if (len(args) == 2 && (n == "Map" || n == "map" || n == "Dict") && k is Ty.Map) {
+        unify(c, args[0], k.key, names, binds)
+        unify(c, args[1], k.value, names, binds)
+    }
+}
+
+fun unify(c: Checker, te: TypeExpr, actual: int, names: [string], binds: {string: int}): void {
+    if (actual == T_ERROR) {
+        return
+    }
+    var tk = te.kind
+    var k = c.types.kindOf(actual)
+    if (tk is TypeKind.Named) {
+        if (len(tk.args) == 0 && contains(names, tk.name)) {
+            bindName(c, tk.name, actual, binds)
+        } else {
+            unifyNamed(c, tk.name, tk.args, actual, names, binds)
+        }
+    } else if (tk is TypeKind.Array) {
+        if (k is Ty.Array) {
+            unify(c, tk.elem, k.elem, names, binds)
+        }
+    } else if (tk is TypeKind.Optional) {
+        if (k is Ty.Optional) {
+            unify(c, tk.inner, k.inner, names, binds)
+        } else if (!(k is Ty.Null)) {
+            unify(c, tk.inner, actual, names, binds)
+        }
+    } else if (tk is TypeKind.Map) {
+        if (k is Ty.Map) {
+            unify(c, tk.key, k.key, names, binds)
+            unify(c, tk.value, k.value, names, binds)
+        }
+    } else if (tk is TypeKind.Func) {
+        if (k is Ty.Func) {
+            var n = len(tk.params)
+            if (len(k.params) < n) {
+                n = len(k.params)
+            }
+            for i in 0..n {
+                unify(c, tk.params[i], k.params[i], names, binds)
+            }
+            var r = tk.ret
+            if (r != null) {
+                unify(c, r, k.ret, names, binds)
+            }
+        }
+    }
+}
+
+fun inferArg(c: Checker, e: Expr): int {
+    var hasCtx = len(c.fx) > 0
+    var dry = false
+    {int: int} narrow = {}
+    if (hasCtx) {
+        dry = c.ctx().dry
+        c.ctx().dry = true
+        narrow = c.ctx().narrow
+        c.ctx().narrow = copyNarrowMap(narrow)
+    }
+    c.inferring += 1
+    var t = T_NULL
+    if (!(e.kind is ExprKind.Null)) {
+        t = exprOf(c, e, null).ty
+    }
+    c.inferring -= 1
+    if (hasCtx) {
+        c.ctx().dry = dry
+        c.ctx().narrow = narrow
+    }
+    return t
+}
+
+fun copyNarrowMap(m: {int: int}): {int: int} {
+    {int: int} out = {}
+    for k in keys(m) {
+        out[k] = m[k] ?? 0
+    }
+    return out
+}
+
+fun reportUnbound(c: Checker, what: string, names: [string], binds: {string: int}, span: SrcSpan, example: string): bool {
+    [string] missing = []
+    for n in names {
+        if (!has(binds, n)) {
+            missing.push("`${n}`")
+        }
+    }
+    if (len(missing) == 0) {
+        return false
+    }
+    var d = c.errorDiag(span, "cannot tell which type to use for ${joinWith(missing, ", ")} in ${what}")
+    d.diag.helps.push("give the value a declared type, for example `${example}`")
+    c.emit(d)
+    return true
+}
+
+fun allBound(names: [string], binds: {string: int}): bool {
+    for n in names {
+        if (!has(binds, n)) {
+            return false
+        }
+    }
+    return true
+}
+
+fun boundTypes(names: [string], binds: {string: int}): [int] {
+    [int] out = []
+    for n in names {
+        out.push(binds[n] ?? T_ERROR)
+    }
+    return out
+}
+
+pub fun genericCall(c: Checker, gid: int, recv: HExpr?, args: [Expr], span: SrcSpan, nameSpan: SrcSpan, expected: int?): HExpr {
+    var decl = c.genericFns[gid].decl
+    [string] names = []
+    for t in decl.tparams {
+        names.push(t.name)
+    }
+    {string: int} binds = {}
+    var offset = 0
+    if (recv != null) {
+        offset = 1
+        if (len(decl.params) > 0) {
+            unify(c, decl.params[0].ty, recv.ty, names, binds)
+        }
+    }
+    for i in 0..len(args) {
+        if (i + offset >= len(decl.params)) {
+            continue
+        }
+        var p = decl.params[i + offset]
+        if (typeMentions(p.ty, names)) {
+            var t = inferArg(c, args[i])
+            unify(c, p.ty, t, names, binds)
+        }
+    }
+    var r = decl.ret
+    if (r != null && expected != null && !allBound(names, binds)) {
+        unify(c, r, expected, names, binds)
+    }
+    if (reportUnbound(c, "this call to `${decl.name.name}`", names, binds, span, "[int] items = []")) {
+        for a in args {
+            exprOf(c, a, null)
+        }
+        return errExpr()
+    }
+    var fid = instantiateFn(c, gid, boundTypes(names, binds), span)
+    return directCall(c, fid, recv, args, span, nameSpan)
+}
+
+def type GenericShape {
+    int gid
+    Def d
+    [string] names
+    [Field] fields
+    [Param] params
+}
+
+fun genericShape(c: Checker, name: Ident): GenericShape? {
+    var m = c.curModule()
+    var gid = c.lookupGenericType(m, name.name)
+    if (gid == null) {
+        return null
+    }
+    if (c.typesNamed(m, name.name)) {
+        return null
+    }
+    var d = c.genericTypes[gid].d
+    [string] names = []
+    for t in defTparams(d) {
+        names.push(t.name)
+    }
+    [Field] fields = []
+    [Param] params = []
+    if (d is Def.Type) {
+        fields = d.fields
+    } else if (d is Def.Struct) {
+        fields = d.s.fields
+        params = d.s.params
+    }
+    return GenericShape { gid: gid, d: d, names: names, fields: fields, params: params }
+}
+
+fun expectedInstance(c: Checker, gid: int, expected: int?): int? {
+    if (expected == null) {
+        return null
+    }
+    var exp = c.types.unwrapOptional(expected)
+    var inst = c.instanceOf[exp]
+    if (inst != null && inst.gid == gid) {
+        return exp
+    }
+    return null
+}
+
+fun finishTarget(c: Checker, g: GenericShape, name: Ident, binds: {string: int}): int {
+    var example = "${name.name}<${joinWith(g.names, ", ")}>"
+    var nspan = c.sp(name.span)
+    if (reportUnbound(c, "`${name.name}`", g.names, binds, nspan, example)) {
+        return T_ERROR
+    }
+    return c.instantiateType(g.gid, boundTypes(g.names, binds), nspan)
+}
+
+/** The instance of a generic type that `Name(args)` creates, or null when `Name` is not a generic type. */
+pub fun genericTargetCall(c: Checker, name: Ident, expected: int?, args: [Expr]): int? {
+    var shape = genericShape(c, name)
+    if (shape == null) {
+        return null
+    }
+    GenericShape g = shape
+    var hit = expectedInstance(c, g.gid, expected)
+    if (hit != null) {
+        return hit
+    }
+    {string: int} binds = {}
+    for i in 0..len(args) {
+        TypeExpr? te = null
+        if (len(g.params) == 0) {
+            if (i < len(g.fields)) {
+                te = g.fields[i].ty
+            }
+        } else if (i < len(g.params)) {
+            te = g.params[i].ty
+        }
+        if (te != null && typeMentions(te, g.names)) {
+            var t = inferArg(c, args[i])
+            unify(c, te, t, g.names, binds)
+        }
+    }
+    return finishTarget(c, g, name, binds)
+}
+
+/** The instance of a generic type that `Name { fields }` creates, or null when `Name` is not a generic type. */
+pub fun genericTargetNamed(c: Checker, name: Ident, expected: int?, given: [FieldInit]): int? {
+    var shape = genericShape(c, name)
+    if (shape == null) {
+        return null
+    }
+    GenericShape g = shape
+    var hit = expectedInstance(c, g.gid, expected)
+    if (hit != null) {
+        return hit
+    }
+    {string: int} binds = {}
+    for fi in given {
+        for f in g.fields {
+            if (f.name.name == fi.name.name) {
+                if (typeMentions(f.ty, g.names)) {
+                    var t = inferArg(c, fi.value)
+                    unify(c, f.ty, t, g.names, binds)
+                }
+                break
+            }
+        }
+    }
+    for f in g.fields {
+        if (!typeMentions(f.ty, g.names) || f.value != null) {
+            continue
+        }
+        var named = false
+        for fi in given {
+            if (fi.name.name == f.name.name) {
+                named = true
+            }
+        }
+        if (named) {
+            continue
+        }
+        var unbound = false
+        for n in g.names {
+            if (!has(binds, n) && typeMentions(f.ty, [n])) {
+                unbound = true
+            }
+        }
+        if (unbound) {
+            c.error(c.sp(name.span), "missing field `${f.name.name}` in `${name.name}`")
+            return T_ERROR
+        }
+    }
+    return finishTarget(c, g, name, binds)
+}
