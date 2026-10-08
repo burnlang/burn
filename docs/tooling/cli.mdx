@@ -28,6 +28,7 @@ This page lists every subcommand of `burn`. The shorter toolchain commands map o
 | `burn build <file.bn> --no-strip` | keep symbols in the executable |
 | `burn build <file.bn> --no-std` | build [without the standard library](./no-std.mdx), like `std = false` in burn.toml |
 | `burn check <files...>` | report errors and warnings without running |
+| `burn run\|check --compiler burn ...`, `burn build --compiler burn --target bvm ...` | use the compiler written in Burn (`share/burn/compiler.bvm`, or the module in `BURN_COMPILER_BVM`) instead of the one written in Rust; it only builds bvm modules so far ([details](https://github.com/burnlang/burn/blob/master/compiler/README.md)) |
 | `burn fix [--dry-run] <files...>` | apply the compiler's certain fixes, then report what is left ([details](./fixing-errors.mdx)) |
 | `burn doc [files...] [-o dir]` | generate an HTML reference from Burndoc comments ([details](./burndoc.mdx)) |
 | `burn fmt <files...>` | print formatted code; `-w` rewrites files, `--check` fails when files are not formatted |

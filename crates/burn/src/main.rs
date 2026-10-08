@@ -18,6 +18,7 @@ mod own;
 mod parser;
 mod project;
 mod repl;
+mod selfhost;
 mod source;
 mod targets;
 mod types;
@@ -62,6 +63,8 @@ Usage:
       --no-strip                      keep symbols in the executable
       --no-std                        build without the standard library (same as `std = false` in burn.toml)
   burn check [files...]               type-check without running (default: the whole project)
+  --compiler <rust|burn>              with run, build --target bvm and check: use the compiler written in Burn
+                                      (share/burn/compiler.bvm, or the module in BURN_COMPILER_BVM)
   burn test [filter...]               run every test in the project's tests/ folder
   burn fix [--dry-run] <files...>     apply the compiler's suggested fixes
   burn doc [files...] [-o dir]        generate HTML documentation from Burndoc comments
@@ -120,6 +123,13 @@ fn run_bvm(file: &Path, args: Vec<String>) -> ExitCode {
 fn cmd_run(file: &Path, args: Vec<String>, native_mode: bool) -> ExitCode {
     if is_bvm_file(file) && !native_mode {
         return run_bvm(file, args);
+    }
+    if selfhost::enabled() {
+        if native_mode {
+            eprintln!("error: the compiler written in Burn only builds bvm modules so far; run without --native");
+            return ExitCode::from(2);
+        }
+        return selfhost::run(file, args);
     }
     let c = match compile(file) {
         Some(c) => c,
@@ -484,6 +494,13 @@ fn build_one(file: PathBuf, output: Option<PathBuf>, target: String, emit_asm: O
     if is_bvm_file(&file) {
         return build_bundle(&file, output, emit_asm, strip);
     }
+    if selfhost::enabled() {
+        if !matches!(target.as_str(), "bvm" | "bytecode") {
+            eprintln!("error: the compiler written in Burn only builds bvm modules so far; add `--target bvm`");
+            return ExitCode::from(2);
+        }
+        return selfhost::build_module(&file, output.unwrap_or_else(|| default_output(&file, "bvmc")));
+    }
     let c = match compile(&file) {
         Some(c) => c,
         None => return ExitCode::from(1),
@@ -672,6 +689,9 @@ fn cmd_eval(code: &str) -> ExitCode {
 }
 
 fn cmd_check(files: &[String]) -> ExitCode {
+    if selfhost::enabled() {
+        return selfhost::check(files);
+    }
     let mut failed = false;
     for f in files {
         match driver::compile_path(Path::new(f)) {
@@ -817,8 +837,38 @@ fn take_no_std(args: Vec<String>) -> Vec<String> {
     out
 }
 
+fn take_compiler(args: Vec<String>) -> Result<Vec<String>, ExitCode> {
+    let program = args
+        .iter()
+        .position(|a| !a.starts_with('-') && (a.ends_with(".bn") || is_bvm_file(Path::new(a))));
+    let mut out = Vec::new();
+    let mut it = args.into_iter().enumerate();
+    while let Some((i, a)) = it.next() {
+        let before = program.map(|p| i < p).unwrap_or(true);
+        if before && (a == "--compiler" || a.starts_with("--compiler=")) {
+            let name = match a.strip_prefix("--compiler=") {
+                Some(n) => Some(n.to_string()),
+                None => it.next().map(|(_, n)| n),
+            };
+            match selfhost::wanted(name.as_deref()) {
+                Ok(on) => selfhost::set(on),
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                    return Err(ExitCode::from(2));
+                }
+            }
+        } else {
+            out.push(a);
+        }
+    }
+    Ok(out)
+}
+
 fn main() -> ExitCode {
-    let args = take_no_std(std::env::args().skip(1).collect());
+    let args = match take_compiler(take_no_std(std::env::args().skip(1).collect())) {
+        Ok(a) => a,
+        Err(c) => return c,
+    };
     match tool_name().as_str() {
         "burni" => return burni(&args),
         "burnc" => return burnc(&args),

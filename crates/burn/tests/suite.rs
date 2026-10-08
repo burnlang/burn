@@ -333,6 +333,49 @@ fn compiler_written_in_burn_matches_the_compiler() {
 }
 
 #[test]
+fn the_compiler_written_in_burn_can_be_chosen() {
+    let root = root();
+    let dir = temp_dir("compiler-flag");
+    let compiler = dir.join("compiler.bvm");
+    let (text, code) = output(burn().current_dir(&root).args(["dump", "--bvm", "compiler/src/main.bn"]));
+    assert_eq!(code, 0, "{}", text);
+    std::fs::write(&compiler, text).unwrap();
+    let with = |args: &[&str]| output(burn().current_dir(&root).env("BURN_COMPILER_BVM", &compiler).args(args));
+    let (out, code) = with(&["run", "--compiler", "burn", "tests/cases/basics.bn"]);
+    assert_eq!(code, 0, "{}", out);
+    assert_eq!(out, std::fs::read_to_string(root.join("tests/cases/basics.out")).unwrap());
+    let module = dir.join("fib.bvmc");
+    let (out, code) = with(&[
+        "build",
+        "--compiler",
+        "burn",
+        "--target",
+        "bvm",
+        "examples/fib.bn",
+        "-o",
+        module.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{}", out);
+    let (out, code) = output(burn().arg(&module));
+    assert_eq!(code, 0, "{}", out);
+    assert!(out.starts_with("fib(32) = 2178309"), "{}", out);
+    let (out, code) = with(&["check", "--compiler", "burn", "tests/errors/mismatch.bn"]);
+    assert_eq!(code, 1, "{}", out);
+    assert!(out.contains("expected string but found int"), "{}", out);
+    let (out, code) = with(&["build", "--compiler", "burn", "examples/fib.bn"]);
+    assert_eq!(code, 2, "{}", out);
+    let (out, code) =
+        output(
+            burn()
+                .current_dir(&root)
+                .env("BURN_COMPILER_BVM", dir.join("missing.bvm"))
+                .args(["run", "--compiler", "burn", "tests/cases/basics.bn"]),
+        );
+    assert_ne!(code, 0, "{}", out);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn projects_use_a_standard_layout() {
     let dir = temp_dir("layout");
     let (out, code) = output(burn().current_dir(&dir).args(["init", "github.com/ada/app", "--no-git"]));

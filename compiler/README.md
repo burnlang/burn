@@ -90,7 +90,7 @@ The inputs include the error-recovery fixtures in `tests/lexer` and `tests/parse
 6. **Ownership** (done). `src/lower/own.bn` ports `own.rs`: which locals own their values, retains for borrowed values that are kept, releases at the end of statements, scopes and functions, temporaries for nested calls, and in-place appends for `s += ...` on locals, globals and fields. `burn dump --owned` prints the program after the pass, and the suite compares it on every Burn file in the repository.
 7. **bvm code generation** (done). `src/vm/compile.bn` ports `vm/compile.rs`, and `src/vm/asm.bn` writes the module as bvm assembly (`.bvm`), like `disassemble` in the bvm crate. Burn has no binary file output yet and stage0 cannot get one, so the Burn compiler writes the text form, which `burn <file.bvm>` assembles and runs. `burn dump --bvm` prints it, and the suite compares it on every Burn file in the repository. `src/vm/bits.bn` converts floats to and from their bits for constants, and `src/vm/runtime.bn` (written by `src/bin/genrt.bn`) names the runtime functions.
 8. **Bootstrap** (done, see *Stage0* below). `scripts/bootstrap.sh` runs the compiler in `compiler/src` on itself (stage 1), lets stage 1 build the compiler again (stage 2) and checks that both modules are identical. The CI job `bootstrap` runs it with stage0 on every push, then lets stage 2 compile and run `examples/fib.bn`.
-   - Next: ship stage 2 with the toolchain and let the command line choose the Burn compiler.
+   - `scripts/package.sh` bootstraps the compiler and installs stage 2 as `share/burn/compiler.bvm`, which `--compiler burn` uses.
 9. **After that:** the native x86-64 and JavaScript backends, then the tools (`fmt`, `doc`, `lsp`). The runtime (`crates/burn-runtime`) stays in Rust and is shared by both compilers.
 
 ## Stage0: the last compiler written in Rust
@@ -107,8 +107,11 @@ To cut a release by hand, run the **Release** workflow from the Actions tab with
 
 The compiler runs on bvm. Run it with any `burn`, or build it once and run the module:
 
+Toolchains ship the bootstrapped compiler as `share/burn/compiler.bvm`, and `--compiler burn` makes `burn run`, `burn check` and `burn build --target bvm` use it. `BURN_COMPILER_BVM` points `burn` at another module, such as `compiler/build/stage2.bvm`.
+
 ```sh
-burn compiler/src/main.bn build examples/fib.bn -o fib.bvm   # compile with the Burn compiler
+burn run --compiler burn examples/fib.bn                     # compile with the shipped Burn compiler, run on bvm
+burn compiler/src/main.bn build examples/fib.bn -o fib.bvm   # compile with the Burn compiler from source
 burn fib.bvm                                                 # run the result on bvm
 sh scripts/bootstrap.sh                                      # build compiler/build/stage2.bvm
 burn compiler/build/stage2.bvm build examples/fib.bn         # the compiler built by itself
