@@ -1,0 +1,984 @@
+import "../check/hir.bn"
+import "../check/types.bn"
+
+def enum Want { Owned, Borrowed, Discard }
+
+/** What `reads` looks for in an expression. */
+def enum Probe {
+    WritesLocal(slot: int),
+    MayWrite,
+    IsLocal(slot: int),
+    IsGlobal(id: int),
+    FieldOf(slot: int, index: int),
+    AnyField(index: int)
+}
+
+def type Temps {
+    [int] managed
+    [int] raw
+}
+
+def type Pass {
+    Types types
+    [int] locals
+    [bool] owned
+    [Temps] scopes
+    [int] freeManaged
+    [int] freeRaw
+}
+
+/** Whether values of the type are reference counted, like `managed` in `own.rs`. */
+pub fun managed(types: Types, t: int): bool {
+    var k = types.kindOf(t)
+    return k is Ty.Str || k is Ty.Any || k is Ty.Array || k is Ty.Map || k is Ty.Optional || k is Ty.Func || k is Ty.Future || k is Ty.Record || k is Ty.Interface
+}
+
+fun release(e: HExpr): HExpr {
+    return hexpr(HKind.Release(e), T_VOID)
+}
+
+fun retain(e: HExpr): HExpr {
+    return hexpr(HKind.Retain(e), e.ty)
+}
+
+fun setL(s: int, v: HExpr): HExpr {
+    return setLocal(s, v, v.ty)
+}
+
+fun nullOf(t: int): HExpr {
+    return hexpr(HKind.Null, t)
+}
+
+fun seqOf(stmts: [HStmt], last: HExpr): HExpr {
+    if (len(stmts) == 0) {
+        return last
+    }
+    return hexpr(HKind.Seq(stmts, last), last.ty)
+}
+
+fun hits(types: Types, k: HKind, p: Probe): bool {
+    if (p is Probe.WritesLocal) {
+        return k is HKind.SetLocal && k.slot == p.slot
+    }
+    if (p is Probe.MayWrite) {
+        if (k is HKind.Call || k is HKind.CallIndirect || k is HKind.CallIface || k is HKind.Spawn || k is HKind.SetField || k is HKind.SetGlobal || k is HKind.SetIndex) {
+            return true
+        }
+        if (k is HKind.Rt) {
+            for x in k.args {
+                if (types.kindOf(x.ty) is Ty.Func) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+    if (p is Probe.IsLocal) {
+        return k is HKind.Local && k.slot == p.slot
+    }
+    if (p is Probe.IsGlobal) {
+        return k is HKind.Global && k.id == p.id
+    }
+    if (p is Probe.FieldOf) {
+        if (k is HKind.GetField && k.index == p.index) {
+            var o = k.obj.kind
+            return o is HKind.Local && o.slot == p.slot
+        }
+        return false
+    }
+    if (p is Probe.AnyField) {
+        return k is HKind.GetField && k.index == p.index
+    }
+    return false
+}
+
+fun readsAll(types: Types, xs: [HExpr], p: Probe): bool {
+    for x in xs {
+        if (reads(types, x, p)) {
+            return true
+        }
+    }
+    return false
+}
+
+fun readsStmts(types: Types, ss: [HStmt], p: Probe): bool {
+    for s in ss {
+        if (readsStmt(types, s, p)) {
+            return true
+        }
+    }
+    return false
+}
+
+fun readsStmt(types: Types, s: HStmt, p: Probe): bool {
+    if (s is HStmt.Eval) {
+        return reads(types, s.value, p)
+    }
+    if (s is HStmt.Return) {
+        var v = s.value
+        return v != null && reads(types, v, p)
+    }
+    if (s is HStmt.If) {
+        return reads(types, s.cond, p) || readsStmts(types, s.then, p) || readsStmts(types, s.els, p)
+    }
+    if (s is HStmt.Loop) {
+        var c = s.cond
+        return (c != null && reads(types, c, p)) || readsStmts(types, s.body, p) || readsStmts(types, s.step, p)
+    }
+    return false
+}
+
+/** Whether the expression or anything inside it matches the probe, like `reads` and `visit` in `own.rs`. */
+fun reads(types: Types, e: HExpr, p: Probe): bool {
+    var k = e.kind
+    if (hits(types, k, p)) {
+        return true
+    }
+    if (k is HKind.SetLocal) {
+        return reads(types, k.value, p)
+    }
+    if (k is HKind.SetGlobal) {
+        return reads(types, k.value, p)
+    }
+    if (k is HKind.Unary) {
+        return reads(types, k.value, p)
+    }
+    if (k is HKind.Conv) {
+        return reads(types, k.value, p)
+    }
+    if (k is HKind.GetField) {
+        return reads(types, k.obj, p)
+    }
+    if (k is HKind.ArrLen) {
+        return reads(types, k.value, p)
+    }
+    if (k is HKind.BoxVal) {
+        return reads(types, k.value, p)
+    }
+    if (k is HKind.Retain) {
+        return reads(types, k.value, p)
+    }
+    if (k is HKind.Release) {
+        return reads(types, k.value, p)
+    }
+    if (k is HKind.Binary) {
+        return reads(types, k.left, p) || reads(types, k.right, p)
+    }
+    if (k is HKind.And) {
+        return reads(types, k.left, p) || reads(types, k.right, p)
+    }
+    if (k is HKind.Or) {
+        return reads(types, k.left, p) || reads(types, k.right, p)
+    }
+    if (k is HKind.Index) {
+        return reads(types, k.obj, p) || reads(types, k.index, p)
+    }
+    if (k is HKind.SetField) {
+        return reads(types, k.obj, p) || reads(types, k.value, p)
+    }
+    if (k is HKind.SetIndex) {
+        return reads(types, k.obj, p) || reads(types, k.index, p) || reads(types, k.value, p)
+    }
+    if (k is HKind.Call) {
+        return readsAll(types, k.args, p)
+    }
+    if (k is HKind.CallIface) {
+        return readsAll(types, k.args, p)
+    }
+    if (k is HKind.Rt) {
+        return readsAll(types, k.args, p)
+    }
+    if (k is HKind.Spawn) {
+        return readsAll(types, k.args, p)
+    }
+    if (k is HKind.NewStruct) {
+        return readsAll(types, k.args, p)
+    }
+    if (k is HKind.NewArray) {
+        return readsAll(types, k.items, p)
+    }
+    if (k is HKind.CallIndirect) {
+        return reads(types, k.callee, p) || readsAll(types, k.args, p)
+    }
+    if (k is HKind.Seq) {
+        return readsStmts(types, k.stmts, p) || reads(types, k.value, p)
+    }
+    return false
+}
+
+fun writesLocal(types: Types, e: HExpr, slot: int): bool {
+    return reads(types, e, Probe.WritesLocal(slot))
+}
+
+fun isConcat(e: HExpr): bool {
+    var k = e.kind
+    return k is HKind.Rt && k.name == "StrConcat" && len(k.args) == 2
+}
+
+fun concatBase(e: HExpr): HExpr? {
+    var k = e.kind
+    if (k is HKind.Rt && k.name == "StrConcat" && len(k.args) == 2) {
+        return concatBase(k.args[0]) ?? k.args[0]
+    }
+    return null
+}
+
+fun concatParts(e: HExpr, out: [HExpr]): void {
+    var k = e.kind
+    if (k is HKind.Rt && k.name == "StrConcat" && len(k.args) >= 2) {
+        concatParts(k.args[0], out)
+        out.push(k.args[1])
+    }
+}
+
+fun concatRefs(e: HExpr, out: [HExpr]): void {
+    var k = e.kind
+    if (k is HKind.Rt && k.name == "StrConcat" && len(k.args) == 2) {
+        concatRefs(k.args[0], out)
+        out.push(k.args[1])
+    }
+}
+
+fun append(a: HExpr, b: HExpr): HExpr {
+    return rt("StrAppend", [a, b], T_STR)
+}
+
+fun isFresh(e: HExpr): bool {
+    var k = e.kind
+    if (k is HKind.Seq) {
+        return isFresh(k.value)
+    }
+    return k is HKind.Call || k is HKind.CallIndirect || k is HKind.CallIface || k is HKind.Rt || k is HKind.Spawn || k is HKind.NewStruct || k is HKind.NewArray
+}
+
+fun isStatic(e: HExpr): bool {
+    return e.kind is HKind.Str || e.kind is HKind.Null
+}
+
+fun diverges(stmts: [HStmt]): bool {
+    return len(stmts) > 0 && stmts[len(stmts) - 1] is HStmt.Return
+}
+
+fun mayWrite(p: Pass, e: HExpr): bool {
+    return reads(p.types, e, Probe.MayWrite)
+}
+
+fun appendable(p: Pass, v: HExpr, base: Probe, conflict: Probe, heap: bool): bool {
+    var b = concatBase(v)
+    if (b == null || !hits(p.types, b.kind, base)) {
+        return false
+    }
+    [HExpr] parts = []
+    concatRefs(v, parts)
+    if (len(parts) > 1) {
+        for x in parts {
+            if (reads(p.types, x, conflict)) {
+                return false
+            }
+        }
+    }
+    if (!heap) {
+        return true
+    }
+    for x in parts {
+        if (mayWrite(p, x)) {
+            return false
+        }
+    }
+    return true
+}
+
+fun isManaged(p: Pass, t: int): bool {
+    return managed(p.types, t)
+}
+
+fun newSlot(p: Pass, t: int, owned: bool): int {
+    p.locals.push(t)
+    p.owned.push(owned)
+    return len(p.locals) - 1
+}
+
+fun temp(p: Pass, t: int): int {
+    var s = 0
+    if (len(p.freeManaged) > 0) {
+        s = p.freeManaged[len(p.freeManaged) - 1]
+        p.freeManaged = slice(p.freeManaged, 0, len(p.freeManaged) - 1)
+        p.locals[s] = t
+    } else {
+        s = newSlot(p, t, true)
+    }
+    if (len(p.scopes) > 0) {
+        p.scopes[len(p.scopes) - 1].managed.push(s)
+    }
+    return s
+}
+
+fun raw(p: Pass, t: int): int {
+    var s = 0
+    if (len(p.freeRaw) > 0) {
+        s = p.freeRaw[len(p.freeRaw) - 1]
+        p.freeRaw = slice(p.freeRaw, 0, len(p.freeRaw) - 1)
+        p.locals[s] = t
+    } else {
+        s = newSlot(p, t, false)
+    }
+    if (len(p.scopes) > 0) {
+        p.scopes[len(p.scopes) - 1].raw.push(s)
+    }
+    return s
+}
+
+fun pushScope(p: Pass) {
+    p.scopes.push(Temps { managed: [], raw: [] })
+}
+
+fun popScope(p: Pass, out: [HStmt]) {
+    if (len(p.scopes) == 0) {
+        return
+    }
+    var sc = p.scopes[len(p.scopes) - 1]
+    p.scopes = slice(p.scopes, 0, len(p.scopes) - 1)
+    for t in sc.managed {
+        var ty = p.locals[t]
+        out.push(HStmt.Eval(release(local(t, ty))))
+        out.push(HStmt.Eval(setL(t, nullOf(ty))))
+        p.freeManaged.push(t)
+    }
+    for t in sc.raw {
+        p.freeRaw.push(t)
+    }
+}
+
+fun scopeHasTemps(p: Pass): bool {
+    return len(p.scopes) > 0 && len(p.scopes[len(p.scopes) - 1].managed) > 0
+}
+
+fun releaseAll(p: Pass): [HStmt] {
+    [HStmt] out = []
+    for i in 0..len(p.owned) {
+        if (p.owned[i]) {
+            out.push(HStmt.Eval(release(local(i, p.locals[i]))))
+        }
+    }
+    return out
+}
+
+fun extend(out: [HStmt], more: [HStmt]) {
+    for s in more {
+        out.push(s)
+    }
+}
+
+fun block(p: Pass, stmts: [HStmt]): [HStmt] {
+    [HStmt] out = []
+    for s in stmts {
+        stmt(p, s, out)
+    }
+    return out
+}
+
+fun anyOwned(p: Pass): bool {
+    for o in p.owned {
+        if (o) {
+            return true
+        }
+    }
+    return false
+}
+
+fun ownedSlot(p: Pass, s: int): bool {
+    return s < len(p.owned) && p.owned[s]
+}
+
+fun stmt(p: Pass, s: HStmt, out: [HStmt]): void {
+    if (s is HStmt.Eval) {
+        pushScope(p)
+        discard(p, s.value, out)
+        popScope(p, out)
+        return
+    }
+    if (s is HStmt.If) {
+        pushScope(p)
+        var c2 = expr(p, s.cond, Want.Borrowed)
+        if (scopeHasTemps(p)) {
+            var tc = newSlot(p, T_BOOL, false)
+            out.push(HStmt.Eval(setL(tc, c2)))
+            c2 = local(tc, T_BOOL)
+        }
+        popScope(p, out)
+        var a2 = block(p, s.then)
+        var b2 = block(p, s.els)
+        out.push(HStmt.If(c2, a2, b2))
+        return
+    }
+    if (s is HStmt.Loop) {
+        [HStmt] prefix = []
+        HExpr? cond2 = null
+        var c = s.cond
+        if (c != null) {
+            pushScope(p)
+            var c2 = expr(p, c, Want.Borrowed)
+            if (scopeHasTemps(p)) {
+                var tc = newSlot(p, T_BOOL, false)
+                prefix.push(HStmt.Eval(setL(tc, c2)))
+                popScope(p, prefix)
+                var not = hexpr(HKind.Unary(HUnOp.Not, local(tc, T_BOOL)), T_BOOL)
+                prefix.push(HStmt.If(not, [HStmt.Break], []))
+            } else {
+                popScope(p, prefix)
+                cond2 = c2
+            }
+        }
+        var b2 = prefix
+        extend(b2, block(p, s.body))
+        var s2 = block(p, s.step)
+        out.push(HStmt.Loop(cond2, b2, s2))
+        return
+    }
+    if (s is HStmt.Return) {
+        var rv = s.value
+        if (rv == null) {
+            extend(out, releaseAll(p))
+            out.push(HStmt.Return(null))
+            return
+        }
+        HExpr v = rv
+        var hasOwned = anyOwned(p)
+        if (!isManaged(p, v.ty)) {
+            pushScope(p)
+            var v2 = expr(p, v, Want.Borrowed)
+            var t = v2.ty
+            var tr = newSlot(p, t, false)
+            out.push(HStmt.Eval(setL(tr, v2)))
+            popScope(p, out)
+            extend(out, releaseAll(p))
+            out.push(HStmt.Return(local(tr, t)))
+            return
+        }
+        var vk = v.kind
+        if (vk is HKind.Local && ownedSlot(p, vk.slot)) {
+            var t = v.ty
+            var tr = newSlot(p, t, false)
+            out.push(HStmt.Eval(setL(tr, local(vk.slot, t))))
+            out.push(HStmt.Eval(setL(vk.slot, nullOf(t))))
+            extend(out, releaseAll(p))
+            out.push(HStmt.Return(local(tr, t)))
+            return
+        }
+        pushScope(p)
+        var v2 = expr(p, v, Want.Owned)
+        if (!hasOwned && !scopeHasTemps(p)) {
+            popScope(p, out)
+            out.push(HStmt.Return(v2))
+            return
+        }
+        var t = v2.ty
+        var tr = newSlot(p, t, false)
+        out.push(HStmt.Eval(setL(tr, v2)))
+        popScope(p, out)
+        extend(out, releaseAll(p))
+        out.push(HStmt.Return(local(tr, t)))
+        return
+    }
+    out.push(s)
+}
+
+fun discard(p: Pass, e: HExpr, out: [HStmt]): void {
+    var k = e.kind
+    if (k is HKind.SetLocal && ownedSlot(p, k.slot)) {
+        assignLocal(p, k.slot, p.locals[k.slot], k.value, out)
+        return
+    }
+    if (k is HKind.SetGlobal && isManaged(p, e.ty)) {
+        assignGlobal(p, k.id, e.ty, k.value, out)
+        return
+    }
+    if (k is HKind.SetField && isManaged(p, k.value.ty)) {
+        assignField(p, k.obj, k.index, k.value, out)
+        return
+    }
+    if (k is HKind.SetIndex && isManaged(p, k.value.ty)) {
+        assignIndex(p, k.obj, k.index, k.value, k.loc, out)
+        return
+    }
+    if (k is HKind.Seq) {
+        for s in k.stmts {
+            stmt(p, s, out)
+        }
+        discard(p, k.value, out)
+        return
+    }
+    var e2 = expr(p, e, Want.Discard)
+    var k2 = e2.kind
+    if (!(k2 is HKind.Int || k2 is HKind.Null || k2 is HKind.Local || k2 is HKind.Global || k2 is HKind.Str)) {
+        out.push(HStmt.Eval(e2))
+    }
+}
+
+fun assignLocal(p: Pass, s: int, ty: int, v: HExpr, out: [HStmt]) {
+    if (ty == T_STR && !writesLocal(p.types, v, s) && appendable(p, v, Probe.IsLocal(s), Probe.IsLocal(s), false)) {
+        [HExpr] parts = []
+        concatParts(v, parts)
+        for b in parts {
+            var b2 = expr(p, b, Want.Borrowed)
+            out.push(HStmt.Eval(setL(s, append(local(s, ty), b2))))
+        }
+        return
+    }
+    var safe = !writesLocal(p.types, v, s)
+    var old = raw(p, ty)
+    var v2 = expr(p, v, Want.Owned)
+    if (safe) {
+        out.push(HStmt.Eval(setL(old, local(s, ty))))
+        out.push(HStmt.Eval(setL(s, v2)))
+    } else {
+        var tv = raw(p, ty)
+        out.push(HStmt.Eval(setL(tv, v2)))
+        out.push(HStmt.Eval(setL(old, local(s, ty))))
+        out.push(HStmt.Eval(setL(s, local(tv, ty))))
+    }
+    out.push(HStmt.Eval(release(local(old, ty))))
+}
+
+fun assignGlobal(p: Pass, g: int, ty: int, v: HExpr, out: [HStmt]) {
+    if (ty == T_STR && appendable(p, v, Probe.IsGlobal(g), Probe.IsGlobal(g), true)) {
+        [HExpr] parts = []
+        concatParts(v, parts)
+        for b in parts {
+            var b2 = expr(p, b, Want.Borrowed)
+            var cur = hexpr(HKind.Global(g), ty)
+            out.push(HStmt.Eval(hexpr(HKind.SetGlobal(g, append(cur, b2)), ty)))
+        }
+        return
+    }
+    var effects = hasSideEffects(v)
+    var old = raw(p, ty)
+    var v2 = expr(p, v, Want.Owned)
+    var gl = hexpr(HKind.Global(g), ty)
+    if (effects) {
+        var tv = raw(p, ty)
+        out.push(HStmt.Eval(setL(tv, v2)))
+        out.push(HStmt.Eval(setL(old, gl)))
+        out.push(HStmt.Eval(hexpr(HKind.SetGlobal(g, local(tv, ty)), ty)))
+    } else {
+        out.push(HStmt.Eval(setL(old, gl)))
+        out.push(HStmt.Eval(hexpr(HKind.SetGlobal(g, v2), ty)))
+    }
+    out.push(HStmt.Eval(release(local(old, ty))))
+}
+
+fun stash(p: Pass, e: HExpr, out: [HStmt]): HExpr {
+    var k = e.kind
+    if (k is HKind.Local || k is HKind.Int || k is HKind.Null || k is HKind.Str) {
+        return e
+    }
+    var t = e.ty
+    var s = raw(p, t)
+    out.push(HStmt.Eval(setL(s, e)))
+    return local(s, t)
+}
+
+fun assignField(p: Pass, o: HExpr, i: int, v: HExpr, out: [HStmt]): HExpr {
+    var ty = v.ty
+    var ok = o.kind
+    if (ok is HKind.Local && ty == T_STR) {
+        var slot = ok.slot
+        if (!writesLocal(p.types, v, slot) && appendable(p, v, Probe.FieldOf(slot, i), Probe.AnyField(i), true)) {
+            var obj = expr(p, o, Want.Borrowed)
+            [HExpr] parts = []
+            concatParts(v, parts)
+            for b in parts {
+                var b2 = expr(p, b, Want.Borrowed)
+                var cur = hexpr(HKind.GetField(obj, i), ty)
+                out.push(HStmt.Eval(hexpr(HKind.SetField(obj, i, append(cur, b2)), ty)))
+            }
+            return hexpr(HKind.GetField(obj, i), ty)
+        }
+    }
+    var effects = hasSideEffects(v)
+    var o2 = expr(p, o, Want.Borrowed)
+    var obj = stash(p, o2, out)
+    var v2 = expr(p, v, Want.Owned)
+    var val = v2
+    if (effects) {
+        val = stash(p, v2, out)
+    }
+    var old = raw(p, ty)
+    out.push(HStmt.Eval(setL(old, hexpr(HKind.GetField(obj, i), ty))))
+    out.push(HStmt.Eval(hexpr(HKind.SetField(obj, i, val), ty)))
+    out.push(HStmt.Eval(release(local(old, ty))))
+    return hexpr(HKind.GetField(obj, i), ty)
+}
+
+fun assignIndex(p: Pass, a: HExpr, i: HExpr, v: HExpr, l: int, out: [HStmt]): HExpr {
+    var ty = v.ty
+    var effects = hasSideEffects(v)
+    var a2 = expr(p, a, Want.Borrowed)
+    var arr = stash(p, a2, out)
+    var i2 = expr(p, i, Want.Borrowed)
+    var idx = stash(p, i2, out)
+    var v2 = expr(p, v, Want.Owned)
+    var val = v2
+    if (effects) {
+        val = stash(p, v2, out)
+    }
+    var old = raw(p, ty)
+    out.push(HStmt.Eval(setL(old, hexpr(HKind.Index(arr, idx, l), ty))))
+    out.push(HStmt.Eval(hexpr(HKind.SetIndex(arr, idx, val, l), ty)))
+    out.push(HStmt.Eval(release(local(old, ty))))
+    return hexpr(HKind.Index(arr, idx, l), ty)
+}
+
+fun fresh(p: Pass, e: HExpr, want: Want): HExpr {
+    if (!isManaged(p, e.ty)) {
+        return e
+    }
+    if (want == Want.Owned) {
+        return e
+    }
+    if (want == Want.Discard) {
+        return release(e)
+    }
+    var s = temp(p, e.ty)
+    return setL(s, e)
+}
+
+fun borrowed(p: Pass, e: HExpr, want: Want): HExpr {
+    if (want == Want.Owned && isManaged(p, e.ty)) {
+        return retain(e)
+    }
+    return e
+}
+
+fun args(p: Pass, xs: [HExpr], user: bool): [HExpr] {
+    var n = len(xs)
+    [bool] effects = []
+    for i in 0..n {
+        var later = false
+        for j in i + 1..n {
+            if (hasSideEffects(xs[j])) {
+                later = true
+            }
+        }
+        effects.push(later)
+    }
+    [HExpr] out = []
+    for i in 0..n {
+        var x = xs[i]
+        var stable = !isManaged(p, x.ty) || isFresh(x) || isStatic(x) || x.kind is HKind.Local
+        if (stable || (!user && !effects[i])) {
+            out.push(expr(p, x, Want.Borrowed))
+        } else {
+            var t = x.ty
+            var x2 = expr(p, x, Want.Owned)
+            var s = temp(p, t)
+            out.push(setL(s, x2))
+        }
+    }
+    return out
+}
+
+fun ownedAll(p: Pass, xs: [HExpr]): [HExpr] {
+    [HExpr] out = []
+    for x in xs {
+        out.push(expr(p, x, Want.Owned))
+    }
+    return out
+}
+
+fun expr(p: Pass, e: HExpr, want: Want): HExpr {
+    var ty = e.ty
+    var k = e.kind
+    if (k is HKind.Int || k is HKind.TypeId || k is HKind.LocId || k is HKind.Float || k is HKind.Bool || k is HKind.Str || k is HKind.Null || k is HKind.FuncRef) {
+        return e
+    }
+    if (k is HKind.Local || k is HKind.Global) {
+        return borrowed(p, e, want)
+    }
+    if (k is HKind.SetLocal) {
+        if (ownedSlot(p, k.slot)) {
+            var st = p.locals[k.slot]
+            [HStmt] out = []
+            assignLocal(p, k.slot, st, k.value, out)
+            return borrowed(p, seqOf(out, local(k.slot, st)), want)
+        }
+        return hexpr(HKind.SetLocal(k.slot, expr(p, k.value, Want.Borrowed)), ty)
+    }
+    if (k is HKind.SetGlobal) {
+        if (isManaged(p, ty)) {
+            [HStmt] out = []
+            assignGlobal(p, k.id, ty, k.value, out)
+            return borrowed(p, seqOf(out, hexpr(HKind.Global(k.id), ty)), want)
+        }
+        return hexpr(HKind.SetGlobal(k.id, expr(p, k.value, Want.Borrowed)), ty)
+    }
+    if (k is HKind.SetField) {
+        if (isManaged(p, k.value.ty)) {
+            [HStmt] out = []
+            var r = assignField(p, k.obj, k.index, k.value, out)
+            return borrowed(p, seqOf(out, r), want)
+        }
+        var o2 = expr(p, k.obj, Want.Borrowed)
+        var v2 = expr(p, k.value, Want.Borrowed)
+        return hexpr(HKind.SetField(o2, k.index, v2), ty)
+    }
+    if (k is HKind.SetIndex) {
+        if (isManaged(p, k.value.ty)) {
+            [HStmt] out = []
+            var r = assignIndex(p, k.obj, k.index, k.value, k.loc, out)
+            return borrowed(p, seqOf(out, r), want)
+        }
+        var a2 = expr(p, k.obj, Want.Borrowed)
+        var i2 = expr(p, k.index, Want.Borrowed)
+        var v2 = expr(p, k.value, Want.Borrowed)
+        return hexpr(HKind.SetIndex(a2, i2, v2, k.loc), ty)
+    }
+    if (k is HKind.Unary) {
+        return hexpr(HKind.Unary(k.op, expr(p, k.value, Want.Borrowed)), ty)
+    }
+    if (k is HKind.Conv) {
+        return hexpr(HKind.Conv(k.conv, expr(p, k.value, Want.Borrowed)), ty)
+    }
+    if (k is HKind.Binary) {
+        var a2 = expr(p, k.left, Want.Borrowed)
+        var b2 = expr(p, k.right, Want.Borrowed)
+        return hexpr(HKind.Binary(k.op, a2, b2), ty)
+    }
+    if (k is HKind.And) {
+        var a2 = expr(p, k.left, Want.Borrowed)
+        var b2 = expr(p, k.right, Want.Borrowed)
+        return hexpr(HKind.And(a2, b2), ty)
+    }
+    if (k is HKind.Or) {
+        var a2 = expr(p, k.left, Want.Borrowed)
+        var b2 = expr(p, k.right, Want.Borrowed)
+        return hexpr(HKind.Or(a2, b2), ty)
+    }
+    if (k is HKind.ArrLen) {
+        return hexpr(HKind.ArrLen(expr(p, k.value, Want.Borrowed)), ty)
+    }
+    if (k is HKind.Call) {
+        var xs = args(p, k.args, true)
+        return fresh(p, hexpr(HKind.Call(k.func, xs), ty), want)
+    }
+    if (k is HKind.CallIface) {
+        var xs = args(p, k.args, true)
+        return fresh(p, hexpr(HKind.CallIface(k.slot, xs), ty), want)
+    }
+    if (k is HKind.CallIndirect) {
+        var xs = args(p, k.args, true)
+        var c2 = expr(p, k.callee, Want.Borrowed)
+        return fresh(p, hexpr(HKind.CallIndirect(c2, xs), ty), want)
+    }
+    if (k is HKind.Rt) {
+        var xs = args(p, k.args, false)
+        return fresh(p, hexpr(HKind.Rt(k.name, xs), ty), want)
+    }
+    if (k is HKind.Spawn) {
+        return fresh(p, hexpr(HKind.Spawn(k.func, ownedAll(p, k.args)), ty), want)
+    }
+    if (k is HKind.NewStruct) {
+        return fresh(p, hexpr(HKind.NewStruct(k.ty, ownedAll(p, k.args)), ty), want)
+    }
+    if (k is HKind.NewArray) {
+        return fresh(p, hexpr(HKind.NewArray(k.ty, ownedAll(p, k.items)), ty), want)
+    }
+    if (k is HKind.GetField) {
+        var o2 = expr(p, k.obj, Want.Borrowed)
+        return borrowed(p, hexpr(HKind.GetField(o2, k.index), ty), want)
+    }
+    if (k is HKind.Index) {
+        var a2 = expr(p, k.obj, Want.Borrowed)
+        var i2 = expr(p, k.index, Want.Borrowed)
+        return borrowed(p, hexpr(HKind.Index(a2, i2, k.loc), ty), want)
+    }
+    if (k is HKind.BoxVal) {
+        var x2 = expr(p, k.value, Want.Borrowed)
+        return borrowed(p, hexpr(HKind.BoxVal(x2), ty), want)
+    }
+    if (k is HKind.Seq) {
+        [HStmt] out = []
+        for s in k.stmts {
+            stmt(p, s, out)
+        }
+        var x2 = expr(p, k.value, want)
+        return seqOf(out, x2)
+    }
+    return e
+}
+
+fun collectSets(e: HExpr, out: [bool]): void {
+    var k = e.kind
+    if (k is HKind.SetLocal && k.slot < len(out)) {
+        out[k.slot] = true
+    }
+    for x in children(e) {
+        collectSets(x, out)
+    }
+    if (k is HKind.Seq) {
+        for s in k.stmts {
+            collectSetsStmt(s, out)
+        }
+    }
+}
+
+fun collectSetsStmt(s: HStmt, out: [bool]): void {
+    if (s is HStmt.Eval) {
+        collectSets(s.value, out)
+    } else if (s is HStmt.Return) {
+        var v = s.value
+        if (v != null) {
+            collectSets(v, out)
+        }
+    } else if (s is HStmt.If) {
+        collectSets(s.cond, out)
+        for x in s.then {
+            collectSetsStmt(x, out)
+        }
+        for x in s.els {
+            collectSetsStmt(x, out)
+        }
+    } else if (s is HStmt.Loop) {
+        var c = s.cond
+        if (c != null) {
+            collectSets(c, out)
+        }
+        for x in s.body {
+            collectSetsStmt(x, out)
+        }
+        for x in s.step {
+            collectSetsStmt(x, out)
+        }
+    }
+}
+
+/** The direct child expressions, in the order `visit` in `own.rs` walks them; a `Seq`'s statements are walked separately. */
+fun children(e: HExpr): [HExpr] {
+    var k = e.kind
+    if (k is HKind.SetLocal) {
+        return [k.value]
+    }
+    if (k is HKind.SetGlobal) {
+        return [k.value]
+    }
+    if (k is HKind.Unary) {
+        return [k.value]
+    }
+    if (k is HKind.Conv) {
+        return [k.value]
+    }
+    if (k is HKind.GetField) {
+        return [k.obj]
+    }
+    if (k is HKind.ArrLen) {
+        return [k.value]
+    }
+    if (k is HKind.BoxVal) {
+        return [k.value]
+    }
+    if (k is HKind.Retain) {
+        return [k.value]
+    }
+    if (k is HKind.Release) {
+        return [k.value]
+    }
+    if (k is HKind.Binary) {
+        return [k.left, k.right]
+    }
+    if (k is HKind.And) {
+        return [k.left, k.right]
+    }
+    if (k is HKind.Or) {
+        return [k.left, k.right]
+    }
+    if (k is HKind.Index) {
+        return [k.obj, k.index]
+    }
+    if (k is HKind.SetField) {
+        return [k.obj, k.value]
+    }
+    if (k is HKind.SetIndex) {
+        return [k.obj, k.index, k.value]
+    }
+    if (k is HKind.Call) {
+        return k.args
+    }
+    if (k is HKind.CallIface) {
+        return k.args
+    }
+    if (k is HKind.Rt) {
+        return k.args
+    }
+    if (k is HKind.Spawn) {
+        return k.args
+    }
+    if (k is HKind.NewStruct) {
+        return k.args
+    }
+    if (k is HKind.NewArray) {
+        return k.items
+    }
+    if (k is HKind.CallIndirect) {
+        return withFirst(k.callee, k.args)
+    }
+    if (k is HKind.Seq) {
+        return [k.value]
+    }
+    return []
+}
+
+fun withFirst(first: HExpr, rest: [HExpr]): [HExpr] {
+    [HExpr] out = [first]
+    for x in rest {
+        out.push(x)
+    }
+    return out
+}
+
+fun lowerFunc(types: Types, f: HFunc): HFunc {
+    var nparams = f.params
+    [bool] assigned = []
+    for t in f.locals {
+        assigned.push(false)
+    }
+    for s in f.body {
+        collectSetsStmt(s, assigned)
+    }
+    [bool] owned = []
+    for i in 0..len(f.locals) {
+        owned.push(managed(types, f.locals[i]) && (i >= nparams || assigned[i] || f.isAsync))
+    }
+    var p = Pass { types: types, locals: slice(f.locals, 0, len(f.locals)), owned: owned, scopes: [], freeManaged: [], freeRaw: [] }
+    var out = block(p, f.body)
+    if (!diverges(out)) {
+        extend(out, releaseAll(p))
+    }
+    [HStmt] pre = []
+    for i in 0..len(p.owned) {
+        if (!p.owned[i]) {
+            continue
+        }
+        if (i < nparams) {
+            if (!f.isAsync) {
+                pre.push(HStmt.Eval(retain(local(i, p.locals[i]))))
+            }
+        } else {
+            pre.push(HStmt.Eval(setL(i, nullOf(p.locals[i]))))
+        }
+    }
+    extend(pre, out)
+    return HFunc { name: f.name, params: f.params, locals: p.locals, ret: f.ret, body: pre, isAsync: f.isAsync, span: f.span, endLoc: f.endLoc, annotations: f.annotations, external: f.external }
+}
+
+/** Adds reference counting to every function, like `own::lower` in Rust. */
+pub fun lowerOwnership(types: Types, funcs: [HFunc]): [HFunc] {
+    [HFunc] out = []
+    for f in funcs {
+        if (f.external != null) {
+            out.push(f)
+        } else {
+            out.push(lowerFunc(types, f))
+        }
+    }
+    return out
+}

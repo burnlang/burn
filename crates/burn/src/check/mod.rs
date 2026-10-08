@@ -333,7 +333,11 @@ pub fn declarations(loaded: &Loaded) -> String {
 }
 
 pub fn checked(loaded: &Loaded) -> String {
-    hirdump::dump(loaded)
+    hirdump::dump(loaded, false)
+}
+
+pub fn owned(loaded: &Loaded) -> String {
+    hirdump::dump(loaded, true)
 }
 
 pub fn edit_distance(a: &str, b: &str) -> usize {

@@ -27,7 +27,17 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const TEXT_DUMPS: &[&str] = &["--tokens", "--ast", "--diagnostics", "--toml", "--project", "--modules", "--decls", "--checked"];
+const TEXT_DUMPS: &[&str] = &[
+    "--tokens",
+    "--ast",
+    "--diagnostics",
+    "--toml",
+    "--project",
+    "--modules",
+    "--decls",
+    "--checked",
+    "--owned",
+];
 
 fn usage() {
     println!(
@@ -876,11 +886,12 @@ fn main() -> ExitCode {
                 if rest.len() > 2 {
                     println!("file {}", f);
                 }
-                if mode == "--project" || mode == "--modules" || mode == "--decls" || mode == "--checked" {
+                if mode == "--project" || mode == "--modules" || mode == "--decls" || mode == "--checked" || mode == "--owned" {
                     let out = match mode.as_str() {
                         "--project" => loaddump::project(Path::new(f)),
                         "--modules" => loaddump::modules(Path::new(f)),
                         "--checked" => loaddump::checked(Path::new(f)),
+                        "--owned" => loaddump::owned(Path::new(f)),
                         _ => loaddump::declarations(Path::new(f)),
                     };
                     print!("{}", out);
@@ -909,7 +920,7 @@ fn main() -> ExitCode {
                 [w, f] if w.starts_with("--") => (w.trim_start_matches("--").to_string(), f.clone()),
                 [f] => ("hir".to_string(), f.clone()),
                 _ => {
-                    eprintln!("usage: burn dump [--hir|--bytecode|--asm|--js] <file.bn>  |  burn dump --tokens|--ast|--diagnostics|--toml|--project|--modules|--decls|--checked <files...>");
+                    eprintln!("usage: burn dump [--hir|--bytecode|--asm|--js] <file.bn>  |  burn dump --tokens|--ast|--diagnostics|--toml|--project|--modules|--decls|--checked|--owned <files...>");
                     return ExitCode::from(2);
                 }
             };

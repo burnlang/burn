@@ -12,7 +12,8 @@ This directory holds the self-hosted Burn compiler. It is ported from the compil
 | `src/diag/` | diagnostics and how they are printed | `diag.rs`, `source.rs` |
 | `src/project/` | `burn.toml`, `burn.lock`, workspaces, paths, the module loader and the embedded standard library | `project.rs`, `loader.rs` |
 | `src/check/` | the type table and the type checker | `types.rs`, `hir.rs`, `check/` |
-| `src/dump/` | the `burn dump` text forms that the tests compare | `astdump.rs`, `loaddump.rs`, `check/declsdump.rs` |
+| `src/lower/` | passes over the checked program: ownership (reference counting) | `own.rs` |
+| `src/dump/` | the `burn dump` text forms that the tests compare | `astdump.rs`, `loaddump.rs`, `check/declsdump.rs`, `check/hirdump.rs` |
 | `src/main.bn` | the entry point; for now it prints the `burn dump` forms | |
 | `src/bin/genstd.bn` | writes `src/project/stdlib.bn` from `lib/std` | |
 
@@ -32,6 +33,7 @@ The Rust compiler can print every stage in a fixed text form. The Burn port prin
 | Every module a program loads, and import errors | `crates/burn/src/loader.rs` | `src/project/loader.bn`, `src/project/stdlib.bn` | `burn dump --modules <files...>` |
 | Declared types, functions, globals and their errors | `crates/burn/src/types.rs`, `check/` up to `declare` | `src/check/types.bn`, `src/check/check.bn`, `src/check/hir.bn` | `burn dump --decls <files...>` |
 | Checked program (functions, statements and expressions after type checking) and checker errors | `crates/burn/src/check/` | `src/check/body.bn` and the files next to it | `burn dump --checked <files...>` |
+| The program after ownership, with `Retain`, `Release` and their temporaries | `crates/burn/src/own.rs` | `src/lower/own.bn` | `burn dump --owned <files...>` |
 
 Run the comparison by hand with:
 
@@ -81,7 +83,7 @@ The inputs include the error-recovery fixtures in `tests/lexer` and `tests/parse
    - function bodies: `src/check/body.bn` checks every function and top-level statement, and `burn dump --checked` prints the checked program (types, functions with their statements and expressions, globals, strings, source locations and interface slots) or the errors.
      The files next to it port the matching Rust files: `expr.bn`, `calls.bn`, `builtins.bn`, `stmt.bn`, `closures.bn`, `generics.bn`, `numeric.bn` (with `wide.bn` for 128-bit constant folding), `matching.bn` (`match`), `nullsafe.bn` (`?.`, `??` and `as?`), `structs.bn` (constructors, inheritance, abstract methods, virtual calls and their devirtualization, static values, `new`, generic structs, adding functions to objects and `destroy`), `annotations.bn` (`annotationsOf` and mixins) and `init_order.bn`.
      The suite compares `burn dump --checked` on every Burn file in the repository. The fixtures in `tests/check/bodies` cover closures, generic functions, return types, initialization order, sized numbers, `match`, the nullable operators and structs.
-6. **Ownership.** Port `own.rs` and compare the HIR after ownership.
+6. **Ownership** (done). `src/lower/own.bn` ports `own.rs`: which locals own their values, retains for borrowed values that are kept, releases at the end of statements, scopes and functions, temporaries for nested calls, and in-place appends for `s += ...` on locals, globals and fields. `burn dump --owned` prints the program after the pass, and the suite compares it on every Burn file in the repository.
 7. **bvm code generation.** Port `vm/compile.rs` and compare `burn dump --bytecode`.
 8. **Bootstrap** (see *Stage0* below).
    - The Rust compiler builds the Burn compiler (stage 1).
