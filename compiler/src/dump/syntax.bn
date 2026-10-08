@@ -1,7 +1,7 @@
-import "ast.bn"
-import "diag.bn"
-import "lexer.bn"
-import "parser.bn"
+import "../diag/diag.bn"
+import "../syntax/ast.bn"
+import "../syntax/lexer.bn"
+import "../syntax/parser.bn"
 
 /** Writes text the way `burn dump` does: quoted, with control characters escaped. */
 pub fun quoted(s: string): string {
@@ -596,4 +596,64 @@ pub fun dumpAst(src: string): string {
         w.out += "error ${d.start} ${d.end} ${d.message}\n"
     }
     return w.out
+}
+
+fun flag(b: bool): int {
+    if (b) {
+        return 1
+    }
+    return 0
+}
+
+fun base(radixed: int): string {
+    if (radixed == 1) {
+        return "hex"
+    }
+    return "dec"
+}
+
+fun tokenLines(tokens: [Token], depth: int): string {
+    var pad = repeat("  ", depth)
+    var out = ""
+    for t in tokens {
+        var head = "${pad}${t.start} ${t.end} ${flag(t.nl)} ${t.kind}"
+        out += match t.kind {
+            Kind.Ident => "${head} ${t.text}\n"
+            Kind.Int => "${head} ${t.value}\n"
+            Kind.BigInt => "${head} ${t.text} ${base(t.value)}\n"
+            Kind.Float => "${head} ${t.number}\n"
+            Kind.Str => "${head} ${quoted(t.text)}\n"
+            else => "${head}\n"
+        }
+        for p in t.parts {
+            match p {
+                Part.Lit(text) => out += "${pad}  lit ${quoted(text)}\n"
+                Part.Code(inner, start, end) => {
+                    out += "${pad}  expr ${start} ${end}\n"
+                    out += tokenLines(inner, depth + 2)
+                }
+            }
+        }
+    }
+    return out
+}
+
+/** The tokens and lexer errors of a file, as `burn dump --tokens` prints them. */
+pub fun dumpTokens(src: string): string {
+    var lexed = lex(src)
+    var out = tokenLines(lexed.tokens, 0)
+    for d in lexed.diags {
+        out += "error ${d.start} ${d.end} ${d.message}\n"
+    }
+    return out
+}
+
+/** The lexer and parser errors of a file, as `burn dump --diagnostics` prints them. */
+pub fun dumpDiagnostics(name: string, src: string): string {
+    var f = new SourceFile(name, src)
+    var out = ""
+    for d in parse(src).diags {
+        out += render(f, d)
+    }
+    return out
 }

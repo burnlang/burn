@@ -1,7 +1,7 @@
-import "ast.bn"
-import "diag.bn"
+import "../diag/diag.bn"
+import "../project/loader.bn"
+import "../syntax/ast.bn"
 import "hir.bn"
-import "loader.bn"
 import "types.bn"
 
 pub const ANNOTATION_BUILTINS = ["Getter", "Setter", "Deprecated", "Export", "Native", "Inject", "Overwrite", "Redirect"]

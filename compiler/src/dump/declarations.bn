@@ -1,11 +1,11 @@
-import "ast.bn"
-import "astdump.bn"
-import "check.bn"
-import "diag.bn"
-import "hir.bn"
-import "loader.bn"
-import "project.bn"
-import "types.bn"
+import "../check/check.bn"
+import "../check/hir.bn"
+import "../check/types.bn"
+import "../diag/diag.bn"
+import "../project/loader.bn"
+import "../project/project.bn"
+import "../syntax/ast.bn"
+import "syntax.bn"
 
 fun optTy(c: Checker, t: int?): string {
     if (t == null) {

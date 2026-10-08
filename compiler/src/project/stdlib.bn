@@ -1,4 +1,4 @@
-/** The sources of `lib/std`, written by `compiler/genstd.bn`. */
+/** The sources of `lib/std`, written by `compiler/src/bin/genstd.bn`. */
 pub def type StdModule {
     string name
     string src

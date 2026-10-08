@@ -40,6 +40,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/stage0
       - name: Build the Burn compiler with the released Rust compiler
-        run: burn build compiler/dump.bn -o "$RUNNER_TEMP/stage1-dump"
+        run: burn build compiler/src/main.bn -o "$RUNNER_TEMP/stage1-dump"
       - name: Run it on every Burn file in the repository
         run: git ls-files -z '*.bn' | xargs -0 "$RUNNER_TEMP/stage1-dump" > "$RUNNER_TEMP/tokens.txt" && wc -l "$RUNNER_TEMP/tokens.txt"

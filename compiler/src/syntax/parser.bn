@@ -1,5 +1,5 @@
+import "../diag/diag.bn"
 import "ast.bn"
-import "diag.bn"
 import "lexer.bn"
 
 /** The source text of a token kind that has no value, like `+=` or `fun`. */

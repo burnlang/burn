@@ -1,8 +1,8 @@
 import "std/fs"
 
 /**
- * Prints `compiler/stdlib.bn`, which holds the sources of `lib/std` the way the Rust compiler embeds them with
- * `include_str!`. Run it from the repository root: `burn compiler/genstd.bn > compiler/stdlib.bn`.
+ * Prints `compiler/src/project/stdlib.bn`, which holds the sources of `lib/std` the way the Rust compiler embeds them with
+ * `include_str!`. Run it from the repository root: `burn compiler/src/bin/genstd.bn > compiler/src/project/stdlib.bn`.
  */
 const NAMES = ["date", "time", "http", "math", "strings", "json", "process", "fs", "list", "collections", "path", "random", "testing"]
 
@@ -29,7 +29,7 @@ fun literal(s: string): string {
 }
 
 fun main() {
-    print("/** The sources of `lib/std`, written by `compiler/genstd.bn`. */")
+    print("/** The sources of `lib/std`, written by `compiler/src/bin/genstd.bn`. */")
     print("pub def type StdModule {")
     print("    string name")
     print("    string src")
