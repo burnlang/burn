@@ -358,11 +358,127 @@ pub struct Project {
     pub root: PathBuf,
     pub manifest: Manifest,
     pub lock: Vec<Locked>,
+    pub lock_root: PathBuf,
+    pub workspace: Option<Workspace>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Member {
+    pub dir: PathBuf,
+    pub path: String,
+    pub name: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Workspace {
+    pub root: PathBuf,
+    pub name: Option<String>,
+    pub members: Vec<Member>,
+}
+
+impl Workspace {
+    pub fn member_named(&self, name: &str) -> Option<&Member> {
+        self.members.iter().find(|m| m.name.as_deref().map(|n| same_package(n, name)).unwrap_or(false))
+    }
+
+    pub fn contains(&self, dir: &Path) -> bool {
+        let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        self.members.iter().any(|m| m.dir == dir)
+    }
+
+    pub fn find(&self, sel: &str) -> Result<&Member, String> {
+        let sel = sel.trim_end_matches('/');
+        let hit = self.members.iter().find(|m| {
+            m.path == sel
+                || m.dir.file_name().map(|f| f == sel).unwrap_or(false)
+                || m.name.as_deref().map(|n| same_package(n, sel) || short_name(n) == sel).unwrap_or(false)
+        });
+        hit.ok_or_else(|| {
+            let names: Vec<&str> = self.members.iter().map(|m| m.path.as_str()).collect();
+            format!("the workspace has no member `{}` (its members: {})", sel, names.join(", "))
+        })
+    }
+
+    pub fn projects(&self) -> Result<Vec<Project>, String> {
+        self.members.iter().map(|m| load(&m.dir)).collect()
+    }
+}
+
+pub type WorkspaceManifest = (Option<String>, Vec<String>);
+
+pub fn parse_workspace(src: &str) -> Result<Option<WorkspaceManifest>, String> {
+    let root = parse(src)?;
+    let Some(ws) = get(&root, "workspace") else {
+        return Ok(None);
+    };
+    let ws = ws.as_table().ok_or("`workspace` must be a table")?;
+    let name = str_field(ws, "name", "workspace")?;
+    if let Some(n) = &name {
+        if !valid_name(n) {
+            return Err(format!("`{}` is not a valid package name; names look like `github.com/owner/project`", n));
+        }
+    }
+    let mut members = Vec::new();
+    match get(ws, "members") {
+        None => {}
+        Some(Value::Array(items)) => {
+            for it in items {
+                members.push(it.as_str().ok_or("`workspace.members` must be a list of folders in quotes")?.to_string());
+            }
+        }
+        Some(_) => return Err("`workspace.members` must be a list of folders, like [\"common\", \"app\"]".into()),
+    }
+    Ok(Some((name, members)))
+}
+
+pub fn load_workspace(root: &Path) -> Result<Option<Workspace>, String> {
+    let path = root.join(MANIFEST);
+    let src = std::fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
+    let Some((name, paths)) = parse_workspace(&src).map_err(|e| format!("{}: {}", path.display(), e))? else {
+        return Ok(None);
+    };
+    let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let mut members = Vec::new();
+    for p in paths {
+        let dir = root.join(&p);
+        let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
+        let name = std::fs::read_to_string(dir.join(MANIFEST))
+            .ok()
+            .and_then(|s| parse_manifest(&s).ok())
+            .map(|m| m.name);
+        members.push(Member { dir, path: p, name });
+    }
+    Ok(Some(Workspace { root, name, members }))
+}
+
+pub fn find_workspace(start: &Path) -> Option<Workspace> {
+    let dir = if start.is_dir() { start.to_path_buf() } else { start.parent()?.to_path_buf() };
+    let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
+    let mut cur: Option<&Path> = Some(&dir);
+    while let Some(d) = cur {
+        if d.join(MANIFEST).is_file() {
+            if let Ok(Some(ws)) = load_workspace(d) {
+                return Some(ws);
+            }
+        }
+        cur = d.parent();
+    }
+    None
+}
+
+pub fn is_workspace_only(root: &Path) -> bool {
+    let Ok(src) = std::fs::read_to_string(root.join(MANIFEST)) else {
+        return false;
+    };
+    let Ok(t) = parse(&src) else {
+        return false;
+    };
+    get(&t, "workspace").is_some() && get(&t, "package").is_none()
 }
 
 pub fn valid_name(name: &str) -> bool {
     let parts: Vec<&str> = name.split('/').collect();
-    if parts.len() != 3 {
+    if parts.len() < 3 {
         return false;
     }
     let domain = parts[0];
@@ -372,8 +488,7 @@ pub fn valid_name(name: &str) -> bool {
     labels.len() >= 2
         && labels.iter().all(label_ok)
         && labels.last().map(|t| t.bytes().all(|c| c.is_ascii_lowercase())).unwrap_or(false)
-        && seg_ok(parts[1])
-        && seg_ok(parts[2])
+        && parts[1..].iter().all(|p| seg_ok(p))
 }
 
 pub fn split_package_path(p: &str) -> Option<(String, String)> {
@@ -386,6 +501,17 @@ pub fn split_package_path(p: &str) -> Option<(String, String)> {
         return None;
     }
     Some((name, parts.get(3).map(|s| s.to_string()).unwrap_or_default()))
+}
+
+pub fn split_known(p: &str, knows: &dyn Fn(&str) -> bool) -> Option<(String, String)> {
+    let parts: Vec<&str> = p.split('/').collect();
+    for k in (4..=parts.len()).rev() {
+        let name = parts[..k].join("/");
+        if valid_name(&name) && knows(&name) {
+            return Some((name, parts[k..].join("/")));
+        }
+    }
+    split_package_path(p)
 }
 
 pub fn same_package(a: &str, b: &str) -> bool {
@@ -498,8 +624,20 @@ pub fn find_root(start: &Path) -> Option<PathBuf> {
 pub fn load(root: &Path) -> Result<Project, String> {
     let path = root.join(MANIFEST);
     let src = std::fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
+    if parse_workspace(&src).ok().flatten().is_some() && parse(&src).map(|t| get(&t, "package").is_none()).unwrap_or(false) {
+        return Err(format!(
+            "{} is the root of a workspace, not a package\n  = help: run the command inside one of its members, or pick one with `-p <member>`",
+            root.display()
+        ));
+    }
     let manifest = parse_manifest(&src).map_err(|e| format!("{}: {}", path.display(), e))?;
-    let lock_path = root.join(LOCKFILE);
+    let workspace = root
+        .parent()
+        .and_then(find_workspace)
+        .filter(|w| w.contains(root))
+        .or_else(|| load_workspace(root).ok().flatten());
+    let lock_root = workspace.as_ref().map(|w| w.root.clone()).unwrap_or_else(|| root.to_path_buf());
+    let lock_path = lock_root.join(LOCKFILE);
     let lock = match std::fs::read_to_string(&lock_path) {
         Ok(s) => parse_lock(&s).map_err(|e| format!("{}: {}", lock_path.display(), e))?,
         Err(_) => Vec::new(),
@@ -508,6 +646,8 @@ pub fn load(root: &Path) -> Result<Project, String> {
         root: root.to_path_buf(),
         manifest,
         lock,
+        lock_root,
+        workspace,
     })
 }
 
@@ -525,11 +665,16 @@ pub fn package_dir(project_root: &Path, l: &Locked) -> PathBuf {
     }
     let rev: String = l.rev.chars().take(12).collect();
     let mut dir = burn_home().join("packages");
-    for part in l.name.split('/') {
+    let parts: Vec<&str> = l.name.split('/').collect();
+    let (repo, sub) = parts.split_at(parts.len().min(3));
+    for part in repo {
         dir.push(part);
     }
     let file = dir.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
     dir.set_file_name(format!("{}@{}", file, rev));
+    for part in sub {
+        dir.push(part);
+    }
     dir
 }
 
@@ -543,7 +688,18 @@ impl Project {
     }
 
     pub fn knows(&self, name: &str) -> bool {
-        self.is_self(name) || self.manifest.dependencies.iter().any(|(d, _)| same_package(d, name)) || self.locked(name).is_some()
+        self.is_self(name)
+            || self.manifest.dependencies.iter().any(|(d, _)| same_package(d, name))
+            || self.locked(name).is_some()
+            || self.member(name).is_some()
+    }
+
+    pub fn member(&self, name: &str) -> Option<&Member> {
+        self.workspace.as_ref().and_then(|w| w.member_named(name))
+    }
+
+    pub fn split_import(&self, p: &str) -> Option<(String, String)> {
+        split_known(p, &|n| self.knows(n))
     }
 
     pub fn main_path(&self) -> PathBuf {
@@ -557,6 +713,9 @@ impl Project {
     pub fn resolve(&self, name: &str) -> Result<PathBuf, String> {
         if self.is_self(name) {
             return Ok(self.root.clone());
+        }
+        if let Some(m) = self.member(name) {
+            return Ok(m.dir.clone());
         }
         let declared = self.manifest.dependencies.iter().find(|(d, _)| same_package(d, name));
         if let (None, Some((_, Some(path)))) = (self.locked(name), declared) {
@@ -574,7 +733,7 @@ impl Project {
         let declared = declared.is_some();
         match self.locked(name) {
             Some(l) => {
-                let dir = package_dir(&self.root, l);
+                let dir = package_dir(&self.lock_root, l);
                 if dir.join(MANIFEST).is_file() {
                     Ok(dir)
                 } else {
@@ -673,6 +832,35 @@ build = "burnc src/lib.bn --target js -o build/hello.js"
         assert!(!valid_name("../owner/project"));
         assert_eq!(split_package_path("github.com/a/b/src/x"), Some(("github.com/a/b".into(), "src/x".into())));
         assert_eq!(split_package_path("utils/math.bn"), None);
+    }
+
+    #[test]
+    fn keeps_sub_packages_inside_their_repository() {
+        let l = Locked {
+            name: "github.com/ada/game/common".into(),
+            rev: "0123456789abcdef".into(),
+            source: "git+https://github.com/ada/game".into(),
+        };
+        let dir = package_dir(Path::new("/p"), &l);
+        assert!(dir.ends_with("packages/github.com/ada/game@0123456789ab/common"), "{}", dir.display());
+    }
+
+    #[test]
+    fn knows_sub_packages_and_workspaces() {
+        assert!(valid_name("github.com/ada/game/common"));
+        assert!(!valid_name("github.com/ada/game/"));
+        let known = |n: &str| n == "github.com/ada/game/common";
+        assert_eq!(
+            split_known("github.com/ada/game/common/net/http", &known),
+            Some(("github.com/ada/game/common".into(), "net/http".into()))
+        );
+        assert_eq!(split_known("github.com/ada/other/x", &known), Some(("github.com/ada/other".into(), "x".into())));
+        let ws = parse_workspace("[workspace]\nname = \"github.com/ada/game\"\nmembers = [\"common\", \"app\"]\n")
+            .unwrap()
+            .unwrap();
+        assert_eq!(ws, (Some("github.com/ada/game".to_string()), vec!["common".to_string(), "app".to_string()]));
+        assert!(parse_workspace("[workspace]\nmembers = \"common\"\n").is_err());
+        assert_eq!(parse_workspace("[package]\nname = \"github.com/a/b\"\n").unwrap(), None);
     }
 
     #[test]

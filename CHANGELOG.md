@@ -9,6 +9,10 @@ The release that ships the compiler written in Burn.
   - `src/bin/` holds extra programs (`burn run --bin`), `tests/` holds tests (`burn test`), and `examples/` holds examples (`burn run --example`).
   - `@/path` imports from the project's source root, and `<package>/path` imports from another package's `src/`.
   - A folder with a `mod.bn` can be imported as a module.
+- Workspaces: a `[workspace]` with `members` builds several projects together, like Gradle multi-projects or Cargo workspaces.
+  - `burn init <name> --workspace` creates the multi-target layout: a `common` library and one app per target (native, js, bvm).
+  - Members are named under the workspace (`github.com/you/game/common`), import each other directly and share one `burn.lock`.
+  - At the root, `burn build`/`check`/`test` cover every member, and `-p <member>` picks one.
 - Self-hosting: the lexer and the parser are ported to Burn (`compiler/`). Both produce output identical to the Rust compiler's, checked by `burn dump --tokens` and `burn dump --ast` on every Burn file in the repository.
 - Fixed: a stray non-ASCII symbol made the lexer loop forever, and an unknown escape before a multi-byte character crashed it.
 

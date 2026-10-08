@@ -74,6 +74,48 @@ Inside a project, `burn` commands work without a file name:
 | `burn check` | type-check every source, program, test and example of the project |
 | `burn test [filter]` | run each file in `tests/`; a test fails when it exits with an error, such as a failed `assert` |
 
+In a [workspace](#workspaces), each of these takes `-p <member>`.
+
+## Workspaces
+
+A workspace is one repository with several projects that are built together, like a Gradle multi-project build or
+a Cargo workspace. The usual shape keeps the shared code in one library and adds one app per target, so the same
+program ships as a native executable, a JavaScript file and bvm bytecode:
+
+```sh
+burn init github.com/you/game --workspace                    # common + native, js and bvm apps
+burn init github.com/you/game --workspace --targets native,js
+```
+
+```text
+game/
+├── burn.toml            [workspace] with the members
+├── burn.lock            one lock file for every member
+├── common/              github.com/you/game/common, a library
+│   └── src/lib.bn
+├── native/              github.com/you/game/native, target = "native"
+│   └── src/main.bn      import "github.com/you/game/common"
+├── js/                  github.com/you/game/js, target = "js"
+└── bvm/                 github.com/you/game/bvm, target = "bvm"
+```
+
+```toml
+[workspace]
+name = "github.com/you/game"
+members = ["common", "native", "js", "bvm"]
+```
+
+- Members are ordinary projects named under the workspace (`github.com/you/game/common`). They import each other by
+  name without listing each other as dependencies; a `path` dependency works too.
+- All members share the `burn.lock` at the root, so they always use the same versions of their packages.
+- At the root, `burn build`, `burn check` and `burn test` work on every member, and `-p <member>` picks one
+  (`burn run -p native`, `burn build -p js`). Inside a member's folder, commands work on that member alone.
+- `burn init <name>` inside a workspace creates a new member and adds it to `members`; a plain name such as
+  `burn init tools --lib` is named after the workspace (`github.com/you/game/tools`).
+- Other projects can install a member like any package: `ash install github.com/you/game/common` downloads the
+  repository `github.com/you/game` and uses its `common` folder. A member that others install should list the
+  members it uses as `path` dependencies; ash pins them to the same commit.
+
 ## burn.toml
 
 ```toml

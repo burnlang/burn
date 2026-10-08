@@ -164,11 +164,68 @@ fn project_main() -> Result<(project::Project, PathBuf), ExitCode> {
 struct Selection {
     bin: Option<String>,
     example: Option<String>,
+    package: Option<String>,
+}
+
+fn selected_projects(package: Option<&str>) -> Result<Vec<project::Project>, String> {
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    if let Some(sel) = package {
+        let ws = project::find_workspace(&cwd).ok_or_else(|| format!("`-p {}` picks a member of a workspace, but there is no workspace here", sel))?;
+        let m = ws.find(sel)?;
+        return Ok(vec![project::load(&m.dir)?]);
+    }
+    match project::find_root(&cwd) {
+        Some(root) if project::is_workspace_only(&root) => {
+            let ws = project::load_workspace(&root)?.ok_or("not a workspace")?;
+            if ws.members.is_empty() {
+                return Err(format!(
+                    "the workspace in {} has no members yet; list them in `[workspace] members`",
+                    root.display()
+                ));
+            }
+            ws.projects()
+        }
+        Some(root) => Ok(vec![project::load(&root)?]),
+        None => Err(current_project().err().unwrap_or_default()),
+    }
+}
+
+fn projects_or_exit(package: Option<&str>) -> Result<Vec<project::Project>, ExitCode> {
+    selected_projects(package).map_err(|e| {
+        eprintln!("error: {}", e);
+        ExitCode::from(2)
+    })
+}
+
+fn take_package(args: &[String]) -> Result<(Option<String>, Vec<String>), ExitCode> {
+    let mut package = None;
+    let mut rest = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "-p" || args[i] == "--package" {
+            match args.get(i + 1) {
+                Some(v) => package = Some(v.clone()),
+                None => {
+                    eprintln!("error: `{}` needs the name of a workspace member", args[i]);
+                    return Err(ExitCode::from(2));
+                }
+            }
+            i += 2;
+            continue;
+        }
+        rest.push(args[i].clone());
+        i += 1;
+    }
+    Ok((package, rest))
 }
 
 impl Selection {
     fn any(&self) -> bool {
         self.bin.is_some() || self.example.is_some()
+    }
+
+    fn named(&self) -> bool {
+        self.any() || self.package.is_some()
     }
 
     fn pick(&self, p: &project::Project) -> Result<Option<targets::Entry>, String> {
@@ -185,6 +242,7 @@ impl Selection {
         let slot = match a {
             "--bin" => &mut self.bin,
             "--example" => &mut self.example,
+            "-p" | "--package" => &mut self.package,
             _ => return None,
         };
         Some(match value {
@@ -198,27 +256,50 @@ impl Selection {
 }
 
 fn cmd_test(args: &[String]) -> ExitCode {
-    let p = match current_project() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("error: {}", e);
-            return ExitCode::from(2);
-        }
+    let (package, args) = match take_package(args) {
+        Ok(x) => x,
+        Err(c) => return c,
     };
-    let tests: Vec<targets::Entry> = targets::tests(&p)
-        .into_iter()
-        .filter(|t| args.is_empty() || args.iter().any(|f| t.name.contains(f.as_str())))
-        .collect();
-    if tests.is_empty() {
-        println!("no tests in {}", shown(p.root.join("tests")).display());
+    let projects = match projects_or_exit(package.as_deref()) {
+        Ok(p) => p,
+        Err(c) => return c,
+    };
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("burn"));
+    let mut total = 0;
+    let mut failures = Vec::new();
+    for p in &projects {
+        let tests: Vec<targets::Entry> = targets::tests(p)
+            .into_iter()
+            .filter(|t| args.is_empty() || args.iter().any(|f| t.name.contains(f.as_str())))
+            .collect();
+        if tests.is_empty() {
+            if projects.len() == 1 {
+                println!("no tests in {}", shown(p.root.join("tests")).display());
+            }
+            continue;
+        }
+        total += tests.len();
+        println!("testing {} ({} file{})", p.manifest.name, tests.len(), if tests.len() == 1 { "" } else { "s" });
+        test_files(&exe, p, &tests, &mut failures);
+    }
+    if total == 0 {
         return ExitCode::SUCCESS;
     }
-    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("burn"));
-    println!("testing {} ({} file{})", p.manifest.name, tests.len(), if tests.len() == 1 { "" } else { "s" });
-    let mut failures = Vec::new();
-    for t in &tests {
+    for (path, out) in &failures {
+        println!("\n---- {} ----\n{}", path.display(), out.trim_end());
+    }
+    println!("\n{} passed, {} failed", total - failures.len(), failures.len());
+    if failures.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
+fn test_files(exe: &Path, p: &project::Project, tests: &[targets::Entry], failures: &mut Vec<(PathBuf, String)>) {
+    for t in tests {
         let shown_path = shown(t.path.clone());
-        match std::process::Command::new(&exe).arg(&t.path).current_dir(&p.root).output() {
+        match std::process::Command::new(exe).arg(&t.path).current_dir(&p.root).output() {
             Ok(out) if out.status.success() => println!("test {} ... ok", shown_path.display()),
             Ok(out) => {
                 println!("test {} ... FAILED", shown_path.display());
@@ -232,15 +313,6 @@ fn cmd_test(args: &[String]) -> ExitCode {
                 failures.push((shown_path, e.to_string()));
             }
         }
-    }
-    for (path, out) in &failures {
-        println!("\n---- {} ----\n{}", path.display(), out.trim_end());
-    }
-    println!("\n{} passed, {} failed", tests.len() - failures.len(), failures.len());
-    if failures.is_empty() {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::from(1)
     }
 }
 
@@ -270,7 +342,7 @@ fn cmd_build(args: &[String]) -> ExitCode {
                 emit_asm = args.get(i).map(PathBuf::from);
             }
             "--no-strip" => strip = false,
-            "--bin" | "--example" => {
+            "--bin" | "--example" | "-p" | "--package" => {
                 i += 1;
                 if let Some(Err(e)) = selection.flag(a, args.get(i)) {
                     eprintln!("error: {}", e);
@@ -292,7 +364,37 @@ fn cmd_build(args: &[String]) -> ExitCode {
     }
     let file = match file {
         Some(f) => f,
-        None => return build_project(selection, output, target, explicit_target, emit_asm, strip),
+        None => {
+            let projects = match projects_or_exit(selection.package.as_deref()) {
+                Ok(p) => p,
+                Err(c) => return c,
+            };
+            let many = projects.len() > 1;
+            let mut chosen = Vec::new();
+            for p in projects {
+                match selection.pick(&p) {
+                    Ok(e) => chosen.push((p, e)),
+                    Err(e) if !many => {
+                        eprintln!("error: {}", e);
+                        return ExitCode::from(2);
+                    }
+                    Err(_) => {}
+                }
+            }
+            if chosen.is_empty() {
+                let what = selection.bin.as_deref().or(selection.example.as_deref()).unwrap_or("");
+                eprintln!("error: no member of the workspace has a program or example named `{}`", what);
+                return ExitCode::from(2);
+            }
+            let output = if chosen.len() == 1 { output } else { None };
+            for (p, entry) in chosen {
+                let code = build_project(&p, entry, output.clone(), target.clone(), explicit_target, emit_asm.clone(), strip);
+                if code != ExitCode::SUCCESS {
+                    return code;
+                }
+            }
+            return ExitCode::SUCCESS;
+        }
     };
     build_one(file, output, target, emit_asm, strip)
 }
@@ -304,17 +406,19 @@ fn shown(path: PathBuf) -> PathBuf {
         .unwrap_or(path)
 }
 
-fn build_project(selection: Selection, output: Option<PathBuf>, target: String, explicit_target: bool, emit_asm: Option<PathBuf>, strip: bool) -> ExitCode {
-    let p = match current_project() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("error: {}", e);
-            return ExitCode::from(2);
-        }
-    };
-    let entries = match selection.pick(&p) {
-        Ok(Some(e)) => vec![e],
-        Ok(None) => {
+fn build_project(
+    p: &project::Project,
+    picked: Option<targets::Entry>,
+    output: Option<PathBuf>,
+    target: String,
+    explicit_target: bool,
+    emit_asm: Option<PathBuf>,
+    strip: bool,
+) -> ExitCode {
+    let p = p.clone();
+    let entries = match picked {
+        Some(e) => vec![e],
+        None => {
             let mut list = targets::programs(&p);
             if list.is_empty() && p.manifest.kind == project::Kind::Lib {
                 if explicit_target {
@@ -330,10 +434,6 @@ fn build_project(selection: Selection, output: Option<PathBuf>, target: String, 
                 }
             }
             list
-        }
-        Err(e) => {
-            eprintln!("error: {}", e);
-            return ExitCode::from(2);
         }
     };
     if entries.is_empty() {
@@ -753,13 +853,17 @@ fn main() -> ExitCode {
         "doc" => doc::cmd(rest),
         "init" | "new" => init::cmd(rest),
         "check" => {
+            let (package, rest) = match take_package(rest) {
+                Ok(x) => x,
+                Err(c) => return c,
+            };
             if rest.is_empty() {
-                return match project_main() {
-                    Ok((p, _)) => cmd_check(&targets::all(&p).iter().map(|e| e.path.display().to_string()).collect::<Vec<_>>()),
+                return match projects_or_exit(package.as_deref()) {
+                    Ok(ps) => cmd_check(&ps.iter().flat_map(targets::all).map(|e| e.path.display().to_string()).collect::<Vec<_>>()),
                     Err(c) => c,
                 };
             }
-            cmd_check(rest)
+            cmd_check(&rest)
         }
         "test" => cmd_test(rest),
         "build" | "-exe" | "--executable" => cmd_build(rest),
@@ -819,26 +923,50 @@ fn main() -> ExitCode {
                         None => {}
                     }
                 }
-                if file.is_none() && !selection.any() {
+                if file.is_none() && !selection.named() {
                     file = Some(a.clone());
-                } else if !(prog_args.is_empty() && a == "--" && selection.any()) {
+                } else if !(prog_args.is_empty() && a == "--" && selection.named()) {
                     prog_args.push(a.clone());
                 }
                 i += 1;
             }
-            if selection.any() {
-                let p = match current_project() {
+            let at_workspace_root = file.is_none()
+                && std::env::current_dir()
+                    .ok()
+                    .and_then(|c| project::find_root(&c))
+                    .map(|r| project::is_workspace_only(&r))
+                    .unwrap_or(false);
+            if selection.named() || at_workspace_root {
+                let projects = match projects_or_exit(selection.package.as_deref()) {
                     Ok(p) => p,
-                    Err(e) => {
-                        eprintln!("error: {}", e);
-                        return ExitCode::from(2);
-                    }
+                    Err(c) => return c,
                 };
-                return match selection.pick(&p) {
-                    Ok(Some(e)) => cmd_run(&e.path, prog_args, native_mode),
-                    Ok(None) => ExitCode::from(2),
-                    Err(e) => {
-                        eprintln!("error: {}", e);
+                let mut found = Vec::new();
+                for p in &projects {
+                    match selection.pick(p) {
+                        Ok(Some(e)) => found.push(e.path),
+                        Ok(None) if p.manifest.kind == project::Kind::App && p.main_path().is_file() => found.push(p.main_path()),
+                        Ok(None) => {}
+                        Err(e) if projects.len() == 1 => {
+                            eprintln!("error: {}", e);
+                            return ExitCode::from(2);
+                        }
+                        Err(_) => {}
+                    }
+                }
+                return match found.len() {
+                    1 => cmd_run(&found[0], prog_args, native_mode),
+                    0 => {
+                        eprintln!("error: there is nothing to run here");
+                        ExitCode::from(2)
+                    }
+                    _ => {
+                        let apps: Vec<String> = projects
+                            .iter()
+                            .filter(|p| p.manifest.kind == project::Kind::App)
+                            .map(|p| p.root.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default())
+                            .collect();
+                        eprintln!("error: this workspace has several programs to run; pick one with `-p` ({})", apps.join(", "));
                         ExitCode::from(2)
                     }
                 };
