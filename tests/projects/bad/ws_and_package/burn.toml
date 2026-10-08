@@ -1,0 +1,4 @@
+[workspace]
+members = ["sub"]
+[package]
+name = "github.com/a/b"

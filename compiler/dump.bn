@@ -1,6 +1,7 @@
 import "astdump.bn"
 import "diag.bn"
 import "lexer.bn"
+import "loaddump.bn"
 import "parser.bn"
 import "std/fs"
 import "std/process"
@@ -66,7 +67,8 @@ fun diagnostics(name: string, src: string): string {
 fun main() {
     var files = args()
     var mode = "--tokens"
-    if (len(files) > 0 && (files[0] == "--ast" || files[0] == "--tokens" || files[0] == "--diagnostics")) {
+    var modes = ["--tokens", "--ast", "--diagnostics", "--toml", "--project", "--modules"]
+    if (len(files) > 0 && contains(modes, files[0])) {
         mode = files[0]
         files = slice(files, 1, len(files))
     }
@@ -74,11 +76,21 @@ fun main() {
         if (len(files) > 1) {
             print("file ${f}")
         }
+        if (mode == "--project") {
+            write(dumpProject(f))
+            continue
+        }
+        if (mode == "--modules") {
+            write(dumpModules(f))
+            continue
+        }
         var src = readFile(f)
         if (mode == "--ast") {
             write(dumpAst(src))
         } else if (mode == "--diagnostics") {
             write(diagnostics(f, src))
+        } else if (mode == "--toml") {
+            write(dumpToml(src))
         } else {
             write(dump(src))
         }

@@ -1,0 +1,3 @@
+pub fun remote(): int {
+    return 5
+}

@@ -1,0 +1,3 @@
+pub fun square(): int {
+    return 4
+}

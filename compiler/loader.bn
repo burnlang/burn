@@ -1,0 +1,486 @@
+import "ast.bn"
+import "diag.bn"
+import "parser.bn"
+import "paths.bn"
+import "project.bn"
+import "stdlib.bn"
+
+/** An import of a module or a bytecode library, by index, with the span of its path. */
+pub def type ImportRef {
+    int target
+    int start
+    int end
+}
+
+pub def type LoadedModule {
+    int file
+    Module ast
+    [ImportRef] imports
+    [ImportRef] libs
+    string key
+}
+
+pub def type LoadedLib {
+    string name
+    string path
+}
+
+/** A diagnostic and the index of the file it points into. */
+pub def type LoadDiag {
+    int file
+    Diag diag
+}
+
+pub def type Loaded {
+    [SourceFile] files
+    [LoadedModule] modules
+    [LoadedLib] libs
+    [int] order
+    [LoadDiag] diags
+    int root
+    bool noStd
+}
+
+pub fun isLibraryPath(p: string): bool {
+    return endsWith(p, ".bvmc") || endsWith(p, ".bar") || endsWith(p, ".bvm")
+}
+
+fun withoutBn(p: string): string {
+    var out = p
+    while (endsWith(out, ".bn")) {
+        out = substring(out, 0, len(out) - 3)
+    }
+    return out
+}
+
+fun displayName(p: string): string {
+    var rel = stripPrefix(p, currentDir())
+    if (rel != null) {
+        return rel
+    }
+    return p
+}
+
+fun visit(i: int, mods: [LoadedModule], state: [int], order: [int]): void {
+    if (state[i] != 0) {
+        return
+    }
+    state[i] = 1
+    for d in mods[i].imports {
+        visit(d.target, mods, state, order)
+    }
+    state[i] = 2
+    order.push(i)
+}
+
+/** Reads a program and every module it imports, like `Loader` in `loader.rs`. */
+pub def struct Loader() {
+    [SourceFile] files = []
+    [LoadedModule] modules = []
+    [LoadedLib] libs = []
+    [LoadDiag] diags = []
+    {string: int} byKey = {}
+    {string: string} overrides = {}
+    [StdModule] std = stdModules()
+    bool projectTried = false
+    Project? project = null
+    string projectError = ""
+
+    fun setProject(root: string) {
+        projectTried = true
+        var e = new Problem()
+        project = loadProject(root, e)
+        projectError = e.message
+    }
+
+    fun projectOf(near: string?, err: Problem): Project? {
+        if (!projectTried) {
+            var start = near ?? currentDir()
+            var root = findRoot(start)
+            if (root == null) {
+                projectTried = true
+                projectError = "package imports need a project; create one with `burn init <name>`, which writes burn.toml"
+            } else {
+                setProject(root)
+            }
+        }
+        var p = project
+        if (p == null) {
+            err.set(projectError)
+        }
+        return p
+    }
+
+    fun stdNamed(name: string): StdModule? {
+        for s in std {
+            if (s.name == name) {
+                return s
+            }
+        }
+        return null
+    }
+
+    fun stdSource(path: string): StdModule? {
+        var dir = pathParent(path)
+        if (dir == null || pathFileName(dir) != "std") {
+            return null
+        }
+        var up = pathParent(dir)
+        if (up == null || pathFileName(up) != "lib" || pathExtension(path) != "bn") {
+            return null
+        }
+        var stem = pathStem(path)
+        if (stem == null) {
+            return null
+        }
+        return stdNamed(stem)
+    }
+
+    fun stdlibName(path: string): StdModule? {
+        var p = withoutBn(path)
+        for prefix in ["std/", "std:", "src/lib/std/"] {
+            if (startsWith(p, prefix)) {
+                return stdNamed(substring(p, len(prefix)))
+            }
+        }
+        return stdNamed(p)
+    }
+
+    fun exists(p: string): bool {
+        return isFile(p) || has(overrides, canonical(p))
+    }
+
+    fun resolvePackageImport(name: string, sub: string, base: string?, err: Problem): int {
+        var p = projectOf(base, err)
+        if (p == null) {
+            return -1
+        }
+        var dir = resolvePackage(p, name, err)
+        if (dir == null) {
+            return -1
+        }
+        var own = isSelf(p, name)
+        var file = ""
+        if (sub == "") {
+            if (own) {
+                file = mainPath(p)
+            } else {
+                var m = packageMain(dir, err)
+                if (m == null) {
+                    return -1
+                }
+                file = m
+            }
+        } else {
+            var src = sourceRoot(p)
+            if (!own) {
+                var s = packageSourceRoot(dir, err)
+                if (s == null) {
+                    return -1
+                }
+                src = s
+            }
+            var direct = pathJoin(dir, sub)
+            if (isFile(direct)) {
+                file = direct
+            } else {
+                var f = moduleFile(src, sub, overrides) ?? moduleFile(dir, sub, overrides)
+                if (f == null) {
+                    var want = sub
+                    if (!endsWith(sub, ".bn")) {
+                        want = "${sub}.bn"
+                    }
+                    err.set("cannot find `${sub}` in the package `${name}` (there is no ${pathJoin(src, want)})")
+                    return -1
+                }
+                file = f
+            }
+        }
+        if (!exists(file)) {
+            err.set("cannot find the main file of the package `${name}` (${file})")
+            return -1
+        }
+        return loadFile(file, err)
+    }
+
+    fun packageBytecode(name: string, base: string?, err: Problem): string? {
+        var p = projectOf(base, err)
+        if (p == null) {
+            return null
+        }
+        var dir = resolvePackage(p, name, err)
+        if (dir == null) {
+            return null
+        }
+        if (isSelf(p, name)) {
+            err.set("a project cannot import its own bytecode; import its source with `import \"${name}\"`")
+            return null
+        }
+        var out = pathJoin(pathJoin(dir, "build"), "${shortName(name)}.bvmc")
+        if (isFile(out)) {
+            return out
+        }
+        err.set("the bytecode of `${name}` is not built yet; build it with `burn build` in ${dir}")
+        return null
+    }
+
+    fun loadLibrary(p: string, base: string?, err: Problem): int {
+        string? packageName = null
+        if (endsWith(p, ".bvmc")) {
+            var sp = splitPath(substring(p, 0, len(p) - 5), base)
+            if (sp != null && sp.sub == "") {
+                packageName = sp.name
+            }
+        }
+        var path = ""
+        if (packageName != null) {
+            var built = packageBytecode(packageName, base, err)
+            if (built == null) {
+                return -1
+            }
+            path = built
+        } else {
+            [string] candidates = []
+            if (base != null) {
+                candidates.push(pathJoin(base, p))
+            }
+            candidates.push(pathJoin(currentDir(), p))
+            for c in candidates {
+                if (path == "" && isFile(c)) {
+                    path = c
+                }
+            }
+            if (path == "") {
+                err.set("cannot find bytecode library `${p}`")
+                return -1
+            }
+        }
+        var c = canonical(path)
+        for i in 0..len(libs) {
+            if (libs[i].path == c) {
+                return i
+            }
+        }
+        libs.push(LoadedLib { name: pathStem(c) ?? "", path: c })
+        return len(libs) - 1
+    }
+
+    fun read(p: string): string? {
+        var c = canonical(p)
+        if (has(overrides, c)) {
+            return overrides[c]
+        }
+        return readText(p)
+    }
+
+    fun loadFile(path: string, err: Problem): int {
+        var c = canonical(path)
+        if (len(modules) == 0 && !projectTried) {
+            var root = findRoot(c)
+            if (root != null) {
+                setProject(root)
+            }
+        }
+        var s = stdSource(c)
+        var key = c
+        if (s != null) {
+            key = "std:${s.name}"
+        }
+        var hit = byKey[key]
+        if (hit != null) {
+            return hit
+        }
+        var src = read(path)
+        if (src == null) {
+            err.set("cannot read file `${path}`")
+            return -1
+        }
+        return addModule(key, displayName(c), c, src, s != null)
+    }
+
+    fun loadSource(name: string, src: string, base: string?): int {
+        var key = "<${name}>#${len(modules)}"
+        string? path = null
+        if (base != null) {
+            path = pathJoin(base, name)
+        }
+        return addModule(key, name, path, src, false)
+    }
+
+    fun addModule(key: string, name: string, path: string?, src: string, isStd: bool): int {
+        var file = len(files)
+        files.push(new SourceFile(name, src))
+        var parsed = parse(src)
+        for d in parsed.diags {
+            diags.push(LoadDiag { file: file, diag: d })
+        }
+        var idx = len(modules)
+        byKey[key] = idx
+        var loaded = LoadedModule { file: file, ast: parsed.module, imports: [], libs: [], key: key }
+        modules.push(loaded)
+        string? base = null
+        if (path != null) {
+            base = pathParent(path)
+        }
+        if (base == null) {
+            base = currentDir()
+        }
+        [ImportPath] items = []
+        for it in parsed.module.items {
+            var kind = it.kind
+            if (kind is ItemKind.Import) {
+                for ip in kind.paths {
+                    items.push(ip)
+                }
+            }
+        }
+        for ip in items {
+            var e = new Problem()
+            if (isLibraryPath(ip.path)) {
+                var li = loadLibrary(ip.path, base, e)
+                if (li < 0) {
+                    diags.push(LoadDiag { file: file, diag: errorAt(ip.span.start, ip.span.end, e.message) })
+                } else if (!listed(loaded.libs, li)) {
+                    loaded.libs.push(ImportRef { target: li, start: ip.span.start, end: ip.span.end })
+                }
+                continue
+            }
+            var m = resolveImport(ip.path, base, isStd, e)
+            if (m < 0) {
+                diags.push(LoadDiag { file: file, diag: errorAt(ip.span.start, ip.span.end, e.message) })
+            } else if (m == idx) {
+                diags.push(LoadDiag { file: file, diag: errorAt(ip.span.start, ip.span.end, "a module cannot import itself") })
+            } else if (!listed(loaded.imports, m)) {
+                loaded.imports.push(ImportRef { target: m, start: ip.span.start, end: ip.span.end })
+            }
+        }
+        return idx
+    }
+
+    fun listed(refs: [ImportRef], target: int): bool {
+        for r in refs {
+            if (r.target == target) {
+                return true
+            }
+        }
+        return false
+    }
+
+    fun splitPath(p: string, base: string?): PackagePath? {
+        if (splitPackagePath(p) == null) {
+            return null
+        }
+        var pr = projectOf(base, new Problem())
+        if (pr != null) {
+            return splitImport(pr, p)
+        }
+        return splitPackagePath(p)
+    }
+
+    fun resolveRootImport(rest: string, base: string?, err: Problem): int {
+        var start = base ?? currentDir()
+        var root = findRoot(start)
+        if (root == null) {
+            err.set("`@/${rest}` imports from the project's sources, but this file is not in a project (there is no burn.toml here or above)")
+            return -1
+        }
+        var src = packageSourceRoot(root, err)
+        if (src == null) {
+            return -1
+        }
+        var f = moduleFile(src, rest, overrides)
+        if (f != null) {
+            return loadFile(f, err)
+        }
+        var want = rest
+        if (!endsWith(rest, ".bn")) {
+            while (endsWith(want, "/")) {
+                want = substring(want, 0, len(want) - 1)
+            }
+            want = "${want}.bn"
+        }
+        err.set("cannot find `@/${rest}`: there is no ${pathJoin(src, want)}")
+        return -1
+    }
+
+    fun resolveImport(p: string, base: string?, fromStd: bool, err: Problem): int {
+        if (startsWith(p, "@/")) {
+            return resolveRootImport(substring(p, 2), base, err)
+        }
+        if (endsWith(p, ".bn")) {
+            var whole = splitPath(p, base)
+            if (whole != null && whole.sub == "") {
+                var pr = projectOf(base, new Problem())
+                if (pr != null && knows(pr, whole.name)) {
+                    return resolvePackageImport(whole.name, "", base, err)
+                }
+            }
+        }
+        var sp = splitPath(withoutBn(p), base)
+        if (sp != null) {
+            var sub = sp.sub
+            if (endsWith(p, ".bn") && sub != "") {
+                sub = "${sub}.bn"
+            }
+            return resolvePackageImport(sp.name, sub, base, err)
+        }
+        [string] candidates = []
+        if (base != null) {
+            candidates.push(pathJoin(base, p))
+            candidates.push(pathJoin(base, "${p}.bn"))
+            candidates.push(pathJoin(pathJoin(base, p), "mod.bn"))
+        }
+        var cwd = currentDir()
+        candidates.push(pathJoin(cwd, p))
+        candidates.push(pathJoin(cwd, "${p}.bn"))
+        var s = stdlibName(p)
+        var explicitStd = startsWith(p, "std/") || startsWith(p, "std:") || (!contains(p, "/") && !endsWith(p, ".bn"))
+        if (s != null && (explicitStd || fromStd)) {
+            return loadStd(s)
+        }
+        for c in candidates {
+            if (exists(c)) {
+                return loadFile(c, err)
+            }
+        }
+        if (s != null) {
+            return loadStd(s)
+        }
+        var known = ""
+        for m in std {
+            if (known != "") {
+                known += ", "
+            }
+            known += m.name
+        }
+        err.set("cannot find module `${p}` (standard modules: ${known})")
+        return -1
+    }
+
+    fun loadStd(s: StdModule): int {
+        var key = "std:${s.name}"
+        var hit = byKey[key]
+        if (hit != null) {
+            return hit
+        }
+        return addModule(key, "std/${s.name}.bn", null, s.src, true)
+    }
+
+    fun finish(root: int): Loaded {
+        [int] order = []
+        [int] state = []
+        for i in 0..len(modules) {
+            state.push(0)
+        }
+        visit(root, modules, state, order)
+        for i in 0..len(modules) {
+            visit(i, modules, state, order)
+        }
+        var noStd = false
+        var p = project
+        if (p != null) {
+            noStd = !p.manifest.std
+        }
+        return Loaded { files: files, modules: modules, libs: libs, order: order, diags: diags, root: root, noStd: noStd }
+    }
+}

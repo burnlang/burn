@@ -1,0 +1,5 @@
+import "../util"
+
+pub fun get2(): int {
+    return 2
+}

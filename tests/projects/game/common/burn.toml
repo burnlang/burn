@@ -1,0 +1,3 @@
+[package]
+name = "github.com/fixture/game/common"
+kind = "lib"

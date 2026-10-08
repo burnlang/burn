@@ -1,0 +1,20 @@
+import "std/strings"
+import "@/util"
+import "@/net"
+import "@/missing"
+import "net/http.bn"
+import "github.com/fixture/lib"
+import "github.com/fixture/lib/shapes"
+import "github.com/fixture/lib/nothing"
+import "github.com/fixture/remote"
+import "github.com/fixture/absent"
+import "github.com/fixture/stranger/x"
+import "github.com/fixture/app/util"
+import "github.com/fixture/app.bvmc"
+import "plugin.bvmc"
+import "nothing/here"
+import "src/main.bn"
+
+fun main() {
+    print(greet())
+}

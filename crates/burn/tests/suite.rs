@@ -240,12 +240,12 @@ fn repository_sources_import_the_standard_modules_they_use() {
 
 #[test]
 fn compiler_written_in_burn_matches_the_compiler() {
-    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+    fn walk(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) {
         for e in std::fs::read_dir(dir).unwrap() {
             let p = e.unwrap().path();
             if p.is_dir() {
-                walk(&p, out);
-            } else if p.extension().map(|x| x == "bn").unwrap_or(false) {
+                walk(&p, ext, out);
+            } else if p.extension().map(|x| x == ext).unwrap_or(false) {
                 out.push(p);
             }
         }
@@ -253,21 +253,46 @@ fn compiler_written_in_burn_matches_the_compiler() {
     let root = root();
     let mut files = Vec::new();
     for dir in ["tests", "examples", "lib/std", "tools", "compiler"] {
-        walk(&root.join(dir), &mut files);
+        walk(&root.join(dir), "bn", &mut files);
     }
     files.sort();
     assert!(files.len() > 100, "only {} files", files.len());
+    let projects = root.join("tests/projects");
+    let mut tomls = Vec::new();
+    walk(&root.join("tests/toml"), "toml", &mut tomls);
+    walk(&projects, "toml", &mut tomls);
+    walk(&projects, "lock", &mut tomls);
+    tomls.sort();
+    let mut places: Vec<PathBuf> = tomls.iter().filter_map(|t| t.parent().map(|p| p.to_path_buf())).collect();
+    places.dedup();
+    places.extend(files.iter().filter(|f| f.starts_with(&projects)).cloned());
+    places.extend([projects.clone(), projects.join("home"), projects.join("app/src/net")]);
+    let home = projects.join("home");
+    let (generated, code) = output(burn().current_dir(&root).arg("compiler/genstd.bn"));
+    assert_eq!(code, 0, "{}", generated);
+    assert!(
+        generated == std::fs::read_to_string(root.join("compiler/stdlib.bn")).unwrap(),
+        "compiler/stdlib.bn is out of date; run `burn compiler/genstd.bn > compiler/stdlib.bn`"
+    );
     let dir = temp_dir("selfhost");
     let exe = dir.join("dump");
     let (built, code) = output(burn().current_dir(&root).args(["build", "compiler/dump.bn", "-o"]).arg(&exe));
     assert_eq!(code, 0, "{}", built);
-    for stage in ["--tokens", "--ast", "--diagnostics"] {
-        let (want, code) = output(burn().current_dir(&root).args(["dump", stage]).args(&files));
+    let stages: [(&str, &[PathBuf]); 6] = [
+        ("--tokens", &files),
+        ("--ast", &files),
+        ("--diagnostics", &files),
+        ("--modules", &files),
+        ("--toml", &tomls),
+        ("--project", &places),
+    ];
+    for (stage, inputs) in stages {
+        let (want, code) = output(burn().current_dir(&root).env("BURN_HOME", &home).args(["dump", stage]).args(inputs));
         assert_eq!(code, 0, "{}", want);
         let mut bvm = burn();
-        bvm.current_dir(&root).arg("compiler/dump.bn").arg(stage).args(&files);
+        bvm.current_dir(&root).env("BURN_HOME", &home).arg("compiler/dump.bn").arg(stage).args(inputs);
         let mut native = Command::new(&exe);
-        native.current_dir(&root).arg(stage).args(&files);
+        native.current_dir(&root).env("BURN_HOME", &home).arg(stage).args(inputs);
         for mut run in [bvm, native] {
             let (got, code) = output(&mut run);
             assert_eq!(code, 0, "{}", got);

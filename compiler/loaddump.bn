@@ -1,0 +1,149 @@
+import "astdump.bn"
+import "diag.bn"
+import "loader.bn"
+import "project.bn"
+import "toml.bn"
+
+fun shown(s: string?): string {
+    return s ?? "-"
+}
+
+fun valueLines(depth: int, label: string, v: TomlValue): string {
+    var pad = repeat("  ", depth)
+    return match v {
+        TomlValue.Str(text) => "${pad}${label} Str ${quoted(text)}\n"
+        TomlValue.Int(value) => "${pad}${label} Int ${value}\n"
+        TomlValue.Float(value) => "${pad}${label} Float ${value}\n"
+        TomlValue.Bool(value) => "${pad}${label} Bool ${value}\n"
+        TomlValue.Array(items) => "${pad}${label} Array\n" + itemLines(depth + 1, items)
+        TomlValue.Table(entries) => "${pad}${label} Table\n" + tableLines(depth + 1, entries)
+    }
+}
+
+fun itemLines(depth: int, items: [TomlValue]): string {
+    var out = ""
+    for it in items {
+        out += valueLines(depth, "-", it)
+    }
+    return out
+}
+
+fun tableLines(depth: int, t: [TomlEntry]): string {
+    var out = ""
+    for e in t {
+        out += valueLines(depth, quoted(e.key), e.value)
+    }
+    return out
+}
+
+/** The parsed form of a TOML file, as `burn dump --toml` prints it. */
+pub fun dumpToml(src: string): string {
+    var doc = parseToml(src)
+    if (doc.error != "") {
+        return "error ${doc.error}\n"
+    }
+    return tableLines(0, doc.table)
+}
+
+/** The project found from a path, as `burn dump --project` prints it. */
+pub fun dumpProject(start: string): string {
+    var out = "workspace_only ${isWorkspaceOnly(start)}\n"
+    var ws = findWorkspace(start)
+    if (ws != null) {
+        out += "workspace ${ws.root} ${shown(ws.name)}\n"
+        for m in ws.members {
+            out += "  member ${m.path} ${m.dir} ${shown(m.name)}\n"
+        }
+    }
+    var root = findRoot(start)
+    if (root == null) {
+        return out + "no project\n"
+    }
+    var err = new Problem()
+    var p = loadProject(root, err)
+    if (p == null) {
+        return out + "error ${err.message}\n"
+    }
+    var m = p.manifest
+    var kind = "app"
+    if (m.kind == ProjectKind.Lib) {
+        kind = "lib"
+    }
+    out += "root ${p.root}\n"
+    out += "name ${m.name}\n"
+    out += "version ${m.version}\n"
+    out += "kind ${kind}\n"
+    out += "target ${m.target}\n"
+    out += "main ${m.main}\n"
+    out += "output ${shown(m.output)}\n"
+    out += "std ${m.std}\n"
+    out += "main_path ${mainPath(p)}\n"
+    out += "source_root ${sourceRoot(p)}\n"
+    out += "lock_root ${p.lockRoot}\n"
+    for l in p.lock {
+        out += "locked ${l.name} ${l.rev} ${l.source}\n"
+    }
+    [string] names = [m.name]
+    for d in m.dependencies {
+        out += "dependency ${d.name} ${shown(d.path)}\n"
+        names.push(d.name)
+    }
+    var inside = p.workspace
+    if (inside != null) {
+        out += "in_workspace ${inside.root}\n"
+        for mem in inside.members {
+            var n = mem.name
+            if (n != null) {
+                names.push(n)
+            }
+        }
+    }
+    for l in p.lock {
+        names.push(l.name)
+    }
+    for n in names {
+        var e = new Problem()
+        var dir = resolvePackage(p, n, e)
+        if (dir != null) {
+            out += "resolve ${n} ${dir}\n"
+        } else {
+            out += "resolve ${n} error ${e.message}\n"
+        }
+    }
+    return out
+}
+
+/** Every module a program loads, as `burn dump --modules` prints it. */
+pub fun dumpModules(file: string): string {
+    var loader = new Loader()
+    var err = new Problem()
+    var root = loader.loadFile(file, err)
+    if (root < 0) {
+        return "error ${err.message}\n"
+    }
+    var loaded = loader.finish(root)
+    var out = ""
+    for i in 0..len(loaded.modules) {
+        var m = loaded.modules[i]
+        out += "module ${i} ${loaded.files[m.file].name} ${m.key}\n"
+        for r in m.imports {
+            out += "  import ${r.target} ${r.start} ${r.end}\n"
+        }
+        for r in m.libs {
+            out += "  lib ${r.target} ${r.start} ${r.end}\n"
+        }
+    }
+    for i in 0..len(loaded.libs) {
+        out += "lib ${i} ${loaded.libs[i].name} ${loaded.libs[i].path}\n"
+    }
+    [string] order = []
+    for i in loaded.order {
+        order.push("${i}")
+    }
+    out += "order ${join(order, " ")}\n"
+    out += "no_std ${loaded.noStd}\n"
+    for d in loaded.diags {
+        out += render(loaded.files[d.file], d.diag)
+    }
+    return out
+}

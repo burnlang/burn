@@ -1,0 +1,4 @@
+[package]
+name = "github.com/a/b"
+[dependencies]
+local = "1.0"

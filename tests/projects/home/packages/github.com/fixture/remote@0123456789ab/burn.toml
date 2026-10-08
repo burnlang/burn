@@ -1,0 +1,4 @@
+[package]
+name = "github.com/fixture/remote"
+kind = "lib"
+target = "bvm"

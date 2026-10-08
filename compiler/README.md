@@ -11,6 +11,9 @@ The Rust compiler can print every stage in a fixed text form. The Burn port prin
 | Tokens | `crates/burn/src/lexer.rs` | `compiler/lexer.bn` | `burn dump --tokens <files...>` |
 | Syntax tree and parse errors | `crates/burn/src/parser.rs`, `ast.rs` | `compiler/parser.bn`, `compiler/ast.bn` | `burn dump --ast <files...>` |
 | Rendered errors with snippets and fixes | `crates/burn/src/diag.rs`, `source.rs` | `compiler/diag.bn` | `burn dump --diagnostics <files...>` |
+| `burn.toml` and `burn.lock` as TOML | `crates/burn/src/project.rs` | `compiler/toml.bn` | `burn dump --toml <files...>` |
+| Projects, workspaces and package resolution | `crates/burn/src/project.rs` | `compiler/project.bn`, `compiler/paths.bn` | `burn dump --project <paths...>` |
+| Every module a program loads, and import errors | `crates/burn/src/loader.rs` | `compiler/loader.bn`, `compiler/stdlib.bn` | `burn dump --modules <files...>` |
 
 Run the comparison by hand with:
 
@@ -20,9 +23,11 @@ burn compiler/dump.bn --tokens examples/*.bn > burn.txt
 diff rust.txt burn.txt
 ```
 
-The same works with `--ast` and `--diagnostics`. The suite test `compiler_written_in_burn_matches_the_compiler` compares every stage on bvm and on a native build.
+The same works with the other stages. `--project` takes folders or files and prints the project found from each. Set `BURN_HOME=tests/projects/home` to use the downloaded packages of the fixtures. The suite test `compiler_written_in_burn_matches_the_compiler` compares every stage on bvm and on a native build.
 
-The inputs include the error-recovery fixtures in `tests/lexer` and `tests/parser`. On bvm, the Burn version lexes and parses all of the repository's Burn files in about half a second.
+The inputs include the error-recovery fixtures in `tests/lexer` and `tests/parser`, the TOML files in `tests/toml`, and the projects and workspaces in `tests/projects`. On bvm, the Burn version lexes and parses all of the repository's Burn files in about half a second.
+
+`compiler/stdlib.bn` holds the sources of `lib/std`, the way the Rust compiler embeds them with `include_str!`. It is generated; after changing `lib/std`, run `burn compiler/genstd.bn > compiler/stdlib.bn`. The suite fails when it is out of date.
 
 ## Rules for porting
 
@@ -47,9 +52,11 @@ The inputs include the error-recovery fixtures in `tests/lexer` and `tests/parse
 3. **Diagnostics** (done).
    - `compiler/diag.bn` ports the diagnostic type, line and column lookup, and the `-->` snippet renderer with notes, helps and fix suggestions.
    - It renders every lexer and parser error the same way `burn check` does without colours. Checker errors are compared once the checker is ported.
-4. **Loader and projects.**
-   - Port imports, the standard library modules (read from `lib/std`), `burn.toml` and `burn.lock` parsing, and package resolution.
-   - Include the project layout (`@/` imports, source roots, `mod.bn`, `src/bin`) and workspaces.
+4. **Loader and projects** (done).
+   - `compiler/toml.bn` ports the TOML reader, `compiler/project.bn` the manifest, lock file, workspaces and package resolution, and `compiler/loader.bn` the module loader with `@/` imports, `mod.bn` folders, packages and the standard library.
+   - Burn has no way yet to resolve symbolic links or read file times, and stage0 must still build these sources. Until a later stage0 adds them:
+     - `paths.bn` makes paths absolute and removes `.` and `..` without following symbolic links;
+     - importing a package's bytecode (`import "<package>.bvmc"`) uses the file in its `build/` folder if there is one, and building it needs the checker and code generation.
 5. **Checker.** The largest part (about 10,000 lines). Split it into PRs, roughly one per Rust file:
    - declarations and types
    - expressions

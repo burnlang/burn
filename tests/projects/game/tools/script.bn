@@ -1,0 +1,5 @@
+import "@/anything"
+
+fun main() {
+    print(1)
+}

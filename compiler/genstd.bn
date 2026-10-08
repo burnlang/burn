@@ -1,0 +1,46 @@
+import "std/fs"
+
+/**
+ * Prints `compiler/stdlib.bn`, which holds the sources of `lib/std` the way the Rust compiler embeds them with
+ * `include_str!`. Run it from the repository root: `burn compiler/genstd.bn > compiler/stdlib.bn`.
+ */
+const NAMES = ["date", "time", "http", "math", "strings", "json", "process", "fs", "list", "collections", "path", "random", "testing"]
+
+fun literal(s: string): string {
+    var out = "\""
+    for c in s {
+        if (c == "\\") {
+            out += "\\\\"
+        } else if (c == "\"") {
+            out += "\\\""
+        } else if (c == "$") {
+            out += "\\$"
+        } else if (c == "\n") {
+            out += "\\n"
+        } else if (c == "\t") {
+            out += "\\t"
+        } else if (c == "\r") {
+            out += "\\r"
+        } else {
+            out += c
+        }
+    }
+    return out + "\""
+}
+
+fun main() {
+    print("/** The sources of `lib/std`, written by `compiler/genstd.bn`. */")
+    print("pub def type StdModule {")
+    print("    string name")
+    print("    string src")
+    print("}")
+    print("")
+    print("pub fun stdModules(): [StdModule] {")
+    print("    [StdModule] out = []")
+    for name in NAMES {
+        var src = readFile("lib/std/${name}.bn")
+        print("    out.push(StdModule { name: ${literal(name)}, src: ${literal(src)} })")
+    }
+    print("    return out")
+    print("}")
+}

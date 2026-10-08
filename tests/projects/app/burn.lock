@@ -1,0 +1,12 @@
+version = 1
+
+[[package]]
+name = "github.com/fixture/remote"
+version = "v1.0.0"
+rev = "0123456789abcdef0123"
+source = "git+https://github.com/fixture/remote"
+
+[[package]]
+name = "github.com/fixture/gone"
+rev = "ffffffffffffffff"
+source = "git+https://github.com/fixture/gone"
