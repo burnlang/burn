@@ -1,0 +1,45 @@
+name: Burn stage0
+description: >
+  Installs the pinned release of the Burn compiler written in Rust (compiler/STAGE0).
+  It is the compiler that builds the Burn compiler written in Burn for the first time.
+inputs:
+  version:
+    description: Release tag to install. Defaults to the tag in compiler/STAGE0.
+    required: false
+    default: ""
+outputs:
+  burn:
+    description: Path to the stage0 burn executable
+    value: ${{ steps.install.outputs.burn }}
+  version:
+    description: The release tag that was installed
+    value: ${{ steps.install.outputs.version }}
+runs:
+  using: composite
+  steps:
+    - id: install
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        REPO: ${{ github.server_url }}/burnlang/burn
+      run: |
+        set -euo pipefail
+        version="${VERSION:-$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/compiler/STAGE0")}"
+        case "$(uname -s)-$(uname -m)" in
+          Linux-x86_64) asset=burn-linux-x86_64.tar.gz ;;
+          Darwin-x86_64) asset=burn-macos-x86_64.tar.gz ;;
+          Darwin-arm64) asset=burn-macos-aarch64.tar.gz ;;
+          *) echo "no stage0 build for $(uname -s) $(uname -m)" >&2; exit 1 ;;
+        esac
+        dir="$RUNNER_TEMP/burn-stage0-$version"
+        mkdir -p "$dir"
+        cd "$dir"
+        curl -fsSL --retry 3 -o "$asset" "$REPO/releases/download/$version/$asset"
+        curl -fsSL --retry 3 -o SHA256SUMS "$REPO/releases/download/$version/SHA256SUMS"
+        grep " $asset\$" SHA256SUMS > want.sha256
+        if command -v sha256sum >/dev/null; then sha256sum -c want.sha256; else shasum -a 256 -c want.sha256; fi
+        tar -xzf "$asset"
+        "$dir/burn/bin/burn" --version
+        echo "$dir/burn/bin" >> "$GITHUB_PATH"
+        echo "burn=$dir/burn/bin/burn" >> "$GITHUB_OUTPUT"
+        echo "version=$version" >> "$GITHUB_OUTPUT"
