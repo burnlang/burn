@@ -1,0 +1,12 @@
+def type int { int a }
+def type Point { int x }
+def type Point { int y }
+def annotation Getter { string name }
+def enum Color { Red, Green, Red }
+def enum Shape { Dot, Circle(r: float), Dot }
+
+fun twice() {}
+fun twice() {}
+var twice = 1
+const limit = 3
+var limit = 4

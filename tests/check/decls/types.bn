@@ -1,0 +1,32 @@
+def enum Kind { A, B }
+def enum Tree { Leaf, Node(left: Tree, right: Tree) }
+def type Pointt { int x }
+
+def type Uses {
+    Point a
+    Ponit b
+    Futur c
+    Kind.A d
+    Tree.Branch e
+    Tree.Leaf f
+    Nope.X g
+    Map<int> h
+    List<int, int> i
+    Future<int> j
+    Task<string> k
+    Optional<int> l
+    Dict<Kind, string> m
+    {[int]: string} n
+    {float: int} o
+    void? p
+    fun(int, string): bool q
+    fun() r
+    (fun(int))? s
+    [[int?]] t
+    Int64 u
+    uint8 v
+    byte w
+    double x
+    any y
+    object z
+}

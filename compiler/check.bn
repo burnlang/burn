@@ -1,0 +1,2063 @@
+import "ast.bn"
+import "diag.bn"
+import "hir.bn"
+import "loader.bn"
+import "types.bn"
+
+pub const ANNOTATION_BUILTINS = ["Getter", "Setter", "Deprecated", "Export", "Native", "Inject", "Overwrite", "Redirect"]
+
+pub def enum ValSym {
+    Func(id: int),
+    Global(id: int)
+}
+
+pub def type ValEntry {
+    ValSym sym
+    Vis vis
+    SrcSpan span
+}
+
+/** A named type, or the index of a generic function or type, visible in a module. */
+pub def type TypeEntry {
+    int sym
+    Vis vis
+    SrcSpan span
+}
+
+pub def type ModScope {
+    int file
+    {string: ValEntry} values
+    {string: TypeEntry} types
+    {string: TypeEntry} gfuncs
+    {string: TypeEntry} gtypes
+    [int] imports
+    int init
+    string? stdName
+    bool snippet
+    int importAt
+    bool importSeen
+}
+
+pub def enum FnState { Pending, InProgress, Done }
+
+pub def type FuncParam {
+    string name
+    int ty
+    SrcSpan span
+}
+
+pub def type FuncInfo {
+    string name
+    [FuncParam] params
+    int? ret
+    bool isAsync
+    FunDecl? decl
+    int module
+    int? selfTy
+    FnState state
+    SrcSpan span
+    bool private
+    bool isStatic
+    [HirAnnotation] annotations
+    string? deprecated
+    External? external
+    {string: int}? tenv
+}
+
+pub def type GlobalInfo {
+    string name
+    int? ty
+    bool isConst
+    int module
+    SrcSpan span
+}
+
+pub def type StructDecl {
+    int module
+    [FuncParam] params
+    [Expr]? superArgs
+    SrcSpan superSpan
+    int ownStart
+    [bool] paramFields
+    [StaticVal] statics
+}
+
+pub def type AbstractSig {
+    int record
+    string name
+    [int] params
+    int ret
+    bool isAsync
+    SrcSpan span
+}
+
+pub def type GenericInstance {
+    [int] targs
+    int target
+}
+
+pub def type GenericFn {
+    FunDecl decl
+    int module
+    bool private
+    [GenericInstance] instances
+}
+
+pub def type GenericType {
+    Def d
+    int module
+    [GenericInstance] instances
+}
+
+pub def type PendingInstance {
+    int gid
+    int record
+    [int] targs
+    SrcSpan span
+}
+
+pub def type TypeAlias {
+    int module
+    string name
+    TypeExpr ty
+}
+
+/** Where an annotation is written; the variants match `Site` in `annot.rs`. */
+pub def enum Site {
+    Func(method: bool, bodyless: bool),
+    Type(isClass: bool),
+    Field
+}
+
+fun describeSite(site: Site): string {
+    if (site is Site.Func) {
+        if (site.method) {
+            return "a method"
+        }
+        return "a function"
+    }
+    if (site is Site.Type) {
+        if (site.isClass) {
+            return "a struct"
+        }
+        return "a type"
+    }
+    return "a field"
+}
+
+pub fun defName(d: Def): Ident {
+    return match d {
+        Def.Type(name, fields, tparams) => name
+        Def.Alias(name, ty) => name
+        Def.Interface(name, methods) => name
+        Def.Struct(s) => s.name
+        Def.Enum(name, variants) => name
+        Def.Annotation(name, fields) => name
+    }
+}
+
+pub fun defTparams(d: Def): [Ident] {
+    if (d is Def.Type) {
+        return d.tparams
+    }
+    if (d is Def.Struct) {
+        return d.s.tparams
+    }
+    return []
+}
+
+pub fun primitive(name: string): int? {
+    if (contains(["int", "Int", "i64", "long", "int64", "Int64"], name)) {
+        return T_INT
+    }
+    if (contains(["int8", "Int8", "i8"], name)) {
+        return T_I8
+    }
+    if (contains(["int16", "Int16", "i16", "short"], name)) {
+        return T_I16
+    }
+    if (contains(["int32", "Int32", "i32"], name)) {
+        return T_I32
+    }
+    if (contains(["uint8", "UInt8", "u8", "byte", "Byte"], name)) {
+        return T_U8
+    }
+    if (contains(["uint16", "UInt16", "u16"], name)) {
+        return T_U16
+    }
+    if (contains(["uint32", "UInt32", "u32"], name)) {
+        return T_U32
+    }
+    if (contains(["uint64", "UInt64", "u64"], name)) {
+        return T_U64
+    }
+    if (contains(["float32", "Float32", "f32"], name)) {
+        return T_F32
+    }
+    if (contains(["float64", "Float64", "float", "Float", "double", "Double", "f64", "number"], name)) {
+        return T_FLOAT
+    }
+    if (contains(["string", "String", "str", "Str"], name)) {
+        return T_STR
+    }
+    if (contains(["bool", "Bool", "boolean", "Boolean"], name)) {
+        return T_BOOL
+    }
+    if (contains(["void", "Void", "Unit"], name)) {
+        return T_VOID
+    }
+    if (contains(["any", "Any", "object"], name)) {
+        return T_ANY
+    }
+    if (name == "null") {
+        return T_NULL
+    }
+    if (name == "array" || name == "Array") {
+        return T_ARR_ANY
+    }
+    if (name == "map" || name == "Map") {
+        return T_MAP_STR_ANY
+    }
+    return null
+}
+
+fun asciiLower(c: string): string {
+    var code = charCode(c)
+    if (code >= 65 && code <= 90) {
+        return fromCharCode(code + 32)
+    }
+    return c
+}
+
+fun sameLetter(a: string, b: string): bool {
+    return asciiLower(a) == asciiLower(b)
+}
+
+fun charsOf(s: string): [string] {
+    [string] out = []
+    for c in s {
+        out.push(c)
+    }
+    return out
+}
+
+pub fun editDistance(x: string, y: string): int {
+    var a = charsOf(x)
+    var b = charsOf(y)
+    [[int]] rows = []
+    [int] first = []
+    for j in 0..len(b) + 1 {
+        first.push(j)
+    }
+    rows.push(first)
+    for i in 1..len(a) + 1 {
+        [int] cur = []
+        for j in 0..len(b) + 1 {
+            cur.push(i)
+        }
+        for j in 1..len(b) + 1 {
+            var cost = 1
+            if (sameLetter(a[i - 1], b[j - 1])) {
+                cost = 0
+            }
+            var best = rows[i - 1][j] + 1
+            if (cur[j - 1] + 1 < best) {
+                best = cur[j - 1] + 1
+            }
+            if (rows[i - 1][j - 1] + cost < best) {
+                best = rows[i - 1][j - 1] + cost
+            }
+            cur[j] = best
+            if (i > 1 && j > 1 && sameLetter(a[i - 1], b[j - 2]) && sameLetter(a[i - 2], b[j - 1])) {
+                if (rows[i - 2][j - 2] + 1 < cur[j]) {
+                    cur[j] = rows[i - 2][j - 2] + 1
+                }
+            }
+        }
+        rows.push(cur)
+    }
+    return rows[len(a)][len(b)]
+}
+
+/** The closest name to a misspelled one, preferring the first in sorted order when several are as close. */
+pub fun suggest(name: string, candidates: [string]): string? {
+    string? best = null
+    var bestDistance = 0
+    var limit = len(name.bytes()) / 3
+    if (limit < 1) {
+        limit = 1
+    }
+    for c in candidates {
+        if (c == name || startsWith(c, "__")) {
+            continue
+        }
+        var d = editDistance(name, c)
+        if (d > limit) {
+            continue
+        }
+        var b = best
+        if (b == null || d < bestDistance || (d == bestDistance && c < b)) {
+            best = c
+            bestDistance = d
+        }
+    }
+    return best
+}
+
+fun literalType(e: Expr): int? {
+    var k = e.kind
+    if (k is ExprKind.Int) {
+        return T_INT
+    }
+    if (k is ExprKind.Float) {
+        return T_FLOAT
+    }
+    if (k is ExprKind.Str || k is ExprKind.Template) {
+        return T_STR
+    }
+    if (k is ExprKind.Bool) {
+        return T_BOOL
+    }
+    if (k is ExprKind.Unary && k.op == UnOp.Neg) {
+        var t = literalType(k.operand)
+        if (t == T_INT || t == T_FLOAT) {
+            return t
+        }
+    }
+    return null
+}
+
+fun typeMentions(te: TypeExpr, names: [string]): bool {
+    var k = te.kind
+    if (k is TypeKind.Named) {
+        if (len(k.args) == 0 && contains(names, k.name)) {
+            return true
+        }
+        for a in k.args {
+            if (typeMentions(a, names)) {
+                return true
+            }
+        }
+        return false
+    }
+    if (k is TypeKind.Array) {
+        return typeMentions(k.elem, names)
+    }
+    if (k is TypeKind.Optional) {
+        return typeMentions(k.inner, names)
+    }
+    if (k is TypeKind.Map) {
+        return typeMentions(k.key, names) || typeMentions(k.value, names)
+    }
+    if (k is TypeKind.Func) {
+        for p in k.params {
+            if (typeMentions(p, names)) {
+                return true
+            }
+        }
+        var r = k.ret
+        return r != null && typeMentions(r, names)
+    }
+    return false
+}
+
+fun targsKey(targs: [int]): string {
+    var out = ""
+    for i in 0..len(targs) {
+        if (i > 0) {
+            out += ","
+        }
+        out += "${targs[i]}"
+    }
+    return out
+}
+
+fun findInstance(list: [GenericInstance], targs: [int]): int? {
+    var key = targsKey(targs)
+    for x in list {
+        if (targsKey(x.targs) == key) {
+            return x.target
+        }
+    }
+    return null
+}
+
+const MAX_INSTANCES = 256
+
+/** The type checker, ported from `check/` part by part. This part declares every type, function and global. */
+pub def struct Checker(loaded: Loaded) {
+    Types types = new Types()
+    [LoadDiag] diags = []
+    [ModScope] mods = []
+    [FuncInfo] funcs = []
+    [GlobalInfo] globals = []
+    [IfaceSlot] slots = []
+    {int: int} ifaceSlotBase = {}
+    {int: bool} annotationTypes = {}
+    {int: [HirAnnotation]} typeAnns = {}
+    {int: string} deprecatedTypes = {}
+    {int: StructDecl} structDecls = {}
+    [AbstractSig] abstractSigs = []
+    {int: bool} staticPrivate = {}
+    [GenericFn] genericFns = []
+    [GenericType] genericTypes = []
+    [{string: int}] tenv = []
+    [PendingInstance] pendingInstances = []
+    bool structsReady = false
+
+    fun fileOf(mi: int): int {
+        return loaded.modules[mi].file
+    }
+
+    fun spanIn(mi: int, s: Span): SrcSpan {
+        return srcSpan(fileOf(mi), s)
+    }
+
+    fun lineOf(s: SrcSpan): int {
+        return loaded.files[s.file].lineCol(s.start)[0]
+    }
+
+    fun srcBytes(file: int): [uint8] {
+        var f = loaded.files[file]
+        f.index()
+        return f.bytes
+    }
+
+    fun show(t: int): string {
+        return types.display(t)
+    }
+
+    fun emit(d: LoadDiag) {
+        diags.push(d)
+    }
+
+    fun errorDiag(span: SrcSpan, msg: string): LoadDiag {
+        return LoadDiag { file: span.file, diag: errorAt(span.start, span.end, msg) }
+    }
+
+    fun error(span: SrcSpan, msg: string) {
+        emit(errorDiag(span, msg))
+    }
+
+    fun errorNote(span: SrcSpan, msg: string, help: string) {
+        var d = errorDiag(span, msg)
+        d.diag.helps.push(help)
+        emit(d)
+    }
+
+    fun errorDetail(span: SrcSpan, msg: string, note: string) {
+        var d = errorDiag(span, msg)
+        d.diag.notes.push(note)
+        emit(d)
+    }
+
+    fun errorFix(span: SrcSpan, msg: string, replacement: string) {
+        var d = errorDiag(span, msg)
+        addFix(d.diag, "did you mean `${replacement}`?", span.start, span.end, replacement, true)
+        emit(d)
+    }
+
+    fun warn(span: SrcSpan, msg: string) {
+        emit(LoadDiag { file: span.file, diag: warningAt(span.start, span.end, msg) })
+    }
+
+    fun truncateDiags(n: int) {
+        diags = slice(diags, 0, n)
+    }
+
+    fun paramsClose(name: SrcSpan): SrcSpan? {
+        var src = srcBytes(name.file)
+        var i = name.end
+        while (i < len(src) && src[i] == 32) {
+            i += 1
+        }
+        if (i >= len(src) || src[i] != 40) {
+            return null
+        }
+        var depth = 0
+        while (i < len(src)) {
+            var c = src[i]
+            if (c == 40) {
+                depth += 1
+            } else if (c == 41) {
+                depth -= 1
+                if (depth == 0) {
+                    return SrcSpan { file: name.file, start: i + 1, end: i + 1 }
+                }
+            } else if (c == 10 || c == 123) {
+                return null
+            }
+            i += 1
+        }
+        return null
+    }
+
+    fun operatorSpan(name: SrcSpan): SrcSpan? {
+        var src = srcBytes(name.file)
+        var i = name.start
+        while (i > 0 && (src[i - 1] == 32 || src[i - 1] == 9)) {
+            i -= 1
+        }
+        if (i >= 2 && src[i - 1] == 58 && src[i - 2] == 58) {
+            return SrcSpan { file: name.file, start: i - 2, end: i }
+        }
+        if (i >= 1 && src[i - 1] == 58) {
+            return SrcSpan { file: name.file, start: i - 1, end: i }
+        }
+        return null
+    }
+
+    fun commaBefore(name: SrcSpan): SrcSpan? {
+        var src = srcBytes(name.file)
+        var i = name.start
+        while (i > 0 && (src[i - 1] == 32 || src[i - 1] == 9)) {
+            i -= 1
+        }
+        if (i >= 1 && src[i - 1] == 44) {
+            return SrcSpan { file: name.file, start: i - 1, end: i }
+        }
+        return null
+    }
+
+    fun moduleName(mi: int): string {
+        return loaded.files[mods[mi].file].name
+    }
+
+    fun visibleValue(module: int, name: string, ambiguous: [string]): ValEntry? {
+        var own = mods[module].values[name]
+        if (own != null) {
+            return own
+        }
+        ValEntry? found = null
+        for imp in mods[module].imports {
+            var e = mods[imp].values[name]
+            if (e != null && e.vis != Vis.Priv) {
+                found = e
+                ambiguous.push(moduleName(imp))
+            }
+        }
+        if (len(ambiguous) > 1) {
+            return null
+        }
+        return found
+    }
+
+    fun typeTable(module: int, which: int): {string: TypeEntry} {
+        if (which == 1) {
+            return mods[module].gfuncs
+        }
+        if (which == 2) {
+            return mods[module].gtypes
+        }
+        return mods[module].types
+    }
+
+    fun visibleType(module: int, name: string, which: int, ambiguous: [string]): TypeEntry? {
+        var own = typeTable(module, which)[name]
+        if (own != null) {
+            return own
+        }
+        TypeEntry? found = null
+        for imp in mods[module].imports {
+            var e = typeTable(imp, which)[name]
+            if (e != null && e.vis != Vis.Priv) {
+                found = e
+                ambiguous.push(moduleName(imp))
+            }
+        }
+        if (len(ambiguous) > 1) {
+            return null
+        }
+        return found
+    }
+
+    fun isPrivateElsewhere(module: int, name: string): bool {
+        for i in mods[module].imports {
+            var v = mods[i].values[name]
+            if (v != null && v.vis == Vis.Priv) {
+                return true
+            }
+            var t = mods[i].types[name]
+            if (t != null && t.vis == Vis.Priv) {
+                return true
+            }
+        }
+        return false
+    }
+
+    fun warnDeprecatedType(t: int, span: SrcSpan) {
+        var msg = deprecatedTypes[t]
+        if (msg == null) {
+            return
+        }
+        var name = show(t)
+        if (msg == "") {
+            warn(span, "`${name}` is deprecated")
+        } else {
+            warn(span, "`${name}` is deprecated: ${msg}")
+        }
+    }
+
+    fun lookupTypeName(module: int, name: string, span: SrcSpan): int? {
+        [string] ambiguous = []
+        var e = visibleType(module, name, 0, ambiguous)
+        if (len(ambiguous) > 1) {
+            error(span, "type `${name}` is ambiguous: it is defined in ${joinWith(ambiguous, " and ")}")
+            return T_ERROR
+        }
+        if (e == null) {
+            return null
+        }
+        warnDeprecatedType(e.sym, span)
+        return e.sym
+    }
+
+    fun lookupGenericType(module: int, name: string): int? {
+        [string] ambiguous = []
+        var e = visibleType(module, name, 2, ambiguous)
+        if (e == null) {
+            return null
+        }
+        return e.sym
+    }
+
+    fun typesNamed(module: int, name: string): bool {
+        [string] ambiguous = []
+        return visibleType(module, name, 0, ambiguous) != null && len(ambiguous) <= 1
+    }
+
+    fun tparam(name: string): int? {
+        if (len(tenv) == 0) {
+            return null
+        }
+        return tenv[len(tenv) - 1][name]
+    }
+
+    fun checkMapKey(k: int, span: SrcSpan) {
+        var kind = types.kindOf(k)
+        var ok = kind is Ty.Str || kind is Ty.Int || kind is Ty.Bool || kind is Ty.Enum || kind is Ty.Any || kind is Ty.Error
+        if (!ok && !types.isInteger(k)) {
+            error(span, "map keys must be string, int, bool, enum or any, not ${show(k)}")
+        }
+    }
+
+    fun resolveTypeIn(te: TypeExpr, module: int): int {
+        var span = spanIn(module, te.span)
+        var kind = te.kind
+        if (kind is TypeKind.Array) {
+            return types.array(resolveTypeIn(kind.elem, module))
+        }
+        if (kind is TypeKind.Optional) {
+            var inner = resolveTypeIn(kind.inner, module)
+            if (inner == T_VOID) {
+                error(span, "`void?` is not a valid type")
+                return T_ERROR
+            }
+            return types.optional(inner)
+        }
+        if (kind is TypeKind.Map) {
+            var k = resolveTypeIn(kind.key, module)
+            var v = resolveTypeIn(kind.value, module)
+            checkMapKey(k, span)
+            return types.mapOf(k, v)
+        }
+        if (kind is TypeKind.Func) {
+            [int] ps = []
+            for p in kind.params {
+                ps.push(resolveTypeIn(p, module))
+            }
+            var r = T_VOID
+            var rt = kind.ret
+            if (rt != null) {
+                r = resolveTypeIn(rt, module)
+            }
+            return types.func(ps, r)
+        }
+        if (kind is TypeKind.Named) {
+            return resolveNamed(kind.name, kind.args, module, span)
+        }
+        return T_ERROR
+    }
+
+    fun resolveNamed(name: string, args: [TypeExpr], module: int, span: SrcSpan): int {
+        var g = resolveGenericNamed(name, args, module, span)
+        if (g != null) {
+            return g
+        }
+        if (len(args) > 0) {
+            [int] a = []
+            for x in args {
+                a.push(resolveTypeIn(x, module))
+            }
+            var n = len(a)
+            if (n == 1 && (name == "Future" || name == "Task" || name == "Promise")) {
+                return types.future(a[0])
+            }
+            if (n == 1 && (name == "Array" || name == "List" || name == "array")) {
+                return types.array(a[0])
+            }
+            if (n == 2 && (name == "Map" || name == "map" || name == "Dict")) {
+                checkMapKey(a[0], span)
+                return types.mapOf(a[0], a[1])
+            }
+            if (n == 1 && (name == "Optional" || name == "Option")) {
+                return types.optional(a[0])
+            }
+            error(span, "type `${name}` does not take ${n} type argument(s)")
+            return T_ERROR
+        }
+        var dot = indexOf(name, ".")
+        if (dot >= 0) {
+            var base = substring(name, 0, dot)
+            var v = substring(name, dot + 1)
+            var t = lookupTypeName(module, base, span)
+            if (t == null) {
+                error(span, "unknown type `${base}`")
+                return T_ERROR
+            }
+            var en = types.variantsOf(t)
+            if (en == null) {
+                error(span, "${show(t)} is not an enum with data, so `${name}` is not a type")
+                return T_ERROR
+            }
+            for x in en.variants {
+                if (x.name == v) {
+                    return types.records[x.record].ty
+                }
+            }
+            error(span, "enum ${en.name} has no variant `${v}`")
+            return T_ERROR
+        }
+        var t = lookupTypeName(module, name, span)
+        if (t != null) {
+            return t
+        }
+        var p = primitive(name)
+        if (p != null) {
+            return p
+        }
+        var cands = keys(mods[module].types)
+        for c in ["int", "float", "string", "bool", "void", "any"] {
+            cands.push(c)
+        }
+        var s = suggest(name, cands)
+        if (s != null) {
+            errorFix(span, "unknown type `${name}`", s)
+        } else if (isPrivateElsewhere(module, name)) {
+            error(span, "type `${name}` is private to its module")
+        } else {
+            error(span, "unknown type `${name}`")
+        }
+        return T_ERROR
+    }
+
+    fun resolveGenericNamed(name: string, args: [TypeExpr], module: int, span: SrcSpan): int? {
+        if (len(args) == 0) {
+            var tp = tparam(name)
+            if (tp != null) {
+                return tp
+            }
+            var gid = lookupGenericType(module, name)
+            if (gid != null) {
+                if (typesNamed(module, name)) {
+                    return null
+                }
+                [string] ps = []
+                for t in defTparams(genericTypes[gid].d) {
+                    ps.push(t.name)
+                }
+                var d = errorDiag(span, "`${name}` needs type arguments")
+                d.diag.helps.push("write `${name}<${joinWith(ps, ", ")}>` with the types to use")
+                emit(d)
+                return T_ERROR
+            }
+            return null
+        }
+        var gid = lookupGenericType(module, name)
+        if (gid == null) {
+            return null
+        }
+        var want = len(defTparams(genericTypes[gid].d))
+        [int] targs = []
+        for a in args {
+            targs.push(resolveTypeIn(a, module))
+        }
+        if (len(targs) != want) {
+            error(span, "`${name}` takes ${want} type argument(s) but ${len(targs)} were given")
+            return T_ERROR
+        }
+        if (contains(targs, T_ERROR)) {
+            return T_ERROR
+        }
+        return instantiateType(gid, targs, span)
+    }
+
+    fun instantiateType(gid: int, targs: [int], span: SrcSpan): int {
+        var g = genericTypes[gid]
+        var hit = findInstance(g.instances, targs)
+        if (hit != null) {
+            return hit
+        }
+        var dname = defName(g.d)
+        if (len(g.instances) >= MAX_INSTANCES) {
+            error(span, "`${dname.name}` is used with too many different type arguments; does it contain itself with a bigger type?")
+            return T_ERROR
+        }
+        [string] shown = []
+        for t in targs {
+            shown.push(show(t))
+        }
+        var rec = newRecordDef("${dname.name}<${joinWith(shown, ", ")}>", g.module, spanIn(g.module, dname.span))
+        rec.isClass = g.d is Def.Struct
+        var ri = types.newRecord(rec)
+        var t = types.records[ri].ty
+        g.instances.push(GenericInstance { targs: targs, target: t })
+        pendingInstances.push(PendingInstance { gid: gid, record: ri, targs: targs, span: span })
+        return t
+    }
+
+    fun addValue(mi: int, name: string, sym: ValSym, vis: Vis, span: SrcSpan) {
+        var prev = mods[mi].values[name]
+        if (prev != null) {
+            error(span, "`${name}` is already defined on line ${lineOf(prev.span)}")
+            return
+        }
+        mods[mi].values[name] = ValEntry { sym: sym, vis: vis, span: span }
+    }
+
+    fun addType(mi: int, name: Ident, t: int, vis: Vis) {
+        var span = spanIn(mi, name.span)
+        if (primitive(name.name) != null) {
+            error(span, "`${name.name}` is a built-in type name")
+        }
+        var prev = mods[mi].types[name.name]
+        if (prev != null) {
+            error(span, "type `${name.name}` is already defined on line ${lineOf(prev.span)}")
+            return
+        }
+        mods[mi].types[name.name] = TypeEntry { sym: t, vis: vis, span: span }
+    }
+
+    fun declareRecord(mi: int, name: Ident, vis: Vis, kind: StructKind?, isAnnotation: bool) {
+        var rec = newRecordDef(name.name, mi, spanIn(mi, name.span))
+        rec.isClass = kind != null
+        rec.isAbstract = kind == StructKind.Abstract
+        rec.isStatic = kind == StructKind.Static
+        var ri = types.newRecord(rec)
+        var t = types.records[ri].ty
+        addType(mi, name, t, vis)
+        if (isAnnotation) {
+            if (contains(ANNOTATION_BUILTINS, name.name)) {
+                error(spanIn(mi, name.span), "@${name.name} is a built-in annotation")
+            }
+            annotationTypes[t] = true
+        }
+    }
+
+    fun declareDef(mi: int, d: Def, vis: Vis, aliases: [TypeAlias]) {
+        if (d is Def.Type) {
+            declareRecord(mi, d.name, vis, null, false)
+            return
+        }
+        if (d is Def.Struct) {
+            declareRecord(mi, d.s.name, vis, d.s.kind, false)
+            return
+        }
+        if (d is Def.Annotation) {
+            declareRecord(mi, d.name, vis, null, true)
+            return
+        }
+        if (d is Def.Interface) {
+            var ii = types.newIface(IfaceDef { name: d.name.name, methods: [], module: mi, span: spanIn(mi, d.name.span), ty: 0, variants: [] })
+            addType(mi, d.name, types.ifaces[ii].ty, vis)
+            return
+        }
+        if (d is Def.Alias) {
+            addType(mi, d.name, T_ERROR, vis)
+            aliases.push(TypeAlias { module: mi, name: d.name.name, ty: d.ty })
+            return
+        }
+        if (d is Def.Enum) {
+            declareEnum(mi, d.name, d.variants, vis)
+        }
+    }
+
+    fun declareEnum(mi: int, name: Ident, variants: [Variant], vis: Vis) {
+        {string: bool} seen = {}
+        var withData = false
+        for v in variants {
+            if (has(seen, v.name.name)) {
+                error(spanIn(mi, v.name.span), "duplicate enum variant `${v.name.name}`")
+            }
+            seen[v.name.name] = true
+            if (v.fields != null) {
+                withData = true
+            }
+        }
+        if (withData) {
+            var ii = types.newIface(IfaceDef { name: name.name, methods: [], module: mi, span: spanIn(mi, name.span), ty: 0, variants: [] })
+            [EnumVariant] out = []
+            for v in variants {
+                var rec = newRecordDef("${name.name}.${v.name.name}", mi, spanIn(mi, v.name.span))
+                rec.implements = [ii]
+                var ri = types.newRecord(rec)
+                out.push(EnumVariant { name: v.name.name, span: spanIn(mi, v.name.span), record: ri })
+            }
+            ifaceSlotBase[ii] = 0
+            types.ifaces[ii].variants = out
+            addType(mi, name, types.ifaces[ii].ty, vis)
+            return
+        }
+        [EnumCase] cases = []
+        for v in variants {
+            cases.push(EnumCase { name: v.name.name, span: spanIn(mi, v.name.span) })
+        }
+        var ei = types.newEnum(EnumDef { name: name.name, variants: cases, module: mi, span: spanIn(mi, name.span), ty: 0 })
+        addType(mi, name, types.enums[ei].ty, vis)
+    }
+
+    fun declareGenericType(mi: int, d: Def, vis: Vis) {
+        var name = defName(d)
+        var span = spanIn(mi, name.span)
+        if (primitive(name.name) != null) {
+            error(span, "`${name.name}` is a built-in type name")
+        }
+        var prevType = mods[mi].types[name.name]
+        var prevGeneric = mods[mi].gtypes[name.name]
+        if (prevType != null) {
+            error(span, "type `${name.name}` is already defined on line ${lineOf(prevType.span)}")
+            return
+        }
+        if (prevGeneric != null) {
+            error(span, "type `${name.name}` is already defined on line ${lineOf(prevGeneric.span)}")
+            return
+        }
+        [string] seen = []
+        for t in defTparams(d) {
+            if (contains(seen, t.name)) {
+                error(spanIn(mi, t.span), "type parameter `${t.name}` is listed twice")
+            }
+            seen.push(t.name)
+        }
+        if (d is Def.Struct) {
+            var ext = d.s.extends
+            if (ext != null) {
+                error(spanIn(mi, ext.name.span), "generic structs cannot extend other structs yet")
+            }
+            if (d.s.kind != StructKind.Normal) {
+                error(span, "abstract and static structs cannot have type parameters")
+            }
+            if (len(d.s.statics) > 0) {
+                error(spanIn(mi, d.s.statics[0].name.span), "generic structs cannot have static members yet")
+            }
+        }
+        var gid = len(genericTypes)
+        genericTypes.push(GenericType { d: d, module: mi, instances: [] })
+        mods[mi].gtypes[name.name] = TypeEntry { sym: gid, vis: vis, span: span }
+    }
+
+    fun declareGenericFn(mi: int, f: FunDecl, vis: Vis) {
+        var span = spanIn(mi, f.name.span)
+        var prevValue = mods[mi].values[f.name.name]
+        var prevGeneric = mods[mi].gfuncs[f.name.name]
+        if (prevValue != null) {
+            error(span, "`${f.name.name}` is already defined on line ${lineOf(prevValue.span)}")
+            return
+        }
+        if (prevGeneric != null) {
+            error(span, "`${f.name.name}` is already defined on line ${lineOf(prevGeneric.span)}")
+            return
+        }
+        if (f.bodyless) {
+            error(span, "functions with type parameters need a body")
+        }
+        {string: int} env = {}
+        for t in f.tparams {
+            env[t.name] = T_ANY
+        }
+        tenv.push(env)
+        for p in f.params {
+            resolveTypeIn(p.ty, mi)
+        }
+        var ret = f.ret
+        if (ret != null) {
+            resolveTypeIn(ret, mi)
+        }
+        tenv = slice(tenv, 0, len(tenv) - 1)
+        for t in f.tparams {
+            var used = false
+            for p in f.params {
+                if (typeMentions(p.ty, [t.name])) {
+                    used = true
+                }
+            }
+            if (ret != null && typeMentions(ret, [t.name])) {
+                used = true
+            }
+            if (!used) {
+                warn(spanIn(mi, t.span), "type parameter `${t.name}` is not used in the parameters or the return type")
+            }
+        }
+        var gid = len(genericFns)
+        genericFns.push(GenericFn { decl: f, module: mi, private: vis == Vis.Priv, instances: [] })
+        mods[mi].gfuncs[f.name.name] = TypeEntry { sym: gid, vis: vis, span: span }
+    }
+
+    fun fillDef(mi: int, d: Def) {
+        var name = defName(d)
+        var e = mods[mi].types[name.name]
+        if (e == null || !sameSpan(e.span, spanIn(mi, name.span))) {
+            return
+        }
+        fillDefFor(mi, d, e.sym)
+    }
+
+    fun recordFields(mi: int, params: [Param], fields: [Field], pdecl: [FuncParam]): [FieldDef] {
+        [FieldDef] out = []
+        for p in params {
+            var pt = resolveTypeIn(p.ty, mi)
+            if (pt == T_VOID) {
+                error(spanIn(mi, p.ty.span), "parameters cannot have type void")
+            }
+            if (fieldNamed(out, p.name.name)) {
+                error(spanIn(mi, p.name.span), "duplicate parameter `${p.name.name}`")
+                continue
+            }
+            out.push(FieldDef { name: p.name.name, ty: pt, value: null, private: false, span: spanIn(mi, p.name.span) })
+            pdecl.push(FuncParam { name: p.name.name, ty: pt, span: spanIn(mi, p.name.span) })
+        }
+        for f in fields {
+            var ft = resolveTypeIn(f.ty, mi)
+            if (ft == T_VOID) {
+                error(spanIn(mi, f.ty.span), "fields cannot have type void")
+            }
+            if (fieldNamed(out, f.name.name)) {
+                error(spanIn(mi, f.name.span), "duplicate field `${f.name.name}`")
+                continue
+            }
+            out.push(FieldDef { name: f.name.name, ty: ft, value: f.value, private: f.vis == Vis.Priv, span: spanIn(mi, f.name.span) })
+        }
+        return out
+    }
+
+    fun fieldNamed(list: [FieldDef], name: string): bool {
+        for x in list {
+            if (x.name == name) {
+                return true
+            }
+        }
+        return false
+    }
+
+    fun fillDefFor(mi: int, d: Def, t: int) {
+        var tk = types.kindOf(t)
+        if (d is Def.Type || d is Def.Annotation || d is Def.Struct) {
+            if (!(tk is Ty.Record)) {
+                return
+            }
+            var ri = tk.index
+            [FuncParam] pdecl = []
+            [Param] params = []
+            [Field] fields = []
+            if (d is Def.Type) {
+                fields = d.fields
+            } else if (d is Def.Annotation) {
+                fields = d.fields
+            } else if (d is Def.Struct) {
+                params = d.s.params
+                fields = d.s.fields
+            }
+            types.records[ri].fields = recordFields(mi, params, fields, pdecl)
+            if (d is Def.Struct) {
+                fillStruct(mi, ri, d.s, pdecl)
+            }
+            return
+        }
+        if (d is Def.Enum) {
+            var e = types.variantsOf(t)
+            if (e == null) {
+                return
+            }
+            for k in 0..len(e.variants) {
+                if (k >= len(d.variants)) {
+                    break
+                }
+                var fs = d.variants[k].fields ?? []
+                [FieldDef] out = []
+                for p in fs {
+                    var ft = resolveTypeIn(p.ty, mi)
+                    if (ft == T_VOID) {
+                        error(spanIn(mi, p.ty.span), "fields cannot have type void")
+                    }
+                    if (fieldNamed(out, p.name.name)) {
+                        error(spanIn(mi, p.name.span), "duplicate field `${p.name.name}`")
+                        continue
+                    }
+                    out.push(FieldDef { name: p.name.name, ty: ft, value: null, private: false, span: spanIn(mi, p.name.span) })
+                }
+                types.records[e.variants[k].record].fields = out
+            }
+            return
+        }
+        if (d is Def.Interface) {
+            if (!(tk is Ty.Interface)) {
+                return
+            }
+            var ii = tk.index
+            [IfaceMethod] out = []
+            for m in d.methods {
+                var dup = false
+                for x in out {
+                    if (x.name == m.name.name) {
+                        dup = true
+                    }
+                }
+                if (dup) {
+                    error(spanIn(mi, m.name.span), "duplicate interface method `${m.name.name}`")
+                    continue
+                }
+                [int] params = []
+                for p in m.params {
+                    params.push(resolveTypeIn(p.ty, mi))
+                }
+                var ret = T_VOID
+                var rt = m.ret
+                if (rt != null) {
+                    ret = resolveTypeIn(rt, mi)
+                }
+                var slot = len(slots)
+                slots.push(IfaceSlot { name: "${d.name.name}.${m.name.name}", argc: len(params) + 1, impls: [] })
+                out.push(IfaceMethod { name: m.name.name, params: params, ret: ret, isAsync: m.isAsync, span: spanIn(mi, m.name.span), slot: slot })
+            }
+            ifaceSlotBase[ii] = 0
+            types.ifaces[ii].methods = out
+        }
+    }
+
+    fun structOrError(mi: int, s: Ident): bool {
+        var saved = len(diags)
+        var r = true
+        var t = lookupTypeName(mi, s.name, spanIn(mi, s.span))
+        if (t != null) {
+            var k = types.kindOf(t)
+            r = k is Ty.Record && !types.records[k.index].isAbstract
+        }
+        truncateDiags(saved)
+        return r
+    }
+
+    fun wrongOperator(mi: int, s: Ident, msg: string, want: string) {
+        var span = spanIn(mi, s.span)
+        var d = errorDiag(span, msg)
+        var op = operatorSpan(span)
+        if (op != null) {
+            addFix(d.diag, "write `${want} ${s.name}`", op.start, op.end, want, true)
+        }
+        emit(d)
+    }
+
+    fun fillStruct(mi: int, ri: int, sd: StructDef, pdecl: [FuncParam]) {
+        var name = sd.name
+        var kind = sd.kind
+        [int] impls = []
+        int? parent = null
+        [Expr]? superArgs = null
+        var superSpan = spanIn(mi, name.span)
+        var extendsStruct = false
+        [SuperRef] heads = []
+        [bool] single = []
+        [bool] listed = []
+        var ext = sd.extends
+        if (ext != null) {
+            heads.push(ext)
+            single.push(true)
+            listed.push(false)
+        }
+        for i in 0..len(sd.supers) {
+            heads.push(sd.supers[i])
+            single.push(false)
+            listed.push(i < sd.colonExtra)
+        }
+        for h in 0..len(heads) {
+            var s = heads[h].name
+            var args = heads[h].args
+            var sspan = spanIn(mi, s.span)
+            if (listed[h]) {
+                if (extendsStruct && !structOrError(mi, s)) {
+                    var d = errorDiag(sspan, "a struct can extend only one struct")
+                    d.diag.helps.push("interfaces and abstract structs are listed after `::`")
+                    var comma = commaBefore(sspan)
+                    if (comma != null && len(sd.supers) > 0 && sameSpan(spanIn(mi, sd.supers[0].name.span), sspan)) {
+                        addFix(d.diag, "list them after `::`", comma.start, comma.end, " ::", true)
+                    }
+                    emit(d)
+                    extendsStruct = false
+                } else if (!extendsStruct) {
+                    var it = lookupTypeName(mi, s.name, sspan)
+                    if (it != null) {
+                        var ik = types.kindOf(it)
+                        if (ik is Ty.Interface) {
+                            impls.push(ik.index)
+                        }
+                    }
+                    continue
+                }
+            }
+            var it = lookupTypeName(mi, s.name, sspan)
+            if (it == null) {
+                var d = errorDiag(sspan, "unknown struct or interface `${s.name}`")
+                var c = suggest(s.name, keys(mods[mi].types))
+                if (c != null) {
+                    addFix(d.diag, "a type with a similar name exists: `${c}`", sspan.start, sspan.end, c, true)
+                }
+                emit(d)
+                continue
+            }
+            var ik = types.kindOf(it)
+            if (ik is Ty.Interface) {
+                if (single[h]) {
+                    wrongOperator(mi, s, "`${s.name}` is an interface, so it is used with `::`", "::")
+                }
+                if (args != null) {
+                    var d = errorDiag(sspan, "interface `${s.name}` has no constructor")
+                    d.diag.helps.push("write `:: ${s.name}` without arguments")
+                    emit(d)
+                }
+                impls.push(ik.index)
+            } else if (ik is Ty.Record) {
+                var pri = ik.index
+                var prec = types.records[pri]
+                if (!prec.isClass) {
+                    var d = errorDiag(sspan, "`${s.name}` is a type, not a struct, so it cannot be extended")
+                    d.diag.helps.push("declare it with `def struct ${s.name}(...)` to make it extendable")
+                    emit(d)
+                    continue
+                }
+                if (prec.isStatic) {
+                    error(sspan, "`${s.name}` is a static struct and has no objects, so it cannot be extended")
+                    continue
+                }
+                if (kind == StructKind.Static) {
+                    error(sspan, "static structs cannot extend other structs")
+                    continue
+                }
+                if (single[h] && !prec.isAbstract) {
+                    extendsStruct = true
+                }
+                if (single[h] && prec.isAbstract) {
+                    wrongOperator(mi, s, "`${s.name}` is an abstract struct, so it is used with `::`", "::")
+                } else if (!single[h] && !prec.isAbstract) {
+                    if (ext == null && len(sd.supers) > 0 && sameSpan(spanIn(mi, sd.supers[0].name.span), sspan)) {
+                        wrongOperator(mi, s, "`${s.name}` is a struct, so it is extended with `:`", ":")
+                    } else {
+                        var d = errorDiag(sspan, "`${s.name}` is a struct, so it is extended with `:`")
+                        d.diag.helps.push("write the struct to extend first: `def struct Name : Parent :: Interface`")
+                        emit(d)
+                    }
+                }
+                if (parent != null) {
+                    var pn = types.records[parent].name
+                    var d = errorDiag(sspan, "a struct extends at most one struct, and `${name.name}` already extends `${pn}`")
+                    d.diag.helps.push("share code through interfaces, or extend one struct from the other")
+                    emit(d)
+                    continue
+                }
+                parent = pri
+                superArgs = args
+                superSpan = sspan
+            } else if (!(ik is Ty.Error)) {
+                error(sspan, "`${show(it)}` is not a struct or an interface")
+            }
+        }
+        if (kind == StructKind.Static) {
+            if (len(sd.params) > 0) {
+                errorNote(spanIn(mi, sd.params[0].name.span), "static structs have no objects, so they take no constructor parameters", "use `static var` values or a normal struct instead")
+            }
+            if (len(impls) > 0) {
+                error(spanIn(mi, name.span), "static structs cannot implement interfaces")
+                impls = []
+            }
+        }
+        types.records[ri].implements = impls
+        types.records[ri].parent = parent
+        [bool] paramFields = []
+        for p in sd.params {
+            paramFields.push(true)
+        }
+        structDecls[ri] = StructDecl { module: mi, params: pdecl, superArgs: superArgs, superSpan: superSpan, ownStart: 0, paramFields: paramFields, statics: sd.statics }
+    }
+
+    fun linkStructs() {
+        [int] state = []
+        for ri in 0..len(types.records) {
+            state.push(0)
+        }
+        for ri in 0..len(types.records) {
+            if (has(structDecls, ri)) {
+                linkStruct(ri, state)
+            }
+        }
+    }
+
+    fun linkStruct(ri: int, state: [int]): void {
+        if (state[ri] == 2) {
+            return
+        }
+        if (state[ri] == 1) {
+            var rec = types.records[ri]
+            error(rec.span, "`${rec.name}` extends itself")
+            types.records[ri].parent = null
+            return
+        }
+        state[ri] = 1
+        var p = types.records[ri].parent
+        if (p != null) {
+            linkStruct(p, state)
+            if (state[ri] == 1 && types.records[ri].parent != null) {
+                inheritFields(ri, p)
+            }
+        }
+        state[ri] = 2
+    }
+
+    fun inheritFields(ri: int, p: int) {
+        var prec = types.records[p]
+        var own = types.records[ri].fields
+        var decl = structDecls[ri]
+        var nparams = 0
+        if (decl != null) {
+            nparams = len(decl.params)
+        }
+        var fields = slice(prec.fields, 0, len(prec.fields))
+        [bool] paramFields = []
+        for k in 0..nparams {
+            paramFields.push(true)
+        }
+        for i in 0..len(own) {
+            var f = own[i]
+            var pi = fieldIndex(prec, f.name)
+            if (pi >= 0) {
+                if (i < nparams) {
+                    paramFields[i] = false
+                    if (prec.fields[pi].ty != f.ty) {
+                        error(f.span, "parameter `${f.name}` has type ${show(f.ty)} but the field it fills in `${prec.name}` has type ${show(prec.fields[pi].ty)}")
+                    }
+                } else {
+                    error(f.span, "field `${f.name}` is already defined in `${prec.name}`")
+                }
+                continue
+            }
+            fields.push(f)
+        }
+        var implements = slice(prec.implements, 0, len(prec.implements))
+        for i in types.records[ri].implements {
+            if (!contains(implements, i)) {
+                implements.push(i)
+            }
+        }
+        types.records[ri].fields = fields
+        types.records[ri].implements = implements
+        if (decl != null) {
+            decl.ownStart = len(prec.fields)
+            decl.paramFields = paramFields
+        }
+        var pd = structDecls[p]
+        if (pd != null && decl != null && decl.superArgs == null && len(pd.params) > 0) {
+            [string] names = []
+            for x in pd.params {
+                names.push(x.name)
+            }
+            errorNote(decl.superSpan, "`${prec.name}` needs constructor arguments", "write `: ${prec.name}(${joinWith(names, ", ")})`")
+        }
+    }
+
+    fun constValue(e: Expr): Const? {
+        var k = e.kind
+        if (k is ExprKind.Int) {
+            return Const.Int(k.value)
+        }
+        if (k is ExprKind.Float) {
+            return Const.Float(k.value)
+        }
+        if (k is ExprKind.Str) {
+            return Const.Str(k.value)
+        }
+        if (k is ExprKind.Bool) {
+            return Const.Bool(k.value)
+        }
+        if (k is ExprKind.Null) {
+            return Const.Null
+        }
+        if (k is ExprKind.Unary && k.op == UnOp.Neg) {
+            var v = constValue(k.operand)
+            if (v is Const.Int) {
+                return Const.Int(wrappingSub(0, v.value))
+            }
+            if (v is Const.Float) {
+                return Const.Float(-v.value)
+            }
+        }
+        return null
+    }
+
+    fun constArgOf(mi: int, e: Expr): Const? {
+        var v = constValue(e)
+        if (v == null) {
+            error(spanIn(mi, e.span), "annotation arguments must be literal values: numbers, strings, booleans or null")
+        }
+        return v
+    }
+
+    fun builtinArgs(mi: int, a: Annotation, keyNames: [string], kinds: [string], required: string?): [ConstArg] {
+        [ConstArg] out = []
+        for i in 0..len(a.args) {
+            var arg = a.args[i]
+            var e = arg.value
+            var k = ""
+            var key = arg.key
+            if (key != null) {
+                k = key.name
+            } else if (i == 0 && len(keyNames) > 0) {
+                k = keyNames[0]
+            } else {
+                var example = "name"
+                if (len(keyNames) > 0) {
+                    example = keyNames[0]
+                }
+                error(spanIn(mi, e.span), "name this argument of @${a.name.name}, for example `${example}: ...`")
+                continue
+            }
+            var at = indexOf(keyNames, k)
+            if (at < 0) {
+                var span = spanIn(mi, e.span)
+                if (key != null) {
+                    span = spanIn(mi, key.span)
+                }
+                if (len(keyNames) == 0) {
+                    error(span, "@${a.name.name} takes no arguments")
+                } else {
+                    error(span, "@${a.name.name} has no argument `${k}` (it takes ${joinWith(keyNames, ", ")})")
+                }
+                continue
+            }
+            var v = constArgOf(mi, e)
+            if (v == null) {
+                continue
+            }
+            var kind = kinds[at]
+            var ok = (kind == "string" && v is Const.Str) || (kind == "bool" && v is Const.Bool) || (kind == "int" && v is Const.Int)
+            if (!ok) {
+                error(spanIn(mi, e.span), "`${k}` of @${a.name.name} must be a ${kind}")
+                continue
+            }
+            var given = false
+            for x in out {
+                if (x.key == k) {
+                    given = true
+                }
+            }
+            if (given) {
+                error(spanIn(mi, e.span), "`${k}` is given twice")
+                continue
+            }
+            out.push(ConstArg { key: k, value: v })
+        }
+        if (required != null) {
+            var found = false
+            for x in out {
+                if (x.key == required) {
+                    found = true
+                }
+            }
+            if (!found) {
+                error(spanIn(mi, a.span), "@${a.name.name} needs `${required}`")
+            }
+        }
+        return out
+    }
+
+    fun resolveAnnotations(mi: int, anns: [Annotation], site: Site): [HirAnnotation] {
+        [HirAnnotation] out = []
+        for a in anns {
+            var name = a.name.name
+            var aspan = spanIn(mi, a.span)
+            [ConstArg] args = []
+            if (name == "Getter" || name == "Setter") {
+                var allowed = site == Site.Type(true) || site is Site.Field
+                if (!allowed) {
+                    error(aspan, "@${name} can only be used on structs and their fields, not on ${describeSite(site)}")
+                }
+                args = builtinArgs(mi, a, [], [], null)
+            } else if (name == "Deprecated") {
+                if (!(site is Site.Func || site is Site.Type)) {
+                    error(aspan, "@Deprecated can be used on functions, methods and types, not on ${describeSite(site)}")
+                }
+                args = builtinArgs(mi, a, ["message"], ["string"], null)
+            } else if (name == "Export" || name == "Native") {
+                var bodyless = name == "Native"
+                if (site != Site.Func(false, bodyless)) {
+                    var what = "top-level functions without a body, such as `@Native fun now(): int`"
+                    if (name == "Export") {
+                        what = "top-level functions with a body"
+                    }
+                    error(aspan, "@${name} can only be used on ${what}")
+                }
+                args = builtinArgs(mi, a, ["name"], ["string"], null)
+            } else if (name == "Inject" || name == "Overwrite" || name == "Redirect") {
+                if (site != Site.Func(false, false)) {
+                    error(aspan, "@${name} can only be used on top-level functions")
+                }
+                [string] keyNames = ["target", "call", "rt", "host", "priority"]
+                [string] kinds = ["string", "string", "string", "string", "int"]
+                if (name == "Inject") {
+                    keyNames = ["target", "at", "cancellable", "priority"]
+                    kinds = ["string", "string", "bool", "int"]
+                } else if (name == "Overwrite") {
+                    keyNames = ["target", "priority"]
+                    kinds = ["string", "int"]
+                }
+                args = builtinArgs(mi, a, keyNames, kinds, "target")
+                if (name == "Inject") {
+                    for x in args {
+                        var v = x.value
+                        if (x.key == "at" && v is Const.Str && v.text != "head" && v.text != "return") {
+                            error(aspan, "`at` must be \"head\" or \"return\"")
+                        }
+                    }
+                }
+                if (name == "Redirect") {
+                    var named = false
+                    for x in args {
+                        if (x.key == "call" || x.key == "rt" || x.key == "host") {
+                            named = true
+                        }
+                    }
+                    if (!named) {
+                        error(aspan, "@Redirect needs `call`, `rt` or `host` to say which call to replace")
+                    }
+                }
+            } else {
+                var u = userAnnotation(mi, a)
+                if (u != null) {
+                    out.push(u)
+                }
+                continue
+            }
+            var twice = false
+            for x in out {
+                if (x.name == name) {
+                    twice = true
+                }
+            }
+            if (twice) {
+                error(aspan, "@${name} is used twice")
+                continue
+            }
+            out.push(HirAnnotation { name: name, ty: null, args: args, span: aspan })
+        }
+        return out
+    }
+
+    fun userAnnotation(mi: int, a: Annotation): HirAnnotation? {
+        var name = a.name.name
+        var nspan = spanIn(mi, a.name.span)
+        int? found = null
+        var own = mods[mi].types[name]
+        if (own != null) {
+            found = own.sym
+        } else {
+            var saved = len(diags)
+            found = lookupTypeName(mi, name, nspan)
+            truncateDiags(saved)
+        }
+        if (found == null) {
+            var cands = slice(ANNOTATION_BUILTINS, 0, len(ANNOTATION_BUILTINS))
+            for mm in 0..len(mods) {
+                for n in keys(mods[mm].types) {
+                    var e = mods[mm].types[n]
+                    if (e != null && has(annotationTypes, e.sym)) {
+                        cands.push(n)
+                    }
+                }
+            }
+            var s = suggest(name, cands)
+            if (s != null) {
+                errorFix(nspan, "unknown annotation `@${name}`", s)
+            } else {
+                errorNote(nspan, "unknown annotation `@${name}`", "declare it with `def annotation ${name} { ... }`")
+            }
+            return null
+        }
+        var t = found
+        if (!has(annotationTypes, t)) {
+            if (t != T_ERROR) {
+                errorNote(nspan, "`${show(t)}` is not an annotation", "declare it with `def annotation ${name} { ... }`")
+            }
+            return null
+        }
+        var rec = types.recordOf(t)
+        if (rec == null) {
+            return null
+        }
+        [Const?] given = []
+        [int] givenAt = []
+        for f in rec.fields {
+            given.push(null)
+            givenAt.push(0)
+        }
+        for i in 0..len(a.args) {
+            var arg = a.args[i]
+            var e = arg.value
+            var fi = 0
+            var key = arg.key
+            if (key != null) {
+                fi = fieldIndex(rec, key.name)
+                if (fi < 0) {
+                    error(spanIn(mi, key.span), "@${name} has no field `${key.name}`")
+                    continue
+                }
+            } else if (i < len(rec.fields)) {
+                fi = i
+            } else {
+                error(spanIn(mi, e.span), "@${name} takes ${len(rec.fields)} arguments")
+                continue
+            }
+            var v = constArgOf(mi, e)
+            if (v == null) {
+                continue
+            }
+            if (given[fi] != null) {
+                error(spanIn(mi, e.span), "`${rec.fields[fi].name}` is given twice")
+            }
+            given[fi] = v
+            givenAt[fi] = e.span.start
+        }
+        [ConstArg] args = []
+        for fi in 0..len(rec.fields) {
+            var f = rec.fields[fi]
+            Const? v = given[fi]
+            var vspan = SrcSpan { file: fileOf(mi), start: givenAt[fi], end: givenAt[fi] }
+            for x in a.args {
+                if (x.value.span.start == givenAt[fi]) {
+                    vspan = spanIn(mi, x.value.span)
+                }
+            }
+            if (v == null) {
+                var dflt = f.value
+                if (dflt != null) {
+                    v = constValue(dflt)
+                    vspan = SrcSpan { file: rec.span.file, start: dflt.span.start, end: dflt.span.end }
+                    if (v == null) {
+                        error(vspan, "defaults of annotation fields must be literal values")
+                    }
+                } else {
+                    error(spanIn(mi, a.span), "@${name} needs a value for `${f.name}`")
+                }
+            }
+            if (v == null) {
+                continue
+            }
+            var value = v
+            var base = types.unwrapOptional(f.ty)
+            var nullable = types.isNullable(f.ty) || f.ty == T_ANY
+            if (value is Const.Int && base == T_FLOAT) {
+                value = Const.Float(toFloat(value.value))
+            }
+            var ok = f.ty == T_ANY || (value is Const.Int && base == T_INT) || (value is Const.Float && base == T_FLOAT) || (value is Const.Bool && base == T_BOOL) || (value is Const.Str && base == T_STR) || (value is Const.Null && nullable)
+            if (!ok) {
+                error(vspan, "`${f.name}` of @${name} must be ${show(f.ty)}")
+                continue
+            }
+            args.push(ConstArg { key: f.name, value: value })
+        }
+        return HirAnnotation { name: name, ty: t, args: args, span: spanIn(mi, a.span) }
+    }
+
+    fun deprecationNote(anns: [HirAnnotation]): string? {
+        for a in anns {
+            if (a.name == "Deprecated") {
+                return strArg(a, "message") ?? ""
+            }
+        }
+        return null
+    }
+
+    fun defAnnotations(mi: int, d: Def, anns: [Annotation]) {
+        var name = defName(d)
+        var e = mods[mi].types[name.name]
+        if (e == null || !sameSpan(e.span, spanIn(mi, name.span))) {
+            return
+        }
+        var t = e.sym
+        var resolved = resolveAnnotations(mi, anns, Site.Type(d is Def.Struct))
+        var note = deprecationNote(resolved)
+        if (note != null) {
+            deprecatedTypes[t] = note
+        }
+        if (len(resolved) > 0) {
+            typeAnns[t] = resolved
+        }
+        [Field] fields = []
+        if (d is Def.Type) {
+            fields = d.fields
+        } else if (d is Def.Annotation) {
+            fields = d.fields
+        } else if (d is Def.Struct) {
+            fields = d.s.fields
+        }
+        for f in fields {
+            if (len(f.annotations) > 0) {
+                resolveAnnotations(mi, f.annotations, Site.Field)
+            }
+        }
+        if (d is Def.Struct) {
+            for a in d.s.paramAnns {
+                if (len(a) > 0) {
+                    resolveAnnotations(mi, a, Site.Field)
+                }
+            }
+        }
+    }
+
+    fun declareFun(mi: int, f: FunDecl, selfTy: int?, private: bool, method: bool): int {
+        var nspan = spanIn(mi, f.name.span)
+        [FuncParam] params = []
+        if (selfTy != null) {
+            params.push(FuncParam { name: "self", ty: selfTy, span: nspan })
+        }
+        for p in f.params {
+            var t = resolveTypeIn(p.ty, mi)
+            if (t == T_VOID) {
+                error(spanIn(mi, p.ty.span), "parameters cannot have type void")
+            }
+            for x in params {
+                if (x.name == p.name.name) {
+                    error(spanIn(mi, p.name.span), "duplicate parameter `${p.name.name}`")
+                    break
+                }
+            }
+            params.push(FuncParam { name: p.name.name, ty: t, span: spanIn(mi, p.name.span) })
+        }
+        int? ret = null
+        var rt = f.ret
+        if (rt != null) {
+            ret = resolveTypeIn(rt, mi)
+        }
+        var annotations = resolveAnnotations(mi, f.annotations, Site.Func(method, f.bodyless))
+        var deprecated = deprecationNote(annotations)
+        External? external = null
+        for a in annotations {
+            if (external == null && a.name == "Native") {
+                external = External.Native(strArg(a, "name") ?? f.name.name)
+            }
+        }
+        if (f.bodyless && external == null) {
+            errorNote(nspan, "function `${f.name.name}` has no body", "only functions provided by the host can be declared without a body; mark them with @Native")
+        }
+        if (external != null && rt == null) {
+            var d = errorDiag(nspan, "@Native function `${f.name.name}` needs a return type")
+            var at = paramsClose(nspan)
+            if (at != null) {
+                addFix(d.diag, "if it returns nothing, say so", at.start, at.end, ": void", false)
+            } else {
+                d.diag.helps.push("write `: void` if it returns nothing")
+            }
+            emit(d)
+        }
+        {string: int}? env = null
+        if (len(tenv) > 0) {
+            env = tenv[len(tenv) - 1]
+        }
+        var fid = len(funcs)
+        funcs.push(FuncInfo {
+            name: f.name.name,
+            params: params,
+            ret: ret,
+            isAsync: f.isAsync,
+            decl: f,
+            module: mi,
+            selfTy: selfTy,
+            state: FnState.Pending,
+            span: nspan,
+            private: private,
+            isStatic: selfTy == null,
+            annotations: annotations,
+            deprecated: deprecated,
+            external: external,
+            tenv: env
+        })
+        return fid
+    }
+
+    fun abstractSig(ri: int, name: string): AbstractSig? {
+        for s in abstractSigs {
+            if (s.record == ri && s.name == name) {
+                return s
+            }
+        }
+        return null
+    }
+
+    fun declareStructMembers(mi: int, ri: int, name: Ident, methods: [Method], statics: [StaticVal]) {
+        var t = types.records[ri].ty
+        for m in methods {
+            var mdecl = m.decl
+            var mname = mdecl.name.name
+            var rec = types.records[ri]
+            var dup = has(rec.methods, mname) || has(rec.statics, mname) || fieldIndex(rec, mname) >= 0 || abstractSig(ri, mname) != null || (mname == "init" && rec.init != null && !mdecl.isStatic)
+            if (dup) {
+                error(spanIn(mi, mdecl.name.span), "`${mname}` is already defined in struct `${name.name}`")
+                continue
+            }
+            if (mdecl.isAbstract) {
+                [int] params = []
+                for p in mdecl.params {
+                    params.push(resolveTypeIn(p.ty, mi))
+                }
+                var ret = T_VOID
+                var rt = mdecl.ret
+                if (rt != null) {
+                    ret = resolveTypeIn(rt, mi)
+                }
+                abstractSigs.push(AbstractSig { record: ri, name: mname, params: params, ret: ret, isAsync: mdecl.isAsync, span: spanIn(mi, mdecl.name.span) })
+                continue
+            }
+            var isInit = mname == "init" && !mdecl.isStatic
+            if (isInit && len(mdecl.params) > 0) {
+                var p = mdecl.params[0]
+                errorNote(spanIn(mi, p.name.span), "`init` takes no parameters", "constructor parameters go after the struct name: `def struct ${name.name}(${p.name.name}: ...)`")
+            }
+            int? selfTy = t
+            if (mdecl.isStatic) {
+                selfTy = null
+            }
+            var fid = declareFun(mi, mdecl, selfTy, m.vis == Vis.Priv, true)
+            funcs[fid].name = "${name.name}.${mname}"
+            funcs[fid].isStatic = mdecl.isStatic
+            if (mdecl.isStatic) {
+                types.records[ri].statics[mname] = fid
+            } else if (isInit) {
+                types.records[ri].init = fid
+                funcs[fid].ret = T_VOID
+            } else {
+                types.records[ri].methods[mname] = fid
+            }
+        }
+        for sv in statics {
+            var n = sv.name.name
+            var rec = types.records[ri]
+            if (has(rec.methods, n) || has(rec.statics, n) || fieldIndex(rec, n) >= 0 || has(rec.staticVals, n)) {
+                error(spanIn(mi, sv.name.span), "`${n}` is already defined in struct `${name.name}`")
+                continue
+            }
+            int? ty = null
+            var te = sv.ty
+            if (te != null) {
+                ty = resolveTypeIn(te, mi)
+            } else {
+                ty = literalType(sv.init)
+            }
+            var g = len(globals)
+            globals.push(GlobalInfo { name: "${name.name}.${n}", ty: ty, isConst: sv.isConst, module: mi, span: spanIn(mi, sv.name.span) })
+            if (sv.vis == Vis.Priv) {
+                staticPrivate[g] = true
+            }
+            types.records[ri].staticVals[n] = g
+        }
+        var rec = types.records[ri]
+        if (!rec.isAbstract && !rec.isStatic) {
+            [FuncParam] params = []
+            var decl = structDecls[ri]
+            if (decl != null) {
+                params = slice(decl.params, 0, len(decl.params))
+            }
+            var fid = len(funcs)
+            funcs.push(FuncInfo {
+                name: "new ${name.name}",
+                params: params,
+                ret: t,
+                isAsync: false,
+                decl: null,
+                module: mi,
+                selfTy: null,
+                state: FnState.Pending,
+                span: spanIn(mi, name.span),
+                private: false,
+                isStatic: true,
+                annotations: [],
+                deprecated: null,
+                external: null,
+                tenv: null
+            })
+            types.records[ri].ctor = fid
+        }
+    }
+
+    fun importLibraries() {
+        for m in loaded.modules {
+            for l in m.libs {
+                error(SrcSpan { file: m.file, start: l.start, end: l.end }, "the compiler written in Burn cannot import bytecode libraries yet")
+            }
+        }
+    }
+
+    /** Everything `run` in `check/mod.rs` does before it checks struct bodies. */
+    fun declare() {
+        for m in loaded.modules {
+            var init = len(funcs)
+            funcs.push(FuncInfo {
+                name: "<init ${loaded.files[m.file].name}>",
+                params: [],
+                ret: T_VOID,
+                isAsync: false,
+                decl: null,
+                module: len(mods),
+                selfTy: null,
+                state: FnState.Done,
+                span: SrcSpan { file: m.file, start: 0, end: 0 },
+                private: false,
+                isStatic: true,
+                annotations: [],
+                deprecated: null,
+                external: null,
+                tenv: null
+            })
+            [int] imports = []
+            for r in m.imports {
+                imports.push(r.target)
+            }
+            var importAt = 0
+            var importSeen = false
+            for it in m.ast.items {
+                if (it.kind is ItemKind.Import) {
+                    importAt = it.span.end
+                    importSeen = true
+                }
+            }
+            string? stdName = null
+            if (startsWith(m.key, "std:")) {
+                stdName = substring(m.key, 4)
+            }
+            mods.push(ModScope {
+                file: m.file,
+                values: {},
+                types: {},
+                gfuncs: {},
+                gtypes: {},
+                imports: imports,
+                init: init,
+                stdName: stdName,
+                snippet: startsWith(m.key, "<<eval>>") || startsWith(m.key, "<repl>"),
+                importAt: importAt,
+                importSeen: importSeen
+            })
+        }
+        [TypeAlias] aliases = []
+        for mi in 0..len(loaded.modules) {
+            for item in loaded.modules[mi].ast.items {
+                var kind = item.kind
+                if (kind is ItemKind.Definition) {
+                    if (len(defTparams(kind.d)) == 0) {
+                        declareDef(mi, kind.d, item.vis, aliases)
+                    } else {
+                        declareGenericType(mi, kind.d, item.vis)
+                    }
+                }
+            }
+        }
+        for round in 0..8 {
+            var changed = false
+            for a in aliases {
+                var entry = mods[a.module].types[a.name]
+                int? before = null
+                if (entry != null) {
+                    before = entry.sym
+                }
+                var saved = len(diags)
+                var t = resolveTypeIn(a.ty, a.module)
+                truncateDiags(saved)
+                if (t != before && t != T_ERROR && entry != null) {
+                    entry.sym = t
+                    changed = true
+                }
+            }
+            if (!changed) {
+                break
+            }
+        }
+        for a in aliases {
+            resolveTypeIn(a.ty, a.module)
+        }
+        for mi in 0..len(loaded.modules) {
+            for item in loaded.modules[mi].ast.items {
+                var kind = item.kind
+                if (kind is ItemKind.Definition) {
+                    fillDef(mi, kind.d)
+                }
+            }
+        }
+        linkStructs()
+        for mi in 0..len(loaded.modules) {
+            for item in loaded.modules[mi].ast.items {
+                var kind = item.kind
+                if (kind is ItemKind.Definition) {
+                    defAnnotations(mi, kind.d, item.annotations)
+                }
+            }
+        }
+        importLibraries()
+        for mi in 0..len(loaded.modules) {
+            for item in loaded.modules[mi].ast.items {
+                declareItem(mi, item)
+            }
+        }
+    }
+
+    fun declareItem(mi: int, item: Item) {
+        var kind = item.kind
+        if (kind is ItemKind.Fun) {
+            var f = kind.decl
+            if (len(f.tparams) > 0) {
+                declareGenericFn(mi, f, item.vis)
+                return
+            }
+            var fid = declareFun(mi, f, null, item.vis == Vis.Priv, false)
+            if (mi == loaded.root && item.vis == Vis.Pub && !f.bodyless) {
+                var exported = false
+                for a in funcs[fid].annotations {
+                    if (a.name == "Export") {
+                        exported = true
+                    }
+                }
+                if (!exported) {
+                    funcs[fid].annotations.push(HirAnnotation { name: "Export", ty: null, args: [], span: spanIn(mi, f.name.span) })
+                }
+            }
+            addValue(mi, f.name.name, ValSym.Func(fid), item.vis, spanIn(mi, f.name.span))
+            return
+        }
+        if (kind is ItemKind.Definition) {
+            var d = kind.d
+            if (d is Def.Struct) {
+                var e = mods[mi].types[d.s.name.name]
+                var t = T_ERROR
+                if (e != null) {
+                    t = e.sym
+                }
+                var tk = types.kindOf(t)
+                if (tk is Ty.Record && sameSpan(types.records[tk.index].span, spanIn(mi, d.s.name.span))) {
+                    declareStructMembers(mi, tk.index, d.s.name, d.s.methods, d.s.statics)
+                }
+            }
+            return
+        }
+        if (kind is ItemKind.Statement) {
+            var sk = kind.stmt.kind
+            if (sk is StmtKind.Var) {
+                var g = len(globals)
+                globals.push(GlobalInfo { name: sk.name.name, ty: null, isConst: sk.isConst, module: mi, span: spanIn(mi, sk.name.span) })
+                addValue(mi, sk.name.name, ValSym.Global(g), item.vis, spanIn(mi, sk.name.span))
+            }
+        }
+    }
+}

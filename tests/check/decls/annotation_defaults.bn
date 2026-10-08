@@ -1,0 +1,13 @@
+def annotation Tag {
+    string name = "a" + "b"
+    int? level = null
+    int count = null
+}
+
+@Tag
+fun tagged() {}
+
+def struct Holder(int a) {
+    @Getter(1)
+    int value = 0
+}

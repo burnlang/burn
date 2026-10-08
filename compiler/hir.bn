@@ -1,0 +1,57 @@
+import "types.bn"
+
+/** A literal value of an annotation argument. */
+pub def enum Const {
+    Int(value: int),
+    Float(value: float),
+    Bool(value: bool),
+    Str(text: string),
+    Null
+}
+
+pub def type ConstArg {
+    string key
+    Const value
+}
+
+/** An annotation after checking: its name, the type of a user annotation, and its arguments. */
+pub def type HirAnnotation {
+    string name
+    int? ty
+    [ConstArg] args
+    SrcSpan span
+}
+
+pub fun constArg(a: HirAnnotation, key: string): Const? {
+    for x in a.args {
+        if (x.key == key) {
+            return x.value
+        }
+    }
+    return null
+}
+
+pub fun strArg(a: HirAnnotation, key: string): string? {
+    var v = constArg(a, key)
+    if (v is Const.Str) {
+        return v.text
+    }
+    return null
+}
+
+pub def enum External {
+    Lib(lib: int, name: string),
+    Native(name: string)
+}
+
+pub def type SlotImpl {
+    int ty
+    int func
+}
+
+/** A method of an interface, and the struct methods that implement it. */
+pub def type IfaceSlot {
+    string name
+    int argc
+    [SlotImpl] impls
+}

@@ -1,6 +1,7 @@
 pub mod annot;
 pub mod builtins;
 pub mod closures;
+mod declsdump;
 pub mod expr;
 pub mod generics;
 pub mod init_order;
@@ -216,8 +217,8 @@ pub struct Checker<'a> {
     pub gated: HashSet<(usize, &'static str)>,
 }
 
-pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
-    let mut c = Checker {
+fn new_checker(loaded: &Loaded, opts: CheckOptions) -> Checker<'_> {
+    Checker {
         sm: &loaded.sm,
         types: Types::new(),
         diags: Vec::new(),
@@ -263,7 +264,11 @@ pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
         no_std: loaded.no_std,
         std_uses: Vec::new(),
         gated: HashSet::new(),
-    };
+    }
+}
+
+pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
+    let mut c = new_checker(loaded, opts);
     c.run(loaded);
     c.check_no_std(loaded);
     let has_errors = loaded.diags.iter().chain(c.diags.iter()).any(|d| d.severity == Severity::Error);
@@ -318,6 +323,12 @@ pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
         funcs,
         type_names,
     }
+}
+
+pub fn declarations(loaded: &Loaded) -> String {
+    let mut c = new_checker(loaded, CheckOptions::default());
+    c.declare(loaded);
+    declsdump::dump(&c, loaded)
 }
 
 pub fn edit_distance(a: &str, b: &str) -> usize {
@@ -809,6 +820,12 @@ impl<'a> Checker<'a> {
     }
 
     fn run(&mut self, loaded: &Loaded) {
+        self.declare(loaded);
+        self.check_structs();
+        self.finish_checking(loaded);
+    }
+
+    fn declare(&mut self, loaded: &Loaded) {
         for m in loaded.modules.iter() {
             let init = self.funcs.len() as FuncId;
             self.funcs.push(FuncInfo {
@@ -939,7 +956,9 @@ impl<'a> Checker<'a> {
                 }
             }
         }
-        self.check_structs();
+    }
+
+    fn finish_checking(&mut self, loaded: &Loaded) {
         self.check_conformance(loaded);
         self.check_mixins();
         self.build_ctors();
