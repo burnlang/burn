@@ -284,13 +284,14 @@ fn compiler_written_in_burn_matches_the_compiler() {
     let exe = dir.join("dump");
     let (built, code) = output(burn().current_dir(&root).args(["build", "compiler/src/main.bn", "-o"]).arg(&exe));
     assert_eq!(code, 0, "{}", built);
-    let stages: [(&str, &[PathBuf]); 8] = [
+    let stages: [(&str, &[PathBuf]); 9] = [
         ("--tokens", &files),
         ("--ast", &files),
         ("--diagnostics", &files),
         ("--modules", &files),
         ("--decls", &files),
         ("--checked", &files),
+        ("--owned", &files),
         ("--toml", &tomls),
         ("--project", &places),
     ];

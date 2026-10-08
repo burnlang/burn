@@ -179,13 +179,14 @@ fn program(out: &mut String, p: &Program) {
     }
 }
 
-pub fn dump(loaded: &Loaded) -> String {
+pub fn dump(loaded: &Loaded, owned: bool) -> String {
     let r = check(loaded, CheckOptions::default());
     let mut out = String::new();
     for d in &r.diags {
         out.push_str(&crate::diag::render(&loaded.sm, d, false));
     }
     match &r.program {
+        Some(p) if owned => program(&mut out, &crate::own::lower(p)),
         Some(p) => program(&mut out, p),
         None => out.push_str("no program\n"),
     }

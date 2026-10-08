@@ -141,22 +141,24 @@ pub fn modules(file: &Path) -> String {
     out
 }
 
-pub fn declarations(file: &Path) -> String {
+fn with_loaded(file: &Path, dump: fn(&crate::loader::Loaded) -> String) -> String {
     let mut loader = crate::loader::Loader::new();
     let root = match loader.load_file(file) {
         Ok(r) => r,
         Err(e) => return format!("error {}\n", e),
     };
     let loaded = loader.finish(root);
-    crate::check::declarations(&loaded)
+    dump(&loaded)
+}
+
+pub fn declarations(file: &Path) -> String {
+    with_loaded(file, crate::check::declarations)
 }
 
 pub fn checked(file: &Path) -> String {
-    let mut loader = crate::loader::Loader::new();
-    let root = match loader.load_file(file) {
-        Ok(r) => r,
-        Err(e) => return format!("error {}\n", e),
-    };
-    let loaded = loader.finish(root);
-    crate::check::checked(&loaded)
+    with_loaded(file, crate::check::checked)
+}
+
+pub fn owned(file: &Path) -> String {
+    with_loaded(file, crate::check::owned)
 }

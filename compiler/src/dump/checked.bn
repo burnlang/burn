@@ -3,6 +3,7 @@ import "../check/check.bn"
 import "../check/hir.bn"
 import "../check/types.bn"
 import "../diag/diag.bn"
+import "../lower/own.bn"
 import "../project/loader.bn"
 import "../project/project.bn"
 import "declarations.bn"
@@ -310,8 +311,8 @@ fun programLines(c: Checker, p: HProgram): [string] {
     return out
 }
 
-/** The checked program, as `burn dump --checked` prints it. */
-pub fun dumpChecked(file: string): string {
+/** The checked program, as `burn dump --checked` prints it, or after the ownership pass for `--owned`. */
+pub fun dumpChecked(file: string, owned: bool): string {
     var loader = new Loader()
     var err = new Problem()
     var root = loader.loadFile(file, err)
@@ -327,6 +328,9 @@ pub fun dumpChecked(file: string): string {
     }
     var p = r.program
     if (p != null) {
+        if (owned) {
+            p.funcs = lowerOwnership(c.types, p.funcs)
+        }
         for line in programLines(c, p) {
             out.push(line)
         }
