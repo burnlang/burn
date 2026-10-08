@@ -1,0 +1,739 @@
+import "../diag/diag.bn"
+import "../syntax/ast.bn"
+import "calls.bn"
+import "check.bn"
+import "expr.bn"
+import "hir.bn"
+import "numeric.bn"
+import "stmt.bn"
+import "types.bn"
+
+def type Arm {
+    HExpr? cond
+    [HStmt] body
+    HExpr? value
+    SrcSpan valueSpan
+}
+
+def type Bind {
+    Ident name
+    int ty
+    HExpr? field
+}
+
+def type Facts {
+    [Narrow] t
+    [Narrow] f
+}
+
+def type PatResult {
+    HExpr cond
+    Facts facts
+    string? key
+    [Bind] binds
+}
+
+def type Seen {
+    string key
+    SrcSpan span
+}
+
+def type Prepared {
+    [HStmt] pre
+    [Arm] arms
+    bool exhaustive
+    [string] missing
+}
+
+def type Subject {
+    HExpr value
+    int? key
+    int? tmp
+}
+
+def type VariantNames {
+    string name
+    [string] variants
+}
+
+def type VariantPat {
+    int index
+    Ident name
+    [Expr]? args
+}
+
+fun noFacts(): Facts {
+    return Facts { t: [], f: [] }
+}
+
+fun spanTo(a: Span, b: Span): Span {
+    return Span { start: a.start, end: b.end }
+}
+
+fun falseExpr(): HExpr {
+    return hexpr(HKind.Bool(false), T_BOOL)
+}
+
+fun andExpr(a: HExpr, b: HExpr): HExpr {
+    return hexpr(HKind.And(a, b), T_BOOL)
+}
+
+fun chainArms(arms: [Arm]): [HStmt] {
+    [HStmt] chain = []
+    var i = len(arms) - 1
+    while (i >= 0) {
+        var a = arms[i]
+        var cond = a.cond
+        if (cond == null) {
+            chain = a.body
+        } else {
+            chain = [HStmt.If(cond, a.body, chain)]
+        }
+        i -= 1
+    }
+    return chain
+}
+
+pub fun matchStmt(c: Checker, subject: Expr?, arms: [MatchArm], span: SrcSpan): [HStmt] {
+    var p = prepareMatch(c, subject, arms, null, false)
+    if (!p.exhaustive && len(p.missing) > 0) {
+        var d = c.warnAt(span, "`match` does not handle ${joinWith(p.missing, ", ")}")
+        d.diag.helps.push("add an arm for each, or an `else` arm if nothing should happen")
+        c.emit(d)
+    }
+    var out = p.pre
+    for s in chainArms(p.arms) {
+        out.push(s)
+    }
+    return out
+}
+
+pub fun matchValue(c: Checker, subject: Expr?, arms: [MatchArm], span: SrcSpan, expected: int?): HExpr {
+    var p = prepareMatch(c, subject, arms, expected, true)
+    if (!p.exhaustive) {
+        var d = c.errorDiag(span, "this `match` produces a value, so it must handle every case")
+        if (len(p.missing) == 0) {
+            d.diag.helps.push("add an `else` arm")
+        } else {
+            d.diag.helps.push("add arms for ${joinWith(p.missing, ", ")}, or an `else` arm")
+        }
+        c.emit(d)
+        return errExpr()
+    }
+    var ty = T_ERROR
+    if (expected != null && expected != T_VOID && expected != T_ERROR) {
+        ty = expected
+    } else {
+        ty = joinArmTypes(c, p.arms)
+    }
+    if (ty == T_ERROR) {
+        return errExpr()
+    }
+    var slot = c.newLocal(ty)
+    var i = len(p.arms) - 1
+    while (i >= 0) {
+        var a = p.arms[i]
+        var v = a.value
+        if (v != null) {
+            a.body.push(HStmt.Eval(setLocal(slot, coerce(c, v, ty, a.valueSpan), ty)))
+        }
+        i -= 1
+    }
+    var out = p.pre
+    for s in chainArms(p.arms) {
+        out.push(s)
+    }
+    return hexpr(HKind.Seq(out, local(slot, ty)), ty)
+}
+
+fun joinArmTypes(c: Checker, arms: [Arm]): int {
+    int? cur = null
+    var nullable = false
+    SrcSpan? first = null
+    for a in arms {
+        var v = a.value
+        if (v == null) {
+            continue
+        }
+        if (first == null) {
+            first = a.valueSpan
+        }
+        var t = v.ty
+        if (t == T_ERROR) {
+            return T_ERROR
+        }
+        if (t == T_NULL) {
+            nullable = true
+            continue
+        }
+        var k = cur
+        if (k == null) {
+            cur = t
+        } else if (k == t) {
+            cur = k
+        } else if ((k == T_INT && t == T_FLOAT) || (k == T_FLOAT && t == T_INT)) {
+            cur = T_FLOAT
+        } else if (c.types.unwrapOptional(k) == t) {
+            cur = k
+        } else if (c.types.unwrapOptional(t) == k) {
+            cur = t
+        } else {
+            var common = commonType(c, k, t)
+            if (common == null) {
+                var d = c.errorDiag(a.valueSpan, "this arm produces ${c.show(t)} but an earlier arm produces ${c.show(k)}")
+                d.diag.helps.push("every arm of a `match` that produces a value must produce the same type")
+                c.emit(d)
+                return T_ERROR
+            }
+            cur = common
+        }
+    }
+    var t = cur
+    if (t == null) {
+        if (nullable) {
+            if (first != null) {
+                c.error(first, "cannot tell the type of this `match`: every arm produces `null`")
+            }
+            return T_ERROR
+        }
+        return T_VOID
+    }
+    if (nullable) {
+        return c.types.optional(t)
+    }
+    return t
+}
+
+fun variantNames(c: Checker, base: int): VariantNames? {
+    var k = c.types.kindOf(base)
+    if (k is Ty.Enum) {
+        var e = c.types.enums[k.index]
+        [string] vs = []
+        for v in e.variants {
+            vs.push(v.name)
+        }
+        return VariantNames { name: e.name, variants: vs }
+    }
+    if (k is Ty.Interface) {
+        var en = c.types.variantsOf(base)
+        if (en != null) {
+            [string] vs = []
+            for v in en.variants {
+                vs.push(v.name)
+            }
+            return VariantNames { name: en.name, variants: vs }
+        }
+    }
+    return null
+}
+
+fun patternSpan(c: Checker, p: Pattern): SrcSpan {
+    if (p is Pattern.Value) {
+        return c.sp(p.value.span)
+    }
+    if (p is Pattern.Range) {
+        return c.sp(spanTo(p.from.span, p.to.span))
+    }
+    if (p is Pattern.Is) {
+        var b = p.bind
+        if (b != null) {
+            return c.sp(spanTo(p.ty.span, b.span))
+        }
+        return c.sp(p.ty.span)
+    }
+    return SrcSpan { file: 0, start: 0, end: 0 }
+}
+
+fun seenAt(seen: [Seen], key: string): SrcSpan? {
+    for s in seen {
+        if (s.key == key) {
+            return s.span
+        }
+    }
+    return null
+}
+
+fun subjectOf(c: Checker, x: Expr, pre: [HStmt]): Subject {
+    var raw = exprRaw(c, x)
+    var key = localOf(c, x)
+    var rk = raw.kind
+    if (rk is HKind.Local && key == rk.slot) {
+        return Subject { value: raw, key: key, tmp: rk.slot }
+    }
+    if (rk is HKind.Global) {
+        return Subject { value: raw, key: key, tmp: null }
+    }
+    var t = raw.ty
+    var s = c.newLocal(t)
+    pre.push(HStmt.Eval(setLocal(s, raw, t)))
+    var k = key
+    if (k == null) {
+        k = s
+    }
+    return Subject { value: local(s, t), key: k, tmp: s }
+}
+
+fun popScope(c: Checker) {
+    var scopes = c.ctx().scopes
+    c.ctx().scopes = slice(scopes, 0, len(scopes) - 1)
+}
+
+fun prepareMatch(c: Checker, subject: Expr?, arms: [MatchArm], expected: int?, valueMode: bool): Prepared {
+    [HStmt] pre = []
+    Subject? subj = null
+    if (subject != null) {
+        subj = subjectOf(c, subject, pre)
+    }
+    var sty = T_BOOL
+    if (subj != null) {
+        sty = subj.value.ty
+    }
+    var base = c.types.unwrapOptional(sty)
+    var enumVariants = variantNames(c, base)
+    var before = copyNarrow(c.ctx().narrow)
+    [{int: int}] ends = []
+    [Arm] out = []
+    [Seen] seen = []
+    var hasElse = false
+    SrcSpan? elseSpan = null
+    for arm in arms {
+        var armSpan = c.sp(arm.span)
+        if (elseSpan != null) {
+            c.emit(c.warnAt(armSpan, "unreachable arm: the `else` on line ${c.lineOf(elseSpan)} already handles everything"))
+        }
+        var start = copyNarrow(c.ctx().narrow)
+        {string: LocalSym} scope = {}
+        c.ctx().scopes.push(scope)
+        [HExpr] conds = []
+        var facts = noFacts()
+        var single = len(arm.patterns) == 1
+        [Bind] binding = []
+        for pat in arm.patterns {
+            if (subj == null) {
+                if (pat is Pattern.Value) {
+                    var cd = condOf(c, pat.value)
+                    if (single) {
+                        facts = Facts { t: cd.whenTrue, f: cd.whenFalse }
+                    }
+                    conds.push(cd.value)
+                }
+                continue
+            }
+            var r = patternCond(c, pat, subj.value, subj.key, subj.tmp, enumVariants)
+            var key = r.key
+            if (key != null && arm.guard == null) {
+                var pspan = patternSpan(c, pat)
+                var prev = seenAt(seen, key)
+                if (prev != null) {
+                    c.emit(c.warnAt(pspan, "this case is already handled on line ${c.lineOf(prev)}"))
+                } else {
+                    seen.push(Seen { key: key, span: pspan })
+                }
+            }
+            if (len(r.binds) > 0) {
+                binding = r.binds
+            }
+            if (single) {
+                facts = r.facts
+            }
+            conds.push(r.cond)
+        }
+        HExpr? cond = null
+        for x in conds {
+            var prevCond = cond
+            if (prevCond == null) {
+                cond = x
+            } else {
+                cond = hexpr(HKind.Or(prevCond, x), T_BOOL)
+            }
+        }
+        if (cond == null) {
+            hasElse = arm.guard == null
+            if (hasElse) {
+                elseSpan = armSpan
+            }
+        }
+        applyNarrow(c, facts.t)
+        [HStmt] body = []
+        for b in binding {
+            int? tmp = null
+            var declared = T_ERROR
+            if (subj != null) {
+                tmp = subj.tmp
+                declared = subj.value.ty
+            }
+            if (tmp != null) {
+                var read = local(tmp, declared)
+                var v = read
+                var field = b.field
+                if (field != null) {
+                    v = field
+                } else if (b.ty != declared) {
+                    v = payloadConv(c, read, declared, b.ty)
+                }
+                var slot = c.declareLocal(b.name.name, b.ty, c.sp(b.name.span), false)
+                body.push(HStmt.Eval(setLocal(slot, v, b.ty)))
+            } else {
+                c.error(c.sp(b.name.span), "a binding needs a subject stored in a variable")
+            }
+        }
+        var guard = arm.guard
+        if (guard != null) {
+            var gd = condOf(c, guard)
+            applyNarrow(c, gd.whenTrue)
+            var prevCond = cond
+            if (prevCond == null) {
+                cond = gd.value
+            } else if (len(body) == 0) {
+                cond = andExpr(prevCond, gd.value)
+            } else {
+                cond = andExpr(prevCond, hexpr(HKind.Seq(slice(body, 0, len(body)), gd.value), T_BOOL))
+            }
+        }
+        HExpr? value = null
+        var valueSpan = armSpan
+        var ab = arm.body
+        if (ab is ArmBody.Body) {
+            var stmts = blockStmts(c, ab.block.stmts)
+            if (valueMode && !diverges(stmts)) {
+                var d = c.errorDiag(c.sp(ab.block.span), "an arm of a `match` that produces a value must be an expression")
+                d.diag.helps.push("write the value after `=>` directly, or use `match` as a statement")
+                c.emit(d)
+            }
+            for s in stmts {
+                body.push(s)
+            }
+        } else if (ab is ArmBody.Value) {
+            if (!valueMode) {
+                body.push(HStmt.Eval(exprOf(c, ab.value, null)))
+            } else {
+                var h = exprOf(c, ab.value, expected)
+                if (h.ty == T_VOID && diverges([HStmt.Eval(h)])) {
+                    body.push(HStmt.Eval(h))
+                } else {
+                    if (h.ty == T_VOID) {
+                        c.error(c.sp(ab.value.span), "this arm produces no value")
+                    }
+                    value = h
+                    valueSpan = c.sp(ab.value.span)
+                }
+            }
+        }
+        popScope(c)
+        var end = c.ctx().narrow
+        c.ctx().narrow = start
+        if (!diverges(body)) {
+            ends.push(end)
+        }
+        if (arm.guard == null) {
+            applyNarrow(c, facts.f)
+        }
+        out.push(Arm { cond: cond, body: body, value: value, valueSpan: valueSpan })
+    }
+    [string] missing = []
+    var exhaustive = hasElse
+    if (!exhaustive && subj != null) {
+        var needsNull = c.types.isNullable(sty) && sty != T_ANY
+        if (enumVariants != null) {
+            for i in 0..len(enumVariants.variants) {
+                if (seenAt(seen, "i:${i}") == null) {
+                    missing.push("${enumVariants.name}.${enumVariants.variants[i]}")
+                }
+            }
+            if (needsNull && seenAt(seen, "null") == null) {
+                missing.push("null")
+            }
+            exhaustive = len(missing) == 0
+        } else if (base == T_BOOL) {
+            for b in [true, false] {
+                if (seenAt(seen, "b:${b}") == null) {
+                    missing.push("${b}")
+                }
+            }
+            if (needsNull && seenAt(seen, "null") == null) {
+                missing.push("null")
+            }
+            exhaustive = len(missing) == 0
+        }
+    }
+    if (!exhaustive) {
+        ends.push(copyNarrow(c.ctx().narrow))
+    }
+    c.ctx().narrow = before
+    if (len(ends) > 0) {
+        var merged = ends[len(ends) - 1]
+        for i in 0..len(ends) - 1 {
+            merged = keepSame(merged, ends[i])
+        }
+        c.ctx().narrow = merged
+    }
+    if (exhaustive && !hasElse && len(out) > 0) {
+        if (arms[len(arms) - 1].guard == null) {
+            out[len(out) - 1].cond = null
+        }
+    }
+    return Prepared { pre: pre, arms: out, exhaustive: exhaustive, missing: missing }
+}
+
+fun keepSame(a: {int: int}, b: {int: int}): {int: int} {
+    {int: int} out = {}
+    for k in keys(a) {
+        var x = a[k]
+        var y = b[k]
+        if (x != null && y != null && x == y) {
+            out[k] = x
+        }
+    }
+    return out
+}
+
+fun hlitKey(c: Checker, h: HExpr): string? {
+    var k = h.kind
+    var tk = c.types.kindOf(h.ty)
+    if (k is HKind.Int && (tk is Ty.Int || tk is Ty.Enum)) {
+        return "i:${k.value}"
+    }
+    if (k is HKind.Bool) {
+        return "b:${k.value}"
+    }
+    if (k is HKind.Str) {
+        return "s:${c.strings[k.id]}"
+    }
+    return null
+}
+
+fun nullFacts(c: Checker, key: int?, facts: Facts) {
+    if (key != null) {
+        var declared = declaredOf(c, key)
+        var u = c.types.unwrapOptional(declared)
+        if (u != declared && narrowable(c, declared, u)) {
+            facts.f.push(Narrow { slot: key, ty: u })
+        }
+    }
+}
+
+fun patternCond(c: Checker, pat: Pattern, val: HExpr, key: int?, tmp: int?, variants: VariantNames?): PatResult {
+    var sty = val.ty
+    var base = c.types.unwrapOptional(sty)
+    var facts = noFacts()
+    if (pat is Pattern.Value) {
+        var e = pat.value
+        var espan = c.sp(e.span)
+        var en = c.types.variantsOf(base)
+        if (en != null) {
+            var vp = variantPattern(c, e, en)
+            if (vp != null) {
+                return variantCond(c, val, en, vp, espan, key, tmp)
+            }
+        }
+        var ek = e.kind
+        if (ek is ExprKind.Ident && variants != null && c.peekLocal(ek.name) == null) {
+            var i = indexOf(variants.variants, ek.name)
+            if (i >= 0) {
+                var lit = hexpr(HKind.Int(i), base)
+                return PatResult { cond: equality(c, true, val, lit, espan), facts: facts, key: "i:${i}", binds: [] }
+            }
+        }
+        if (ek is ExprKind.Null) {
+            var cond = isCheck(c, val, T_NULL, espan)
+            nullFacts(c, key, facts)
+            return PatResult { cond: cond, facts: facts, key: "null", binds: [] }
+        }
+        var h = exprOf(c, e, base)
+        var k = hlitKey(c, h)
+        if (h.ty != T_ERROR && sty != T_ERROR && base != h.ty && !(isNumeric(c, base) && isNumeric(c, h.ty)) && base != T_ANY) {
+            c.error(espan, "this pattern is ${c.show(h.ty)} but the value being matched is ${c.show(sty)}")
+            return PatResult { cond: falseExpr(), facts: facts, key: null, binds: [] }
+        }
+        if (base != sty && c.types.isNullable(sty)) {
+            var nn = isCheck(c, val, T_NULL, espan)
+            var notNull = hexpr(HKind.Unary(HUnOp.Not, nn), T_BOOL)
+            var inner = payloadConv(c, val, sty, base)
+            var eq = equality(c, true, inner, h, espan)
+            return PatResult { cond: andExpr(notNull, eq), facts: facts, key: k, binds: [] }
+        }
+        return PatResult { cond: equality(c, true, val, h, espan), facts: facts, key: k, binds: [] }
+    }
+    if (pat is Pattern.Range) {
+        var ha = exprOf(c, pat.from, base)
+        var hb = exprOf(c, pat.to, base)
+        var span = c.sp(spanTo(pat.from.span, pat.to.span))
+        if (!(isNumeric(c, base) || base == T_STR)) {
+            c.error(span, "ranges only match numbers and strings, not ${c.show(sty)}")
+            return PatResult { cond: falseExpr(), facts: facts, key: null, binds: [] }
+        }
+        var lo = comparison(c, BinOp.Ge, val, ha, span)
+        var upper = BinOp.Lt
+        if (pat.inclusive) {
+            upper = BinOp.Le
+        }
+        var hi = comparison(c, upper, val, hb, span)
+        return PatResult { cond: andExpr(lo, hi), facts: facts, key: null, binds: [] }
+    }
+    if (pat is Pattern.Is) {
+        var t = c.resolveType(pat.ty)
+        var cond = isCheck(c, val, t, c.sp(pat.ty.span))
+        if (key != null) {
+            var declared = declaredOf(c, key)
+            if (t == T_NULL) {
+                nullFacts(c, key, facts)
+            } else if (narrowable(c, declared, t)) {
+                facts.t.push(Narrow { slot: key, ty: t })
+            }
+        }
+        if (tmp != null && tmp != key) {
+            var declared = declaredOf(c, tmp)
+            if (narrowable(c, declared, t)) {
+                facts.t.push(Narrow { slot: tmp, ty: t })
+            }
+        }
+        string? k = null
+        if (t == T_NULL) {
+            k = "null"
+        }
+        [Bind] binds = []
+        var b = pat.bind
+        if (b != null) {
+            binds.push(Bind { name: b, ty: t, field: null })
+        }
+        return PatResult { cond: cond, facts: facts, key: k, binds: binds }
+    }
+    return PatResult { cond: falseExpr(), facts: facts, key: null, binds: [] }
+}
+
+fun variantIndex(en: IfaceDef, name: string): int {
+    for i in 0..len(en.variants) {
+        if (en.variants[i].name == name) {
+            return i
+        }
+    }
+    return -1
+}
+
+fun variantPattern(c: Checker, e: Expr, en: IfaceDef): VariantPat? {
+    var head = e
+    [Expr]? args = null
+    var k = e.kind
+    if (k is ExprKind.Call) {
+        head = k.callee
+        args = k.args
+    }
+    var hk = head.kind
+    Ident? name = null
+    if (hk is ExprKind.Ident) {
+        if (c.peekLocal(hk.name) == null) {
+            name = Ident { name: hk.name, span: head.span }
+        }
+    } else if (hk is ExprKind.Field) {
+        if (typeIdent(c, hk.obj) == en.ty) {
+            name = hk.name
+        }
+    }
+    if (name == null) {
+        return null
+    }
+    var i = variantIndex(en, name.name)
+    if (i < 0) {
+        return null
+    }
+    return VariantPat { index: i, name: name, args: args }
+}
+
+fun hasSlot(list: [Narrow], slot: int): bool {
+    for n in list {
+        if (n.slot == slot) {
+            return true
+        }
+    }
+    return false
+}
+
+fun isFuncValue(c: Checker, name: string): bool {
+    var e = c.lookupValueEntry(c.curModule(), name)
+    if (e == null) {
+        return true
+    }
+    return e.sym is ValSym.Func
+}
+
+fun variantCond(c: Checker, val: HExpr, en: IfaceDef, vp: VariantPat, span: SrcSpan, key: int?, tmp: int?): PatResult {
+    var facts = noFacts()
+    var v = en.variants[vp.index]
+    var rec = c.types.records[v.record]
+    var rt = rec.ty
+    var sty = val.ty
+    var cond = isCheck(c, val, rt, span)
+    for k in [key, tmp] {
+        if (k != null) {
+            var declared = declaredOf(c, k)
+            if (narrowable(c, declared, rt) && !hasSlot(facts.t, k)) {
+                facts.t.push(Narrow { slot: k, ty: rt })
+            }
+        }
+    }
+    [Bind] binds = []
+    var total = true
+    var args = vp.args
+    if (args != null) {
+        if (len(args) != len(rec.fields)) {
+            [string] shape = []
+            for f in rec.fields {
+                shape.push(f.name)
+            }
+            var s = "s"
+            if (len(rec.fields) == 1) {
+                s = ""
+            }
+            var d = c.errorDiag(span, "`${en.name}.${v.name}` has ${len(rec.fields)} field${s} but the pattern lists ${len(args)}")
+            if (len(shape) == 0) {
+                d.diag.helps.push("write `${en.name}.${v.name}`")
+            } else {
+                d.diag.helps.push("write `${en.name}.${v.name}(${joinWith(shape, ", ")})`, using `_` for fields you do not need")
+            }
+            c.emit(d)
+            for a in args {
+                var ak = a.kind
+                if (ak is ExprKind.Ident && ak.name != "_" && c.peekLocal(ak.name) == null) {
+                    binds.push(Bind { name: Ident { name: ak.name, span: a.span }, ty: T_ERROR, field: null })
+                }
+            }
+            return PatResult { cond: falseExpr(), facts: facts, key: null, binds: binds }
+        }
+        for fi in 0..len(args) {
+            var a = args[fi]
+            var f = rec.fields[fi]
+            var r = payloadConv(c, val, sty, rt)
+            var got = hexpr(HKind.GetField(r, fi), f.ty)
+            var inner = c.types.variantsOf(c.types.unwrapOptional(f.ty))
+            if (inner != null) {
+                var sub = variantPattern(c, a, inner)
+                if (sub != null) {
+                    var sr = variantCond(c, got, inner, sub, c.sp(a.span), null, null)
+                    total = false
+                    cond = andExpr(cond, sr.cond)
+                    for b in sr.binds {
+                        binds.push(b)
+                    }
+                    continue
+                }
+            }
+            var ak = a.kind
+            if (ak is ExprKind.Ident && ak.name == "_") {
+                continue
+            }
+            if (ak is ExprKind.Ident && c.peekLocal(ak.name) == null && isFuncValue(c, ak.name)) {
+                binds.push(Bind { name: Ident { name: ak.name, span: a.span }, ty: f.ty, field: got })
+                continue
+            }
+            total = false
+            var want = exprOf(c, a, f.ty)
+            var eq = equality(c, true, got, want, c.sp(a.span))
+            cond = andExpr(cond, eq)
+        }
+    }
+    string? k = null
+    if (total) {
+        k = "i:${vp.index}"
+    }
+    return PatResult { cond: cond, facts: facts, key: k, binds: binds }
+}

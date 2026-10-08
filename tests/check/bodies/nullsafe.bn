@@ -1,0 +1,31 @@
+def type User {
+    string name
+    User? friend
+}
+
+fun find(name: string): User? {
+    if (name == "") {
+        return null
+    }
+    return User { name: name, friend: null }
+}
+
+var u = find("ada")
+var name = u?.name
+var friendName = u?.friend?.name ?? "nobody"
+var size = u?.friend?.name ?? "none"
+var plain = User { name: "x", friend: null }
+var needless = plain?.name
+var fallback = plain.name ?? "y"
+fun read(): any {
+    return 5
+}
+
+var raw = read()
+var n = raw as? int
+var s = raw as? string
+var same = 3 as? int
+var deep = find("b")?.friend
+var picked = raw ?? 1
+var nothing = null ?? "z"
+print(name, friendName, size, needless, fallback, n, s, same, deep, picked, nothing)

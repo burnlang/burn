@@ -7,6 +7,8 @@ import "check.bn"
 import "closures.bn"
 import "generics.bn"
 import "hir.bn"
+import "matching.bn"
+import "nullsafe.bn"
 import "numeric.bn"
 import "stmt.bn"
 import "structs.bn"
@@ -501,11 +503,18 @@ pub fun exprOf(c: Checker, e: Expr, expected: int?): HExpr {
         c.notPorted("`new`")
         return errExpr()
     }
-    if (k is ExprKind.SafeGet || k is ExprKind.Coalesce || k is ExprKind.SafeAs) {
-        c.notPorted("`?.`, `??` and `as?`")
-        return errExpr()
+    if (k is ExprKind.SafeGet) {
+        return safeGet(c, k.obj, k.name, k.args, span)
     }
-    c.notPorted("`match`")
+    if (k is ExprKind.Coalesce) {
+        return coalesce(c, k.left, k.right, span, expected)
+    }
+    if (k is ExprKind.SafeAs) {
+        return safeAs(c, k.value, k.ty, span)
+    }
+    if (k is ExprKind.Match) {
+        return matchValue(c, k.subject, k.arms, span, expected)
+    }
     return errExpr()
 }
 
