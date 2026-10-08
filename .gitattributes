@@ -17,3 +17,4 @@
 *.exe binary
 
 tests/lexer/*.bn -text
+tests/toml/*.toml -text
