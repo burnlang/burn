@@ -9,7 +9,7 @@ Burn is written in **Burn**: the compiler, the command line, the formatter, the 
 language server are Burn programs that run on **bvm**, the Burn virtual machine, which is written in Rust. Programs
 run instantly on bvm and ship as portable bytecode or as self-contained `.bar` archives.
 
-Current version: **26.1.0-experimental-2**
+Current version: **26.1.0-experimental-3**
 
 > [!WARNING]
 > Burn is **not** ready for production. Syntax may still change. Please report bugs as issues.
