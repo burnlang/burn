@@ -196,7 +196,7 @@ fn formatter_is_idempotent() {
 fn repository_sources_are_formatted() {
     let root = root();
     let mut files = Vec::new();
-    let mut dirs: Vec<PathBuf> = ["tests/cases", "examples", "lib/std", "tests/modules", "compiler/src"]
+    let mut dirs: Vec<PathBuf> = ["tests/cases", "examples", "lib/std", "lib/runtime", "tests/modules", "compiler/src"]
         .iter()
         .map(|d| root.join(d))
         .collect();
@@ -228,7 +228,7 @@ fn repository_sources_import_the_standard_modules_they_use() {
     }
     let root = root();
     let mut files = Vec::new();
-    for dir in ["tests", "examples", "lib/std", "tools", "compiler"] {
+    for dir in ["tests", "examples", "lib/std", "lib/runtime", "tools", "compiler"] {
         walk(&root.join(dir), &mut files);
     }
     let mut failures = Vec::new();
@@ -258,7 +258,7 @@ fn compiler_written_in_burn_matches_the_compiler() {
     }
     let root = root();
     let mut files = Vec::new();
-    for dir in ["tests", "examples", "lib/std", "tools", "compiler"] {
+    for dir in ["tests", "examples", "lib/std", "lib/runtime", "tools", "compiler"] {
         walk(&root.join(dir), "bn", &mut files);
     }
     files.sort();
@@ -373,6 +373,17 @@ fn the_compiler_written_in_burn_can_be_chosen() {
         );
     assert_ne!(code, 0, "{}", out);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_runtime_written_in_burn_is_up_to_date() {
+    let root = root();
+    let (generated, code) = output(burn().current_dir(&root).args(["dump", "--bvm", "lib/runtime/runtime.bn"]));
+    assert_eq!(code, 0, "{}", generated);
+    assert!(
+        generated == std::fs::read_to_string(root.join("bvm/runtime.bvm")).unwrap(),
+        "bvm/runtime.bvm is out of date; run `burn dump --bvm lib/runtime/runtime.bn > bvm/runtime.bvm` from the repository root"
+    );
 }
 
 #[test]

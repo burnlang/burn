@@ -68,6 +68,35 @@ threads are running. While threads run, counts are updated atomically.
 Functions without a meaningful result return 0, so pop it. `bvm runtime` prints every name with its argument
 count. The most useful ones:
 
+### Written in Burn
+
+The runtime has two parts. The core is part of bvm and written in Rust: memory and values, reference counting,
+arrays, maps, records, printing, numbers and the system (files, processes, network, time, tasks). Everything that
+can be written on top of the core is written in Burn, in `lib/runtime/`:
+
+```burn
+@Runtime("str_split")
+pub fun textSplit(text: string, separator: string): [string] {
+    ...
+}
+```
+
+`@Runtime("name")` marks the function that replaces the runtime function `name`; it takes the same arguments and
+returns the same result. The module is compiled to `bvm/runtime.bvm`, which bvm embeds. When bvm loads a module
+built by Burn (one marked `@RefCounted`) that uses one of those functions, it links `runtime.bvm` in and turns each
+`rt name` into a call of the Burn function. Modules from other languages keep using the core directly.
+
+The functions written in Burn may only use the core, never another function written in Burn through `rt`, and
+the test suite checks that `bvm/runtime.bvm` matches `lib/runtime/`. After changing it, run from the repository
+root:
+
+```sh
+burn dump --bvm lib/runtime/runtime.bn > bvm/runtime.bvm
+```
+
+Written in Burn so far: `str_contains`, `str_replace`, `str_split`, `str_starts`, `str_ends`, `str_repeat`,
+`imin` and `imax`.
+
 ### Text and output
 
 | Function | Arguments | Result |

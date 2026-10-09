@@ -1,0 +1,606 @@
+; bvm module, format 2
+@RefCounted
+module runtime
+
+type #12 = int8
+type #13 = uint8
+type #14 = int16
+type #15 = uint16
+type #16 = int32
+type #17 = uint32
+type #18 = uint64
+type #19 = float32
+type Runtime = record { name: string }
+type #21 = [#13]
+
+string ""
+
+loc "lib/runtime/math.bn:1:1"
+loc "lib/runtime/strings.bn:1:1"
+loc "lib/runtime/runtime.bn:1:1"
+loc "lib/runtime/math.bn:5:5"
+loc "lib/runtime/math.bn:14:5"
+loc "lib/runtime/strings.bn:4:9"
+loc "lib/runtime/strings.bn:4:21"
+loc "lib/runtime/strings.bn:8:18"
+loc "lib/runtime/strings.bn:8:13"
+loc "lib/runtime/strings.bn:8:29"
+loc "lib/runtime/strings.bn:3:6"
+loc "lib/runtime/strings.bn:17:5"
+loc "lib/runtime/strings.bn:23:5"
+loc "lib/runtime/strings.bn:33:38"
+loc "lib/runtime/strings.bn:30:5"
+loc "lib/runtime/strings.bn:38:5"
+loc "lib/runtime/strings.bn:59:12"
+loc "lib/runtime/strings.bn:62:13"
+loc "lib/runtime/strings.bn:65:13"
+loc "lib/runtime/strings.bn:48:5"
+loc "lib/runtime/strings.bn:85:12"
+loc "lib/runtime/strings.bn:89:13"
+loc "lib/runtime/strings.bn:92:13"
+loc "lib/runtime/strings.bn:74:5"
+
+entry "<entry>"
+
+func "<init lib/runtime/runtime.bn>"(): void
+    retv
+end
+
+func "<init lib/runtime/math.bn>"(): void
+    retv
+end
+
+func "<init lib/runtime/strings.bn>"(): void
+    retv
+end
+
+@Runtime name="imin"
+func intMin(_: int, _: int): int
+    locals 2
+    load 1
+    load 0
+    ilt
+    jz L0
+    load 1
+    store 2
+    load 2
+    ret
+L0:
+    load 0
+    store 3
+    load 3
+    ret
+end
+
+@Runtime name="imax"
+func intMax(_: int, _: int): int
+    locals 2
+    load 1
+    load 0
+    igt
+    jz L0
+    load 1
+    store 2
+    load 2
+    ret
+L0:
+    load 0
+    store 3
+    load 3
+    ret
+end
+
+func matchesAt(_: #21, _: #21, _: int): bool
+    locals 6
+    load 0
+    load 2
+    index 5
+    load 1
+    const 0
+    index 6
+    ine
+    jz L0
+    const 0
+    store 6
+    load 6
+    ret
+L0:
+    const 1
+    store 3
+    load 1
+    len
+    store 4
+L1:
+    load 3
+    load 4
+    ilt
+    jz L3
+    load 3
+    store 5
+    load 0
+    load 2
+    load 5
+    iadd.ovf 7
+    index 8
+    load 1
+    load 5
+    index 9
+    ine
+    jz L2
+    const 0
+    store 7
+    load 7
+    ret
+L2:
+    load 3
+    const 1
+    iadd
+    store 3
+    jmp L1
+L3:
+    const 1
+    store 8
+    load 8
+    ret
+end
+
+@Runtime name="str_contains"
+func textContains(_: string, _: string): bool
+    locals 1
+    load 0
+    load 1
+    rt str_find
+    const 0
+    ige
+    store 2
+    load 2
+    ret
+end
+
+@Runtime name="str_starts"
+func textStartsWith(_: string, _: string): bool
+    locals 3
+    const 0
+    store 3
+    load 1
+    rt str_len
+    store 2
+    load 2
+    load 0
+    rt str_len
+    ile
+    jzk L0
+    pop
+    load 0
+    const 0
+    load 2
+    rt str_sub
+    tee 3
+    load 1
+    rt str_eq
+L0:
+    store 4
+    load 3
+    rt release
+    pop
+    const 0
+    store 3
+    load 3
+    rt release
+    pop
+    load 4
+    ret
+end
+
+@Runtime name="str_ends"
+func textEndsWith(_: string, _: string): bool
+    locals 4
+    const 0
+    store 4
+    load 0
+    rt str_len
+    store 2
+    load 1
+    rt str_len
+    store 3
+    load 3
+    load 2
+    ile
+    jzk L0
+    pop
+    load 0
+    load 2
+    load 3
+    isub.ovf 13
+    load 2
+    rt str_sub
+    tee 4
+    load 1
+    rt str_eq
+L0:
+    store 5
+    load 4
+    rt release
+    pop
+    const 0
+    store 4
+    load 4
+    rt release
+    pop
+    load 5
+    ret
+end
+
+@Runtime name="str_repeat"
+func textRepeat(_: string, _: int): string
+    locals 6
+    const 0
+    store 2
+    load 2
+    store 6
+    str ""
+    store 2
+    load 6
+    rt release
+    pop
+    const 0
+    store 3
+    load 1
+    store 4
+L0:
+    load 3
+    load 4
+    ilt
+    jz L1
+    load 3
+    store 5
+    load 2
+    load 0
+    rt str_append
+    store 2
+    load 3
+    const 1
+    iadd
+    store 3
+    jmp L0
+L1:
+    load 2
+    store 7
+    const 0
+    store 2
+    load 2
+    rt release
+    pop
+    load 7
+    ret
+end
+
+@Runtime name="str_split"
+func textSplit(_: string, _: string): [string]
+    locals 12
+    const 0
+    store 2
+    const 0
+    store 3
+    const 0
+    store 6
+    const 0
+    store 11
+    const 0
+    store 12
+    load 1
+    rt str_len
+    const 0
+    ieq
+    jz L0
+    load 0
+    rt str_chars
+    store 9
+    load 2
+    rt release
+    pop
+    load 3
+    rt release
+    pop
+    load 6
+    rt release
+    pop
+    load 9
+    ret
+L0:
+    load 2
+    store 10
+    load 0
+    tconst #21
+    rt str_to_bytes
+    store 2
+    load 10
+    rt release
+    pop
+    load 3
+    store 10
+    load 1
+    tconst #21
+    rt str_to_bytes
+    store 3
+    load 10
+    rt release
+    pop
+    load 2
+    len
+    store 4
+    load 3
+    len
+    store 5
+    load 6
+    store 10
+    newarr [string] 0
+    store 6
+    load 10
+    rt release
+    pop
+    const 0
+    store 7
+    const 0
+    store 8
+L1:
+    load 8
+    load 5
+    iadd.ovf 16
+    load 4
+    ile
+    jz L4
+    load 2
+    load 3
+    load 8
+    call matchesAt
+    jz L2
+    load 6
+    load 2
+    load 7
+    load 8
+    rt arr_slice
+    tee 11
+    rt str_from_bytes
+    tee 12
+    rt arr_push
+    pop
+    load 11
+    rt release
+    pop
+    const 0
+    store 11
+    load 12
+    rt release
+    pop
+    const 0
+    store 12
+    load 8
+    load 5
+    iadd.ovf 17
+    store 8
+    load 8
+    store 7
+    jmp L3
+L2:
+    load 8
+    const 1
+    iadd.ovf 18
+    store 8
+L3:
+    jmp L1
+L4:
+    load 6
+    load 2
+    load 7
+    load 4
+    rt arr_slice
+    tee 12
+    rt str_from_bytes
+    tee 11
+    rt arr_push
+    pop
+    load 12
+    rt release
+    pop
+    const 0
+    store 12
+    load 11
+    rt release
+    pop
+    const 0
+    store 11
+    load 6
+    store 13
+    const 0
+    store 6
+    load 2
+    rt release
+    pop
+    load 3
+    rt release
+    pop
+    load 6
+    rt release
+    pop
+    load 11
+    rt release
+    pop
+    load 12
+    rt release
+    pop
+    load 13
+    ret
+end
+
+@Runtime name="str_replace"
+func textReplace(_: string, _: string, _: string): string
+    locals 12
+    const 0
+    store 3
+    const 0
+    store 4
+    const 0
+    store 7
+    const 0
+    store 12
+    const 0
+    store 13
+    load 1
+    rt str_len
+    const 0
+    ieq
+    jz L0
+    load 0
+    rt retain
+    store 10
+    load 3
+    rt release
+    pop
+    load 4
+    rt release
+    pop
+    load 7
+    rt release
+    pop
+    load 10
+    ret
+L0:
+    load 3
+    store 11
+    load 0
+    tconst #21
+    rt str_to_bytes
+    store 3
+    load 11
+    rt release
+    pop
+    load 4
+    store 11
+    load 1
+    tconst #21
+    rt str_to_bytes
+    store 4
+    load 11
+    rt release
+    pop
+    load 3
+    len
+    store 5
+    load 4
+    len
+    store 6
+    load 7
+    store 11
+    str ""
+    store 7
+    load 11
+    rt release
+    pop
+    const 0
+    store 8
+    const 0
+    store 9
+L1:
+    load 9
+    load 6
+    iadd.ovf 20
+    load 5
+    ile
+    jz L4
+    load 3
+    load 4
+    load 9
+    call matchesAt
+    jz L2
+    load 7
+    load 3
+    load 8
+    load 9
+    rt arr_slice
+    tee 12
+    rt str_from_bytes
+    tee 13
+    rt str_append
+    store 7
+    load 12
+    rt release
+    pop
+    const 0
+    store 12
+    load 13
+    rt release
+    pop
+    const 0
+    store 13
+    load 7
+    load 2
+    rt str_append
+    store 7
+    load 9
+    load 6
+    iadd.ovf 21
+    store 9
+    load 9
+    store 8
+    jmp L3
+L2:
+    load 9
+    const 1
+    iadd.ovf 22
+    store 9
+L3:
+    jmp L1
+L4:
+    load 7
+    load 3
+    load 8
+    load 5
+    rt arr_slice
+    tee 13
+    rt str_from_bytes
+    tee 12
+    rt str_append
+    store 7
+    load 13
+    rt release
+    pop
+    const 0
+    store 13
+    load 12
+    rt release
+    pop
+    const 0
+    store 12
+    load 7
+    store 14
+    const 0
+    store 7
+    load 3
+    rt release
+    pop
+    load 4
+    rt release
+    pop
+    load 7
+    rt release
+    pop
+    load 12
+    rt release
+    pop
+    load 13
+    rt release
+    pop
+    load 14
+    ret
+end
+
+func "<entry>"(): void
+    call "<init lib/runtime/math.bn>"
+    pop
+    call "<init lib/runtime/strings.bn>"
+    pop
+    call "<init lib/runtime/runtime.bn>"
+    pop
+    retv
+end

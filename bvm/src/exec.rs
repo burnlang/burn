@@ -251,6 +251,14 @@ pub fn load(m: &Module, host: &Host) -> Result<Arc<Program>, LoadError> {
 }
 
 pub fn load_with(m: &Module, host: &Host, install_meta: bool) -> Result<Arc<Program>, LoadError> {
+    let with_runtime;
+    let m = match crate::burnrt::link(m).map_err(LoadError::Link)? {
+        Some(x) => {
+            with_runtime = x;
+            &with_runtime
+        }
+        None => m,
+    };
     let linked;
     let m = if needs_link(m) {
         analyze(m)?;

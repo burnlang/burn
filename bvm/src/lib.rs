@@ -2,6 +2,7 @@ pub mod archive;
 pub mod asm;
 pub mod binary;
 pub mod builder;
+pub mod burnrt;
 pub mod exec;
 pub mod link;
 pub mod mixin;
