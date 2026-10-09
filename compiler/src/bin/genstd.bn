@@ -1,10 +1,11 @@
 import "std/fs"
+import "std/strings"
 
 /**
- * Prints `compiler/src/project/stdlib.bn`, which holds the sources of `lib/std` the way the Rust compiler embeds them with
+ * Prints `compiler/src/project/stdlib.bn`, which holds the sources of `lib/std` and `lib/tools` the way the Rust compiler embeds them with
  * `include_str!`. Run it from the repository root: `burn compiler/src/bin/genstd.bn > compiler/src/project/stdlib.bn`.
  */
-const NAMES = ["date", "time", "http", "math", "strings", "json", "process", "fs", "list", "collections", "path", "random", "testing"]
+const NAMES = ["date", "time", "http", "math", "strings", "json", "process", "fs", "list", "collections", "path", "random", "testing", "tools/fmt"]
 
 fun literal(s: string): string {
     var out = "\""
@@ -38,7 +39,11 @@ fun main() {
     print("pub fun stdModules(): [StdModule] {")
     print("    [StdModule] out = []")
     for name in NAMES {
-        var src = readFile("lib/std/${name}.bn")
+        var file = "lib/std/${name}.bn"
+        if (startsWith(name, "tools/")) {
+            file = "lib/${name}.bn"
+        }
+        var src = readFile(file)
         print("    out.push(StdModule { name: ${literal(name)}, src: ${literal(src)} })")
     }
     print("    return out")

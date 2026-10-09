@@ -92,13 +92,12 @@ for tool in burni burnc burn-lsp; do
 done
 
 rm -rf "$SHARE/tools" "$SHARE/examples"
-mkdir -p "$SHARE/tools"
-cp -R "$ROOT/tools/burnfmt" "$SHARE/tools/burnfmt"
+cp -R "$ROOT/lib/tools" "$SHARE/tools"
 cp -R "$ROOT/examples" "$SHARE/examples"
 cp -f "$ROOT/LICENSE" "$SHARE/LICENSE"
 
 say "==> Compiling burnfmt (the formatter is written in Burn)"
-src="$SHARE/tools/burnfmt/burnfmt.bn"
+src="$SHARE/tools/fmt.bn"
 rm -f "$BIN/burnfmt"
 log="$(mktemp)"
 if ! "$BIN/burnc" "$src" -o "$BIN/burnfmt" >/dev/null 2>"$log"; then

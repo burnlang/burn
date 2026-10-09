@@ -12,7 +12,7 @@
 - Add private and public for imports: `pub` and `priv`
 - Add async: `async fun`, `Future<T>` and `await`
 - Toolchain installer with `burni`, `burnc`, `burnfmt` and `burn-lsp`
-- Formatter written in Burn (`tools/burnfmt`)
+- Formatter written in Burn (`lib/tools/fmt.bn`)
 - bvm: a general-purpose virtual machine with an assembler, bytecode format, verifier, host functions and an example language (Ember)
 - bvm: linking, `.bar` archives, mixins (`@Inject`, `@Overwrite`, `@Redirect`) and a native bridge
 - Annotations: `def annotation`, `@Getter`, `@Setter`, `@Deprecated`, `@Export`, `@Native`, `annotationsOf`

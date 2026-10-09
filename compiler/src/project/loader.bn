@@ -122,7 +122,11 @@ pub def struct Loader() {
 
     fun stdSource(path: string): StdModule? {
         var dir = pathParent(path)
-        if (dir == null || pathFileName(dir) != "std") {
+        if (dir == null) {
+            return null
+        }
+        var folder = pathFileName(dir)
+        if (folder != "std" && folder != "tools") {
             return null
         }
         var up = pathParent(dir)
@@ -132,6 +136,9 @@ pub def struct Loader() {
         var stem = pathStem(path)
         if (stem == null) {
             return null
+        }
+        if (folder == "tools") {
+            return stdNamed("tools/${stem}")
         }
         return stdNamed(stem)
     }
@@ -434,7 +441,7 @@ pub def struct Loader() {
         candidates.push(pathJoin(cwd, p))
         candidates.push(pathJoin(cwd, "${p}.bn"))
         var s = stdlibName(p)
-        var explicitStd = startsWith(p, "std/") || startsWith(p, "std:") || (!contains(p, "/") && !endsWith(p, ".bn"))
+        var explicitStd = startsWith(p, "std/") || startsWith(p, "std:") || startsWith(p, "tools/") || (!contains(p, "/") && !endsWith(p, ".bn"))
         if (s != null && (explicitStd || fromStd)) {
             return loadStd(s)
         }
