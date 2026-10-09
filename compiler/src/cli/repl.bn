@@ -1,0 +1,181 @@
+import "../build.bn"
+import "../check/body.bn"
+import "../diag/diag.bn"
+import "../project/loader.bn"
+import "../project/paths.bn"
+import "compile.bn"
+import "host.bn"
+
+/** How many brackets the input leaves open, outside strings and comments. */
+priv fun balance(src: string): int {
+    var depth = 0
+    string? quote = null
+    var skipNext = false
+    var comment = false
+    var prev = ""
+    for c in src {
+        if (comment) {
+            if (c == "\n") {
+                comment = false
+            }
+            prev = c
+            continue
+        }
+        var q = quote
+        if (q != null) {
+            if (skipNext) {
+                skipNext = false
+            } else if (c == "\\") {
+                skipNext = true
+            } else if (c == q) {
+                quote = null
+            }
+            prev = c
+            continue
+        }
+        if (c == "\"" || c == "'") {
+            quote = c
+        } else if (c == "/" && prev == "/") {
+            comment = true
+        } else if (c == "{" || c == "(" || c == "[") {
+            depth += 1
+        } else if (c == "}" || c == ")" || c == "]") {
+            depth -= 1
+        }
+        prev = c
+    }
+    return depth
+}
+
+priv fun trimEnd(s: string): string {
+    var b = bytes(s)
+    var end = len(b)
+    while (end > 0 && (b[end - 1] == 32 || b[end - 1] == 10 || b[end - 1] == 13 || b[end - 1] == 9)) {
+        end -= 1
+    }
+    return fromBytes(slice(b, 0, end))
+}
+
+priv fun eprintText(text: string) {
+    if (endsWith(text, "\n")) {
+        eprint(substring(text, 0, len(text) - 1))
+    } else if (text != "") {
+        eprint(text)
+    }
+}
+
+/** What the REPL remembers between inputs: the code entered so far. */
+priv def struct Session() {
+    string source = ""
+
+    /** Checks and runs `input` after everything entered so far; returns `""`, `"error\t…"` or `"exit\t…"`. */
+    fun eval(input: string): string {
+        var offset = len(bytes(source)) + 1
+        var candidate = "${source}\n${input}\n"
+        var loader = newLoader()
+        var root = loader.loadSource("repl", candidate, currentDir())
+        var loaded = loader.finish(root)
+        readLibraries(loaded)
+        var rootFile = loaded.modules[root].file
+        var r = checkRepl(loaded, rootFile, offset)
+        [LoadDiag] all = []
+        for d in loaded.diags {
+            all.push(d)
+        }
+        for d in r.diags {
+            all.push(d)
+        }
+        all = sortedDiags(all)
+        var failed = false
+        for d in all {
+            if (d.diag.severity == Severity.Error) {
+                failed = true
+            }
+        }
+        var color = colorErrors()
+        var p = r.program
+        if (p == null || failed) {
+            var msg = ""
+            for d in all {
+                if (d.file == rootFile && d.diag.start < offset) {
+                    continue
+                }
+                msg += renderIn(loaded.files[d.file], d.diag, color)
+            }
+            eprintText(msg)
+            return ""
+        }
+        [string] globals = []
+        for g in p.globals {
+            globals.push("${g.module}\t${g.name}")
+        }
+        [string] keys = []
+        [int] funcs = []
+        for i in p.inits {
+            keys.push(i.key)
+            funcs.push(i.func)
+        }
+        var result = replEval(moduleText(r.checker, p), r.checker.libPaths, globals, keys, funcs)
+        source = trimEnd(candidate)
+        var warnings = ""
+        for d in all {
+            if (d.file == rootFile && d.diag.start >= offset) {
+                warnings += renderIn(loaded.files[d.file], d.diag, color)
+            }
+        }
+        eprintText(warnings)
+        return result
+    }
+}
+
+/** `burn repl`: reads Burn code line by line, runs it and prints the value of each expression. */
+pub fun cmdRepl(): int {
+    replStart()
+    print("Burn ${toolchainVersion()} REPL. Type :help for help, :quit to exit.")
+    var session = new Session()
+    while (true) {
+        var line = readLine(">>> ")
+        if (line == null) {
+            break
+        }
+        var input = line
+        while (balance(input) > 0) {
+            var more = readLine("... ")
+            if (more == null) {
+                break
+            }
+            input += "\n" + more
+        }
+        var trimmed = trim(input)
+        if (trimmed == "") {
+            continue
+        }
+        if (trimmed == ":q" || trimmed == ":quit" || trimmed == ":exit" || trimmed == "exit" || trimmed == "quit") {
+            break
+        }
+        if (trimmed == ":help" || trimmed == ":h") {
+            print("Enter Burn statements, declarations or expressions. Expression results are printed.")
+            print("  :quit    leave the REPL")
+            print("  :reset   forget everything defined so far")
+            print("  :source  show the code entered so far")
+            continue
+        }
+        if (trimmed == ":reset") {
+            session = new Session()
+            replReset()
+            print("session cleared")
+            continue
+        }
+        if (trimmed == ":source") {
+            print(trim(session.source))
+            continue
+        }
+        var result = session.eval(input)
+        if (startsWith(result, "error\t")) {
+            eprint(substring(result, 6, len(result)))
+        } else if (startsWith(result, "exit\t")) {
+            return toInt(substring(result, 5, len(result)))
+        }
+    }
+    return 0
+}

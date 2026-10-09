@@ -1,8 +1,10 @@
 use crate::exec::Host;
 use bvm_runtime::obj::{array_at, array_len, str_ref, string};
+use std::collections::{HashMap, HashSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Mutex;
 
 pub const TOOLS: &[&str] = &["burn", "burni", "burnc", "burn-lsp"];
 
@@ -160,6 +162,89 @@ pub fn stale(dir: &Path, out: &Path) -> bool {
     }
 }
 
+#[derive(Default)]
+struct ReplSession {
+    saved: HashMap<String, u64>,
+    inited: HashSet<String>,
+}
+
+static REPL: Mutex<Option<ReplSession>> = Mutex::new(None);
+
+fn repl_start() {
+    bvm_runtime::io::set_panic_mode(true);
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let p = info.payload();
+        if p.downcast_ref::<bvm_runtime::io::BurnError>().is_some() || p.downcast_ref::<bvm_runtime::io::BurnExit>().is_some() {
+            return;
+        }
+        default(info);
+    }));
+    *REPL.lock().unwrap() = Some(ReplSession::default());
+}
+
+fn repl_eval(text: &str, libs: &[String], globals: &[String], inits: &[String], funcs: &[u64]) -> String {
+    let cli = bvm_runtime::meta::current_meta();
+    let (m, host) = match linked(text, libs) {
+        Ok(x) => x,
+        Err(f) => {
+            let r = f.report();
+            let (code, message) = r.split_once('\t').unwrap_or(("1", &r));
+            eprintln!("{}", message);
+            finish(code.parse().unwrap_or(1))
+        }
+    };
+    let prog = match crate::load(&m, &host) {
+        Ok(p) => p,
+        Err(e @ (crate::LoadError::Link(_) | crate::LoadError::MissingImport(_) | crate::LoadError::ImportArity { .. } | crate::LoadError::Unlinked(_))) => {
+            eprintln!("error: {}", e);
+            finish(1)
+        }
+        Err(e) => {
+            eprintln!("internal error: the compiler produced an invalid bvm module: {}", e);
+            finish(70)
+        }
+    };
+    let mut guard = REPL.lock().unwrap();
+    let session = guard.get_or_insert_with(ReplSession::default);
+    let values: Vec<u64> = globals.iter().map(|g| *session.saved.get(g).unwrap_or(&0)).collect();
+    let mut runner = crate::Runner::new(prog, values);
+    let root = inits.last().cloned().unwrap_or_default();
+    let mut result = String::new();
+    for (key, &init) in inits.iter().zip(funcs) {
+        if *key != root && session.inited.contains(key) {
+            continue;
+        }
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runner.call(init as u32)));
+        bvm_runtime::io::flush();
+        if let Err(e) = r {
+            result = if let Some(err) = e.downcast_ref::<bvm_runtime::io::BurnError>() {
+                format!("error\t{}", err.0)
+            } else if let Some(ex) = e.downcast_ref::<bvm_runtime::io::BurnExit>() {
+                format!("exit\t{}", ex.0)
+            } else {
+                "error\tinternal error".into()
+            };
+            break;
+        }
+        if *key != root {
+            session.inited.insert(key.clone());
+        }
+    }
+    let values = runner.finish();
+    for (i, g) in globals.iter().enumerate() {
+        if let Some(v) = values.get(i) {
+            session.saved.insert(g.clone(), *v);
+        }
+    }
+    bvm_runtime::meta::restore_meta(cli);
+    result
+}
+
+fn ints(p: u64) -> Vec<u64> {
+    (0..array_len(p)).map(|i| array_at(p, i)).collect()
+}
+
 fn write_archive(text: &str, name: &str, libs: &[String], out: &Path) -> Result<(), Failure> {
     let m = crate::asm::assemble(text).map_err(|e| Failure::Internal(e.to_string()))?;
     let mut a = crate::archive::Archive::new(name);
@@ -210,6 +295,36 @@ pub fn host(tool: &str) -> Host {
     host.register("burn.tool", 0, move |_| string(&name));
     host.register("burn.version", 0, |_| string(crate::VERSION));
     host.register("burn.launcher", 0, |_| string(&launcher()));
+    host.register("burn.replStart", 0, |_| {
+        repl_start();
+        0
+    });
+    host.register("burn.replReset", 0, |_| {
+        *REPL.lock().unwrap() = Some(ReplSession::default());
+        0
+    });
+    host.register("burn.replEval", 5, |a| {
+        string(&repl_eval(str_ref(a[0]), &strings(a[1]), &strings(a[2]), &strings(a[3]), &ints(a[4])))
+    });
+    host.register("burn.readLine", 1, |a| {
+        use std::io::{BufRead, Write};
+        bvm_runtime::io::flush();
+        print!("{}", str_ref(a[0]));
+        let _ = std::io::stdout().flush();
+        let mut line = String::new();
+        match std::io::stdin().lock().read_line(&mut line) {
+            Ok(n) if n > 0 => {
+                if line.ends_with('\n') {
+                    line.pop();
+                    if line.ends_with('\r') {
+                        line.pop();
+                    }
+                }
+                string(&line)
+            }
+            _ => 0,
+        }
+    });
     host.register("burn.stale", 2, |a| stale(Path::new(str_ref(a[0])), Path::new(str_ref(a[1]))) as u64);
     host.register("burn.library", 1, |a| string(&describe_library(Path::new(str_ref(a[0])))));
     host.register("burn.colorErrors", 0, |_| {
@@ -357,11 +472,16 @@ pub fn main(tool: &str, args: Vec<String>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    match crate::exec::run(&m, &host(tool), args) {
-        Ok(code) => ExitCode::from(code as u8),
-        Err(e) => {
+    let host = host(tool);
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::exec::run(&m, &host, args))) {
+        Ok(Ok(code)) => ExitCode::from(code as u8),
+        Ok(Err(e)) => {
             eprintln!("error: {}: {}", path.display(), e);
             ExitCode::from(2)
         }
+        Err(e) => match e.downcast_ref::<bvm_runtime::io::BurnExit>() {
+            Some(exit) => finish(exit.0),
+            None => std::panic::resume_unwind(e),
+        },
     }
 }

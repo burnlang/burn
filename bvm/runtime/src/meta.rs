@@ -248,6 +248,14 @@ pub fn set_meta(mut m: Meta) {
     META.store(b, Ordering::Release);
 }
 
+pub fn current_meta() -> *mut Meta {
+    META.load(Ordering::Acquire)
+}
+
+pub fn restore_meta(m: *mut Meta) {
+    META.store(m, Ordering::Release);
+}
+
 pub fn meta() -> &'static Meta {
     let p = META.load(Ordering::Acquire);
     if p.is_null() {
