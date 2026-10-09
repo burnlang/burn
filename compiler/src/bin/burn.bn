@@ -1,0 +1,7 @@
+import "../cli/cli.bn"
+import "std/process"
+
+/** The `burn` command line, which bvm runs when it is started as `burn`, `burni`, `burnc` or `burn-lsp`. */
+fun main() {
+    exit(cliMain(args()))
+}

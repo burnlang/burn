@@ -180,13 +180,47 @@ fun patched(f: SourceFile, s: Suggestion): Patch? {
     return Patch { line: line, text: out, marks: marks }
 }
 
+/** The terminal colour codes of a rendered diagnostic, all empty without colours. */
+def type Paint {
+    string red
+    string yellow
+    string blue
+    string cyan
+    string green
+    string bold
+    string reset
+}
+
+fun paint(color: bool): Paint {
+    if (color) {
+        return Paint {
+            red: "\u{1b}[31m",
+            yellow: "\u{1b}[33m",
+            blue: "\u{1b}[34m",
+            cyan: "\u{1b}[36m",
+            green: "\u{1b}[32m",
+            bold: "\u{1b}[1m",
+            reset: "\u{1b}[0m"
+        }
+    }
+    return Paint { red: "", yellow: "", blue: "", cyan: "", green: "", bold: "", reset: "" }
+}
+
 /** A diagnostic as `burn check` prints it, without colours. */
 pub fun render(f: SourceFile, d: Diag): string {
+    return renderIn(f, d, false)
+}
+
+/** A diagnostic as `burn check` prints it, in colour when `color` is set. */
+pub fun renderIn(f: SourceFile, d: Diag, color: bool): string {
+    var p = paint(color)
     var label = "error"
+    var c = p.red
     if (d.severity == Severity.Warning) {
         label = "warning"
+        c = p.yellow
     }
-    var out = "${label}: ${d.message}\n"
+    var out = "${p.bold}${c}${label}${p.reset}: ${p.bold}${d.message}${p.reset}\n"
     var lc = f.lineCol(d.start)
     var line = lc[0]
     var col = lc[1]
@@ -194,18 +228,19 @@ pub fun render(f: SourceFile, d: Diag): string {
     var gutter = digitCount(line)
     [Patch?] patches = []
     for s in d.suggestions {
-        var p = patched(f, s)
-        patches.push(p)
-        if (p != null && digitCount(p.line) > gutter) {
-            gutter = digitCount(p.line)
+        var pt = patched(f, s)
+        patches.push(pt)
+        if (pt != null && digitCount(pt.line) > gutter) {
+            gutter = digitCount(pt.line)
         }
     }
     var blank = repeat(" ", gutter)
-    out += "${blank}--> ${f.name}:${line}:${col}\n"
+    var bar = "${p.blue}${blank} |${p.reset}\n"
+    out += "${p.blue}${blank}--> ${p.reset}${f.name}:${line}:${col}\n"
     if (line <= f.lineCount()) {
         var text = f.lineText(line)
-        out += "${blank} |\n"
-        out += "${rightAligned(line, gutter)} | ${text}\n"
+        out += bar
+        out += "${p.blue}${rightAligned(line, gutter)} |${p.reset} ${text}\n"
         var width = 1
         if (elc[0] == line) {
             width = elc[1] - col
@@ -228,22 +263,22 @@ pub fun render(f: SourceFile, d: Diag): string {
             }
             k += 1
         }
-        out += "${blank} | ${pad}${repeat("^", width)}\n"
+        out += "${p.blue}${blank} |${p.reset} ${pad}${c}${repeat("^", width)}${p.reset}\n"
     }
     for n in d.notes {
-        out += "${blank} = note: ${n}\n"
+        out += "${p.blue}${blank} = ${p.reset}${p.bold}note${p.reset}: ${n}\n"
     }
     for h in d.helps {
-        out += "${blank} = help: ${h}\n"
+        out += "${p.blue}${blank} = ${p.reset}${p.bold}help${p.reset}: ${h}\n"
     }
     for i in 0..len(d.suggestions) {
-        out += "help: ${d.suggestions[i].message}\n"
-        var p = patches[i]
-        if (p != null) {
-            out += "${blank} |\n"
-            out += "${rightAligned(p.line, gutter)} | ${p.text}\n"
-            if (len(p.marks) > 0) {
-                out += "${blank} | ${p.marks}\n"
+        out += "${p.bold}${p.cyan}help${p.reset}: ${d.suggestions[i].message}\n"
+        var pt = patches[i]
+        if (pt != null) {
+            out += bar
+            out += "${p.blue}${rightAligned(pt.line, gutter)} |${p.reset} ${pt.text}\n"
+            if (len(pt.marks) > 0) {
+                out += "${p.blue}${blank} |${p.reset} ${p.green}${pt.marks}${p.reset}\n"
             }
         }
     }

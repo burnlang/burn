@@ -11,10 +11,11 @@ usage() {
 Builds the Burn toolchain and lays it out in a directory:
 
   <prefix>/bin/burn, burni, burnc, burn-lsp, burnfmt, bvm
-  <prefix>/share/burn/compiler.bvm, tools, examples, LICENSE
+  <prefix>/share/burn/compiler.bvm, burn.bvm, tools, examples, LICENSE
 
 compiler.bvm is the compiler written in Burn, built by itself (scripts/bootstrap.sh);
-\`burn --compiler burn\` uses it.
+\`burn --compiler burn\` uses it. burn.bvm is the command line written in Burn, built
+by compiler.bvm; bvm runs it when it is started as burn, burni or burnc.
 
 This is what release archives contain. To install Burn, use burnup:
   curl -fsSL https://raw.githubusercontent.com/burnlang/burnup/master/install.sh | sh
@@ -119,5 +120,11 @@ else
 fi
 cp -f "$boot/stage2.bvm" "$SHARE/compiler.bvm"
 rm -rf "$boot"
+
+say "==> Building the command line written in Burn"
+cli="$(mktemp)"
+(cd "$ROOT" && "$BIN/burn" "$SHARE/compiler.bvm" build compiler/src/bin/burn.bn -o "$cli.bvm" >/dev/null)
+"$BIN/bvm" asm "$cli.bvm" -o "$SHARE/burn.bvm" >/dev/null
+rm -f "$cli" "$cli.bvm"
 
 say "==> Burn $("$BIN/burn" version | sed 's/^Burn //') is in $PREFIX"

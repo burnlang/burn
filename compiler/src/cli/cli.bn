@@ -1,0 +1,719 @@
+import "../dump/checked.bn"
+import "../dump/declarations.bn"
+import "../dump/loading.bn"
+import "../dump/syntax.bn"
+import "../project/paths.bn"
+import "../project/project.bn"
+import "compile.bn"
+import "host.bn"
+import "std/fs"
+import "targets.bn"
+
+priv const TEXT_DUMPS = ["--tokens", "--ast", "--diagnostics", "--toml", "--project", "--modules", "--decls", "--checked", "--owned", "--bvm"]
+
+priv fun usage() {
+    print(join([
+        "Burn ${toolchainVersion()}",
+        "",
+        "Usage:",
+        "  burn <file.bn> [args...]            run a program instantly on the Burn VM (bvm)",
+        "  burn <file.bvm|file.bvmc|file.bar> [args...]",
+        "                                      run a bvm module or archive",
+        "  burn run [file.bn] [args...]        run a program, or the project's main file",
+        "      --bin <name>                    run src/bin/<name>.bn of the project",
+        "      --example <name>                run examples/<name>.bn of the project",
+        "  burn build [file.bn] [options]      compile to bvm bytecode, or build the project",
+        "                                      (its main file and every program in src/bin, into build/)",
+        "      --bin <name>, --example <name>  build only that program",
+        "      -o, --output <path>             output file (default: the file name with .bvmc or .bar)",
+        "      --target <bvm|bar>              a bvm module (default) or a runnable archive",
+        "      --emit-asm <path>               also write the bvm assembly",
+        "      --no-std                        build without the standard library (same as `std = false` in burn.toml)",
+        "  burn check [files...]               type-check without running (default: the whole project)",
+        "  burn eval '<code>'                  evaluate code from the command line",
+        "  burn version                        print the version"
+    ], "\n"))
+}
+
+priv fun burniUsage() {
+    print(join([
+        "burni ${toolchainVersion()} - the Burn interpreter",
+        "",
+        "Usage:",
+        "  burni <file.bn> [args...]   type-check and run a program on the Burn VM (bvm)",
+        "  burni <file.bvm|file.bvmc>  run a bvm module",
+        "  burni -e '<code>'           evaluate code from the command line",
+        "  burni -v | --version        print the version"
+    ], "\n"))
+}
+
+priv fun burncUsage() {
+    print(join([
+        "burnc ${toolchainVersion()} - the Burn compiler",
+        "",
+        "Usage:",
+        "  burnc <file.bn> [options]   compile to bvm bytecode",
+        "      -o, --output <path>     output file (default: the file name with .bvmc or .bar)",
+        "      --target <bvm|bar>      a bvm module (default) or a runnable archive",
+        "      --emit-asm <path>       also write the bvm assembly",
+        "      --no-std                build without the standard library",
+        "  burnc --check <files...>    type-check without producing output",
+        "  burnc -v | --version        print the version"
+    ], "\n"))
+}
+
+priv fun fail(message: string, code: int): int {
+    eprint("error: ${message}")
+    return code
+}
+
+priv fun notYet(command: string): int {
+    return fail("`burn ${command}` is not available in the command line written in Burn yet", 2)
+}
+
+priv fun isBvmFile(file: string): bool {
+    var ext = pathExtension(file)
+    return ext == "bvm" || ext == "bvmc" || ext == "bar"
+}
+
+/** The file next to `file` named like it, with `ext` as its extension. */
+priv fun defaultOutput(file: string, ext: string): string {
+    var name = (pathStem(file) ?? "out") + "." + ext
+    var parent = pathParent(file)
+    if (parent == null) {
+        return name
+    }
+    return pathJoin(parent, name)
+}
+
+/** `path` relative to the working directory when it is inside it. */
+priv fun shown(path: string): string {
+    return stripPrefix(path, currentDir()) ?? path
+}
+
+priv fun runFileWith(file: string, args: [string], opts: Options): int {
+    if (isBvmFile(file)) {
+        return runFile(file, args)
+    }
+    var c = compilePath(file, opts)
+    if (c == null) {
+        return 1
+    }
+    return runModule(moduleOf(c), args)
+}
+
+priv fun currentProject(err: Problem): Project? {
+    var root = findRoot(currentDir())
+    if (root == null) {
+        err.set("no source file given, and there is no burn.toml here or above\n  = help: pass a file like `burn build app.bn`, or create a project with `burn init github.com/you/app`")
+        return null
+    }
+    return loadProject(root, err)
+}
+
+priv def struct Selection() {
+    string? bin = null
+    string? example = null
+    string? package = null
+
+    fun named(): bool {
+        return bin != null || example != null || package != null
+    }
+
+    fun pick(p: Project, err: Problem): Entry? {
+        var b = bin
+        if (b != null) {
+            return findEntry(bins(p), "program in src/bin", b, p, err)
+        }
+        var x = example
+        if (x != null) {
+            return findEntry(examples(p), "example", x, p, err)
+        }
+        return null
+    }
+
+    fun flag(a: string, value: string?, err: Problem): bool {
+        if (a != "--bin" && a != "--example" && a != "-p" && a != "--package") {
+            return false
+        }
+        if (value == null) {
+            err.set("`${a}` needs a name")
+            return true
+        }
+        if (a == "--bin") {
+            bin = value
+        } else if (a == "--example") {
+            example = value
+        } else {
+            package = value
+        }
+        return true
+    }
+}
+
+priv fun findMember(ws: Workspace, sel: string, err: Problem): Member? {
+    var s = sel
+    while (endsWith(s, "/")) {
+        s = substring(s, 0, len(s) - 1)
+    }
+    [string] names = []
+    for m in ws.members {
+        var n = m.name
+        if (m.path == s || pathFileName(m.dir) == s || (n != null && (samePackage(n, s) || shortName(n) == s))) {
+            return m
+        }
+        names.push(m.path)
+    }
+    err.set("the workspace has no member `${s}` (its members: ${join(names, ", ")})")
+    return null
+}
+
+priv fun selectedProjects(package: string?, err: Problem): [Project]? {
+    var cwd = currentDir()
+    if (package != null) {
+        var ws = findWorkspace(cwd)
+        if (ws == null) {
+            err.set("`-p ${package}` picks a member of a workspace, but there is no workspace here")
+            return null
+        }
+        var m = findMember(ws, package, err)
+        if (m == null) {
+            return null
+        }
+        var p = loadProject(m.dir, err)
+        if (p == null) {
+            return null
+        }
+        return [p]
+    }
+    var root = findRoot(cwd)
+    if (root == null) {
+        currentProject(err)
+        return null
+    }
+    if (isWorkspaceOnly(root)) {
+        var ws = loadWorkspace(root, err)
+        if (ws == null) {
+            if (err.message == "") {
+                err.set("not a workspace")
+            }
+            return null
+        }
+        if (len(ws.members) == 0) {
+            err.set("the workspace in ${root} has no members yet; list them in `[workspace] members`")
+            return null
+        }
+        [Project] out = []
+        for m in ws.members {
+            var p = loadProject(m.dir, err)
+            if (p == null) {
+                return null
+            }
+            out.push(p)
+        }
+        return out
+    }
+    var p = loadProject(root, err)
+    if (p == null) {
+        return null
+    }
+    return [p]
+}
+
+priv fun takeNoStd(args: [string], opts: Options): [string] {
+    var program = -1
+    for i in 0..len(args) {
+        var a = args[i]
+        if (program < 0 && !startsWith(a, "-") && (endsWith(a, ".bn") || isBvmFile(a))) {
+            program = i
+        }
+    }
+    var compiles = len(args) > 0 && (args[0] == "build" || args[0] == "check" || args[0] == "dump")
+    if (toolName() == "burnc") {
+        compiles = true
+    }
+    [string] out = []
+    for i in 0..len(args) {
+        var a = args[i]
+        if (a == "--no-std" && (compiles || program < 0 || i < program)) {
+            opts.noStd = true
+        } else {
+            out.push(a)
+        }
+    }
+    return out
+}
+
+priv fun cmdEval(code: string, opts: Options): int {
+    var c = compileSource("<eval>", code, opts)
+    if (c == null) {
+        return 1
+    }
+    return runModule(moduleOf(c), [])
+}
+
+priv fun cmdCheck(files: [string], opts: Options): int {
+    var failed = false
+    for f in files {
+        if (compilePath(f, opts) == null) {
+            failed = true
+        }
+    }
+    if (failed) {
+        return 1
+    }
+    return 0
+}
+
+priv fun buildOne(file: string, output: string?, target: string, emitAsm: string?, opts: Options): int {
+    if (output != null) {
+        var parent = pathParent(output)
+        if (parent != null && parent != "") {
+            Files.makeDir(parent)
+        }
+    }
+    if (target != "bvm" && target != "bytecode" && target != "bar") {
+        return fail("unknown target `${target}` (expected `bvm` or `bar`)", 2)
+    }
+    if (isBvmFile(file)) {
+        return fail("${file} is bytecode already; run it with `burn ${file}`", 2)
+    }
+    var c = compilePath(file, opts)
+    if (c == null) {
+        return 1
+    }
+    var module = moduleOf(c)
+    if (target == "bar") {
+        var out = output ?? defaultOutput(file, "bar")
+        var problem = writeArchive(module, c.program.name, out)
+        if (problem != "") {
+            return fail(problem, 1)
+        }
+        print("wrote ${out}")
+        return 0
+    }
+    var out = output ?? defaultOutput(file, "bvmc")
+    var invalid = checkModule(module)
+    if (invalid != "") {
+        eprint("internal error: the compiler produced an invalid bvm module: ${invalid}")
+        return 70
+    }
+    if (emitAsm != null) {
+        if (!writeFile(emitAsm, module)) {
+            return fail("cannot write ${emitAsm}", 1)
+        }
+    }
+    var problem = writeBytecode(module, out)
+    if (problem != "") {
+        return fail(problem, 1)
+    }
+    print("wrote ${out}")
+    return 0
+}
+
+priv fun projectTarget(p: Project): string {
+    if (p.manifest.target == "bar") {
+        return "bar"
+    }
+    return "bvm"
+}
+
+priv fun buildProject(p: Project, picked: Entry?, output: string?, target: string, explicitTarget: bool, emitAsm: string?, opts: Options): int {
+    [Entry] entries = []
+    if (picked != null) {
+        entries.push(picked)
+    } else {
+        entries = programs(p)
+        if (len(entries) == 0 && p.manifest.kind == ProjectKind.Lib) {
+            if (explicitTarget) {
+                var m = mainEntry(p)
+                if (m != null) {
+                    entries.push(m)
+                }
+            } else {
+                if (compilePath(mainPath(p), opts) == null) {
+                    return 1
+                }
+                print("checked ${p.manifest.name} (a library is used through imports, so there is nothing to build)")
+                return 0
+            }
+        }
+    }
+    if (len(entries) == 0) {
+        return fail("${p.manifest.name} has nothing to build (no ${p.manifest.main} and no programs in src/bin)", 2)
+    }
+    var t = target
+    if (!explicitTarget) {
+        t = projectTarget(p)
+    }
+    print("building ${p.manifest.name} ${p.manifest.version} (${t})")
+    var single = len(entries) == 1
+    for e in entries {
+        var out = shown(outputFor(p, e, t))
+        if (output != null && single) {
+            out = output
+        }
+        var parent = pathParent(out)
+        if (parent != null && parent != "") {
+            Files.makeDir(parent)
+        }
+        var code = buildOne(e.path, out, t, emitAsm, opts)
+        if (code != 0) {
+            return code
+        }
+    }
+    return 0
+}
+
+priv fun cmdBuild(args: [string], opts: Options): int {
+    var selection = new Selection()
+    string? file = null
+    string? output = null
+    var target = "bvm"
+    var explicitTarget = false
+    string? emitAsm = null
+    var err = new Problem()
+    var i = 0
+    while (i < len(args)) {
+        var a = args[i]
+        string? next = null
+        if (i + 1 < len(args)) {
+            next = args[i + 1]
+        }
+        if (a == "-o" || a == "--output") {
+            i += 1
+            output = next
+        } else if (a == "--target" || a == "-t") {
+            i += 1
+            target = next ?? ""
+            explicitTarget = true
+        } else if (a == "--emit-asm" || a == "-S") {
+            i += 1
+            emitAsm = next
+        } else if (a == "--bin" || a == "--example" || a == "-p" || a == "--package") {
+            i += 1
+            selection.flag(a, next, err)
+            if (err.message != "") {
+                return fail(err.message, 2)
+            }
+        } else if (startsWith(a, "--target=")) {
+            target = substring(a, len("--target="), len(a))
+            explicitTarget = true
+        } else if (file == null) {
+            file = a
+        } else if (output == null) {
+            output = a
+        } else {
+            return fail("unexpected argument `${a}`", 2)
+        }
+        i += 1
+    }
+    if (file != null) {
+        return buildOne(file, output, target, emitAsm, opts)
+    }
+    var projects = selectedProjects(selection.package, err)
+    if (projects == null) {
+        return fail(err.message, 2)
+    }
+    var many = len(projects) > 1
+    [Project] chosen = []
+    [Entry?] picks = []
+    for p in projects {
+        var perr = new Problem()
+        var e = selection.pick(p, perr)
+        if (perr.message != "") {
+            if (!many) {
+                return fail(perr.message, 2)
+            }
+            continue
+        }
+        chosen.push(p)
+        picks.push(e)
+    }
+    if (len(chosen) == 0) {
+        return fail("no member of the workspace has a program or example named `${selection.bin ?? selection.example ?? ""}`", 2)
+    }
+    string? out = null
+    if (len(chosen) == 1) {
+        out = output
+    }
+    for k in 0..len(chosen) {
+        var code = buildProject(chosen[k], picks[k], out, target, explicitTarget, emitAsm, opts)
+        if (code != 0) {
+            return code
+        }
+    }
+    return 0
+}
+
+priv fun cmdRun(rest: [string], opts: Options): int {
+    string? file = null
+    [string] progArgs = []
+    var selection = new Selection()
+    var err = new Problem()
+    var i = 0
+    while (i < len(rest)) {
+        var a = rest[i]
+        if (file == null && len(progArgs) == 0) {
+            string? next = null
+            if (i + 1 < len(rest)) {
+                next = rest[i + 1]
+            }
+            if (selection.flag(a, next, err)) {
+                if (err.message != "") {
+                    return fail(err.message, 2)
+                }
+                i += 2
+                continue
+            }
+        }
+        if (file == null && !selection.named()) {
+            file = a
+        } else if (!(len(progArgs) == 0 && a == "--" && selection.named())) {
+            progArgs.push(a)
+        }
+        i += 1
+    }
+    var atWorkspaceRoot = false
+    if (file == null) {
+        var root = findRoot(currentDir())
+        atWorkspaceRoot = root != null && isWorkspaceOnly(root)
+    }
+    if (selection.named() || atWorkspaceRoot) {
+        var projects = selectedProjects(selection.package, err)
+        if (projects == null) {
+            return fail(err.message, 2)
+        }
+        [string] found = []
+        for p in projects {
+            var perr = new Problem()
+            var e = selection.pick(p, perr)
+            if (perr.message != "") {
+                if (len(projects) == 1) {
+                    return fail(perr.message, 2)
+                }
+                continue
+            }
+            if (e != null) {
+                found.push(e.path)
+            } else if (p.manifest.kind == ProjectKind.App && isFile(mainPath(p))) {
+                found.push(mainPath(p))
+            }
+        }
+        if (len(found) == 1) {
+            return runFileWith(found[0], progArgs, opts)
+        }
+        if (len(found) == 0) {
+            return fail("there is nothing to run here", 2)
+        }
+        [string] apps = []
+        for p in projects {
+            if (p.manifest.kind == ProjectKind.App) {
+                apps.push(pathFileName(p.root) ?? "")
+            }
+        }
+        return fail("this workspace has several programs to run; pick one with `-p` (${join(apps, ", ")})", 2)
+    }
+    if (file != null && file != "--") {
+        return runFileWith(file, progArgs, opts)
+    }
+    var p = currentProject(err)
+    if (p == null) {
+        return fail(err.message, 2)
+    }
+    if (file == null && p.manifest.kind == ProjectKind.Lib) {
+        eprint("error: ${p.manifest.name} is a library, so it has no program to run")
+        eprint("  = help: run its tests with `ash test`, or run a file with `burn run <file.bn>`")
+        return 2
+    }
+    return runFileWith(mainPath(p), progArgs, opts)
+}
+
+priv fun cmdDump(rest: [string], opts: Options): int {
+    if (len(rest) > 0 && contains(TEXT_DUMPS, rest[0])) {
+        var mode = rest[0]
+        var code = 0
+        for k in 1..len(rest) {
+            var f = rest[k]
+            if (len(rest) > 2) {
+                print("file ${f}")
+            }
+            if (mode == "--project") {
+                write(dumpProject(f))
+            } else if (mode == "--modules") {
+                write(dumpModules(f))
+            } else if (mode == "--decls") {
+                write(dumpDeclarations(f))
+            } else if (mode == "--checked" || mode == "--owned") {
+                write(dumpChecked(f, mode == "--owned"))
+            } else if (mode == "--bvm") {
+                write(dumpBvm(f))
+            } else {
+                var src = readText(f)
+                if (src == null) {
+                    eprint("error: cannot read `${f}`: ${readError(f)}")
+                    code = 1
+                } else if (mode == "--ast") {
+                    write(dumpAst(src))
+                } else if (mode == "--diagnostics") {
+                    write(dumpDiagnostics(f, src))
+                } else if (mode == "--toml") {
+                    write(dumpToml(src))
+                } else {
+                    write(dumpTokens(src))
+                }
+            }
+        }
+        return code
+    }
+    if (len(rest) == 2 && (rest[0] == "--bytecode" || rest[0] == "--bvm")) {
+        var c = compilePath(rest[1], opts)
+        if (c == null) {
+            return 1
+        }
+        write(moduleOf(c))
+        return 0
+    }
+    eprint("usage: burn dump --bytecode <file.bn>  |  burn dump --tokens|--ast|--diagnostics|--toml|--project|--modules|--decls|--checked|--owned|--bvm <files...>")
+    return 2
+}
+
+priv fun cmdCheckArgs(rest: [string], opts: Options): int {
+    string? package = null
+    [string] files = []
+    var i = 0
+    while (i < len(rest)) {
+        if (rest[i] == "-p" || rest[i] == "--package") {
+            if (i + 1 >= len(rest)) {
+                return fail("`${rest[i]}` needs the name of a workspace member", 2)
+            }
+            package = rest[i + 1]
+            i += 2
+            continue
+        }
+        files.push(rest[i])
+        i += 1
+    }
+    if (len(files) > 0) {
+        return cmdCheck(files, opts)
+    }
+    var err = new Problem()
+    var projects = selectedProjects(package, err)
+    if (projects == null) {
+        return fail(err.message, 2)
+    }
+    [string] all = []
+    for p in projects {
+        for e in allEntries(p) {
+            all.push(e.path)
+        }
+    }
+    return cmdCheck(all, opts)
+}
+
+priv fun burni(args: [string], opts: Options): int {
+    if (len(args) == 0) {
+        return notYet("repl")
+    }
+    var first = args[0]
+    if (first == "-h" || first == "--help") {
+        burniUsage()
+        return 0
+    }
+    if (first == "-v" || first == "--version") {
+        print("burni ${toolchainVersion()}")
+        return 0
+    }
+    if (first == "-e" || first == "--eval") {
+        if (len(args) < 2) {
+            return fail("no code given", 2)
+        }
+        return cmdEval(args[1], opts)
+    }
+    if (startsWith(first, "-")) {
+        eprint("error: unknown option `${first}`")
+        burniUsage()
+        return 2
+    }
+    return runFileWith(first, slice(args, 1, len(args)), opts)
+}
+
+priv fun burnc(args: [string], opts: Options): int {
+    if (len(args) == 0) {
+        burncUsage()
+        return 2
+    }
+    var first = args[0]
+    if (first == "-h" || first == "--help") {
+        burncUsage()
+        return 0
+    }
+    if (first == "-v" || first == "--version") {
+        print("burnc ${toolchainVersion()}")
+        return 0
+    }
+    if (first == "--check") {
+        return cmdCheck(slice(args, 1, len(args)), opts)
+    }
+    return cmdBuild(args, opts)
+}
+
+/** Runs the command line `burn` with `argv`, and returns its exit code. */
+pub fun cliMain(argv: [string]): int {
+    var opts = new Options()
+    var args = takeNoStd(argv, opts)
+    var tool = toolName()
+    if (tool == "burni") {
+        return burni(args, opts)
+    }
+    if (tool == "burnc") {
+        return burnc(args, opts)
+    }
+    if (tool == "burn-lsp") {
+        return notYet("lsp")
+    }
+    if (len(args) == 0) {
+        usage()
+        return 1
+    }
+    var first = args[0]
+    var rest = slice(args, 1, len(args))
+    if (first == "-h" || first == "--help" || first == "help") {
+        usage()
+        return 0
+    }
+    if (first == "-v" || first == "--version" || first == "version") {
+        print("Burn ${toolchainVersion()}")
+        return 0
+    }
+    if (first == "-e" || first == "--eval" || first == "eval") {
+        if (len(rest) == 0) {
+            return fail("no code given", 2)
+        }
+        return cmdEval(rest[0], opts)
+    }
+    if (first == "-r" || first == "--repl" || first == "repl") {
+        return notYet("repl")
+    }
+    if (first == "lsp" || first == "--lsp" || first == "sources" || first == "fmt" || first == "fix" || first == "doc" || first == "init" || first == "new" || first == "test") {
+        return notYet(first)
+    }
+    if (first == "check") {
+        return cmdCheckArgs(rest, opts)
+    }
+    if (first == "build" || first == "-exe" || first == "--executable") {
+        return cmdBuild(rest, opts)
+    }
+    if (first == "dump" || first == "-d" || first == "--debug") {
+        return cmdDump(rest, opts)
+    }
+    if (first == "run") {
+        return cmdRun(rest, opts)
+    }
+    if (startsWith(first, "-")) {
+        eprint("error: unknown option `${first}`")
+        usage()
+        return 2
+    }
+    return runFileWith(first, rest, opts)
+}
