@@ -6,6 +6,7 @@ import "../project/loader.bn"
 import "../project/paths.bn"
 import "../project/project.bn"
 import "host.bn"
+import "std/fs"
 
 /** A program that type-checked: its checker, its checked form and the warnings it got. */
 pub def type Compiled {
@@ -83,10 +84,100 @@ pub fun reportMessage(message: string) {
     }
 }
 
+/** Builds the bytecode of the packages a program imports as `name.bvmc`, like `package_bytecode` in `loader.rs`. */
+priv def struct HostBuilder() :: PackageBuilder {
+    [string] building = []
+
+    fun build(name: string, dir: string, project: Project, out: string): string {
+        if (!isStale(dir, out)) {
+            return ""
+        }
+        if (contains(building, name)) {
+            return "the bytecode of `${name}` imports itself through its packages"
+        }
+        building.push(name)
+        var problem = buildPackage(name, dir, project, out)
+        building = slice(building, 0, len(building) - 1)
+        return problem
+    }
+}
+
+priv var packageBuilder = new HostBuilder()
+
+/** A loader that builds the bytecode of imported packages when it is out of date. */
+pub fun newLoader(): Loader {
+    var loader = new Loader()
+    loader.builder = packageBuilder
+    return loader
+}
+
+priv fun buildPackage(name: string, dir: string, project: Project, out: string): string {
+    var err = new Problem()
+    var main = packageMain(dir, err)
+    if (main == null) {
+        return err.message
+    }
+    var loader = newLoader()
+    loader.project = project
+    loader.projectTried = true
+    var root = loader.loadFile(main, err)
+    if (root < 0) {
+        return err.message
+    }
+    var loaded = loader.finish(root)
+    readLibraries(loaded)
+    var r = checkProgram(loaded)
+    [LoadDiag] all = []
+    for d in loaded.diags {
+        all.push(d)
+    }
+    for d in r.diags {
+        all.push(d)
+    }
+    var first = ""
+    var failed = false
+    for d in sortedDiags(all) {
+        if (d.diag.severity == Severity.Error && !failed) {
+            failed = true
+            first = d.diag.message
+        }
+    }
+    var p = r.program
+    if (p == null || failed) {
+        return "the package `${name}` does not compile, so it has no bytecode: ${first}"
+    }
+    var parent = pathParent(out)
+    if (parent != null && parent != "") {
+        Files.makeDir(parent)
+    }
+    var problem = writeBytecode(moduleText(r.checker, p), r.checker.libPaths, out, "")
+    if (problem == "") {
+        return ""
+    }
+    var internal = "70\tinternal error: the compiler produced an invalid bvm module: "
+    if (startsWith(problem, internal)) {
+        return "the bytecode of `${name}` is invalid: ${substring(problem, len(internal), len(problem))}"
+    }
+    return substring(problem, len("1\terror: "), len(problem))
+}
+
+/** Reads the bytecode libraries the program imports, so the checker can import their functions. */
+pub fun readLibraries(loaded: Loaded) {
+    for l in loaded.libs {
+        l.info = libraryInfo(l.path)
+    }
+}
+
+/** The paths of the bytecode libraries the program imports, in the order the checker numbered them. */
+pub fun libraryPaths(c: Compiled): [string] {
+    return c.checker.libPaths
+}
+
 priv fun checked(loaded: Loaded, opts: Options): Compiled? {
     if (opts.noStd) {
         loaded.noStd = true
     }
+    readLibraries(loaded)
     var r = checkProgram(loaded)
     [LoadDiag] all = []
     for d in loaded.diags {
@@ -115,7 +206,7 @@ priv fun checked(loaded: Loaded, opts: Options): Compiled? {
 
 /** Loads and checks the program in `path`; prints its errors, or its warnings when it compiles. */
 pub fun compilePath(path: string, opts: Options): Compiled? {
-    var loader = new Loader()
+    var loader = newLoader()
     var err = new Problem()
     var root = loader.loadFile(path, err)
     if (root < 0) {
@@ -127,7 +218,7 @@ pub fun compilePath(path: string, opts: Options): Compiled? {
 
 /** Loads and checks a program given as source text named `name`, with imports relative to the working directory. */
 pub fun compileSource(name: string, src: string, opts: Options): Compiled? {
-    var loader = new Loader()
+    var loader = newLoader()
     var root = loader.loadSource(name, src, currentDir())
     return checked(loader.finish(root), opts)
 }

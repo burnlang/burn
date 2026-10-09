@@ -328,7 +328,11 @@ pub fun dumpDeclarations(file: string): string {
     if (root < 0) {
         return "error ${err.message}\n"
     }
-    var loaded = loader.finish(root)
+    return dumpDeclarationsOf(loader.finish(root))
+}
+
+/** `dumpDeclarations` for a program that is loaded already. */
+pub fun dumpDeclarationsOf(loaded: Loaded): string {
     var c = new Checker(loaded)
     c.declare()
     var out = ""

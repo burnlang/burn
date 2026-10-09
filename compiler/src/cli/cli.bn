@@ -2,6 +2,7 @@ import "../dump/checked.bn"
 import "../dump/declarations.bn"
 import "../dump/loading.bn"
 import "../dump/syntax.bn"
+import "../project/loader.bn"
 import "../project/paths.bn"
 import "../project/project.bn"
 import "compile.bn"
@@ -107,7 +108,7 @@ priv fun runFileWith(file: string, args: [string], opts: Options): int {
     if (c == null) {
         return 1
     }
-    return runModule(moduleOf(c), args)
+    return runModule(moduleOf(c), libraryPaths(c), args)
 }
 
 priv fun currentProject(err: Problem): Project? {
@@ -257,7 +258,7 @@ priv fun cmdEval(code: string, opts: Options): int {
     if (c == null) {
         return 1
     }
-    return runModule(moduleOf(c), [])
+    return runModule(moduleOf(c), libraryPaths(c), [])
 }
 
 priv fun cmdCheck(files: [string], opts: Options): int {
@@ -291,29 +292,19 @@ priv fun buildOne(file: string, output: string?, target: string, emitAsm: string
         return 1
     }
     var module = moduleOf(c)
-    if (target == "bar") {
-        var out = output ?? defaultOutput(file, "bar")
-        var problem = writeArchive(module, c.program.name, out)
-        if (problem != "") {
-            return fail(problem, 1)
-        }
-        print("wrote ${out}")
-        return 0
-    }
+    var libs = libraryPaths(c)
     var out = output ?? defaultOutput(file, "bvmc")
-    var invalid = checkModule(module)
-    if (invalid != "") {
-        eprint("internal error: the compiler produced an invalid bvm module: ${invalid}")
-        return 70
+    var problem = ""
+    if (target == "bar") {
+        out = output ?? defaultOutput(file, "bar")
+        problem = writeArchive(module, c.program.name, libs, out)
+    } else {
+        problem = writeBytecode(module, libs, out, emitAsm ?? "")
     }
-    if (emitAsm != null) {
-        if (!writeFile(emitAsm, module)) {
-            return fail("cannot write ${emitAsm}", 1)
-        }
-    }
-    var problem = writeBytecode(module, out)
     if (problem != "") {
-        return fail(problem, 1)
+        var tab = indexOf(problem, "\t")
+        eprint(substring(problem, tab + 1, len(problem)))
+        return toInt(substring(problem, 0, tab))
     }
     print("wrote ${out}")
     return 0
@@ -537,6 +528,25 @@ priv fun cmdRun(rest: [string], opts: Options): int {
     return runFileWith(mainPath(p), progArgs, opts)
 }
 
+/** A `--decls`, `--checked`, `--owned` or `--bvm` dump of `file`, with the bytecode libraries it imports. */
+priv fun dumpLoaded(file: string, mode: string): string {
+    var loader = newLoader()
+    var err = new Problem()
+    var root = loader.loadFile(file, err)
+    if (root < 0) {
+        return "error ${err.message}\n"
+    }
+    var loaded = loader.finish(root)
+    readLibraries(loaded)
+    if (mode == "--decls") {
+        return dumpDeclarationsOf(loaded)
+    }
+    if (mode == "--bvm") {
+        return dumpBvmOf(loaded)
+    }
+    return dumpCheckedOf(loaded, mode == "--owned")
+}
+
 priv fun cmdDump(rest: [string], opts: Options): int {
     if (len(rest) > 0 && contains(TEXT_DUMPS, rest[0])) {
         var mode = rest[0]
@@ -550,12 +560,8 @@ priv fun cmdDump(rest: [string], opts: Options): int {
                 write(dumpProject(f))
             } else if (mode == "--modules") {
                 write(dumpModules(f))
-            } else if (mode == "--decls") {
-                write(dumpDeclarations(f))
-            } else if (mode == "--checked" || mode == "--owned") {
-                write(dumpChecked(f, mode == "--owned"))
-            } else if (mode == "--bvm") {
-                write(dumpBvm(f))
+            } else if (mode == "--decls" || mode == "--checked" || mode == "--owned" || mode == "--bvm") {
+                write(dumpLoaded(f, mode))
             } else {
                 var src = readText(f)
                 if (src == null) {

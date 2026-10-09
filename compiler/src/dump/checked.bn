@@ -320,7 +320,11 @@ pub fun dumpChecked(file: string, owned: bool): string {
     if (root < 0) {
         return "error ${err.message}\n"
     }
-    var loaded = loader.finish(root)
+    return dumpCheckedOf(loader.finish(root), owned)
+}
+
+/** `dumpChecked` for a program that is loaded already. */
+pub fun dumpCheckedOf(loaded: Loaded, owned: bool): string {
     var r = checkProgram(loaded)
     var c = r.checker
     [string] out = []
@@ -349,7 +353,11 @@ pub fun dumpBvm(file: string): string {
     if (root < 0) {
         return "error ${err.message}\n"
     }
-    var loaded = loader.finish(root)
+    return dumpBvmOf(loader.finish(root))
+}
+
+/** `dumpBvm` for a program that is loaded already. */
+pub fun dumpBvmOf(loaded: Loaded): string {
     var r = checkProgram(loaded)
     var c = r.checker
     [string] out = []
