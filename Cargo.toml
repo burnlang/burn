@@ -3,7 +3,7 @@ resolver = "2"
 members = ["bvm", "bvm/runtime"]
 
 [workspace.package]
-version = "26.1.0-experimental-2"
+version = "26.1.0-experimental-3"
 edition = "2021"
 license = "GPL-3.0-only"
 rust-version = "1.85"

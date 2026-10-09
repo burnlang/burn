@@ -81,6 +81,23 @@ Burn itself and the toolchain released with it (the compiler, the standard libra
 - Packages that move with the year, such as bindings that follow Burn's releases, can use yearly versions too.
   Libraries with their own pace should use semantic versions, so the major number still says when code breaks.
 
+### Burn's releases
+
+Every release of Burn is tagged `v<version>` and listed in the
+[changelog](https://github.com/burnlang/burn/blob/master/CHANGELOG.md).
+
+| Version | Tag | What it is |
+| --- | --- | --- |
+| `26.1.0-experimental-1` | none | the version of the first development builds; it was never published |
+| `26.1.0-experimental-2` | `v26.1.0-experimental-2` | the first published release and the last whose compiler is written in Rust; it is the stage0 that builds the compiler written in Burn for the first time (`compiler/STAGE0`) |
+| `26.1.0-experimental-3` | `v26.1.0-experimental-3` | the first release written in Burn: the compiler, the command line and the language server run on bvm, and the compiler written in Rust is gone |
+| `26.1.0` | `v26.1.0` | the first stable release of 2026, after the experimental ones |
+| `26.2.0`, `26.3.0`, … | `v26.2.0`, … | the next releases of 2026; fixes to a release are `26.1.1`, `26.1.2`, … |
+| `27.1.0` | `v27.1.0` | the first release of 2027 |
+
+A project names the Burn it was written for with `burn = "26.1"` in `burn.toml`, and burnup uses the newest
+`26.1.x` for it ([details](./tooling/installation.mdx)).
+
 ### Tags
 
 - Never move a tag after publishing it; tag a new version instead. `burn.lock` pins the exact commit, so a moved

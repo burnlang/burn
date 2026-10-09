@@ -4,11 +4,11 @@ version = 4
 
 [[package]]
 name = "bvm"
-version = "26.1.0-experimental-2"
+version = "26.1.0-experimental-3"
 dependencies = [
  "bvm-runtime",
 ]
 
 [[package]]
 name = "bvm-runtime"
-version = "26.1.0-experimental-2"
+version = "26.1.0-experimental-3"
