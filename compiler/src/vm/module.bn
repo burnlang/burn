@@ -1,6 +1,6 @@
 import "../check/hir.bn"
 
-/** A bvm instruction, like `Op` in `crates/bvm/src/op.rs`; only the ones Burn code generation emits. */
+/** A bvm instruction, like `Op` in `bvm/src/op.rs`; only the ones Burn code generation emits. */
 pub def enum Op {
     Const(value: int),
     TypeConst(ty: int),
@@ -263,7 +263,7 @@ pub def type VAnnotation {
     [ValueArg] args
 }
 
-/** A bvm module, like `Module` in `crates/bvm/src/module.rs`. */
+/** A bvm module, like `Module` in `bvm/src/module.rs`. */
 pub def type VModule {
     string name
     [Desc] types

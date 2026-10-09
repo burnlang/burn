@@ -37,7 +37,7 @@ The Rust compiler can print every stage in a fixed text form. The Burn port prin
 | Declared types, functions, globals and their errors | `crates/burn/src/types.rs`, `check/` up to `declare` | `src/check/types.bn`, `src/check/check.bn`, `src/check/hir.bn` | `burn dump --decls <files...>` |
 | Checked program (functions, statements and expressions after type checking) and checker errors | `crates/burn/src/check/` | `src/check/body.bn` and the files next to it | `burn dump --checked <files...>` |
 | The program after ownership, with `Retain`, `Release` and their temporaries | `crates/burn/src/own.rs` | `src/lower/own.bn` | `burn dump --owned <files...>` |
-| The bvm module in bvm assembly | `crates/burn/src/vm/compile.rs`, `crates/bvm/src/asm.rs` | `src/vm/compile.bn`, `src/vm/asm.bn` | `burn dump --bvm <files...>` |
+| The bvm module in bvm assembly | `crates/burn/src/vm/compile.rs`, `bvm/src/asm.rs` | `src/vm/compile.bn`, `src/vm/asm.bn` | `burn dump --bvm <files...>` |
 
 Run the comparison by hand with:
 

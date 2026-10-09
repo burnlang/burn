@@ -7,7 +7,7 @@ fn main() {
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let runtime_src = manifest.join("../burn-runtime/src");
-    let bvm_src = manifest.join("../bvm/src");
+    let bvm_src = manifest.join("../../bvm/src");
     println!("cargo:rerun-if-changed={}", runtime_src.display());
     println!("cargo:rerun-if-changed={}", bvm_src.display());
     println!("cargo:rerun-if-changed=build.rs");

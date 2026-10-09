@@ -300,7 +300,7 @@ fn bvm_cmd() -> Command {
 
 #[test]
 fn command_line_tool_assembles_runs_and_disassembles() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let fib = root.join("examples/bvm/fib.bvm");
     let out = bvm_cmd().arg(&fib).output().unwrap();
     assert!(out.status.success());
