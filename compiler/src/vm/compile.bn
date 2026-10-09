@@ -348,7 +348,8 @@ fun annotation(target: Target, a: HirAnnotation): VAnnotation {
     return VAnnotation { target: target, name: a.name, args: out }
 }
 
-fun descOf(types: Types, t: int): Desc {
+/** The bvm type description of type `t`, like `Types::descs` in Rust. */
+pub fun descOf(types: Types, t: int): Desc {
     var k = types.kindOf(t)
     return match k {
         Ty.Error => Desc.Error

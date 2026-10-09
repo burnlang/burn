@@ -40,8 +40,10 @@ print(describe(new Circle(2)))
 | `burni app.bn` | compiled to a bvm module in memory and run right away, starts in milliseconds | development, scripts |
 | `burnc app.bn` | compiled to a portable `.bvmc` bytecode file, run with `burn` or `bvm` | distributing without a build per platform |
 | `burnc app.bn --target bar` | the program and its bytecode libraries in one runnable `.bar` archive | shipping applications that run everywhere bvm runs |
+| `burnc app.bn --target js` | compiled to a JavaScript file that runs with Node.js | running where Node.js is already installed |
 
-Either way the program runs on bvm with the same runtime, so it behaves the same way everywhere.
+On bvm the program always uses the same runtime, so it behaves the same way everywhere; the JavaScript build
+carries a runtime written in JavaScript that matches it.
 
 The virtual machine, [bvm](./bvm/overview.mdx), is not tied to Burn: it has its own assembly language, bytecode
 format, verifier and Rust API, and other languages can compile to it.

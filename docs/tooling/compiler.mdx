@@ -56,6 +56,10 @@ size and common sequences are fused into superinstructions for loops, comparison
 compiling a typical program takes a few milliseconds, so running a file feels like using an interpreter.
 `burnc` writes the same module to a `.bvmc` file, and `--target bar` into an archive.
 
+`--target js` turns the IR into one JavaScript file instead (`compiler/src/js/js.bn`), with a runtime written in
+JavaScript in front of it (`lib/js/prelude.js`): every function becomes a JavaScript function, records become arrays
+tagged with their type, and checked operations call small helpers that report the same runtime errors as bvm.
+
 ## Without the standard library
 
 Programs built with `--no-std` or `std = false` link only the built-in core of the runtime, and the checker rejects

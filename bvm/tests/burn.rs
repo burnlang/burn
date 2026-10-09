@@ -90,6 +90,35 @@ fn vm_matches_expected_output() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+fn has_node() -> bool {
+    Command::new("node").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+}
+
+#[test]
+fn js_matches_vm() {
+    if !has_node() {
+        return;
+    }
+    let root = root();
+    let tmp = temp_dir("js");
+    let mut failures = Vec::new();
+    for (file, expected) in cases() {
+        let rel = file.strip_prefix(&root).unwrap();
+        let js = tmp.join(format!("{}.js", file.file_stem().unwrap().to_string_lossy()));
+        let (build_out, code) = output(burn().current_dir(&root).arg("build").arg(rel).arg("--target").arg("js").arg("-o").arg(&js));
+        if code != 0 {
+            failures.push(format!("{}: js build failed\n{}", rel.display(), build_out));
+            continue;
+        }
+        let (out, _) = output(Command::new("node").current_dir(&root).arg(&js));
+        if out != expected {
+            failures.push(format!("{}:\n--- expected\n{}\n--- got\n{}", rel.display(), expected, out));
+        }
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 #[test]
 fn compile_errors_point_at_the_right_line() {
     let root = root();
@@ -235,6 +264,17 @@ fn the_doc_assets_written_in_burn_are_up_to_date() {
     assert!(
         generated == std::fs::read_to_string(root.join("compiler/src/doc/assets.bn")).unwrap(),
         "compiler/src/doc/assets.bn is out of date; run `burn compiler/src/bin/gendoc.bn > compiler/src/doc/assets.bn`"
+    );
+}
+
+#[test]
+fn the_javascript_prelude_written_in_burn_is_up_to_date() {
+    let root = root();
+    let (generated, code) = output(burn().current_dir(&root).arg("compiler/src/bin/genjs.bn"));
+    assert_eq!(code, 0, "{}", generated);
+    assert!(
+        generated == std::fs::read_to_string(root.join("compiler/src/js/prelude.bn")).unwrap(),
+        "compiler/src/js/prelude.bn is out of date; run `burn compiler/src/bin/genjs.bn > compiler/src/js/prelude.bn`"
     );
 }
 
@@ -463,7 +503,7 @@ fn stdout_of(cmd: &mut Command) -> (String, String, i32) {
 }
 
 #[test]
-fn mixins_rewrite_bytecode() {
+fn mixins_rewrite_bytecode_and_are_rejected_for_javascript() {
     let root = root();
     let expected = std::fs::read_to_string(root.join("tests/mixins/mixins.out")).unwrap();
     let (out, err, code) = stdout_of(burn().current_dir(&root).arg("tests/mixins/mixins.bn"));
@@ -481,6 +521,14 @@ fn mixins_rewrite_bytecode() {
     assert_eq!(code, 0, "{}", err);
     let (out, _, _) = stdout_of(burn().arg(&archive));
     assert_eq!(out, expected);
+    let (_, err, code) = stdout_of(
+        burn()
+            .current_dir(&root)
+            .args(["build", "--target", "js", "tests/mixins/mixins.bn", "-o"])
+            .arg(dir.join("m.js")),
+    );
+    assert_ne!(code, 0);
+    assert!(err.contains("mixin"), "{}", err);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -511,7 +559,7 @@ fn bytecode_libraries_run_on_bvm_and_in_archives() {
     assert_eq!(out, expected, "static bvmc: {}", err);
     let (_, err, code) = stdout_of(burn().args(["build", "--target", "js"]).arg(&app).arg("-o").arg(dir.join("app.js")));
     assert_ne!(code, 0);
-    assert!(err.contains("unknown target `js`"), "{}", err);
+    assert!(err.contains("bytecode library"), "{}", err);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -618,9 +666,18 @@ fn init_creates_projects_that_build_and_import_packages() {
     assert_eq!(code, 0, "{}", out);
     assert!(out.contains("case"), "{}", out);
 
-    let (out, code) = run(&dir, &["init", "example.com/ada/app", "--target", "js", "--no-git"]);
-    assert_eq!(code, 2, "{}", out);
-    assert!(out.contains("unknown target `js`"), "{}", out);
+    let (out, code) = run(&dir, &["init", "example.com/ada/web", "--target", "js", "--no-git"]);
+    assert_eq!(code, 0, "{}", out);
+    let web = dir.join("web");
+    let toml = std::fs::read_to_string(web.join("burn.toml")).unwrap();
+    assert!(toml.contains("target = \"js\"") && toml.contains("node build/web.js"), "{}", toml);
+    let (out, code) = run(&web, &["build"]);
+    assert_eq!(code, 0, "{}", out);
+    assert!(out.contains("building example.com/ada/web 0.1.0 (js)"), "{}", out);
+    if has_node() {
+        let (out, _) = output(Command::new("node").arg(web.join("build/web.js")));
+        assert_eq!(out, "Hello from web!\n");
+    }
     let (out, code) = run(&dir, &["init", "example.com/ada/app", "--target", "bar", "--no-git"]);
     assert_eq!(code, 0, "{}", out);
     let app = dir.join("app");
