@@ -43,6 +43,10 @@ fn toolchain() -> &'static Path {
         for tool in ["burn", "burni", "burnc", "burn-lsp"] {
             std::os::unix::fs::symlink(bvm_exe(), dir.join("bin").join(tool)).unwrap();
         }
+        if native_supported() {
+            let (out, code) = output(Command::new("sh").arg(root().join("scripts/native-runtime.sh")).arg(dir.join("share/burn/lib")));
+            assert_eq!(code, 0, "{}", out);
+        }
         dir
     })
 }
@@ -87,6 +91,48 @@ fn vm_matches_expected_output() {
             failures.push(format!("{}:\n--- expected\n{}\n--- got\n{}", rel.display(), expected, out));
         }
     }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+fn native_supported() -> bool {
+    cfg!(all(target_arch = "x86_64", any(target_os = "linux", target_os = "macos")))
+}
+
+#[test]
+fn native_matches_vm() {
+    if !native_supported() {
+        return;
+    }
+    let root = root();
+    let tmp = temp_dir("native");
+    let mut failures = Vec::new();
+    for (file, expected) in cases() {
+        let rel = file.strip_prefix(&root).unwrap();
+        let exe = tmp.join(file.file_stem().unwrap());
+        let (build_out, code) = output(burn().current_dir(&root).arg("build").arg(rel).arg("-o").arg(&exe));
+        if code != 0 {
+            failures.push(format!("{}: build failed\n{}", rel.display(), build_out));
+            continue;
+        }
+        for threshold in [None, Some("16384")] {
+            let mut cmd = Command::new(&exe);
+            cmd.current_dir(&root);
+            if let Some(t) = threshold {
+                cmd.env("BURN_GC_THRESHOLD", t);
+            }
+            let (out, _) = output(&mut cmd);
+            if out != expected {
+                failures.push(format!(
+                    "{} (gc threshold {:?}):\n--- expected\n{}\n--- got\n{}",
+                    rel.display(),
+                    threshold,
+                    expected,
+                    out
+                ));
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
@@ -363,18 +409,18 @@ fn workspaces_build_every_member() {
     let ws = dir.join("game");
     let run = |cwd: &Path, args: &[&str]| output(burn().current_dir(cwd).args(args));
     let toml = std::fs::read_to_string(ws.join("burn.toml")).unwrap();
-    assert!(toml.contains("members = [\"common\", \"bvm\", \"bar\"]"), "{}", toml);
+    assert!(toml.contains("members = [\"common\", \"native\", \"js\", \"bvm\"]"), "{}", toml);
     let (out, code) = run(&ws, &["build"]);
     assert_eq!(code, 0, "{}", out);
-    for f in ["bvm/build/bvm.bvmc", "bar/build/bar.bar"] {
+    for f in ["native/build/native", "js/build/js.js", "bvm/build/bvm.bvmc"] {
         assert!(ws.join(f).is_file(), "{} missing after:\n{}", f, out);
     }
-    for t in ["bvm", "bar"] {
+    for t in ["native", "js", "bvm"] {
         assert_eq!(run(&ws, &["run", "-p", t]), (format!("Hello from {}!\n", t), 0));
     }
     let (out, code) = run(&ws, &["run"]);
-    assert!(code != 0 && out.contains("pick one with `-p` (bvm, bar)"), "{}", out);
-    assert_eq!(run(&ws.join("bvm"), &["run"]), ("Hello from bvm!\n".to_string(), 0));
+    assert!(code != 0 && out.contains("pick one with `-p` (native, js, bvm)"), "{}", out);
+    assert_eq!(run(&ws.join("native"), &["run"]), ("Hello from native!\n".to_string(), 0));
     let (out, code) = run(&ws, &["run", "-p", "nope"]);
     assert!(code != 0 && out.contains("has no member `nope`"), "{}", out);
     let (out, code) = run(&ws, &["init", "tools", "--lib", "--no-git"]);
@@ -383,11 +429,11 @@ fn workspaces_build_every_member() {
         .unwrap()
         .contains("name = \"github.com/ada/game/tools\""));
     std::fs::write(
-        ws.join("bvm/src/main.bn"),
-        "import \"github.com/ada/game/common\"\nimport \"github.com/ada/game/tools\"\n\nfun main() {\n    print(greeting(\"bvm\"), greet(\"tools\"))\n}\n",
+        ws.join("native/src/main.bn"),
+        "import \"github.com/ada/game/common\"\nimport \"github.com/ada/game/tools\"\n\nfun main() {\n    print(greeting(\"native\"), greet(\"tools\"))\n}\n",
     )
     .unwrap();
-    assert_eq!(run(&ws, &["run", "-p", "bvm"]), ("Hello from bvm! Hello, tools!\n".to_string(), 0));
+    assert_eq!(run(&ws, &["run", "-p", "native"]), ("Hello from native! Hello, tools!\n".to_string(), 0));
     let (out, code) = run(&ws, &["test"]);
     assert!(
         code == 0 && out.contains("common/tests/main.bn ... ok") && out.contains("tools/tests/main.bn ... ok") && out.contains("2 passed"),
@@ -395,7 +441,7 @@ fn workspaces_build_every_member() {
         out
     );
     assert_eq!(run(&ws, &["check"]).1, 0);
-    let (out, code) = run(&ws, &["check", "-p", "bvm"]);
+    let (out, code) = run(&ws, &["check", "-p", "native"]);
     assert_eq!(code, 0, "{}", out);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -503,7 +549,7 @@ fn stdout_of(cmd: &mut Command) -> (String, String, i32) {
 }
 
 #[test]
-fn mixins_rewrite_bytecode_and_are_rejected_for_javascript() {
+fn mixins_rewrite_bytecode_and_are_rejected_for_native_code_and_javascript() {
     let root = root();
     let expected = std::fs::read_to_string(root.join("tests/mixins/mixins.out")).unwrap();
     let (out, err, code) = stdout_of(burn().current_dir(&root).arg("tests/mixins/mixins.bn"));
@@ -521,6 +567,11 @@ fn mixins_rewrite_bytecode_and_are_rejected_for_javascript() {
     assert_eq!(code, 0, "{}", err);
     let (out, _, _) = stdout_of(burn().arg(&archive));
     assert_eq!(out, expected);
+    if native_supported() {
+        let (_, err, code) = stdout_of(burn().current_dir(&root).args(["build", "tests/mixins/mixins.bn", "-o"]).arg(dir.join("m")));
+        assert_ne!(code, 0);
+        assert!(err.contains("compiled to native code; mixins can only change bvm bytecode"), "{}", err);
+    }
     let (_, err, code) = stdout_of(
         burn()
             .current_dir(&root)
@@ -533,7 +584,7 @@ fn mixins_rewrite_bytecode_and_are_rejected_for_javascript() {
 }
 
 #[test]
-fn bytecode_libraries_run_on_bvm_and_in_archives() {
+fn bytecode_libraries_run_on_bvm_in_archives_and_in_native_executables() {
     let root = root();
     let expected = std::fs::read_to_string(root.join("tests/libs/app.out")).unwrap();
     let dir = temp_dir("libs");
@@ -557,6 +608,17 @@ fn bytecode_libraries_run_on_bvm_and_in_archives() {
     assert_eq!(code, 0, "{}", err);
     let (out, err, _) = stdout_of(burn().arg(dir.join("static.bvmc")));
     assert_eq!(out, expected, "static bvmc: {}", err);
+    if native_supported() {
+        let (out, err, _) = stdout_of(burn().args(["run", "--native"]).arg(&app));
+        assert_eq!(out, expected, "native: {}", err);
+        let exe = dir.join("bundled");
+        let (_, err, code) = stdout_of(burn().arg("build").arg(dir.join("app.bar")).arg("-o").arg(&exe));
+        assert_eq!(code, 0, "{}", err);
+        let (out, err, _) = stdout_of(&mut Command::new(&exe));
+        assert_eq!(out, expected, "bundled bar: {}", err);
+        let (out, _, _) = stdout_of(Command::new(&exe).env("BURN_GC_THRESHOLD", "4096"));
+        assert_eq!(out, expected, "bundled bar with a small GC threshold");
+    }
     let (_, err, code) = stdout_of(burn().args(["build", "--target", "js"]).arg(&app).arg("-o").arg(dir.join("app.js")));
     assert_ne!(code, 0);
     assert!(err.contains("bytecode library"), "{}", err);
@@ -736,6 +798,11 @@ fn runaway_programs_stop_at_the_heap_limit() {
     let (out, code) = output(burn().env("BURN_MAX_HEAP_MB", "64").arg(&file));
     assert_eq!(code, 1, "{}", out);
     assert!(out.contains("out of memory") && out.contains("BURN_MAX_HEAP_MB"), "{}", out);
+    if native_supported() {
+        let (out, code) = output(burn().env("BURN_MAX_HEAP_MB", "64").args(["run", "--native"]).arg(&file));
+        assert_eq!(code, 1, "{}", out);
+        assert!(out.contains("out of memory"), "{}", out);
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -764,6 +831,10 @@ fn values_that_only_reference_each_other_are_freed() {
     .unwrap();
     let (out, code) = output(burn().env("BURN_MAX_HEAP_MB", "24").arg(&file));
     assert_eq!((out.as_str(), code), ("600000\n", 0));
+    if native_supported() {
+        let (out, code) = output(burn().env("BURN_MAX_HEAP_MB", "24").args(["run", "--native"]).arg(&file));
+        assert_eq!((out.as_str(), code), ("600000\n", 0));
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -866,6 +937,10 @@ fn apps_can_be_imported_as_bytecode_and_changed_with_mixins() {
     let (out, code) = run(&m, &["run"]);
     assert_eq!((out.as_str(), code), ("score 60\n", 0));
     assert!(dir.join("game/build/game.bvmc").is_file());
+    if native_supported() {
+        let (out, code) = run(&m, &["run", "--native"]);
+        assert_eq!((out.as_str(), code), ("score 60\n", 0));
+    }
     std::thread::sleep(std::time::Duration::from_millis(1100));
     std::fs::write(
         &game,
@@ -882,7 +957,7 @@ fn apps_can_be_imported_as_bytecode_and_changed_with_mixins() {
 }
 
 #[test]
-fn programs_without_the_standard_runtime_behave_the_same() {
+fn programs_without_the_standard_runtime_are_small_and_behave_the_same() {
     let root = root();
     let tmp = temp_dir("nostd");
     let mut failures = Vec::new();
@@ -909,9 +984,51 @@ fn programs_without_the_standard_runtime_behave_the_same() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
     assert!(ran >= 15, "only {} cases run without the standard runtime", ran);
 
+    if native_supported() {
+        for (file, expected) in cases() {
+            let rel = file.strip_prefix(&root).unwrap();
+            let (_, code) = output(burn().current_dir(&root).args(["check", "--no-std"]).arg(rel));
+            if code != 0 {
+                continue;
+            }
+            let exe = tmp.join(file.file_stem().unwrap());
+            let (build_out, code) = output(burn().current_dir(&root).args(["build", "--no-std"]).arg(rel).arg("-o").arg(&exe));
+            if code != 0 {
+                failures.push(format!("{}: build failed\n{}", rel.display(), build_out));
+                continue;
+            }
+            let (out, _) = output(Command::new(&exe).current_dir(&root).env("BURN_RC_CHECK", "1").env("BURN_GC_THRESHOLD", "4096"));
+            if out != expected {
+                failures.push(format!("{} (native):\n--- expected\n{}\n--- got\n{}", rel.display(), expected, out));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+
+        let hello = tmp.join("hello.bn");
+        std::fs::write(&hello, "fun main() {\n    print(\"hello\")\n}\n").unwrap();
+        let size = |no_std: bool| {
+            let exe = tmp.join(if no_std { "small" } else { "full" });
+            let mut cmd = burn();
+            cmd.arg("build").arg(&hello).arg("-o").arg(&exe);
+            if no_std {
+                cmd.arg("--no-std");
+            }
+            let (out, code) = output(&mut cmd);
+            assert_eq!(code, 0, "{}", out);
+            assert_eq!(output(&mut Command::new(&exe)).0, "hello\n");
+            std::fs::metadata(&exe).unwrap().len()
+        };
+        let (small, full) = (size(true), size(false));
+        assert!(small * 4 < full, "no-std hello is {} bytes, the full one {}", small, full);
+    }
+
     let project = tmp.join("app");
     std::fs::create_dir_all(project.join("src")).unwrap();
-    std::fs::write(project.join("burn.toml"), "[package]\nname = \"example.com/ada/app\"\nstd = false\n").unwrap();
+    std::fs::write(
+        project.join("burn.toml"),
+        "[package]\nname = \"example.com/ada/app\"\ntarget = \"bvm\"\nstd = false\n",
+    )
+    .unwrap();
     std::fs::write(
         project.join("src/main.bn"),
         "import \"std/http\"\nimport \"std/strings\"\n\nasync fun later(): int {\n    return 1\n}\n\nfun main() {\n    print(toJSON([1]), await later())\n}\n",
@@ -952,7 +1069,7 @@ fn programs_without_the_standard_runtime_behave_the_same() {
 }
 
 #[test]
-fn uint64_uses_all_64_bits() {
+fn uint64_uses_all_64_bits_on_bvm_and_natively() {
     let dir = temp_dir("uint64");
     let src = dir.join("hash.bn");
     std::fs::write(
@@ -965,6 +1082,20 @@ fn uint64_uses_all_64_bits() {
     assert_eq!(code, 1, "{}", out);
     assert!(out.starts_with(expected), "{}", out);
     assert!(out.contains("integer overflow: 18446744073709551615 + 1 does not fit in uint64"), "{}", out);
+    if native_supported() {
+        for no_std in [false, true] {
+            let exe = dir.join(if no_std { "small" } else { "full" });
+            let mut cmd = burn();
+            cmd.arg("build").arg(&src).arg("-o").arg(&exe);
+            if no_std {
+                cmd.arg("--no-std");
+            }
+            let (build, code) = output(&mut cmd);
+            assert_eq!(code, 0, "{}", build);
+            let (native, _) = output(&mut Command::new(&exe));
+            assert_eq!(native, out);
+        }
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 

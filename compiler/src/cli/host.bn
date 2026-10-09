@@ -90,3 +90,23 @@ pub fun exeDir(): string?
  */
 @Native("burn.runIn")
 pub fun runIn(program: string, args: [string], dir: string): string
+
+/** The operating system and processor this toolchain runs on, such as `linux-x86_64` or `macos-aarch64`. */
+@Native("burn.platform")
+pub fun platform(): string
+
+/** The folder that holds the command line module, `share/burn` in a toolchain, or null when it is unknown. */
+@Native("burn.shareDir")
+pub fun shareDir(): string?
+
+/** The bytes of the file at `path`, or null when it cannot be read. */
+@Native("burn.fileBytes")
+pub fun fileBytes(path: string): [int]?
+
+/** The names the functions of the bytecode library at `path` can be targeted by, one per line, or `"error"` and why, split by a tab. */
+@Native("burn.libraryFunctions")
+pub fun libraryFunctions(path: string): string
+
+/** Checks that the bvm module or archive at `path` loads and has an entry, and writes it as bytecode to `out`. Returns `""` or the error. */
+@Native("burn.bundle")
+pub fun bundleFile(path: string, out: string): string

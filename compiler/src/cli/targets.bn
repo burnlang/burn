@@ -121,6 +121,8 @@ pub fun outputFor(p: Project, e: Entry, target: string): string {
         ext = ".bar"
     } else if (target == "js" || target == "javascript" || target == "node") {
         ext = ".js"
+    } else if (target == "native" || target == "exe" || target == "asm") {
+        ext = ""
     }
     if (e.role == Role.Main) {
         var o = p.manifest.output

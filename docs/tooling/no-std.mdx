@@ -1,6 +1,6 @@
 ---
 title: Building without the standard library
-description: Programs that use only the built-in core of the language, without the standard library.
+description: Small native executables that use only the built-in core of the language, without the standard library.
 order: 22
 ---
 
@@ -8,7 +8,12 @@ order: 22
 
 Like `no_std` in Rust, a program can be built with only the core of the language: no standard library modules and none
 of the runtime behind them (threads for `async fun`, the HTTP client, JSON, processes, time zones and bytecode
-libraries). The checker rejects everything else, so such a program depends on nothing but the core runtime:
+libraries). The checker rejects everything else, so such a program depends on nothing but the core runtime, and a
+native executable gets much smaller:
+
+| Program | With the standard library | Without |
+| --- | --- | --- |
+| `print("hello")` | 345 KB | 35 KB |
 
 ```sh
 burn build app.bn --no-std
@@ -24,7 +29,7 @@ std = false
 
 The language does not change. Strings, arrays, maps, structs, interfaces, generics, closures, `match`, smart casts,
 templates and automatic memory all work the same way, and so do runtime errors, overflow checks and stack overflow
-detection.
+detection. The executable only needs the C library and `libm`.
 
 ## What is available
 

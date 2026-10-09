@@ -3,7 +3,7 @@ import "../project/project.bn"
 import "std/fs"
 import "std/process"
 
-priv const USAGE = "usage: burn init <name> [dir] [--lib] [--target bvm|bar|js] [--no-git]\n       burn init <name> [dir] --workspace [--targets bvm,bar,js] [--no-git]\n\n  <name>       where the code lives, for example github.com/you/hello\n  [dir]        the directory to create it in (default: the last part of the name)\n  --lib        create a library instead of an app\n  --target     what `burn build` produces: bvm bytecode (default), a bar archive or JavaScript\n  --workspace  create a workspace: a `common` library and one app per target that uses it\n  --targets    the apps of the workspace (default: bvm,bar)\n  --no-git     do not create a git repository\n\nInside a workspace, a new project is added to its members."
+priv const USAGE = "usage: burn init <name> [dir] [--lib] [--target native|js|bvm|bar] [--no-git]\n       burn init <name> [dir] --workspace [--targets native,js,bvm,bar] [--no-git]\n\n  <name>       where the code lives, for example github.com/you/hello\n  [dir]        the directory to create it in (default: the last part of the name)\n  --lib        create a library instead of an app\n  --target     what `burn build` produces: native (default), js, bvm or bar\n  --workspace  create a workspace: a `common` library and one app per target that uses it\n  --targets    the apps of the workspace (default: native,js,bvm)\n  --no-git     do not create a git repository\n\nInside a workspace, a new project is added to its members."
 
 priv fun failWith(message: string, help: string): int {
     eprint("error: ${message}")
@@ -20,7 +20,10 @@ priv fun buildCommand(short: string, target: string, main: string): string {
     if (target == "bar") {
         return "burnc ${main} --target bar -o build/${short}.bar"
     }
-    return "burnc ${main} -o build/${short}.bvmc"
+    if (target == "bvm") {
+        return "burnc ${main} --target bvm -o build/${short}.bvmc"
+    }
+    return "burnc ${main} -o build/${short}"
 }
 
 priv fun startCommand(short: string, target: string): string {
@@ -30,7 +33,10 @@ priv fun startCommand(short: string, target: string): string {
     if (target == "bar") {
         return "./build/${short}.bar"
     }
-    return "burn build/${short}.bvmc"
+    if (target == "bvm") {
+        return "bvm build/${short}.bvmc"
+    }
+    return "./build/${short}"
 }
 
 /** The `burn.toml` of a new project. */
@@ -78,7 +84,7 @@ priv fun workspaceFiles(name: string, targets: [string]): [NewFile] {
     [NewFile] out = [
         NewFile { path: "burn.toml", text: "[workspace]\nname = \"${name}\"\nmembers = [${join(members, ", ")}]\n" },
         NewFile { path: ".gitignore", text: "build/\n" },
-        NewFile { path: "common/burn.toml", text: manifestText(common, ProjectKind.Lib, "bvm") },
+        NewFile { path: "common/burn.toml", text: manifestText(common, ProjectKind.Lib, "native") },
         NewFile { path: "common/src/lib.bn", text: "/**\n * The code every app shares.\n *\n * @param app the app that runs\n * @return a greeting that names the app\n */\npub fun greeting(app: string): string {\n    return \"Hello from \${app}!\"\n}\n" },
         NewFile { path: "common/tests/main.bn", text: "import \"std/testing\"\nimport \"${common}\"\n\nassert(greeting(\"tests\") == \"Hello from tests!\")\n" }
     ]
@@ -182,10 +188,10 @@ pub fun cmdInit(args: [string]): int {
     string? name = null
     string? dir = null
     var kind = ProjectKind.App
-    var target = "bvm"
+    var target = "native"
     var git = true
     var workspace = false
-    [string] targets = ["bvm", "bar"]
+    [string] targets = ["native", "js", "bvm"]
     var i = 0
     while (i < len(args)) {
         var a = args[i]
@@ -236,8 +242,11 @@ pub fun cmdInit(args: [string]): int {
     if (target == "javascript" || target == "node") {
         target = "js"
     }
-    if (target != "bvm" && target != "bar" && target != "js") {
-        return failWith("unknown target `${target}`", "choose `bvm`, `bar` or `js`")
+    if (target == "exe") {
+        target = "native"
+    }
+    if (target != "native" && target != "js" && target != "bvm" && target != "bar") {
+        return failWith("unknown target `${target}`", "choose `native`, `js`, `bvm` or `bar`")
     }
     if (name == null) {
         eprint(USAGE)
@@ -272,15 +281,15 @@ pub fun cmdInit(args: [string]): int {
     if (workspace) {
         [string] ts = []
         for t in targets {
-            if (t != "bvm" && t != "bar" && t != "js") {
-                return failWith("unknown target `${t}`", "choose from bvm, bar and js, like `--targets bvm,js`")
+            if (t != "native" && t != "js" && t != "bvm" && t != "bar") {
+                return failWith("unknown target `${t}`", "choose from native, js, bvm and bar, like `--targets native,js`")
             }
             if (!contains(ts, t)) {
                 ts.push(t)
             }
         }
         if (len(ts) == 0) {
-            return failWith("a workspace needs at least one target", "for example `--targets bvm`")
+            return failWith("a workspace needs at least one target", "for example `--targets native`")
         }
         for f in workspaceFiles(full, ts) {
             if (isFile(pathJoin(targetDir, f.path)) || isDir(pathJoin(targetDir, f.path))) {

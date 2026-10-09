@@ -15,14 +15,18 @@ This page lists every subcommand of `burn`. The shorter toolchain commands map o
 | `burn <file.bn> [args...]` | type-check and run on bvm |
 | `burn <file.bvm\|file.bvmc\|file.bar> [args...]` | run a bvm module or archive |
 | `burn run <file.bn> [args...]` | the same |
-| `burn init <name> [--lib] [--target bvm\|bar\|js] [--workspace]` | create a project ([details](./packages.mdx)) |
+| `burn init <name> [--lib] [--target native\|js\|bvm\|bar] [--workspace]` | create a project ([details](./packages.mdx)) |
 | `burn run`, `burn build`, `burn check` | without a file, work on the project in the current folder |
+| `burn run --native <file.bn> [args...]` | compile to machine code and run it |
 | `burn run --bin <name>`, `burn run --example <name>` | run a program of the project's `src/bin/` or `examples/` |
-| `burn build <file.bn>` | write a `.bvmc` bytecode module next to the source file (imported bytecode libraries are linked in) |
+| `burn build <file.bn>` | build a native executable next to the source file |
 | `burn build <file.bn> -o <path>` | choose the output path |
 | `burn build <file.bn> --target bar` | write a runnable `.bar` archive with the program and its bytecode libraries |
 | `burn build <file.bn> --target js` | write a `.js` file that runs with Node.js |
-| `burn build <file.bn> --emit-asm out.bvm` | also write the bvm assembly |
+| `burn build <file.bn> --target bvm` | write a `.bvmc` bytecode module (imported bytecode libraries are linked in) |
+| `burn build <file.bar\|file.bvmc>` | build a native executable that runs the bytecode |
+| `burn build <file.bn> --emit-asm out.s` | also keep the generated assembly (bvm assembly with `--target bvm`) |
+| `burn build <file.bn> --no-strip` | keep symbols in the executable |
 | `burn build <file.bn> --no-std` | build [without the standard library](./no-std.mdx), like `std = false` in burn.toml |
 | `burn test [filter...]` | run the tests in the project's `tests/` folder |
 | `burn check <files...>` | report errors and warnings without running |
@@ -34,6 +38,7 @@ This page lists every subcommand of `burn`. The shorter toolchain commands map o
 | `burn lsp` | language server over stdio ([details](./editors.mdx)) |
 | `burn sources` | write the sources of the standard library and the built-ins for reading and print the folder |
 | `burn dump --bytecode <file.bn>` | print the bvm assembly of a program, linked with its bytecode libraries |
+| `burn dump --asm <file.bn>`, `burn dump --js <file.bn>` | print the x86-64 assembly or the JavaScript of a program |
 | `burn dump --tokens <files...>` | print the tokens and lexer errors of each file, one token per line with byte offsets |
 | `burn dump --ast <files...>` | print the syntax tree and parse errors of each file, one node per line with byte spans |
 | `burn dump --diagnostics <files...>` | print the lexer and parser errors of each file as `burn check` shows them, without colours |
@@ -53,6 +58,7 @@ The older flags still work: `-r`, `-e`, `-exe <file>` and `-d`.
 
 | Variable | Effect |
 | --- | --- |
+| `BURN_CC` / `CC` | linker driver used by `burn build` (default `cc`) |
 | `NO_COLOR` | disable colored diagnostics |
 | `BURN_CLI_BVM` | the command line module bvm runs when it is started as `burn`, `burni`, `burnc` or `burn-lsp` (default `share/burn/burn.bvm` next to its `bin/`) |
 | `BURN_HOME` | where packages are found (default `~/.burn`, packages in `packages/`) |

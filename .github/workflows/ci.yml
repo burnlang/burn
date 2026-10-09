@@ -27,10 +27,12 @@ jobs:
           "$RUNNER_TEMP/burn/bin/burnfmt" --check examples/*.bn lib/std/*.bn lib/tools/*.bn
           "$RUNNER_TEMP/burn/bin/burni" examples/fib.bn
           "$RUNNER_TEMP/burn/bin/burn" run examples/fib.bn
+          "$RUNNER_TEMP/burn/bin/burn" run --native examples/fib.bn
+          "$RUNNER_TEMP/burn/bin/burnc" examples/fib.bn --target js -o "$RUNNER_TEMP/fib.js" && node "$RUNNER_TEMP/fib.js"
           "$RUNNER_TEMP/burn/bin/bvm" examples/bvm/fib.bvm
           "$RUNNER_TEMP/burn/bin/bvm" pack examples/bvm/mixins/app.bvm examples/bvm/mixins/greetlib.bvm examples/bvm/mixins/mods.bvm -o "$RUNNER_TEMP/mixins.bar"
           PATH="$RUNNER_TEMP/burn/bin:$PATH" "$RUNNER_TEMP/mixins.bar"
-          cd "$RUNNER_TEMP" && PATH="$RUNNER_TEMP/burn/bin:$PATH" burn init github.com/ci/hello --no-git && cd hello && PATH="$RUNNER_TEMP/burn/bin:$PATH" burn build && "$RUNNER_TEMP/burn/bin/burn" build/hello.bvmc
+          cd "$RUNNER_TEMP" && PATH="$RUNNER_TEMP/burn/bin:$PATH" burn init github.com/ci/hello --no-git && cd hello && PATH="$RUNNER_TEMP/burn/bin:$PATH" burn build && ./build/hello
 
   stage0:
     name: The Burn compiler builds with stage0

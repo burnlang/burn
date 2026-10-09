@@ -13,11 +13,14 @@ import "compile.bn"
 import "doc.bn"
 import "host.bn"
 import "init.bn"
+import "native.bn"
 import "repl.bn"
 import "std/fs"
 import "std/process"
 import "targets.bn"
 import "tools.bn"
+
+priv const TARGETS = ["native", "exe", "asm", "js", "javascript", "node", "bvm", "bytecode", "bar"]
 
 priv const TEXT_DUMPS = ["--tokens", "--ast", "--diagnostics", "--toml", "--project", "--modules", "--decls", "--checked", "--owned", "--bvm", "--index"]
 
@@ -29,17 +32,19 @@ priv fun usage() {
         "  burn <file.bn> [args...]            run a program instantly on the Burn VM (bvm)",
         "  burn <file.bvm|file.bvmc|file.bar> [args...]",
         "                                      run a bvm module or archive",
-        "  burn init <name> [--lib] [--target <bvm|bar|js>]",
+        "  burn init <name> [--lib] [--target <native|js|bvm|bar>]",
         "                                      create a project, named like github.com/you/app",
-        "  burn run [file.bn] [args...]        run a program, or the project's main file",
+        "  burn run [file.bn] [--native] [args...]",
+        "                                      run a program, or the project's main file; --native compiles it first",
         "      --bin <name>                    run src/bin/<name>.bn of the project",
         "      --example <name>                run examples/<name>.bn of the project",
-        "  burn build [file.bn] [options]      compile to bvm bytecode, or build the project",
+        "  burn build [file.bn] [options]      compile to a standalone executable, or build the project",
         "                                      (its main file and every program in src/bin, into build/)",
         "      --bin <name>, --example <name>  build only that program",
-        "      -o, --output <path>             output file (default: the file name with .bvmc, .bar or .js)",
-        "      --target <bvm|bar|js>           a bvm module (default), a runnable archive or JavaScript for Node.js",
-        "      --emit-asm <path>               also write the bvm assembly",
+        "      -o, --output <path>             output file (default: file name without .bn)",
+        "      --target <native|js|bvm|bar>    native executable (default), JavaScript, bvm bytecode or a runnable archive",
+        "      --emit-asm <path>               also write the generated assembly (x86-64, or bvm text)",
+        "      --no-strip                      keep symbols in the executable",
         "      --no-std                        build without the standard library (same as `std = false` in burn.toml)",
         "  burn check [files...]               type-check without running (default: the whole project)",
         "  burn test [filter...]               run every test in the project's tests/ folder",
@@ -50,7 +55,7 @@ priv fun usage() {
         "  burn doc [files...] [-o <dir>]      generate HTML documentation from Burndoc comments",
         "  burn lsp                            run the language server over stdio",
         "  burn sources                        write the standard library and built-in sources editors show",
-        "  burn dump --<stage> <files...>      print a compiler stage, such as --tokens, --checked, --bvm or --js",
+        "  burn dump --<stage> <files...>      print a compiler stage, such as --tokens, --checked, --bvm, --asm or --js",
         "  burn version                        print the version"
     ], "\n"))
 }
@@ -72,10 +77,12 @@ priv fun burncUsage() {
         "burnc ${toolchainVersion()} - the Burn compiler",
         "",
         "Usage:",
-        "  burnc <file.bn> [options]   compile to bvm bytecode",
-        "      -o, --output <path>     output file (default: the file name with .bvmc, .bar or .js)",
-        "      --target <bvm|bar|js>   a bvm module (default), a runnable archive or JavaScript for Node.js",
-        "      --emit-asm <path>       also write the bvm assembly",
+        "  burnc <file.bn> [options]   compile to a standalone native executable",
+        "      -o, --output <path>     output file (default: file name without .bn)",
+        "      --target <native|js|bvm|bar>",
+        "                              native executable (default), JavaScript, bvm bytecode or a runnable archive",
+        "      --emit-asm <path>       also write the generated assembly (x86-64, or bvm text)",
+        "      --no-strip              keep symbols in the executable",
         "      --no-std                build without the standard library",
         "  burnc --check <files...>    type-check without producing output",
         "  burnc -v | --version        print the version"
@@ -94,7 +101,10 @@ priv fun isBvmFile(file: string): bool {
 
 /** The file next to `file` named like it, with `ext` as its extension. */
 priv fun defaultOutput(file: string, ext: string): string {
-    var name = (pathStem(file) ?? "out") + "." + ext
+    var name = pathStem(file) ?? "out"
+    if (ext != "") {
+        name += "." + ext
+    }
     var parent = pathParent(file)
     if (parent == null) {
         return name
@@ -108,14 +118,34 @@ priv fun shown(path: string): string {
 }
 
 priv fun runFileWith(file: string, args: [string], opts: Options): int {
-    if (isBvmFile(file)) {
+    if (isBvmFile(file) && !opts.native) {
         return runFile(file, args)
     }
     var c = compilePath(file, opts)
     if (c == null) {
         return 1
     }
+    if (opts.native) {
+        return runNative(c, args)
+    }
     return runModule(moduleOf(c), libraryPaths(c), args)
+}
+
+priv fun runNative(c: Compiled, args: [string]): int {
+    var dir = tempPath("run")
+    Files.makeDir(dir)
+    var exe = pathJoin(dir, "program")
+    var problem = buildNative(c, NativeOptions { output: exe, emitAsm: null, strip: true })
+    if (problem != null) {
+        Files.remove(dir)
+        return fail(problem, 1)
+    }
+    var code = Process.run(exe, args)
+    Files.remove(dir)
+    if (code < 0) {
+        return fail("could not run the compiled program", 1)
+    }
+    return code
 }
 
 priv fun currentProject(err: Problem): Project? {
@@ -288,11 +318,17 @@ priv fun buildOne(file: string, output: string?, target: string, emitAsm: string
             Files.makeDir(parent)
         }
     }
-    if (target != "bvm" && target != "bytecode" && target != "bar" && target != "js" && target != "javascript" && target != "node") {
-        return fail("unknown target `${target}` (expected `bvm`, `bar` or `js`)", 2)
-    }
     if (isBvmFile(file)) {
-        return fail("${file} is bytecode already; run it with `burn ${file}`", 2)
+        var exe = output ?? defaultOutput(file, "")
+        var bundled = buildLauncher(file, NativeOptions { output: exe, emitAsm: emitAsm, strip: opts.strip })
+        if (bundled != null) {
+            return fail(bundled, 1)
+        }
+        print("built ${exe}")
+        return 0
+    }
+    if (!contains(TARGETS, target)) {
+        return fail("unknown target `${target}` (expected `native`, `js`, `bvm` or `bar`)", 2)
     }
     var c = compilePath(file, opts)
     if (c == null) {
@@ -300,6 +336,15 @@ priv fun buildOne(file: string, output: string?, target: string, emitAsm: string
     }
     if (target == "js" || target == "javascript" || target == "node") {
         return writeJs(c, output ?? defaultOutput(file, "js"))
+    }
+    if (target == "native" || target == "exe" || target == "asm") {
+        var exe = output ?? defaultOutput(file, "")
+        var problem = buildNative(c, NativeOptions { output: exe, emitAsm: emitAsm, strip: opts.strip })
+        if (problem != null) {
+            return fail(problem, 1)
+        }
+        print("built ${exe}")
+        return 0
     }
     var module = moduleOf(c)
     var libs = libraryPaths(c)
@@ -333,11 +378,7 @@ priv fun writeJs(c: Compiled, out: string): int {
 }
 
 priv fun projectTarget(p: Project): string {
-    var t = p.manifest.target
-    if (t == "bar" || t == "js") {
-        return t
-    }
-    return "bvm"
+    return p.manifest.target
 }
 
 priv fun buildProject(p: Project, picked: Entry?, output: string?, target: string, explicitTarget: bool, emitAsm: string?, opts: Options): int {
@@ -391,7 +432,7 @@ priv fun cmdBuild(args: [string], opts: Options): int {
     var selection = new Selection()
     string? file = null
     string? output = null
-    var target = "bvm"
+    var target = "native"
     var explicitTarget = false
     string? emitAsm = null
     var err = new Problem()
@@ -412,6 +453,8 @@ priv fun cmdBuild(args: [string], opts: Options): int {
         } else if (a == "--emit-asm" || a == "-S") {
             i += 1
             emitAsm = next
+        } else if (a == "--no-strip") {
+            opts.strip = false
         } else if (a == "--bin" || a == "--example" || a == "-p" || a == "--package") {
             i += 1
             selection.flag(a, next, err)
@@ -477,6 +520,11 @@ priv fun cmdRun(rest: [string], opts: Options): int {
     while (i < len(rest)) {
         var a = rest[i]
         if (file == null && len(progArgs) == 0) {
+            if (a == "--native" || a == "-n") {
+                opts.native = true
+                i += 1
+                continue
+            }
             string? next = null
             if (i + 1 < len(rest)) {
                 next = rest[i + 1]
@@ -614,6 +662,14 @@ priv fun cmdDump(rest: [string], opts: Options): int {
         write(moduleOf(c))
         return 0
     }
+    if (len(rest) == 2 && rest[0] == "--asm") {
+        var c = compilePath(rest[1], opts)
+        if (c == null) {
+            return 1
+        }
+        write(nativeAssemblyOf(c))
+        return 0
+    }
     if (len(rest) == 2 && rest[0] == "--js") {
         var c = compilePath(rest[1], opts)
         if (c == null) {
@@ -622,7 +678,7 @@ priv fun cmdDump(rest: [string], opts: Options): int {
         write(generateJs(c.checker, c.program))
         return 0
     }
-    eprint("usage: burn dump --bytecode|--js <file.bn>  |  burn dump --tokens|--ast|--diagnostics|--toml|--project|--modules|--decls|--checked|--owned|--bvm|--index <files...>")
+    eprint("usage: burn dump --bytecode|--asm|--js <file.bn>  |  burn dump --tokens|--ast|--diagnostics|--toml|--project|--modules|--decls|--checked|--owned|--bvm|--index <files...>")
     return 2
 }
 

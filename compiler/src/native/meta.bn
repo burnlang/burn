@@ -1,0 +1,99 @@
+import "../check/check.bn"
+import "../check/types.bn"
+import "../vm/compile.bn"
+import "../vm/module.bn"
+
+priv fun u32(out: [int], v: int) {
+    out.push(v & 255)
+    out.push((v >> 8) & 255)
+    out.push((v >> 16) & 255)
+    out.push((v >> 24) & 255)
+}
+
+priv fun text(out: [int], s: string) {
+    var b = bytes(s)
+    u32(out, len(b))
+    for x in b {
+        out.push(x as int)
+    }
+}
+
+priv fun desc(out: [int], d: Desc) {
+    if (d is Desc.Error) {
+        out.push(0)
+    } else if (d is Desc.Void) {
+        out.push(1)
+    } else if (d is Desc.Null) {
+        out.push(2)
+    } else if (d is Desc.Int) {
+        out.push(3)
+    } else if (d is Desc.Float) {
+        out.push(4)
+    } else if (d is Desc.Bool) {
+        out.push(5)
+    } else if (d is Desc.Str) {
+        out.push(6)
+    } else if (d is Desc.Any) {
+        out.push(7)
+    } else if (d is Desc.Array) {
+        out.push(8)
+        u32(out, d.elem)
+    } else if (d is Desc.Map) {
+        out.push(9)
+        u32(out, d.key)
+        u32(out, d.value)
+    } else if (d is Desc.Optional) {
+        out.push(10)
+        u32(out, d.inner)
+    } else if (d is Desc.Func) {
+        out.push(11)
+    } else if (d is Desc.Future) {
+        out.push(12)
+        u32(out, d.inner)
+    } else if (d is Desc.Record) {
+        out.push(13)
+        text(out, d.name)
+        if (d.isClass) {
+            out.push(1)
+        } else {
+            out.push(0)
+        }
+        u32(out, len(d.fields))
+        for f in d.fields {
+            text(out, f.name)
+            u32(out, f.ty)
+        }
+        u32(out, len(d.implements))
+        for i in d.implements {
+            u32(out, i)
+        }
+    } else if (d is Desc.Interface) {
+        out.push(14)
+        text(out, d.name)
+    } else if (d is Desc.Num) {
+        out.push(16)
+        out.push(d.code + 1)
+    } else if (d is Desc.Enum) {
+        out.push(15)
+        text(out, d.name)
+        u32(out, len(d.variants))
+        for v in d.variants {
+            text(out, v)
+        }
+    }
+}
+
+/** The types and source locations of a program as the runtime reads them, like `meta::encode` in the bvm runtime. */
+pub fun encodeMeta(c: Checker): [int] {
+    [int] out = []
+    var n = c.types.count()
+    u32(out, n)
+    for t in 0..n {
+        desc(out, descOf(c.types, t))
+    }
+    u32(out, len(c.locs))
+    for l in c.locs {
+        text(out, l)
+    }
+    return out
+}
