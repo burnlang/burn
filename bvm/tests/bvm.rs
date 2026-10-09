@@ -535,6 +535,7 @@ fn the_runtime_written_in_burn_replaces_runtime_functions() {
     for r in [bvm::RtFn::StrSplit, bvm::RtFn::StrReplace, bvm::RtFn::StrContains, bvm::RtFn::IMin] {
         assert!(w.funcs.contains_key(&r), "{:?} is not written in Burn", r);
     }
+    assert!(w.module.globals.is_empty(), "the runtime written in Burn keeps globals: {:?}", w.module.globals);
     for f in &w.module.funcs {
         for op in &f.code {
             if let bvm::Op::Rt(r) = op {

@@ -421,6 +421,7 @@ const $R = {
   Assert: (c, m, l) => { if (!c) $err("assertion failed: " + m, l); return 0; },
   ErrIndex: (l, i, n) => $err("index " + i + " out of bounds (length " + n + ")", l),
   ErrDivZero: l => $err("division by zero", l),
+  Fail: (m, l) => $err(m, l),
   ErrOverflow: l => $err("integer overflow", l),
   NumFit: (v, c, l) => { const n = $NUMS[c]; if (v < n[1] || v > n[2]) $err("integer overflow: " + v + " does not fit in " + n[0], l); return v; },
   NumConv: (v, c, l) => { const k = c & 15; const n = k === 0 ? ["int", -9223372036854775808, 9223372036854775807] : $NUMS[k]; if (v < n[1] || v > n[2]) $err("cannot convert " + v + " to " + n[0], l); return v; },

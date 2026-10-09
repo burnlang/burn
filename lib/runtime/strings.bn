@@ -95,3 +95,71 @@ pub fun textReplace(text: string, from: string, to: string): string {
     out += fromBytes(slice(b, start, n))
     return out
 }
+
+priv fun byteWidth(lead: uint8): int {
+    if (lead < 128) {
+        return 1
+    }
+    if (lead < 224) {
+        return 2
+    }
+    if (lead < 240) {
+        return 3
+    }
+    return 4
+}
+
+priv fun isContinuation(b: uint8): bool {
+    return b >= 128 && b < 192
+}
+
+priv fun codeAt(b: [uint8], at: int, width: int): int {
+    if (width == 1) {
+        return b[at]
+    }
+    var c = (b[at] as int) & (127 >> width)
+    for k in 1..width {
+        c = c << 6 | (b[at + k] as int) & 63
+    }
+    return c
+}
+
+priv fun isSpaceCode(c: int): bool {
+    if (c < 128) {
+        return c == 32 || c >= 9 && c <= 13
+    }
+    if (c < 8192) {
+        return c == 133 || c == 160 || c == 5760
+    }
+    return c <= 8202 || c == 8232 || c == 8233 || c == 8239 || c == 8287 || c == 12288
+}
+
+/** `trim(text)`: `text` without the whitespace at its start and end. */
+@Runtime("str_trim")
+pub fun textTrim(text: string): string {
+    var b = bytes(text)
+    var n = len(b)
+    var start = 0
+    while (start < n) {
+        var w = byteWidth(b[start])
+        if (!isSpaceCode(codeAt(b, start, w))) {
+            break
+        }
+        start += w
+    }
+    var end = n
+    while (end > start) {
+        var s = end - 1
+        while (s > start && isContinuation(b[s])) {
+            s -= 1
+        }
+        if (!isSpaceCode(codeAt(b, s, end - s))) {
+            break
+        }
+        end = s
+    }
+    if (start == 0 && end == n) {
+        return text
+    }
+    return fromBytes(slice(b, start, end))
+}

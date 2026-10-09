@@ -1,0 +1,131 @@
+import "runtime.bn"
+import "strings.bn"
+
+priv fun digitOf(c: uint8): int {
+    if (c >= 48 && c <= 57) {
+        return c - 48
+    }
+    if (c >= 97 && c <= 122) {
+        return c - 87
+    }
+    if (c >= 65 && c <= 90) {
+        return c - 55
+    }
+    return -1
+}
+
+priv fun intIn(text: string, radix: int): int? {
+    var b = bytes(text)
+    var n = len(b)
+    var i = 0
+    var negative = false
+    if (n > 0 && (b[0] == 43 || b[0] == 45)) {
+        negative = b[0] == 45
+        i = 1
+    }
+    if (i >= n) {
+        return null
+    }
+    var v = 0
+    while (i < n) {
+        var d = digitOf(b[i])
+        if (d < 0 || d >= radix) {
+            return null
+        }
+        if (v < (d - 9223372036854775807 - 1) / radix) {
+            return null
+        }
+        v = v * radix - d
+        i += 1
+    }
+    if (negative) {
+        return v
+    }
+    if (v == -9223372036854775807 - 1) {
+        return null
+    }
+    return -v
+}
+
+priv fun checkRadix(radix: int, loc: int) {
+    if (radix < 2 || radix > 36) {
+        __fail("radix ${radix} is out of range, it must be between 2 and 36", loc)
+    }
+}
+
+priv fun truncate(f: float): int {
+    if (f >= 9223372036854775808.0) {
+        return 9223372036854775807
+    }
+    if (f <= -9223372036854775808.0) {
+        return -9223372036854775807 - 1
+    }
+    return toInt(f)
+}
+
+/** `isInt(text)`: whether `text`, without surrounding whitespace, is a decimal int. */
+@Runtime("is_int_str")
+pub fun textIsInt(text: string): bool {
+    return intIn(textTrim(text), 10) != null
+}
+
+/** `toInt(text)`: the decimal int in `text`, or a float in it cut to an int. */
+@Runtime("parse_int")
+pub fun textToInt(text: string, loc: int): int {
+    var t = textTrim(text)
+    var v = intIn(t, 10)
+    if (v != null) {
+        return v
+    }
+    if (isNumber(t)) {
+        var f = toFloat(t)
+        if (f == f && f - f == 0.0) {
+            return truncate(f)
+        }
+    }
+    __fail("cannot convert \"${t}\" to int", loc)
+    return 0
+}
+
+/** `isInt(text, radix)`: whether `text` is an int in base `radix`. */
+@Runtime("is_int_radix")
+pub fun textIsIntIn(text: string, radix: int, loc: int): bool {
+    checkRadix(radix, loc)
+    return intIn(textTrim(text), radix) != null
+}
+
+/** `toInt(text, radix)`: the int written in base `radix` in `text`. */
+@Runtime("parse_int_radix")
+pub fun textToIntIn(text: string, radix: int, loc: int): int {
+    checkRadix(radix, loc)
+    var t = textTrim(text)
+    var v = intIn(t, radix)
+    if (v == null) {
+        __fail("cannot convert \"${t}\" to an int in base ${radix}", loc)
+        return 0
+    }
+    return v
+}
+
+/** `toString(value, radix)`: `value` written in base `radix`, with lowercase letters for digits above 9. */
+@Runtime("int_to_str_radix")
+pub fun intToText(value: int, radix: int, loc: int): string {
+    checkRadix(radix, loc)
+    var x = value
+    if (value > 0) {
+        x = -value
+    }
+    var out = ""
+    while (true) {
+        var d = 0 - x % radix
+        out = substring("0123456789abcdefghijklmnopqrstuvwxyz", d, d + 1) + out
+        x = x / radix
+        if (x == 0) {
+            break
+        }
+    }
+    if (value < 0) {
+        return "-" + out
+    }
+    return out
+}

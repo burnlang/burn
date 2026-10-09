@@ -108,6 +108,7 @@ pub const BUILTINS: &[&str] = &[
     "__fsOp",
     "__listDir",
     "__cwd",
+    "__fail",
 ];
 
 pub const HOMES: &[(&str, &[&str])] = &[
@@ -1057,6 +1058,14 @@ impl<'a> Checker<'a> {
                     return Some(Self::err_expr());
                 }
                 Self::rt(RtFn::Cwd, vec![], T_STR)
+            }
+            "__fail" => {
+                if !self.arity(name, n, 2, 2, span) {
+                    return Some(Self::err_expr());
+                }
+                let m = self.barg_to(&xs[0], T_STR);
+                let l = self.barg_to(&xs[1], T_INT);
+                Self::rt(RtFn::Fail, vec![m, l], T_VOID)
             }
             "__httpRequest" => {
                 if !self.arity(name, n, 4, 4, span) {
