@@ -108,11 +108,14 @@ fn run_text(text: &str, libs: &[String], args: Vec<String>) -> Result<i32, Failu
         }
         e => Failure::Internal(e.to_string()),
     })?;
+    let host_roots = bvm_runtime::rc::take_roots();
     let mut r = crate::Runner::new(prog.clone(), Vec::new());
     if let Some(e) = prog.entry {
         r.call(e);
     }
     r.finish();
+    bvm_runtime::rc::take_roots();
+    bvm_runtime::rc::restore_roots(host_roots);
     Ok(0)
 }
 
@@ -166,6 +169,7 @@ pub fn stale(dir: &Path, out: &Path) -> bool {
 struct ReplSession {
     saved: HashMap<String, u64>,
     inited: HashSet<String>,
+    roots: Vec<u64>,
 }
 
 static REPL: Mutex<Option<ReplSession>> = Mutex::new(None);
@@ -208,6 +212,8 @@ fn repl_eval(text: &str, libs: &[String], globals: &[String], inits: &[String], 
     let mut guard = REPL.lock().unwrap();
     let session = guard.get_or_insert_with(ReplSession::default);
     let values: Vec<u64> = globals.iter().map(|g| *session.saved.get(g).unwrap_or(&0)).collect();
+    let cli_roots = bvm_runtime::rc::take_roots();
+    bvm_runtime::rc::restore_roots(std::mem::take(&mut session.roots));
     let mut runner = crate::Runner::new(prog, values);
     let root = inits.last().cloned().unwrap_or_default();
     let mut result = String::new();
@@ -237,6 +243,8 @@ fn repl_eval(text: &str, libs: &[String], globals: &[String], inits: &[String], 
             session.saved.insert(g.clone(), *v);
         }
     }
+    session.roots = bvm_runtime::rc::take_roots();
+    bvm_runtime::rc::restore_roots(cli_roots);
     bvm_runtime::meta::restore_meta(cli);
     result
 }
@@ -471,6 +479,7 @@ pub fn host(tool: &str) -> Host {
         finish(code)
     });
     host.register("burn.runFile", 2, |a| {
+        bvm_runtime::rc::take_roots();
         let code = match crate::run_file(Path::new(str_ref(a[0])), strings(a[1])) {
             Ok(code) => code,
             Err(e) => {

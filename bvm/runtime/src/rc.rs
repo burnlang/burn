@@ -328,6 +328,14 @@ fn zombie(p: u64) {
     })
 }
 
+pub fn take_roots() -> Vec<u64> {
+    ROOTS.with(|r| core::mem::take(&mut *r.borrow_mut()))
+}
+
+pub fn restore_roots(roots: Vec<u64>) {
+    ROOTS.with(|r| r.borrow_mut().extend(roots));
+}
+
 pub fn drain_zombies() {
     if multi() {
         return;
