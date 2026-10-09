@@ -16,4 +16,4 @@ name = "bvm"
 path = "src/main.rs"
 
 [dependencies]
-burn-runtime = { path = "../crates/burn-runtime" }
+bvm-runtime = { path = "runtime" }

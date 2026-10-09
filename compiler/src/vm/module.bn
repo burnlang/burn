@@ -181,7 +181,7 @@ pub fun withJumpTarget(op: Op, t: int): Op {
     return op
 }
 
-/** How bvm describes a type, like `Desc` in `burn_runtime::meta`. */
+/** How bvm describes a type, like `Desc` in `bvm_runtime::meta`. */
 pub def enum Desc {
     Error,
     Void,

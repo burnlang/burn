@@ -658,7 +658,7 @@ fn dump_tokens(toks: &[Token], depth: usize, out: &mut String) {
             Tok::Ident(s) => out.push_str(&format!("{} Ident {}\n", head, s)),
             Tok::Int(v) => out.push_str(&format!("{} Int {}\n", head, v)),
             Tok::BigInt(v, hex) => out.push_str(&format!("{} BigInt {} {}\n", head, v, if *hex { "hex" } else { "dec" })),
-            Tok::Float(v) => out.push_str(&format!("{} Float {}\n", head, burn_runtime::fmt::float_str(*v))),
+            Tok::Float(v) => out.push_str(&format!("{} Float {}\n", head, bvm::runtime::fmt::float_str(*v))),
             Tok::Str(s) => out.push_str(&format!("{} Str {}\n", head, escape(s))),
             Tok::Template(parts) => {
                 out.push_str(&format!("{} Template\n", head));

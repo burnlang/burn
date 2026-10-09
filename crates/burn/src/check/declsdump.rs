@@ -25,7 +25,7 @@ fn span(s: Span) -> String {
 fn konst(v: &Const) -> String {
     match v {
         Const::Int(i) => format!("int {}", i),
-        Const::Float(f) => format!("float {}", burn_runtime::fmt::float_str(*f)),
+        Const::Float(f) => format!("float {}", bvm::runtime::fmt::float_str(*f)),
         Const::Bool(b) => format!("bool {}", b),
         Const::Str(s) => format!("str {}", crate::lexer::escape(s)),
         Const::Null => "null".into(),

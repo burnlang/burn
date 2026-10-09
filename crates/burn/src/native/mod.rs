@@ -25,7 +25,7 @@ pub fn supported() -> Result<(), String> {
 }
 
 pub fn assembly(p: &Program) -> String {
-    let meta = burn_runtime::meta::encode(&p.meta());
+    let meta = bvm::runtime::meta::encode(&p.meta());
     let p = crate::own::lower(p);
     x86::generate(&p, &meta, &x86::Target::host())
 }

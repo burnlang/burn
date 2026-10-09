@@ -1,4 +1,4 @@
-use burn_runtime::RtFn;
+use bvm_runtime::RtFn;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Cmp {

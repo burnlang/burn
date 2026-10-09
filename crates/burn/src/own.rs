@@ -1,6 +1,6 @@
 use crate::hir::{Expr, ExprKind, Func, Program, Stmt, UnOp};
 use crate::types::*;
-use burn_runtime::RtFn;
+use bvm::runtime::RtFn;
 
 pub fn lower(p: &Program) -> Program {
     let mut out = p.clone();

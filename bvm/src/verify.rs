@@ -1,7 +1,7 @@
 use crate::module::{Function, Module, Target};
 use crate::op::{rt_name, Op};
-use burn_runtime::meta::Desc;
-use burn_runtime::RtFn;
+use bvm_runtime::meta::Desc;
+use bvm_runtime::RtFn;
 use std::fmt;
 
 #[derive(Clone, Debug, PartialEq)]

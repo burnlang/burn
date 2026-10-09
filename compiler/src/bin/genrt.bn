@@ -2,11 +2,11 @@ import "std/fs"
 import "std/strings"
 
 /**
- * Prints `compiler/src/vm/runtime.bn`, which maps each runtime function of `crates/burn-runtime` to its symbol, the way
+ * Prints `compiler/src/vm/runtime.bn`, which maps each runtime function of `bvm/runtime` to its symbol, the way
  * `rt_name` in bvm names them. Run it from the repository root: `burn compiler/src/bin/genrt.bn > compiler/src/vm/runtime.bn`.
  */
 fun main() {
-    var src = readFile("crates/burn-runtime/src/lib.rs")
+    var src = readFile("bvm/runtime/src/lib.rs")
     print("/** The symbol of each runtime function without `burn_`, by its name in `RtFn`, written by `compiler/src/bin/genrt.bn`. */")
     print("pub fun runtimeSymbols(): {string: string} {")
     print("    {string: string} out = {}")

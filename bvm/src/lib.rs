@@ -13,9 +13,9 @@ pub mod tier;
 pub mod verify;
 
 pub use builder::{FuncBuilder, FuncId, Label, ModuleBuilder};
-pub use burn_runtime as runtime;
-pub use burn_runtime::meta::Desc;
-pub use burn_runtime::RtFn;
+pub use bvm_runtime as runtime;
+pub use bvm_runtime::meta::Desc;
+pub use bvm_runtime::RtFn;
 pub use exec::{load, run, Host, LoadError, Program, Runner};
 pub use link::{link, link_with, LinkOptions};
 pub use module::{Annotation, Function, Import, Module, Sig, Table, Target, Value};

@@ -11,5 +11,4 @@ name = "burn"
 path = "src/main.rs"
 
 [dependencies]
-burn-runtime = { path = "../burn-runtime" }
 bvm = { path = "../../bvm" }

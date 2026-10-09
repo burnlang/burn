@@ -151,7 +151,7 @@ impl<'a> Checker<'a> {
                 self.error(span, format!("cannot convert {} to {}", v, s));
                 return Self::err_expr();
             }
-            let code = self.num_code(to) | if from == T_U64 { burn_runtime::api::CONV_FROM_U64 as i64 } else { 0 };
+            let code = self.num_code(to) | if from == T_U64 { bvm::runtime::api::CONV_FROM_U64 as i64 } else { 0 };
             let loc = self.loc_expr(span);
             return Expr::new(ExprKind::Rt(RtFn::NumConv, vec![h, Expr::int(code), loc]), to);
         }

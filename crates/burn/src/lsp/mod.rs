@@ -1058,7 +1058,7 @@ fn cap_memory() {}
 
 pub fn run() -> ExitCode {
     cap_memory();
-    burn_runtime::io::set_panic_mode(true);
+    bvm::runtime::io::set_panic_mode(true);
     crate::repl::install_quiet_hook();
     let stdin = std::io::stdin();
     let mut reader = BufReader::new(stdin.lock());

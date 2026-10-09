@@ -1,6 +1,6 @@
 use crate::hir::{BinOp, Cmp, Const, Conv, Expr, ExprKind, External, Func, Program, Stmt, UnOp};
 use crate::types::{Num, Ty};
-use burn_runtime::RtFn;
+use bvm::runtime::RtFn;
 use std::fmt::Write;
 
 pub struct Target {
@@ -356,7 +356,7 @@ impl<'p> Gen<'p> {
             self.out.push_str(".p2align 4\n");
             writeln!(self.out, "bs_{}:", i).unwrap();
             writeln!(self.out, "    .byte 1, 0, {}, 0", flags).unwrap();
-            writeln!(self.out, "    .long {}", burn_runtime::meta::TID_STR).unwrap();
+            writeln!(self.out, "    .long {}", bvm::runtime::meta::TID_STR).unwrap();
             writeln!(self.out, "    .long {}, 0", 24 + b.len() + 1).unwrap();
             writeln!(self.out, "    .quad {}", b.len()).unwrap();
             let mut bb = b.to_vec();

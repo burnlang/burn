@@ -250,7 +250,7 @@ impl Compiler {
                 if let BinOp::Shl(l) | BinOp::Shr(l) | BinOp::UShr(l) = op {
                     if *l != u32::MAX {
                         self.emit(Op::LocConst(*l));
-                        self.emit(Op::Rt(burn_runtime::RtFn::ShiftCheck));
+                        self.emit(Op::Rt(bvm::runtime::RtFn::ShiftCheck));
                     }
                 }
                 self.emit(match op {
@@ -365,11 +365,11 @@ impl Compiler {
             }
             ExprKind::Retain(x) => {
                 self.expr(x);
-                self.emit(Op::Rt(burn_runtime::RtFn::Retain));
+                self.emit(Op::Rt(bvm::runtime::RtFn::Retain));
             }
             ExprKind::Release(x) => {
                 self.expr(x);
-                self.emit(Op::Rt(burn_runtime::RtFn::Release));
+                self.emit(Op::Rt(bvm::runtime::RtFn::Release));
             }
         }
     }

@@ -18,7 +18,7 @@ This directory holds the self-hosted Burn compiler. It is ported from the compil
 | `src/main.bn` | the command line: `build <file.bn> [-o <file.bvm>]` and the `burn dump` forms | |
 | `src/build.bn` | loads, checks and compiles a program to bvm assembly | `driver.rs`, `vm/mod.rs` |
 | `src/bin/genstd.bn` | writes `src/project/stdlib.bn` from `lib/std` | |
-| `src/bin/genrt.bn` | writes `src/vm/runtime.bn`, the symbol of each runtime function, from `crates/burn-runtime/src/lib.rs` | |
+| `src/bin/genrt.bn` | writes `src/vm/runtime.bn`, the symbol of each runtime function, from `bvm/runtime/src/lib.rs` | |
 
 The sources import each other with relative paths (`"../syntax/ast.bn"`) because stage0 does not know `@/` imports yet.
 
@@ -91,7 +91,7 @@ The inputs include the error-recovery fixtures in `tests/lexer` and `tests/parse
 7. **bvm code generation** (done). `src/vm/compile.bn` ports `vm/compile.rs`, and `src/vm/asm.bn` writes the module as bvm assembly (`.bvm`), like `disassemble` in the bvm crate. Burn has no binary file output yet and stage0 cannot get one, so the Burn compiler writes the text form, which `burn <file.bvm>` assembles and runs. `burn dump --bvm` prints it, and the suite compares it on every Burn file in the repository. `src/vm/bits.bn` converts floats to and from their bits for constants, and `src/vm/runtime.bn` (written by `src/bin/genrt.bn`) names the runtime functions.
 8. **Bootstrap** (done, see *Stage0* below). `scripts/bootstrap.sh` runs the compiler in `compiler/src` on itself (stage 1), lets stage 1 build the compiler again (stage 2) and checks that both modules are identical. The CI job `bootstrap` runs it with stage0 on every push, then lets stage 2 compile and run `examples/fib.bn`.
    - `scripts/package.sh` bootstraps the compiler and installs stage 2 as `share/burn/compiler.bvm`, which `--compiler burn` uses.
-9. **After that:** the native x86-64 and JavaScript backends, then the tools (`fmt`, `doc`, `lsp`). The runtime (`crates/burn-runtime`) stays in Rust and is shared by both compilers.
+9. **After that:** the native x86-64 and JavaScript backends, then the tools (`fmt`, `doc`, `lsp`). The runtime core (`bvm/runtime`) stays in Rust and is shared by both compilers; the rest of the runtime is written in Burn in `lib/runtime`.
 
 ## Stage0: the last compiler written in Rust
 
@@ -99,7 +99,7 @@ The inputs include the error-recovery fixtures in `tests/lexer` and `tests/parse
 
 - **The action:** `.github/actions/stage0` downloads that release for the runner's platform, checks it against the release's `SHA256SUMS`, and puts its `burn` on `PATH`. It runs on Linux x86-64 and macOS (Intel and Apple silicon).
 - **The guard:** the CI job `stage0` builds the Burn compiler in `compiler/` with that release on every push. So the sources here may only use language features that stage0 already understands. To use a newer feature in the compiler, cut a new release first, then move `compiler/STAGE0` to it.
-- **The bootstrap:** the CI job `bootstrap` runs `scripts/bootstrap.sh` with stage0. Stage0 runs the compiler in `compiler/src`, which builds itself (`stage1.bvm`); stage0's bvm runs `stage1.bvm`, which builds the compiler again (`stage2.bvm`); the two must be identical. Because stage 1 is already the compiler written in Burn, this is the same check as comparing stage 2 with stage 3. The release will ship `stage2.bvm`. From then on, each release can bootstrap from the previous Burn release instead of stage0. The Rust compiler crate can then be retired. The runtime (`crates/burn-runtime`) stays in Rust.
+- **The bootstrap:** the CI job `bootstrap` runs `scripts/bootstrap.sh` with stage0. Stage0 runs the compiler in `compiler/src`, which builds itself (`stage1.bvm`); stage0's bvm runs `stage1.bvm`, which builds the compiler again (`stage2.bvm`); the two must be identical. Because stage 1 is already the compiler written in Burn, this is the same check as comparing stage 2 with stage 3. The release will ship `stage2.bvm`. From then on, each release can bootstrap from the previous Burn release instead of stage0. The Rust compiler crate can then be retired. The runtime core (`bvm/runtime`) stays in Rust.
 
 To cut a release by hand, run the **Release** workflow from the Actions tab with the tag to create. The tag must be `v` followed by the workspace version.
 

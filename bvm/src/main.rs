@@ -55,7 +55,7 @@ fn main() -> ExitCode {
         Some("list") => list(rest),
         Some("unpack") => unpack(rest),
         Some("runtime") => {
-            for f in burn_runtime::RtFn::all() {
+            for f in bvm_runtime::RtFn::all() {
                 if !verify::RESERVED_RT.contains(f) {
                     println!("{:<18} {}", bvm::op::rt_name(*f), f.argc());
                 }

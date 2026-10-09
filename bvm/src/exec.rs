@@ -1,8 +1,8 @@
 use crate::module::Module;
 use crate::op::{Op, NO_LOC};
 use crate::verify::{analyze, VerifyError};
-use burn_runtime::obj::*;
-use burn_runtime::{api, io, meta, rc, task};
+use bvm_runtime::obj::*;
+use bvm_runtime::{api, io, meta, rc, task};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicU8, Ordering};

@@ -1,6 +1,6 @@
 use crate::source::Span;
 use crate::types::{TyId, Types};
-use burn_runtime::RtFn;
+use bvm::runtime::RtFn;
 
 pub type FuncId = u32;
 
@@ -187,8 +187,8 @@ pub struct Program {
 }
 
 impl Program {
-    pub fn meta(&self) -> burn_runtime::meta::Meta {
-        burn_runtime::meta::Meta {
+    pub fn meta(&self) -> bvm::runtime::meta::Meta {
+        bvm::runtime::meta::Meta {
             types: self.types.descs(),
             locs: self.locs.clone(),
             info: Vec::new(),

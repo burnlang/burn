@@ -1,7 +1,7 @@
 use crate::module::{Annotation, Function, Import, Module, Sig, Table, Target, Value};
 use crate::op::{Cmp, Op};
-use burn_runtime::meta::Desc;
-use burn_runtime::RtFn;
+use bvm_runtime::meta::Desc;
+use bvm_runtime::RtFn;
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

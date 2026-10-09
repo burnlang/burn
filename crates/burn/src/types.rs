@@ -1,6 +1,6 @@
 use crate::source::Span;
-pub use burn_runtime::meta::Num;
-use burn_runtime::meta::{self, Desc};
+pub use bvm::runtime::meta::Num;
+use bvm::runtime::meta::{self, Desc};
 use std::collections::HashMap;
 
 pub type TyId = u32;

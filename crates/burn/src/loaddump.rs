@@ -16,7 +16,7 @@ fn value(out: &mut String, depth: usize, label: &str, v: &Value) {
             let _ = writeln!(out, "{}{} Int {}", pad, label, n);
         }
         Value::Float(f) => {
-            let _ = writeln!(out, "{}{} Float {}", pad, label, burn_runtime::fmt::float_str(*f));
+            let _ = writeln!(out, "{}{} Float {}", pad, label, bvm::runtime::fmt::float_str(*f));
         }
         Value::Bool(b) => {
             let _ = writeln!(out, "{}{} Bool {}", pad, label, b);
