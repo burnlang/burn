@@ -17,7 +17,6 @@ type #23 = [#13]
 type #24 = JsonError?
 type #25 = int?
 
-string "0123456789abcdefghijklmnopqrstuvwxyz"
 string " at offset "
 string "unexpected end of input"
 string "true"
@@ -45,6 +44,7 @@ string " is out of range, it must be between 2 and 36"
 string "cannot convert \""
 string "\" to int"
 string "\" to an int in base "
+string "0123456789abcdefghijklmnopqrstuvwxyz"
 string "-"
 
 loc "lib/runtime/json.bn:7:17"
@@ -125,43 +125,44 @@ loc "lib/runtime/json.bn:270:5"
 loc "lib/runtime/json.bn:326:5"
 loc "lib/runtime/math.bn:5:5"
 loc "lib/runtime/math.bn:14:5"
-loc "lib/runtime/math.bn:30:25"
+loc "lib/runtime/math.bn:27:25"
+loc "lib/runtime/math.bn:29:21"
 loc "lib/runtime/math.bn:32:21"
-loc "lib/runtime/math.bn:35:21"
-loc "lib/runtime/math.bn:37:17"
-loc "lib/runtime/math.bn:24:6"
-loc "lib/runtime/math.bn:40:6"
-loc "lib/runtime/math.bn:51:16"
-loc "lib/runtime/math.bn:46:5"
-loc "lib/runtime/math.bn:70:17"
-loc "lib/runtime/math.bn:77:17"
-loc "lib/runtime/math.bn:58:5"
-loc "lib/runtime/numbers.bn:10:16"
-loc "lib/runtime/numbers.bn:13:16"
-loc "lib/runtime/numbers.bn:16:16"
-loc "lib/runtime/numbers.bn:8:6"
-loc "lib/runtime/numbers.bn:26:19"
-loc "lib/runtime/numbers.bn:26:33"
-loc "lib/runtime/numbers.bn:27:20"
-loc "lib/runtime/numbers.bn:35:25"
-loc "lib/runtime/numbers.bn:39:17"
-loc "lib/runtime/numbers.bn:42:13"
-loc "lib/runtime/numbers.bn:43:9"
-loc "lib/runtime/numbers.bn:51:12"
-loc "lib/runtime/numbers.bn:21:6"
-loc "lib/runtime/numbers.bn:54:6"
-loc "lib/runtime/numbers.bn:60:6"
-loc "lib/runtime/numbers.bn:72:5"
-loc "lib/runtime/numbers.bn:85:17"
-loc "lib/runtime/numbers.bn:78:5"
-loc "lib/runtime/numbers.bn:96:5"
-loc "lib/runtime/numbers.bn:103:5"
-loc "lib/runtime/numbers.bn:120:13"
-loc "lib/runtime/numbers.bn:124:21"
-loc "lib/runtime/numbers.bn:124:17"
-loc "lib/runtime/numbers.bn:125:36"
-loc "lib/runtime/numbers.bn:126:13"
-loc "lib/runtime/numbers.bn:116:5"
+loc "lib/runtime/math.bn:34:17"
+loc "lib/runtime/math.bn:21:6"
+loc "lib/runtime/math.bn:37:6"
+loc "lib/runtime/math.bn:48:16"
+loc "lib/runtime/math.bn:43:5"
+loc "lib/runtime/math.bn:67:17"
+loc "lib/runtime/math.bn:74:17"
+loc "lib/runtime/math.bn:55:5"
+loc "lib/runtime/numbers.bn:6:16"
+loc "lib/runtime/numbers.bn:9:16"
+loc "lib/runtime/numbers.bn:12:16"
+loc "lib/runtime/numbers.bn:4:6"
+loc "lib/runtime/numbers.bn:22:19"
+loc "lib/runtime/numbers.bn:22:33"
+loc "lib/runtime/numbers.bn:23:20"
+loc "lib/runtime/numbers.bn:31:25"
+loc "lib/runtime/numbers.bn:35:18"
+loc "lib/runtime/numbers.bn:35:17"
+loc "lib/runtime/numbers.bn:38:13"
+loc "lib/runtime/numbers.bn:39:9"
+loc "lib/runtime/numbers.bn:47:12"
+loc "lib/runtime/numbers.bn:17:6"
+loc "lib/runtime/numbers.bn:50:6"
+loc "lib/runtime/numbers.bn:56:6"
+loc "lib/runtime/numbers.bn:68:5"
+loc "lib/runtime/numbers.bn:81:17"
+loc "lib/runtime/numbers.bn:74:5"
+loc "lib/runtime/numbers.bn:92:5"
+loc "lib/runtime/numbers.bn:99:5"
+loc "lib/runtime/numbers.bn:116:13"
+loc "lib/runtime/numbers.bn:120:21"
+loc "lib/runtime/numbers.bn:120:17"
+loc "lib/runtime/numbers.bn:121:68"
+loc "lib/runtime/numbers.bn:122:13"
+loc "lib/runtime/numbers.bn:112:5"
 loc "lib/runtime/strings.bn:4:9"
 loc "lib/runtime/strings.bn:4:21"
 loc "lib/runtime/strings.bn:8:18"
@@ -200,12 +201,6 @@ loc "lib/runtime/strings.bn:154:13"
 loc "lib/runtime/strings.bn:156:39"
 loc "lib/runtime/strings.bn:139:5"
 
-global "/home/user/burn/lib/runtime/math.bn.MAX_INT"
-global "/home/user/burn/lib/runtime/math.bn.MIN_INT"
-global "/home/user/burn/lib/runtime/numbers.bn.MIN_INT"
-global "/home/user/burn/lib/runtime/numbers.bn.DIGITS"
-global "/home/user/burn/lib/runtime/numbers.bn.TWO_63"
-
 entry "<entry>"
 
 func "<init lib/runtime/runtime.bn>"(): void
@@ -217,26 +212,10 @@ func "<init lib/runtime/json.bn>"(): void
 end
 
 func "<init lib/runtime/math.bn>"(): void
-    const 9223372036854775807
-    gstore "/home/user/burn/lib/runtime/math.bn.MAX_INT"
-    const -9223372036854775808
-    gstore "/home/user/burn/lib/runtime/math.bn.MIN_INT"
     retv
 end
 
 func "<init lib/runtime/numbers.bn>"(): void
-    locals 1
-    const -9223372036854775808
-    gstore "/home/user/burn/lib/runtime/numbers.bn.MIN_INT"
-    gload "/home/user/burn/lib/runtime/numbers.bn.DIGITS"
-    store 0
-    str "0123456789abcdefghijklmnopqrstuvwxyz"
-    gstore "/home/user/burn/lib/runtime/numbers.bn.DIGITS"
-    load 0
-    rt release
-    pop
-    const 9.223372036854776e18
-    gstore "/home/user/burn/lib/runtime/numbers.bn.TWO_63"
     retv
 end
 
@@ -2165,7 +2144,7 @@ L1:
     igt
     jz L2
     load 0
-    gload "/home/user/burn/lib/runtime/math.bn.MAX_INT"
+    const 9223372036854775807
     load 1
     idiv 78
     ile
@@ -2174,7 +2153,7 @@ L1:
     ret
 L2:
     load 1
-    gload "/home/user/burn/lib/runtime/math.bn.MIN_INT"
+    const -9223372036854775808
     load 0
     idiv 79
     ige
@@ -2187,7 +2166,7 @@ L3:
     igt
     jz L4
     load 0
-    gload "/home/user/burn/lib/runtime/math.bn.MIN_INT"
+    const -9223372036854775808
     load 1
     idiv 80
     ige
@@ -2196,7 +2175,7 @@ L3:
     ret
 L4:
     load 0
-    gload "/home/user/burn/lib/runtime/math.bn.MAX_INT"
+    const 9223372036854775807
     load 1
     idiv 81
     ige
@@ -2217,7 +2196,7 @@ end
 func intAbs(_: int): int
     locals 2
     load 0
-    gload "/home/user/burn/lib/runtime/math.bn.MIN_INT"
+    const -9223372036854775808
     ieq
     jz L0
     call overflow
@@ -2469,11 +2448,13 @@ L4:
     ret
 L5:
     load 6
-    gload "/home/user/burn/lib/runtime/numbers.bn.MIN_INT"
     load 7
-    iadd.ovf 97
+    const 9223372036854775807
+    isub.ovf 97
+    const 1
+    isub.ovf 98
     load 1
-    idiv 97
+    idiv 98
     ilt
     jz L6
     const 0
@@ -2486,13 +2467,13 @@ L5:
 L6:
     load 6
     load 1
-    imul.ovf 98
+    imul.ovf 99
     load 7
-    isub.ovf 98
+    isub.ovf 99
     store 6
     load 4
     const 1
-    iadd.ovf 99
+    iadd.ovf 100
     store 4
     jmp L3
 L7:
@@ -2509,7 +2490,7 @@ L7:
     ret
 L8:
     load 6
-    gload "/home/user/burn/lib/runtime/numbers.bn.MIN_INT"
+    const -9223372036854775808
     ieq
     jz L9
     const 0
@@ -2521,7 +2502,7 @@ L8:
     ret
 L9:
     load 6
-    ineg.ovf 100
+    ineg.ovf 101
     tconst int
     rt box
     store 14
@@ -2594,7 +2575,7 @@ end
 func truncate(_: float): int
     locals 3
     load 0
-    gload "/home/user/burn/lib/runtime/numbers.bn.TWO_63"
+    const 9.223372036854776e18
     fge
     jz L0
     const 9223372036854775807
@@ -2603,11 +2584,10 @@ func truncate(_: float): int
     ret
 L0:
     load 0
-    gload "/home/user/burn/lib/runtime/numbers.bn.TWO_63"
-    fneg
+    const -9.223372036854776e18
     fle
     jz L1
-    gload "/home/user/burn/lib/runtime/numbers.bn.MIN_INT"
+    const -9223372036854775808
     store 2
     load 2
     ret
@@ -2703,7 +2683,7 @@ L0:
     rt is_float_str
     jz L2
     load 2
-    lconst 105
+    lconst 106
     rt parse_float
     store 4
     load 4
@@ -2934,13 +2914,11 @@ end
 
 @Runtime name="int_to_str_radix"
 func intToText(_: int, _: int, _: int): string
-    locals 8
+    locals 7
     const 0
     store 4
     const 0
     store 7
-    const 0
-    store 8
     load 1
     load 2
     call checkRadix
@@ -2952,7 +2930,7 @@ func intToText(_: int, _: int, _: int): string
     igt
     jz L0
     load 0
-    ineg.ovf 109
+    ineg.ovf 110
     store 3
 L0:
     load 4
@@ -2966,20 +2944,18 @@ L1:
     const 0
     load 3
     load 1
-    irem 110
-    isub.ovf 111
+    irem 111
+    isub.ovf 112
     store 5
     load 4
     store 6
-    gload "/home/user/burn/lib/runtime/numbers.bn.DIGITS"
-    rt retain
-    tee 7
+    str "0123456789abcdefghijklmnopqrstuvwxyz"
     load 5
     load 5
     const 1
-    iadd.ovf 112
+    iadd.ovf 113
     rt str_sub
-    tee 8
+    tee 7
     load 4
     rt str_concat
     store 4
@@ -2991,14 +2967,9 @@ L1:
     pop
     const 0
     store 7
-    load 8
-    rt release
-    pop
-    const 0
-    store 8
     load 3
     load 1
-    idiv 113
+    idiv 114
     store 3
     load 3
     const 0
@@ -3015,7 +2986,7 @@ L3:
     str "-"
     load 4
     rt str_concat
-    store 9
+    store 8
     load 4
     rt release
     pop
@@ -3023,13 +2994,10 @@ L3:
     rt release
     pop
     load 8
-    rt release
-    pop
-    load 9
     ret
 L4:
     load 4
-    store 10
+    store 9
     const 0
     store 4
     load 4
@@ -3038,10 +3006,7 @@ L4:
     load 7
     rt release
     pop
-    load 8
-    rt release
-    pop
-    load 10
+    load 9
     ret
 end
 
@@ -3049,10 +3014,10 @@ func matchesAt(_: #23, _: #23, _: int): bool
     locals 6
     load 0
     load 2
-    index 115
+    index 116
     load 1
     const 0
-    index 116
+    index 117
     ine
     jz L0
     const 0
@@ -3075,11 +3040,11 @@ L1:
     load 0
     load 2
     load 5
-    iadd.ovf 117
-    index 118
+    iadd.ovf 118
+    index 119
     load 1
     load 5
-    index 119
+    index 120
     ine
     jz L2
     const 0
@@ -3166,7 +3131,7 @@ func textEndsWith(_: string, _: string): bool
     load 0
     load 2
     load 3
-    isub.ovf 123
+    isub.ovf 124
     load 2
     rt str_sub
     tee 4
@@ -3301,7 +3266,7 @@ L0:
 L1:
     load 8
     load 5
-    iadd.ovf 126
+    iadd.ovf 127
     load 4
     ile
     jz L4
@@ -3332,7 +3297,7 @@ L1:
     store 12
     load 8
     load 5
-    iadd.ovf 127
+    iadd.ovf 128
     store 8
     load 8
     store 7
@@ -3340,7 +3305,7 @@ L1:
 L2:
     load 8
     const 1
-    iadd.ovf 128
+    iadd.ovf 129
     store 8
 L3:
     jmp L1
@@ -3459,7 +3424,7 @@ L0:
 L1:
     load 9
     load 6
-    iadd.ovf 130
+    iadd.ovf 131
     load 5
     ile
     jz L4
@@ -3494,7 +3459,7 @@ L1:
     store 7
     load 9
     load 6
-    iadd.ovf 131
+    iadd.ovf 132
     store 9
     load 9
     store 8
@@ -3502,7 +3467,7 @@ L1:
 L2:
     load 9
     const 1
-    iadd.ovf 132
+    iadd.ovf 133
     store 9
 L3:
     jmp L1
@@ -3609,17 +3574,17 @@ func codeAt(_: #23, _: int, _: int): int
     jz L0
     load 0
     load 1
-    index 136
+    index 137
     store 7
     load 7
     ret
 L0:
     load 0
     load 1
-    index 137
+    index 138
     const 127
     load 2
-    lconst 138
+    lconst 139
     rt shift_check
     shr
     and
@@ -3641,8 +3606,8 @@ L1:
     load 0
     load 1
     load 6
-    iadd.ovf 140
-    index 141
+    iadd.ovf 141
+    index 142
     const 63
     and
     or
@@ -3772,7 +3737,7 @@ L0:
     jz L2
     load 1
     load 3
-    index 145
+    index 146
     call byteWidth
     store 4
     load 1
@@ -3786,7 +3751,7 @@ L0:
 L1:
     load 3
     load 4
-    iadd.ovf 146
+    iadd.ovf 147
     store 3
     jmp L0
 L2:
@@ -3799,7 +3764,7 @@ L3:
     jz L8
     load 5
     const 1
-    isub.ovf 147
+    isub.ovf 148
     store 6
 L4:
     load 6
@@ -3809,13 +3774,13 @@ L4:
     pop
     load 1
     load 6
-    index 148
+    index 149
     call isContinuation
 L5:
     jz L6
     load 6
     const 1
-    isub.ovf 149
+    isub.ovf 150
     store 6
     jmp L4
 L6:
@@ -3823,7 +3788,7 @@ L6:
     load 6
     load 5
     load 6
-    isub.ovf 150
+    isub.ovf 151
     call codeAt
     call isSpaceCode
     not

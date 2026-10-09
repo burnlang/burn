@@ -18,23 +18,20 @@ pub fun intMax(a: int, b: int): int {
     return a
 }
 
-priv const MAX_INT = 9223372036854775807
-priv const MIN_INT = -9223372036854775807 - 1
-
 priv fun productFits(a: int, b: int): bool {
     if (a == 0 || b == 0) {
         return true
     }
     if (a > 0) {
         if (b > 0) {
-            return a <= MAX_INT / b
+            return a <= 9223372036854775807 / b
         }
-        return b >= MIN_INT / a
+        return b >= (-9223372036854775807 - 1) / a
     }
     if (b > 0) {
-        return a >= MIN_INT / b
+        return a >= (-9223372036854775807 - 1) / b
     }
-    return a >= MAX_INT / b
+    return a >= 9223372036854775807 / b
 }
 
 priv fun overflow() {
@@ -44,7 +41,7 @@ priv fun overflow() {
 /** `abs(n)` on ints. */
 @Runtime("iabs")
 pub fun intAbs(n: int): int {
-    if (n == MIN_INT) {
+    if (n == (-9223372036854775807 - 1)) {
         overflow()
     }
     if (n < 0) {

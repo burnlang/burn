@@ -86,9 +86,9 @@ returns the same result. The module is compiled to `bvm/runtime.bvm`, which bvm 
 built by Burn (one marked `@RefCounted`) that uses one of those functions, it links `runtime.bvm` in and turns each
 `rt name` into a call of the Burn function. Modules from other languages keep using the core directly.
 
-The functions written in Burn may only use the core, never another function written in Burn through `rt`, and
-the test suite checks that `bvm/runtime.bvm` matches `lib/runtime/`. After changing it, run from the repository
-root:
+The functions written in Burn may only use the core, never another function written in Burn through `rt`. They
+keep no globals, constants included, since global names carry the path of their source file. The test suite checks
+that `bvm/runtime.bvm` matches `lib/runtime/`. After changing it, run from the repository root:
 
 ```sh
 burn dump --bvm lib/runtime/runtime.bn > bvm/runtime.bvm
