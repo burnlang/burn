@@ -17,6 +17,8 @@ This directory holds the self-hosted Burn compiler. It is ported from the compil
 | `src/dump/` | the `burn dump` text forms that the tests compare | `astdump.rs`, `loaddump.rs`, `check/declsdump.rs`, `check/hirdump.rs` |
 | `src/main.bn` | the command line: `build <file.bn> [-o <file.bvm>]` and the `burn dump` forms | |
 | `src/cli/` | the `burn` command line: running, checking and building programs and projects, `burni`, `burnc` and the `burn dump` forms | `main.rs`, `driver.rs`, `targets.rs` |
+| `src/doc/` | Burndoc comments and the HTML sites of `burn doc` | `doc/` |
+| `src/bin/gendoc.bn` | writes `src/doc/assets.bn` from `lib/doc` | |
 | `src/bin/burn.bn` | the program bvm runs when it is started as `burn`, `burni` or `burnc` (`share/burn/burn.bvm`) | |
 | `src/build.bn` | loads, checks and compiles a program to bvm assembly | `driver.rs`, `vm/mod.rs` |
 | `src/bin/genstd.bn` | writes `src/project/stdlib.bn` from `lib/std` | |
@@ -98,7 +100,8 @@ The inputs include the error-recovery fixtures in `tests/lexer` and `tests/parse
    - `burn init` makes bvm projects: `--target bvm` (the default) or `--target bar`, and `--workspace` makes a `common` library with one app per target (`bvm,bar` by default).
    - Bytecode libraries: `import "lib.bvmc"` and `import "<package>.bvmc"` work like in the Rust compiler. bvm describes each library's exported functions and types (`burn.library`), `src/check/check.bn` imports them the way `check/libs.rs` does, and bvm links them when the program runs or is written (`.bvmc` and `.bar`, with their resources). A package's bytecode is rebuilt when its sources are newer (`burn.stale`), through the `PackageBuilder` hook of the loader. Without the hooks, as when stage0 runs `src/main.bn`, library imports are still an error.
    - `burn repl` (`src/cli/repl.bn`) ports `repl.rs`. `checkRepl` checks the code typed so far again without errors or code and prints the value of the last expression, like the `skip_before` and `repl_echo` options of the Rust checker. bvm keeps the session's globals between inputs (`burn.replEval`), turns runtime errors into messages, and gives the command line its own type table back after each input.
-   - Next: `sources`, `doc` and `lsp`. It builds bvm bytecode only: the native x86-64 and JavaScript backends stay behind with the Rust compiler.
+   - `burn doc` (`src/cli/doc.bn`) ports `doc/`: `src/doc/comment.bn` parses Burndoc comments, `src/doc/model.bn` collects what each module documents, `src/doc/html.bn` writes the pages and the search index, and `src/doc/builtin_docs.bn` reads the built-in functions. Their declarations, the search script and the style sheet live in `lib/doc/`, and `src/bin/gendoc.bn` embeds them in `src/doc/assets.bn`. The suite compares whole sites with the Rust `burn doc`.
+   - Next: `sources` and `lsp`. It builds bvm bytecode only: the native x86-64 and JavaScript backends stay behind with the Rust compiler.
    - `scripts/package.sh` builds it with `compiler.bvm` and installs it as `share/burn/burn.bvm`. The runtime core (`bvm/runtime`) stays in Rust and is shared by both compilers; the rest of the runtime is written in Burn in `lib/runtime`.
 
 ## Stage0: the last compiler written in Rust

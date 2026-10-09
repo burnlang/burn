@@ -1,0 +1,246 @@
+import "std/math"
+import "../syntax/ast.bn"
+import "comment.bn"
+import "text.bn"
+
+/** What a documented item is, like `Kind` in `doc/model.rs`. */
+pub def enum Kind {
+    Function,
+    Struct(kind: StructKind),
+    Interface,
+    Enum,
+    Type,
+    Alias,
+    Annotation,
+    Value(isConst: bool)
+}
+
+pub def enum MemberKind { Field, Method, StaticMethod, AbstractMethod, StaticValue, Variant, Init, Destructor }
+
+pub def type SigParam {
+    string name
+    TypeExpr ty
+}
+
+pub def type Sig {
+    [SigParam] params
+    TypeExpr? ret
+    bool isAsync
+}
+
+pub def type Member {
+    MemberKind kind
+    string name
+    Sig? sig
+    TypeExpr? ty
+    string? value
+    DocComment? doc
+    bool private
+    bool isConst
+    [string] annotations
+}
+
+pub def type DocItem {
+    Kind kind
+    string name
+    bool public
+    bool private
+    Sig? sig
+    [SigParam]? ctor
+    string? extends
+    [string] implements
+    [Member] members
+    DocComment? doc
+    [string] annotations
+    TypeExpr? ty
+    string? value
+}
+
+pub def type DocModule {
+    string name
+    bool isStd
+    DocComment? doc
+    [DocItem] items
+}
+
+priv fun spanText(src: string, s: Span): string {
+    return squeezed(byteSlice(src, s.start, s.end))
+}
+
+priv fun docAt(src: string, offset: int): DocComment? {
+    var raw = docBefore(src, offset)
+    if (raw == null) {
+        return null
+    }
+    return parseDoc(raw)
+}
+
+priv fun paramsOf(ps: [Param]): [SigParam] {
+    [SigParam] out = []
+    for p in ps {
+        out.push(SigParam { name: p.name.name, ty: p.ty })
+    }
+    return out
+}
+
+priv fun funSig(f: FunDecl): Sig {
+    return Sig { params: paramsOf(f.params), ret: f.ret, isAsync: f.isAsync }
+}
+
+priv fun anns(src: string, a: [Annotation]): [string] {
+    [string] out = []
+    for x in a {
+        out.push(spanText(src, x.span))
+    }
+    return out
+}
+
+priv fun member(kind: MemberKind, name: string, sig: Sig?, ty: TypeExpr?, value: string?, doc: DocComment?, private: bool, isConst: bool, annotations: [string]): Member {
+    return Member { kind: kind, name: name, sig: sig, ty: ty, value: value, doc: doc, private: private, isConst: isConst, annotations: annotations }
+}
+
+priv fun valueText(src: string, e: Expr?): string? {
+    if (e == null) {
+        return null
+    }
+    return spanText(src, e.span)
+}
+
+priv fun fieldMember(src: string, f: Field): Member {
+    return member(MemberKind.Field, f.name.name, null, f.ty, valueText(src, f.value), docAt(src, min(f.ty.span.start, f.name.span.start)), f.vis == Vis.Priv, false, [])
+}
+
+/** The documentation of a module, like `model::build`. */
+pub fun buildDocModule(name: string, isStd: bool, src: string, m: Module): DocModule {
+    [DocItem] items = []
+    for it in m.items {
+        var doc = docAt(src, it.span.start)
+        var base = DocItem {
+            kind: Kind.Function,
+            name: "",
+            public: it.vis == Vis.Pub,
+            private: it.vis == Vis.Priv,
+            sig: null,
+            ctor: null,
+            extends: null,
+            implements: [],
+            members: [],
+            doc: doc,
+            annotations: anns(src, it.annotations),
+            ty: null,
+            value: null
+        }
+        var k = it.kind
+        if (k is ItemKind.Fun) {
+            base.name = k.decl.name.name
+            base.sig = funSig(k.decl)
+            base.annotations = anns(src, k.decl.annotations)
+            items.push(base)
+        } else if (k is ItemKind.Statement) {
+            var s = k.stmt.kind
+            if (s is StmtKind.Var) {
+                base.kind = Kind.Value(s.isConst)
+                base.name = s.name.name
+                base.ty = s.ty
+                base.value = valueText(src, s.init)
+                items.push(base)
+            }
+        } else if (k is ItemKind.Definition) {
+            var d = k.d
+            if (d is Def.Struct) {
+                var sd = d.s
+                base.kind = Kind.Struct(sd.kind)
+                base.name = sd.name.name
+                if (sd.kind != StructKind.Static) {
+                    base.ctor = paramsOf(sd.params)
+                }
+                var ext = sd.extends
+                if (ext != null) {
+                    base.extends = ext.name.name
+                }
+                for s in sd.supers {
+                    base.implements.push(s.name.name)
+                }
+                for p in sd.params {
+                    DocComment? pd = null
+                    if (doc != null) {
+                        var t = paramDoc(doc, p.name.name)
+                        if (t != null) {
+                            var one = emptyDoc()
+                            one.summary = firstSentence(t)
+                            one.body = [DocBlock.Para(t)]
+                            pd = one
+                        }
+                    }
+                    base.members.push(member(MemberKind.Field, p.name.name, null, p.ty, null, pd, false, false, []))
+                }
+                for f in sd.fields {
+                    base.members.push(fieldMember(src, f))
+                }
+                for sv in sd.statics {
+                    base.members.push(member(MemberKind.StaticValue, sv.name.name, null, sv.ty, spanText(src, sv.init.span), docAt(src, sv.name.span.start), sv.vis == Vis.Priv, sv.isConst, []))
+                }
+                for mt in sd.methods {
+                    var f = mt.decl
+                    var mk = MemberKind.Method
+                    if (f.isAbstract) {
+                        mk = MemberKind.AbstractMethod
+                    } else if (f.isStatic) {
+                        mk = MemberKind.StaticMethod
+                    } else if (f.name.name == "init") {
+                        mk = MemberKind.Init
+                    } else if (f.name.name == "destroy") {
+                        mk = MemberKind.Destructor
+                    }
+                    base.members.push(member(mk, f.name.name, funSig(f), null, null, docAt(src, f.span.start), mt.vis == Vis.Priv, false, anns(src, f.annotations)))
+                }
+                items.push(base)
+            } else if (d is Def.Interface) {
+                base.kind = Kind.Interface
+                base.name = d.name.name
+                for ms in d.methods {
+                    var sig = Sig { params: paramsOf(ms.params), ret: ms.ret, isAsync: ms.isAsync }
+                    base.members.push(member(MemberKind.AbstractMethod, ms.name.name, sig, null, null, docAt(src, ms.name.span.start), false, false, []))
+                }
+                items.push(base)
+            } else if (d is Def.Enum) {
+                base.kind = Kind.Enum
+                base.name = d.name.name
+                for v in d.variants {
+                    Sig? sig = null
+                    var fs = v.fields
+                    if (fs != null) {
+                        sig = Sig { params: paramsOf(fs), ret: null, isAsync: false }
+                    }
+                    base.members.push(member(MemberKind.Variant, v.name.name, sig, null, null, docAt(src, v.name.span.start), false, false, []))
+                }
+                items.push(base)
+            } else if (d is Def.Type) {
+                base.kind = Kind.Type
+                base.name = d.name.name
+                for f in d.fields {
+                    base.members.push(fieldMember(src, f))
+                }
+                items.push(base)
+            } else if (d is Def.Annotation) {
+                base.kind = Kind.Annotation
+                base.name = d.name.name
+                for f in d.fields {
+                    base.members.push(fieldMember(src, f))
+                }
+                items.push(base)
+            } else if (d is Def.Alias) {
+                base.kind = Kind.Alias
+                base.name = d.name.name
+                base.ty = d.ty
+                items.push(base)
+            }
+        }
+    }
+    DocComment? doc = null
+    var raw = moduleDoc(src)
+    if (raw != null) {
+        doc = parseDoc(raw)
+    }
+    return DocModule { name: name, isStd: isStd, doc: doc, items: items }
+}

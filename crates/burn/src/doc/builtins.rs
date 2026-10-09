@@ -21,7 +21,7 @@ impl Builtin {
     }
 }
 
-pub const SOURCE: &str = include_str!("builtins.bn");
+pub const SOURCE: &str = include_str!("../../../../lib/doc/builtins.bn");
 
 pub fn parse(src: &str) -> Vec<Builtin> {
     let mut out = Vec::new();

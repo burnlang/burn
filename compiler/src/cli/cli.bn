@@ -6,6 +6,7 @@ import "../project/loader.bn"
 import "../project/paths.bn"
 import "../project/project.bn"
 import "compile.bn"
+import "doc.bn"
 import "host.bn"
 import "init.bn"
 import "repl.bn"
@@ -819,7 +820,10 @@ pub fun cliMain(argv: [string]): int {
     if (first == "init" || first == "new") {
         return cmdInit(rest)
     }
-    if (first == "lsp" || first == "--lsp" || first == "sources" || first == "doc") {
+    if (first == "doc") {
+        return cmdDoc(rest)
+    }
+    if (first == "lsp" || first == "--lsp" || first == "sources") {
         return notYet(first)
     }
     if (first == "check") {

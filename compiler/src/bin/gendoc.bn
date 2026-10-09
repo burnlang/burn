@@ -1,0 +1,38 @@
+import "std/fs"
+
+/**
+ * Prints `compiler/src/doc/assets.bn`, which holds the files of `lib/doc` the way the Rust compiler embeds them with
+ * `include_str!`. Run it from the repository root: `burn compiler/src/bin/gendoc.bn > compiler/src/doc/assets.bn`.
+ */
+fun literal(s: string): string {
+    var out = "\""
+    for c in s {
+        if (c == "\\") {
+            out += "\\\\"
+        } else if (c == "\"") {
+            out += "\\\""
+        } else if (c == "$") {
+            out += "\\$"
+        } else if (c == "\n") {
+            out += "\\n"
+        } else if (c == "\t") {
+            out += "\\t"
+        } else if (c == "\r") {
+            out += "\\r"
+        } else {
+            out += c
+        }
+    }
+    return out + "\""
+}
+
+fun main() {
+    print("/** The declarations of the built-in functions, from `lib/doc/builtins.bn`, written by `compiler/src/bin/gendoc.bn`. */")
+    print("pub const BUILTINS_SOURCE = ${literal(readFile("lib/doc/builtins.bn"))}")
+    print("")
+    print("/** The search script of `burn doc` sites, from `lib/doc/search.js`. */")
+    print("pub const SEARCH_JS = ${literal(readFile("lib/doc/search.js"))}")
+    print("")
+    print("/** The style sheet of `burn doc` sites, from `lib/doc/style.css`. */")
+    print("pub const STYLE_CSS = ${literal(readFile("lib/doc/style.css"))}")
+}

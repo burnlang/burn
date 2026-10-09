@@ -1,0 +1,1316 @@
+import "../syntax/ast.bn"
+import "assets.bn"
+import "builtin_docs.bn"
+import "comment.bn"
+import "model.bn"
+import "std/math"
+import "std/strings"
+import "text.bn"
+
+/** Everything a documentation site shows, like `Site` in `doc/html.rs`. */
+pub def type Site {
+    string title
+    [DocModule] modules
+    [Builtin] builtins
+    bool private
+}
+
+/** A file of the site and its content. */
+pub def type Page {
+    string path
+    string content
+}
+
+priv const PRIMITIVES = ["int", "float", "string", "bool", "void", "any", "null", "Future"]
+
+priv const KEYWORDS = ["fun", "var", "const", "def", "struct", "type", "interface", "enum", "annotation", "abstract", "static", "if", "else", "while", "for", "in", "return", "break", "continue", "import", "pub", "priv", "async", "await", "is", "as", "new", "destroy", "self", "true", "false", "null"]
+
+priv const GROUPS = ["Output", "Input", "Conversion", "Strings", "Arrays", "Maps", "Math", "Random", "Time", "Files", "JSON", "HTTP", "Async", "Types", "Program"]
+
+priv fun esc(s: string): string {
+    return replace(replace(replace(replace(s, "&", "&amp;"), "<", "&lt;"), ">", "&gt;"), "\"", "&quot;")
+}
+
+priv fun slug(s: string): string {
+    var out = ""
+    for c in s {
+        if (alphanumeric(c) || c == "_" || c == ".") {
+            out += c
+        } else {
+            out += "-"
+        }
+    }
+    return out
+}
+
+pub fun moduleUrl(m: string): string {
+    return "m-${slug(m)}.html"
+}
+
+pub fun typeUrl(m: string, t: string): string {
+    return "t-${slug(m)}.${t}.html"
+}
+
+priv fun replaceFirst(s: string, from: string, to: string): string {
+    var i = indexOf(s, from)
+    if (i < 0) {
+        return s
+    }
+    return substring(s, 0, i) + to + substring(s, i + len(from), len(s))
+}
+
+priv fun kindLabel(k: Kind): string {
+    if (k is Kind.Function) {
+        return "function"
+    }
+    if (k is Kind.Struct) {
+        if (k.kind == StructKind.Abstract) {
+            return "abstract struct"
+        }
+        if (k.kind == StructKind.Static) {
+            return "static struct"
+        }
+        return "struct"
+    }
+    if (k is Kind.Interface) {
+        return "interface"
+    }
+    if (k is Kind.Enum) {
+        return "enum"
+    }
+    if (k is Kind.Type) {
+        return "type"
+    }
+    if (k is Kind.Alias) {
+        return "type alias"
+    }
+    if (k is Kind.Annotation) {
+        return "annotation"
+    }
+    if (k is Kind.Value && k.isConst) {
+        return "constant"
+    }
+    return "variable"
+}
+
+priv fun hasPage(k: Kind): bool {
+    return k is Kind.Struct || k is Kind.Interface || k is Kind.Enum || k is Kind.Type || k is Kind.Annotation
+}
+
+priv fun icon(k: Kind): string {
+    if (k is Kind.Function) {
+        return "i-fn"
+    }
+    if (k is Kind.Struct) {
+        return "i-st"
+    }
+    if (k is Kind.Interface) {
+        return "i-if"
+    }
+    if (k is Kind.Enum) {
+        return "i-en"
+    }
+    if (k is Kind.Value) {
+        return "i-va"
+    }
+    return "i-ty"
+}
+
+priv fun visible(items: [DocItem], private: bool): [DocItem] {
+    [DocItem] out = []
+    for i in items {
+        if (private || !i.private) {
+            out.push(i)
+        }
+    }
+    return out
+}
+
+priv fun itemUrl(m: string, it: DocItem): string {
+    if (hasPage(it.kind)) {
+        return typeUrl(m, it.name)
+    }
+    return "${moduleUrl(m)}#${slug(it.name)}"
+}
+
+priv def type LinkTarget {
+    string module
+    string url
+}
+
+/** Where names in documentation link to, like `Linker` in `doc/html.rs`. */
+priv def struct Linker() {
+    {string: [LinkTarget]} types = {}
+    {string: [LinkTarget]} funcs = {}
+    {string: string} builtins = {}
+
+    fun add(m: {string: [LinkTarget]}, name: string, t: LinkTarget) {
+        var list = m[name]
+        if (list == null) {
+            m[name] = [t]
+        } else {
+            list.push(t)
+        }
+    }
+
+    fun pick(list: [LinkTarget]?, module: string): string? {
+        if (list == null || len(list) == 0) {
+            return null
+        }
+        for t in list {
+            if (t.module == module) {
+                return t.url
+            }
+        }
+        return list[0].url
+    }
+
+    fun ty(name: string, module: string): string? {
+        return pick(types[name], module)
+    }
+
+    fun target(text: string, module: string): string? {
+        var t = trim(text)
+        while (endsWith(t, "()")) {
+            t = substring(t, 0, len(t) - 2)
+        }
+        var dot = indexOf(t, ".")
+        if (dot >= 0) {
+            var u = ty(substring(t, 0, dot), module)
+            if (u == null) {
+                return null
+            }
+            var b = substring(t, dot + 1, len(t))
+            while (endsWith(b, "()")) {
+                b = substring(b, 0, len(b) - 2)
+            }
+            return "${u}#${slug(b)}"
+        }
+        return ty(t, module) ?? pick(funcs[t], module) ?? builtins[t]
+    }
+}
+
+priv fun newLinker(site: Site): Linker {
+    var l = new Linker()
+    for m in site.modules {
+        for it in visible(m.items, site.private) {
+            if (hasPage(it.kind)) {
+                l.add(l.types, it.name, LinkTarget { module: m.name, url: typeUrl(m.name, it.name) })
+            } else {
+                l.add(l.funcs, it.name, LinkTarget { module: m.name, url: "${moduleUrl(m.name)}#${slug(it.name)}" })
+            }
+        }
+    }
+    for b in site.builtins {
+        var u = "builtins.html#${b.name}"
+        l.builtins[b.name] = u
+        for a in b.doc.aliases {
+            l.builtins[a] = u
+        }
+    }
+    return l
+}
+
+priv fun codeLike(code: string): bool {
+    for c in code {
+        if (!alphanumeric(c) && c != "." && c != "_" && c != "(" && c != ")") {
+            return false
+        }
+    }
+    return true
+}
+
+priv fun startsUpper(s: string): bool {
+    if (s == "") {
+        return false
+    }
+    return uppercase(substring(s, 0, 1))
+}
+
+/** Renders types and documentation text with links, for the pages of one module. */
+priv def struct Ctx(link: Linker, module: string) {
+    fun ty(t: TypeExpr): string {
+        var k = t.kind
+        if (k is TypeKind.Named) {
+            var n = k.name
+            var head = ""
+            if (contains(PRIMITIVES, n)) {
+                head = "<span class=\"prim\">${esc(n)}</span>"
+            } else {
+                var u = link.ty(n, module)
+                if (u != null) {
+                    head = "<a class=\"ty\" href=\"${u}\">${esc(n)}</a>"
+                } else {
+                    head = "<span class=\"ty\">${esc(n)}</span>"
+                }
+            }
+            if (len(k.args) == 0) {
+                return head
+            }
+            [string] args = []
+            for a in k.args {
+                args.push(ty(a))
+            }
+            return "${head}&lt;${joined(args, ", ")}&gt;"
+        }
+        if (k is TypeKind.Array) {
+            return "[${ty(k.elem)}]"
+        }
+        if (k is TypeKind.Optional) {
+            if (k.inner.kind is TypeKind.Func) {
+                return "(${ty(k.inner)})?"
+            }
+            return "${ty(k.inner)}?"
+        }
+        if (k is TypeKind.Map) {
+            return "{${ty(k.key)}: ${ty(k.value)}}"
+        }
+        if (k is TypeKind.Func) {
+            [string] ps = []
+            for p in k.params {
+                ps.push(ty(p))
+            }
+            var r = k.ret
+            if (r != null) {
+                return "<span class=\"kw\">fun</span>(${joined(ps, ", ")}): ${ty(r)}"
+            }
+            return "<span class=\"kw\">fun</span>(${joined(ps, ", ")})"
+        }
+        return ""
+    }
+
+    fun params(ps: [SigParam]): string {
+        [string] out = []
+        for p in ps {
+            out.push("<span class=\"pn\">${esc(p.name)}</span>: ${ty(p.ty)}")
+        }
+        return joined(out, ", ")
+    }
+
+    fun sig(prefix: string, name: string, s: Sig): string {
+        var r = ""
+        var ret = s.ret
+        if (ret != null) {
+            r = ": ${ty(ret)}"
+        }
+        var asyncKw = ""
+        if (s.isAsync) {
+            asyncKw = "<span class=\"kw\">async</span> "
+        }
+        return "${prefix}${asyncKw}<span class=\"kw\">fun</span> <span class=\"fn\">${esc(name)}</span>(${params(s.params)})${r}"
+    }
+
+    fun inline(text: string): string {
+        var out = ""
+        var rest = text
+        while (true) {
+            var tick = indexOf(rest, "`")
+            var tag = indexOf(rest, "{@")
+            var next = tick
+            if (next < 0 || (tag >= 0 && tag < next)) {
+                next = tag
+            }
+            if (next < 0) {
+                break
+            }
+            out += esc(substring(rest, 0, next))
+            var after = substring(rest, next, len(rest))
+            if (startsWith(after, "`")) {
+                var tail = substring(after, 1, len(after))
+                var e = indexOf(tail, "`")
+                if (e < 0) {
+                    out += esc(after)
+                    rest = ""
+                } else {
+                    var code = substring(tail, 0, e)
+                    string? u = null
+                    if (codeLike(code)) {
+                        u = link.target(code, module)
+                    }
+                    if (u != null && startsUpper(code)) {
+                        out += "<a href=\"${u}\"><code>${esc(code)}</code></a>"
+                    } else {
+                        out += "<code>${esc(code)}</code>"
+                    }
+                    rest = substring(after, 2 + e, len(after))
+                }
+            } else {
+                var e = indexOf(after, "}")
+                if (e < 0) {
+                    out += esc(after)
+                    rest = ""
+                } else {
+                    var inner = substring(after, 2, e)
+                    var tagName = inner
+                    var arg = ""
+                    var ws = whitespaceAt(inner)
+                    if (ws >= 0) {
+                        tagName = substring(inner, 0, ws)
+                        arg = substring(inner, ws + 1, len(inner))
+                    }
+                    arg = trim(arg)
+                    if (tagName == "link" || tagName == "linkplain") {
+                        var target = arg
+                        var label = arg
+                        var at = whitespaceAt(arg)
+                        if (at >= 0) {
+                            target = substring(arg, 0, at)
+                            label = substring(arg, at + 1, len(arg))
+                        }
+                        var u = link.target(target, module)
+                        if (u != null) {
+                            out += "<a href=\"${u}\"><code>${esc(trim(label))}</code></a>"
+                        } else {
+                            out += "<code>${esc(trim(label))}</code>"
+                        }
+                    } else {
+                        out += "<code>${esc(arg)}</code>"
+                    }
+                    rest = substring(after, e + 1, len(after))
+                }
+            }
+        }
+        return out + esc(rest)
+    }
+
+    fun body(d: DocComment): string {
+        var out = ""
+        for b in d.body {
+            if (b is DocBlock.Para) {
+                out += "<p>${inline(b.text)}</p>"
+            } else if (b is DocBlock.Code) {
+                out += "<pre class=\"code\"><code>${highlight(b.text)}</code></pre>"
+            } else if (b is DocBlock.List) {
+                out += "<ul>"
+                for it in b.items {
+                    out += "<li>${inline(it)}</li>"
+                }
+                out += "</ul>"
+            }
+        }
+        return out
+    }
+
+    fun tags(d: DocComment, ps: [SigParam]): string {
+        var out = ""
+        [string] keys = []
+        [string] values = []
+        if (len(d.params) > 0 || len(ps) > 0) {
+            var s = "<dl class=\"params\">"
+            for p in ps {
+                var desc = ""
+                var t = paramDoc(d, p.name)
+                if (t != null) {
+                    desc = inline(t)
+                }
+                s += "<dt><code>${esc(p.name)}</code></dt><dd>${desc}</dd>"
+            }
+            for dp in d.params {
+                var listed = false
+                for p in ps {
+                    if (p.name == dp.name) {
+                        listed = true
+                    }
+                }
+                if (!listed) {
+                    s += "<dt><code>${esc(dp.name)}</code></dt><dd>${inline(dp.text)}</dd>"
+                }
+            }
+            s += "</dl>"
+            keys.push("Parameters")
+            values.push(s)
+        }
+        var r = d.ret
+        if (r != null) {
+            keys.push("Returns")
+            values.push(inline(r))
+        }
+        if (len(d.throws) > 0) {
+            [string] ts = []
+            for t in d.throws {
+                ts.push(inline(t))
+            }
+            keys.push("Errors")
+            values.push(joined(ts, "<br>"))
+        }
+        if (len(d.see) > 0) {
+            [string] links = []
+            for s in d.see {
+                var u = link.target(s, module)
+                if (u != null) {
+                    links.push("<a href=\"${u}\"><code>${esc(s)}</code></a>")
+                } else {
+                    links.push(inline(s))
+                }
+            }
+            keys.push("See also")
+            values.push(joined(links, ", "))
+        }
+        var since = d.since
+        if (since != null) {
+            keys.push("Since")
+            values.push(esc(since))
+        }
+        if (len(d.authors) > 0) {
+            keys.push("Author")
+            values.push(esc(joined(d.authors, ", ")))
+        }
+        if (len(keys) > 0) {
+            out += "<dl class=\"tags\">"
+            for k in 0..len(keys) {
+                out += "<dt>${keys[k]}</dt><dd>${values[k]}</dd>"
+            }
+            out += "</dl>"
+        }
+        for ex in d.examples {
+            out += "<div class=\"example\"><div class=\"label\">Example</div><pre class=\"code\"><code>${highlight(ex)}</code></pre></div>"
+        }
+        return out
+    }
+
+    fun summary(d: DocComment?): string {
+        if (d == null) {
+            return ""
+        }
+        var s = inline(d.summary)
+        if (d.deprecated != null) {
+            s = "<span class=\"badge dep\">Deprecated</span> ${s}"
+        }
+        return s
+    }
+}
+
+priv fun deprecatedText(doc: DocComment?, anns: [string]): string? {
+    if (doc != null) {
+        var d = doc.deprecated
+        if (d != null) {
+            return d
+        }
+    }
+    for a in anns {
+        if (startsWith(a, "@Deprecated")) {
+            var inner = substring(a, len("@Deprecated"), len(a))
+            while (startsWith(inner, "@Deprecated")) {
+                inner = substring(inner, len("@Deprecated"), len(inner))
+            }
+            while (startsWith(inner, "(")) {
+                inner = substring(inner, 1, len(inner))
+            }
+            while (endsWith(inner, ")")) {
+                inner = substring(inner, 0, len(inner) - 1)
+            }
+            while (startsWith(inner, "\"")) {
+                inner = substring(inner, 1, len(inner))
+            }
+            while (endsWith(inner, "\"")) {
+                inner = substring(inner, 0, len(inner) - 1)
+            }
+            return inner
+        }
+    }
+    return null
+}
+
+priv fun quotesIn(s: string): int {
+    var n = 0
+    for c in s {
+        if (c == "\"") {
+            n += 1
+        }
+    }
+    return n
+}
+
+priv fun isAsciiDigit(c: string): bool {
+    return c >= "0" && c <= "9" && len(c) == 1
+}
+
+priv fun isAsciiAlphanumeric(c: string): bool {
+    return len(c) == 1 && ((c >= "0" && c <= "9") || (c >= "a" && c <= "z") || (c >= "A" && c <= "Z"))
+}
+
+/** Code with spans for strings, keywords, types, numbers and comments. */
+pub fun highlight(code: string): string {
+    var out = ""
+    for line in split(code, "\n") {
+        var src = line
+        string? comment = null
+        var ci = indexOf(line, "//")
+        if (ci >= 0 && quotesIn(substring(line, 0, ci)) % 2 == 0) {
+            src = substring(line, 0, ci)
+            comment = substring(line, ci, len(line))
+        }
+        [string] chars = []
+        for c in src {
+            chars.push(c)
+        }
+        var i = 0
+        var n = len(chars)
+        while (i < n) {
+            var c = chars[i]
+            if (c == "\"") {
+                var start = i
+                i += 1
+                while (i < n && chars[i] != "\"") {
+                    if (chars[i] == "\\") {
+                        i += 1
+                    }
+                    i += 1
+                }
+                i = min(i + 1, n)
+                out += "<span class=\"s\">${esc(joined(slice(chars, start, i), ""))}</span>"
+            } else if (isLetter(c) || c == "_") {
+                var start = i
+                while (i < n && (alphanumeric(chars[i]) || chars[i] == "_")) {
+                    i += 1
+                }
+                var w = joined(slice(chars, start, i), "")
+                if (contains(KEYWORDS, w)) {
+                    out += "<span class=\"k\">${w}</span>"
+                } else if (contains(PRIMITIVES, w) || startsUpper(w)) {
+                    out += "<span class=\"t\">${w}</span>"
+                } else {
+                    out += esc(w)
+                }
+            } else if (isAsciiDigit(c)) {
+                var start = i
+                while (i < n && (isAsciiAlphanumeric(chars[i]) || chars[i] == "." || chars[i] == "_")) {
+                    i += 1
+                }
+                out += "<span class=\"n\">${esc(joined(slice(chars, start, i), ""))}</span>"
+            } else {
+                out += esc(c)
+                i += 1
+            }
+        }
+        if (comment != null) {
+            out += "<span class=\"c\">${esc(comment)}</span>"
+        }
+        out += "\n"
+    }
+    return substring(out, 0, len(out) - 1)
+}
+
+priv fun navSection(site: Site, label: string, isStd: bool, current: string): string {
+    var side = ""
+    var any = false
+    for m in site.modules {
+        if (m.isStd == isStd) {
+            any = true
+        }
+    }
+    if (!any) {
+        return ""
+    }
+    side += "<div class=\"nav-h\">${label}</div><ul>"
+    for m in site.modules {
+        if (m.isStd != isStd) {
+            continue
+        }
+        var u = moduleUrl(m.name)
+        var on = ""
+        if (u == current) {
+            on = " class=\"on\""
+        }
+        side += "<li><a href=\"${u}\"${on}>${esc(m.name)}</a></li>"
+    }
+    return side + "</ul>"
+}
+
+priv fun layout(site: Site, title: string, current: string, nav: string, main: string): string {
+    var side = navSection(site, "Modules", false, current) + navSection(site, "Standard library", true, current)
+    if (len(site.builtins) > 0) {
+        var on = ""
+        if (current == "builtins.html") {
+            on = " class=\"on\""
+        }
+        side += "<div class=\"nav-h\">Language</div><ul><li><a href=\"builtins.html\"${on}>Built-in functions</a></li></ul>"
+    }
+    var t = esc(title)
+    var s = esc(site.title)
+    return joined([
+        "<!doctype html>",
+        "<html lang=\"en\">",
+        "<head>",
+        "<meta charset=\"utf-8\">",
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+        "<title>${t} · ${s}</title>",
+        "<link rel=\"stylesheet\" href=\"style.css\">",
+        "</head>",
+        "<body>",
+        "<header class=\"top\">",
+        "<a class=\"brand\" href=\"index.html\"><span class=\"flame\">&#x1F525;</span> ${s}</a>",
+        "<div class=\"search\"><input id=\"q\" type=\"search\" placeholder=\"Search  /\" autocomplete=\"off\" aria-label=\"Search\"><div id=\"results\" hidden></div></div>",
+        "</header>",
+        "<div class=\"wrap\">",
+        "<nav class=\"side\">${side}${nav}</nav>",
+        "<main>${main}",
+        "<footer>Generated by <code>burn doc</code></footer>",
+        "</main>",
+        "</div>",
+        "<script src=\"search-index.js\"></script>",
+        "<script src=\"search.js\"></script>",
+        "</body>",
+        "</html>",
+        ""
+    ], "\n")
+}
+
+priv fun itemNav(m: DocModule, private: bool, current: string): string {
+    var out = "<div class=\"nav-h\">In ${esc(m.name)}</div><ul class=\"items\">"
+    for it in visible(m.items, private) {
+        var u = itemUrl(m.name, it)
+        var on = ""
+        if (u == current) {
+            on = " class=\"on\""
+        }
+        out += "<li><a href=\"${u}\"${on}><span class=\"ic ${icon(it.kind)}\"></span>${esc(it.name)}</a></li>"
+    }
+    return out + "</ul>"
+}
+
+priv fun pubKw(public: bool): string {
+    if (public) {
+        return "<span class=\"kw\">pub</span> "
+    }
+    return ""
+}
+
+priv fun linkName(ctx: Ctx, n: string): string {
+    var u = ctx.link.ty(n, ctx.module)
+    if (u != null) {
+        return "<a class=\"ty\" href=\"${u}\">${esc(n)}</a>"
+    }
+    return "<span class=\"ty\">${esc(n)}</span>"
+}
+
+priv fun itemHead(ctx: Ctx, it: DocItem): string {
+    var k = it.kind
+    if (k is Kind.Function) {
+        var s = it.sig
+        if (s != null) {
+            return ctx.sig(pubKw(it.public), it.name, s)
+        }
+        return ""
+    }
+    if (k is Kind.Value) {
+        var kw = "var"
+        if (k.isConst) {
+            kw = "const"
+        }
+        var tyText = ""
+        var t = it.ty
+        if (t != null) {
+            tyText = ": ${ctx.ty(t)}"
+        }
+        var v = ""
+        var value = it.value
+        if (value != null) {
+            v = " = ${esc(value)}"
+        }
+        return "${pubKw(it.public)}<span class=\"kw\">${kw}</span> <span class=\"fn\">${esc(it.name)}</span>${tyText}${v}"
+    }
+    if (k is Kind.Alias) {
+        var tyText = ""
+        var t = it.ty
+        if (t != null) {
+            tyText = ctx.ty(t)
+        }
+        return "<span class=\"kw\">def type</span> <span class=\"fn\">${esc(it.name)}</span> = ${tyText}"
+    }
+    var kw = "def type"
+    if (k is Kind.Struct) {
+        kw = "def struct"
+        if (k.kind == StructKind.Abstract) {
+            kw = "def abstract struct"
+        } else if (k.kind == StructKind.Static) {
+            kw = "def static struct"
+        }
+    } else if (k is Kind.Interface) {
+        kw = "def interface"
+    } else if (k is Kind.Enum) {
+        kw = "def enum"
+    } else if (k is Kind.Annotation) {
+        kw = "def annotation"
+    }
+    var s = "${pubKw(it.public)}<span class=\"kw\">${kw}</span> <span class=\"fn\">${esc(it.name)}</span>"
+    var c = it.ctor
+    if (c != null && len(c) > 0) {
+        s += "(${ctx.params(c)})"
+    }
+    var e = it.extends
+    if (e != null) {
+        s += " : ${linkName(ctx, e)}"
+    }
+    if (len(it.implements) > 0) {
+        [string] names = []
+        for x in it.implements {
+            names.push(linkName(ctx, x))
+        }
+        s += " :: ${joined(names, ", ")}"
+    }
+    return s
+}
+
+priv fun detail(ctx: Ctx, id: string, name: string, head: string, doc: DocComment?, anns: [string], ps: [SigParam]): string {
+    var out = "<section class=\"member\" id=\"${slug(id)}\"><h3><a href=\"#${slug(id)}\">${esc(name)}</a></h3>"
+    for a in anns {
+        if (!startsWith(a, "@Deprecated")) {
+            out += "<div class=\"ann\">${esc(a)}</div>"
+        }
+    }
+    out += "<pre class=\"sig\">${head}</pre>"
+    var dep = deprecatedText(doc, anns)
+    if (dep != null) {
+        out += "<div class=\"deprecated\"><b>Deprecated.</b> ${ctx.inline(dep)}</div>"
+    }
+    if (doc != null) {
+        out += ctx.body(doc)
+        out += ctx.tags(doc, ps)
+    } else {
+        out += "<p class=\"undoc\">No description.</p>"
+    }
+    return out + "</section>"
+}
+
+priv def type Row {
+    string name
+    string text
+}
+
+priv fun summaryTable(title: string, rows: [Row]): string {
+    if (len(rows) == 0) {
+        return ""
+    }
+    var out = "<h2>${title}</h2><table class=\"summary\"><tbody>"
+    for r in rows {
+        out += "<tr><td class=\"name\">${r.name}</td><td>${r.text}</td></tr>"
+    }
+    return out + "</tbody></table>"
+}
+
+priv fun miniSig(ctx: Ctx, name: string, s: Sig): string {
+    return replace(ctx.sig("", name, s), "<span class=\"kw\">fun</span> ", "")
+}
+
+priv fun depBadge(doc: DocComment?, anns: [string]): string {
+    var undocumented = doc == null || doc.deprecated == null
+    if (undocumented && deprecatedText(null, anns) != null) {
+        return "<span class=\"badge dep\">Deprecated</span> "
+    }
+    return ""
+}
+
+priv fun inGroup(group: int, k: Kind): bool {
+    if (group == 0) {
+        return k is Kind.Struct
+    }
+    if (group == 1) {
+        return k is Kind.Interface
+    }
+    if (group == 2) {
+        return k is Kind.Enum
+    }
+    if (group == 3) {
+        return k is Kind.Type || k is Kind.Alias || k is Kind.Annotation
+    }
+    if (group == 4) {
+        return k is Kind.Function
+    }
+    return k is Kind.Value
+}
+
+priv fun modulePage(site: Site, link: Linker, m: DocModule): Page {
+    var ctx = new Ctx(link, m.name)
+    var url = moduleUrl(m.name)
+    var kind = "module"
+    if (m.isStd) {
+        kind = "standard library module"
+    }
+    var main = "<div class=\"crumbs\"><a href=\"index.html\">Overview</a> / ${esc(m.name)}</div><h1><span class=\"kind\">${kind}</span>${esc(m.name)}</h1>"
+    var md = m.doc
+    if (md != null) {
+        main += ctx.body(md)
+        main += ctx.tags(md, [])
+    }
+    var items = visible(m.items, site.private)
+    var titles = ["Structs", "Interfaces", "Enums", "Types and annotations", "Functions", "Constants and variables"]
+    for g in 0..len(titles) {
+        [Row] rows = []
+        for i in items {
+            if (!inGroup(g, i.kind)) {
+                continue
+            }
+            var u = "#${slug(i.name)}"
+            if (hasPage(i.kind)) {
+                u = typeUrl(m.name, i.name)
+            }
+            var name = "<a href=\"${u}\"><code>${esc(i.name)}</code></a>"
+            var s = i.sig
+            if (s != null) {
+                name += "<div class=\"mini\">${miniSig(ctx, i.name, s)}</div>"
+            }
+            var label = ""
+            var k = i.kind
+            if (k is Kind.Struct) {
+                if (k.kind == StructKind.Abstract) {
+                    label = "<span class=\"badge\">abstract</span> "
+                } else if (k.kind == StructKind.Static) {
+                    label = "<span class=\"badge\">static</span> "
+                }
+            }
+            rows.push(Row { name: name, text: label + depBadge(i.doc, i.annotations) + ctx.summary(i.doc) })
+        }
+        main += summaryTable(titles[g], rows)
+    }
+    [DocItem] details = []
+    for i in items {
+        if (!hasPage(i.kind)) {
+            details.push(i)
+        }
+    }
+    if (len(details) > 0) {
+        main += "<h2>Details</h2>"
+        for i in details {
+            [SigParam] ps = []
+            var s = i.sig
+            if (s != null) {
+                ps = s.params
+            }
+            main += detail(ctx, i.name, i.name, itemHead(ctx, i), i.doc, i.annotations, ps)
+        }
+    }
+    var nav = itemNav(m, site.private, url)
+    return Page { path: url, content: layout(site, m.name, url, nav, main) }
+}
+
+priv def type Found {
+    DocModule module
+    DocItem item
+}
+
+priv fun findItem(site: Site, name: string, module: string): Found? {
+    Found? found = null
+    for m in site.modules {
+        for i in m.items {
+            if (i.name == name && hasPage(i.kind)) {
+                if (m.name == module) {
+                    return Found { module: m, item: i }
+                }
+                if (found == null) {
+                    found = Found { module: m, item: i }
+                }
+                break
+            }
+        }
+    }
+    return found
+}
+
+priv fun memberRow(ctx: Ctx, it: DocItem, x: Member): Row {
+    var name = "<a href=\"#${slug(x.name)}\"><code>${esc(x.name)}</code></a>"
+    var s = x.sig
+    if (s != null) {
+        name += "<div class=\"mini\">${miniSig(ctx, x.name, s)}</div>"
+    } else {
+        var t = x.ty
+        if (t != null) {
+            name += "<div class=\"mini\">${ctx.ty(t)}</div>"
+        }
+    }
+    var badge = ""
+    if (x.kind == MemberKind.AbstractMethod && !(it.kind is Kind.Interface)) {
+        badge = "<span class=\"badge\">abstract</span> "
+    } else if (x.kind == MemberKind.StaticMethod || x.kind == MemberKind.StaticValue) {
+        badge = "<span class=\"badge\">static</span> "
+    }
+    return Row { name: name, text: badge + depBadge(x.doc, x.annotations) + ctx.summary(x.doc) }
+}
+
+priv fun inMemberGroup(group: int, k: MemberKind): bool {
+    if (group == 0) {
+        return k == MemberKind.Variant
+    }
+    if (group == 1) {
+        return k == MemberKind.Field
+    }
+    if (group == 2) {
+        return k == MemberKind.StaticValue
+    }
+    if (group == 3) {
+        return k == MemberKind.Method || k == MemberKind.AbstractMethod || k == MemberKind.Init || k == MemberKind.Destructor
+    }
+    return k == MemberKind.StaticMethod
+}
+
+priv fun memberHead(ctx: Ctx, it: DocItem, x: Member): string {
+    var s = x.sig
+    if (x.kind == MemberKind.Variant) {
+        if (s != null) {
+            return "${esc(it.name)}.<span class=\"fn\">${esc(x.name)}</span>(${ctx.params(s.params)})"
+        }
+        return "${esc(it.name)}.<span class=\"fn\">${esc(x.name)}</span>"
+    }
+    var privKw = ""
+    if (x.private) {
+        privKw = "<span class=\"kw\">priv</span> "
+    }
+    if (s != null) {
+        var prefix = ""
+        if (x.kind == MemberKind.StaticMethod) {
+            prefix = "<span class=\"kw\">static</span> "
+        } else if (x.kind == MemberKind.AbstractMethod && !(it.kind is Kind.Interface)) {
+            prefix = "<span class=\"kw\">abstract</span> "
+        }
+        return replaceFirst(ctx.sig(privKw, x.name, s), "<span class=\"kw\">fun</span>", "${prefix}<span class=\"kw\">fun</span>")
+    }
+    var kw = ""
+    if (x.kind == MemberKind.StaticValue) {
+        if (x.isConst) {
+            kw = "<span class=\"kw\">static const</span> "
+        } else {
+            kw = "<span class=\"kw\">static var</span> "
+        }
+    }
+    var tyText = ""
+    var t = x.ty
+    if (t != null) {
+        tyText = ": ${ctx.ty(t)}"
+    }
+    var v = ""
+    var value = x.value
+    if (value != null) {
+        v = " = ${esc(value)}"
+    }
+    return "${privKw}${kw}<span class=\"fn\">${esc(x.name)}</span>${tyText}${v}"
+}
+
+priv fun typePage(site: Site, link: Linker, m: DocModule, it: DocItem): Page {
+    var ctx = new Ctx(link, m.name)
+    var url = typeUrl(m.name, it.name)
+    var main = "<div class=\"crumbs\"><a href=\"index.html\">Overview</a> / <a href=\"${moduleUrl(m.name)}\">${esc(m.name)}</a> / ${esc(it.name)}</div><h1><span class=\"kind\">${kindLabel(it.kind)}</span>${esc(it.name)}</h1>"
+    [string] chain = []
+    var cur = it.extends
+    var guard = 0
+    while (cur != null) {
+        guard += 1
+        if (guard > 32) {
+            break
+        }
+        chain.push(cur)
+        var f = findItem(site, cur, m.name)
+        if (f == null) {
+            cur = null
+        } else {
+            cur = f.item.extends
+        }
+    }
+    if (len(chain) > 0) {
+        [string] names = []
+        var j = len(chain) - 1
+        while (j >= 0) {
+            names.push(linkName(ctx, chain[j]))
+            j -= 1
+        }
+        main += "<div class=\"hier\">${joined(names, " ← ")} ← ${esc(it.name)}</div>"
+    }
+    for a in it.annotations {
+        if (!startsWith(a, "@Deprecated")) {
+            main += "<div class=\"ann\">${esc(a)}</div>"
+        }
+    }
+    main += "<pre class=\"sig\">${itemHead(ctx, it)}</pre>"
+    [string] subs = []
+    for om in site.modules {
+        for oi in om.items {
+            if (oi.extends == it.name || contains(oi.implements, it.name)) {
+                subs.push("<a class=\"ty\" href=\"${typeUrl(om.name, oi.name)}\">${esc(oi.name)}</a>")
+            }
+        }
+    }
+    var dep = deprecatedText(it.doc, it.annotations)
+    if (dep != null) {
+        main += "<div class=\"deprecated\"><b>Deprecated.</b> ${ctx.inline(dep)}</div>"
+    }
+    var d = it.doc
+    if (d != null) {
+        main += ctx.body(d)
+        var d2 = DocComment {
+            summary: d.summary,
+            body: d.body,
+            params: [],
+            ret: d.ret,
+            throws: d.throws,
+            see: d.see,
+            since: d.since,
+            deprecated: d.deprecated,
+            examples: d.examples,
+            authors: d.authors,
+            group: d.group,
+            aliases: d.aliases
+        }
+        main += ctx.tags(d2, [])
+    } else {
+        main += "<p class=\"undoc\">No description.</p>"
+    }
+    if (len(subs) > 0) {
+        var label = "Extended by"
+        if (it.kind is Kind.Interface) {
+            label = "Implemented by"
+        }
+        main += "<dl class=\"tags\"><dt>${label}</dt><dd>${joined(subs, ", ")}</dd></dl>"
+    }
+    [Member] members = []
+    for x in it.members {
+        if (site.private || !x.private) {
+            members.push(x)
+        }
+    }
+    var c = it.ctor
+    if (c != null) {
+        main += "<h2>Constructor</h2><pre class=\"sig\"><span class=\"kw\">new</span> <span class=\"fn\">${esc(it.name)}</span>(${ctx.params(c)})</pre>"
+        if (d != null && len(c) > 0) {
+            var only = emptyDoc()
+            only.params = d.params
+            main += ctx.tags(only, c)
+        }
+    }
+    var titles = ["Variants", "Fields", "Static values", "Methods", "Static functions"]
+    for g in 0..len(titles) {
+        [Row] rows = []
+        for x in members {
+            if (inMemberGroup(g, x.kind)) {
+                rows.push(memberRow(ctx, it, x))
+            }
+        }
+        main += summaryTable(titles[g], rows)
+    }
+    [string] own = []
+    for x in it.members {
+        own.push(x.name)
+    }
+    var parent = it.extends
+    guard = 0
+    while (parent != null) {
+        guard += 1
+        if (guard > 32) {
+            break
+        }
+        var f = findItem(site, parent, m.name)
+        if (f == null) {
+            break
+        }
+        [string] inherited = []
+        for x in f.item.members {
+            if ((x.kind == MemberKind.Method || x.kind == MemberKind.Field || x.kind == MemberKind.AbstractMethod) && !contains(own, x.name) && !x.private) {
+                inherited.push("<a href=\"${typeUrl(f.module.name, f.item.name)}#${slug(x.name)}\"><code>${esc(x.name)}</code></a>")
+            }
+        }
+        if (len(inherited) > 0) {
+            main += "<div class=\"inherited\"><b>Inherited from ${linkName(ctx, parent)}:</b> ${joined(inherited, ", ")}</div>"
+        }
+        parent = f.item.extends
+    }
+    if (len(members) > 0) {
+        main += "<h2>Details</h2>"
+        for x in members {
+            [SigParam] ps = []
+            var s = x.sig
+            if (s != null) {
+                ps = s.params
+            }
+            main += detail(ctx, x.name, x.name, memberHead(ctx, it, x), x.doc, x.annotations, ps)
+        }
+    }
+    var nav = itemNav(m, site.private, url)
+    return Page { path: url, content: layout(site, "${kindLabel(it.kind)} ${it.name}", url, nav, main) }
+}
+
+priv fun groupOf(b: Builtin): string {
+    return b.doc.group ?? "Other"
+}
+
+priv fun builtinsPage(site: Site, link: Linker): Page {
+    var ctx = new Ctx(link, "")
+    var main = "<div class=\"crumbs\"><a href=\"index.html\">Overview</a> / Built-in functions</div><h1><span class=\"kind\">language</span>Built-in functions</h1><p>These functions are always available, without an import. Functions that take a value first can also be called as methods on it: <code>text.upper()</code> is <code>upper(text)</code>.</p>"
+    [string] groups = []
+    for g in GROUPS {
+        groups.push(g)
+    }
+    for b in site.builtins {
+        var g = groupOf(b)
+        if (!contains(groups, g)) {
+            groups.push(g)
+        }
+    }
+    var nav = "<div class=\"nav-h\">Groups</div><ul class=\"items\">"
+    for g in groups {
+        [Row] rows = []
+        for b in site.builtins {
+            if (groupOf(b) != g) {
+                continue
+            }
+            var aliases = ""
+            if (len(b.doc.aliases) > 0) {
+                [string] codes = []
+                for a in b.doc.aliases {
+                    codes.push("<code>${esc(a)}</code>")
+                }
+                aliases = "<div class=\"mini\">also ${joined(codes, ", ")}</div>"
+            }
+            rows.push(Row { name: "<a href=\"#${b.name}\"><code>${esc(b.name)}</code></a>${aliases}", text: ctx.summary(b.doc) })
+        }
+        if (len(rows) == 0) {
+            continue
+        }
+        nav += "<li><a href=\"#g-${slug(g)}\">${esc(g)}</a></li>"
+        main += "<div id=\"g-${slug(g)}\"></div>"
+        main += summaryTable(g, rows)
+    }
+    nav += "</ul>"
+    main += "<h2>Details</h2>"
+    for b in site.builtins {
+        var head = highlight(b.sig)
+        var d = b.doc
+        var extra = ""
+        var shown = d
+        if (len(d.aliases) > 0) {
+            [string] codes = []
+            for a in d.aliases {
+                codes.push("<code>${esc(a)}</code>")
+            }
+            extra = "<dl class=\"tags\"><dt>Also called</dt><dd>${joined(codes, ", ")}</dd></dl>"
+            shown = DocComment {
+                summary: d.summary,
+                body: d.body,
+                params: d.params,
+                ret: d.ret,
+                throws: d.throws,
+                see: d.see,
+                since: d.since,
+                deprecated: d.deprecated,
+                examples: d.examples,
+                authors: d.authors,
+                group: d.group,
+                aliases: []
+            }
+        }
+        var mod = builtinModule(b)
+        if (mod != null) {
+            extra += "<dl class=\"tags\"><dt>Import</dt><dd><code>import \"std/${mod}\"</code></dd></dl>"
+        }
+        var s = detail(ctx, b.name, b.name, head, shown, [], [])
+        main += substring(s, 0, len(s) - len("</section>")) + extra + "</section>"
+    }
+    return Page { path: "builtins.html", content: layout(site, "Built-in functions", "builtins.html", nav, main) }
+}
+
+priv fun indexPage(site: Site, link: Linker): Page {
+    var ctx = new Ctx(link, "")
+    var main = "<h1><span class=\"kind\">documentation</span>${esc(site.title)}</h1>"
+    for m in site.modules {
+        if (!m.isStd) {
+            var d = m.doc
+            if (d != null) {
+                main += ctx.body(d)
+            }
+            break
+        }
+    }
+    var titles = ["Modules", "Standard library"]
+    for k in 0..2 {
+        [Row] rows = []
+        for m in site.modules {
+            if (m.isStd != (k == 1)) {
+                continue
+            }
+            var summary = ""
+            var d = m.doc
+            if (d != null) {
+                summary = ctx.inline(d.summary)
+            } else {
+                var n = len(visible(m.items, site.private))
+                var plural = "s"
+                if (n == 1) {
+                    plural = ""
+                }
+                summary = "<span class=\"undoc\">${n} documented item${plural}</span>"
+            }
+            rows.push(Row { name: "<a href=\"${moduleUrl(m.name)}\"><code>${esc(m.name)}</code></a>", text: summary })
+        }
+        main += summaryTable(titles[k], rows)
+    }
+    if (len(site.builtins) > 0) {
+        main += summaryTable("Language", [Row { name: "<a href=\"builtins.html\"><code>builtins</code></a>", text: "${len(site.builtins)} built-in functions for output, strings, arrays, maps, math, files, JSON, HTTP and more." }])
+    }
+    return Page { path: "index.html", content: layout(site, "Overview", "index.html", "", main) }
+}
+
+priv fun stripTags(s: string): string {
+    var out = ""
+    var tag = false
+    for c in s {
+        if (c == "<") {
+            tag = true
+        } else if (c == ">") {
+            tag = false
+        } else if (!tag) {
+            out += c
+        }
+    }
+    return replace(replace(replace(replace(out, "&lt;", "<"), "&gt;", ">"), "&quot;", "\""), "&amp;", "&")
+}
+
+priv fun js(s: string): string {
+    return replace(replace(replace(s, "\\", "\\\\"), "\"", "\\\""), "\n", " ")
+}
+
+priv fun searchIndex(site: Site, link: Linker): string {
+    [string] entries = []
+    var ctx = new Ctx(link, "")
+    for m in site.modules {
+        entries.push("[\"${js(m.name)}\",\"module\",\"${moduleUrl(m.name)}\",\"\"]")
+        for it in visible(m.items, site.private) {
+            var u = itemUrl(m.name, it)
+            var s = stripTags(ctx.summary(it.doc))
+            entries.push("[\"${js(it.name)}\",\"${kindLabel(it.kind)}\",\"${u}\",\"${js(s)}\"]")
+            if (hasPage(it.kind)) {
+                for x in it.members {
+                    if (site.private || !x.private) {
+                        var xs = stripTags(ctx.summary(x.doc))
+                        entries.push("[\"${js(it.name)}.${js(x.name)}\",\"member\",\"${u}#${slug(x.name)}\",\"${js(xs)}\"]")
+                    }
+                }
+            }
+        }
+    }
+    for b in site.builtins {
+        var s = stripTags(ctx.summary(b.doc))
+        entries.push("[\"${js(b.name)}\",\"builtin\",\"builtins.html#${b.name}\",\"${js(s)}\"]")
+        for a in b.doc.aliases {
+            entries.push("[\"${js(a)}\",\"builtin\",\"builtins.html#${b.name}\",\"${js(s)}\"]")
+        }
+    }
+    return "window.BURNDOC=[\n${joined(entries, ",\n")}\n];\n"
+}
+
+/** Every page of the site, like `html::render`. */
+pub fun renderSite(site: Site): [Page] {
+    var link = newLinker(site)
+    [Page] pages = [indexPage(site, link)]
+    for m in site.modules {
+        pages.push(modulePage(site, link, m))
+        for it in visible(m.items, site.private) {
+            if (hasPage(it.kind)) {
+                pages.push(typePage(site, link, m, it))
+            }
+        }
+    }
+    if (len(site.builtins) > 0) {
+        pages.push(builtinsPage(site, link))
+    }
+    pages.push(Page { path: "search-index.js", content: searchIndex(site, link) })
+    pages.push(Page { path: "search.js", content: SEARCH_JS })
+    pages.push(Page { path: "style.css", content: STYLE_CSS })
+    return pages
+}

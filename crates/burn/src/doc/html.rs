@@ -1114,11 +1114,11 @@ pub fn render(site: &Site) -> Vec<Page> {
     });
     pages.push(Page {
         path: "search.js".into(),
-        content: include_str!("search.js").into(),
+        content: include_str!("../../../../lib/doc/search.js").into(),
     });
     pages.push(Page {
         path: "style.css".into(),
-        content: include_str!("style.css").into(),
+        content: include_str!("../../../../lib/doc/style.css").into(),
     });
     pages
 }

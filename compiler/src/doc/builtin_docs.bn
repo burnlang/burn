@@ -1,0 +1,83 @@
+import "../check/builtins.bn"
+import "assets.bn"
+import "comment.bn"
+import "text.bn"
+
+/** A built-in function with its signature and documentation, like `Builtin` in `doc/builtins.rs`. */
+pub def type Builtin {
+    string name
+    string sig
+    DocComment doc
+}
+
+/** The standard library module a built-in function needs, if any. */
+pub fun builtinModule(b: Builtin): string? {
+    return homeModule(b.name)
+}
+
+/** The documentation of a built-in function as Markdown, with the import it needs. */
+pub fun builtinMarkdown(b: Builtin): string {
+    var text = toMarkdown(b.doc)
+    var m = builtinModule(b)
+    if (m != null) {
+        return "Needs `import \"std/${m}\"`.\n\n${text}"
+    }
+    return text
+}
+
+/** The built-in functions declared in `src`, in their order: each `fun` line after a doc comment. */
+pub fun parseBuiltins(src: string): [Builtin] {
+    [Builtin] out = []
+    var lines = textLines(src)
+    var i = 0
+    while (i < len(lines)) {
+        var open = indexOf(lines[i], "/**")
+        if (open < 0) {
+            i += 1
+            continue
+        }
+        [string] raw = [substring(lines[i], open, len(lines[i]))]
+        while (!contains(raw[len(raw) - 1], "*/") && i + 1 < len(lines)) {
+            i += 1
+            raw.push(lines[i])
+        }
+        var last = raw[len(raw) - 1]
+        raw[len(raw) - 1] = substring(last, 0, indexOf(last, "*/") + 2)
+        i += 1
+        var sig = ""
+        var j = i
+        while (j < len(lines) && sig == "") {
+            sig = trim(lines[j])
+            j += 1
+        }
+        if (!startsWith(sig, "fun ")) {
+            continue
+        }
+        var name = ""
+        for c in substring(sig, 4, len(sig)) {
+            if (!alphanumeric(c) && c != "_") {
+                break
+            }
+            name += c
+        }
+        if (name != "") {
+            out.push(Builtin { name: name, sig: sig, doc: parseDoc(join(raw, "\n")) })
+        }
+    }
+    return out
+}
+
+/** Every built-in function, from `lib/doc/builtins.bn`. */
+pub fun allBuiltins(): [Builtin] {
+    return parseBuiltins(BUILTINS_SOURCE)
+}
+
+/** The built-in function called `name` or with `name` as an alias. */
+pub fun findBuiltin(all: [Builtin], name: string): Builtin? {
+    for b in all {
+        if (b.name == name || contains(b.doc.aliases, name)) {
+            return b
+        }
+    }
+    return null
+}
