@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["bvm", "bvm/runtime", "crates/burn"]
+members = ["bvm", "bvm/runtime"]
 
 [workspace.package]
 version = "26.1.0-experimental-2"

@@ -25,7 +25,7 @@ burni -e 'print("hello")'
 | --- | --- |
 | `burn` | the all-in-one driver: run, build, check, fmt, init, repl, lsp |
 | `burni` | the interpreter: runs programs on bvm and starts the REPL |
-| `burnc` | the compiler: native executables, JavaScript and bvm bytecode |
+| `burnc` | the compiler: bvm bytecode and runnable `.bar` archives |
 | `burnfmt` | the code formatter, written in Burn itself |
 | `burn-lsp` | the language server for editors |
 | `bvm` | the Burn virtual machine: runs, assembles and inspects bytecode |
@@ -39,8 +39,9 @@ See [the toolchain](./toolchain.mdx) for what each command does.
 - Linux or macOS (Windows: see [manual installation](#manual-installation))
 - `git`, which burnup and ash use to download Burn versions and packages
 - Rust 1.85 or newer for versions built from source (branches such as `master`, and any version without a
-  prebuilt release). Pass `--install-rust` to the installer to get it with rustup.
-- A C toolchain (`cc`) to build native executables with `burnc`. Everything else works without it.
+  prebuilt release), which builds bvm. Pass `--install-rust` to the installer to get it with rustup. A source build
+  also needs a released Burn to compile the compiler written in Burn for the first time; burnup uses the release
+  named in `compiler/STAGE0`.
 
 ## Versions
 
@@ -126,18 +127,16 @@ tar -xzf burn-linux-x86_64.tar.gz
 
 ## Manual installation
 
-Any platform with Rust can build the toolchain:
+Any platform with Rust can build the toolchain. It needs a released Burn to start from (stage0), such as
+`v26.1.0-experimental-2`, on `PATH` or given with `--stage0`:
 
 ```sh
-cargo build --release
+sh scripts/package.sh --prefix ~/.burn --stage0 /path/to/burn
 ```
 
-Copy `target/release/burn` and `target/release/bvm` (`burn.exe` and `bvm.exe` on Windows) somewhere on your
-`PATH`, then create `burni`, `burnc` and `burn-lsp` as links or copies of `burn`. On Windows copy the file to
-`burni.exe`, `burnc.exe` and `burn-lsp.exe`. Native executables currently need x86-64 Linux or macOS; on other
-platforms `burni`, `bvm`, `burnc --target js`, `burnc --target bvm`, `burn fmt` and `burn lsp` all work. To get
-`burnfmt` without native compilation, run it on the interpreter:
-
-```sh
-burni lib/tools/fmt.bn -w file.bn
-```
+This builds bvm, lets stage0 compile the compiler written in Burn, lets that compiler build itself and the command
+line, and lays out `bin/` (`burn`, `burni`, `burnc` and `burn-lsp` are bvm, `burnfmt` is a script) and
+`share/burn/`. To do it by hand, copy `target/release/bvm` to `bin/bvm` and `bin/burn` (and to `burni`, `burnc`
+and `burn-lsp`, or link them), and put the command line module, built with
+`burn compiler/src/main.bn build compiler/src/bin/burn.bn -o burn.bvm`, at `share/burn/burn.bvm` next to `bin/`.
+`BURN_CLI_BVM` can point at it instead.

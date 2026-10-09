@@ -35,6 +35,7 @@ jobs:
           version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
           [ "$TAG" = "v$version" ] || { echo "tag $TAG does not match workspace version $version"; exit 1; }
       - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/stage0
       - name: Build the toolchain
         run: sh scripts/package.sh --prefix "$PWD/dist/burn"
       - name: Smoke test

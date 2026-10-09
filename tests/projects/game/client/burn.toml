@@ -1,4 +1,4 @@
 [package]
 name = "github.com/fixture/game/client"
-target = "js"
+target = "bvm"
 main = "src/client.bn"

@@ -1,7 +1,7 @@
 name: Burn stage0
 description: >
-  Installs the pinned release of the Burn compiler written in Rust (compiler/STAGE0).
-  It is the compiler that builds the Burn compiler written in Burn for the first time.
+  Installs the pinned Burn release (compiler/STAGE0). It is the compiler that builds
+  the Burn compiler written in Burn for the first time.
 inputs:
   version:
     description: Release tag to install. Defaults to the tag in compiler/STAGE0.

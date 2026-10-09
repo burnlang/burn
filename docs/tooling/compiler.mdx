@@ -1,17 +1,21 @@
 ---
 title: How the compiler works
-description: The pipeline from source to bvm bytecode, machine code and JavaScript.
+description: The pipeline from source to bvm bytecode, and how the compiler written in Burn builds itself.
 order: 25
 ---
 
 # How the compiler works
 
 ```text
-source ──▶ lexer ──▶ parser ──▶ type checker ──▶ typed IR ─┬─▶ bvm module ──▶ bvm         (burn run)
-                                    │                      ├─▶ x86-64 asm ──▶ cc + runtime (burn build)
-                                    ▼                      └─▶ JavaScript               (--target js)
+source ──▶ lexer ──▶ parser ──▶ type checker ──▶ typed IR ──▶ ownership ──▶ bvm module ──▶ bvm   (burn run)
+                                    │                                              └──▶ .bvmc, .bar (burn build)
+                                    ▼
                           diagnostics, hover, completion
 ```
+
+The compiler is written in Burn ([`compiler/`](https://github.com/burnlang/burn/tree/master/compiler)) and runs on
+bvm, like every Burn program. `burn` itself is bvm running the command line written in Burn, which contains the
+compiler, so `burn run app.bn` checks, compiles and runs the program without leaving bvm.
 
 ## Front end
 
@@ -27,10 +31,10 @@ knows the static type of its arguments.
 ## Runtime
 
 All values are 64 bit words. Ints, floats, bools and enums are stored directly, everything else is a pointer to a
-heap object with a 16 byte header (kind, flags, type id, size). The runtime crate (Rust) implements strings,
-arrays, maps, boxing for `any`, formatting, JSON, HTTP, files and async tasks, plus reference counting with a
-cycle collector. The same runtime is used by bvm and linked
-into native executables, so both behave identically.
+heap object with a 16 byte header (kind, flags, type id, size). The runtime core is part of bvm and written in
+Rust (`bvm/runtime`): memory and reference counting with a cycle collector, strings, arrays, maps, boxing for
+`any`, formatting, HTTP, files and async tasks. The functions built on top of it, such as `split`, `trim` or
+`parseJSON`, are written in Burn (`lib/runtime`), compiled to a bvm module that bvm links into every program.
 
 ## Ownership
 
@@ -39,8 +43,7 @@ array slot and map entry owns the object in it; parameters are borrowed from the
 `retain` where a borrowed value becomes owned (stored in a variable or field, returned), `release` where an owner
 lets go (a variable is overwritten, a temporary has been used, the function returns), and moves instead of
 copies when a local is returned. Temporaries are released at the end of the statement that created them, and
-arguments read from fields or globals are kept alive for the duration of the call. Native code inlines the common
-case of both operations. Cycles are found by trial deletion over the objects whose type can form a cycle, which is
+arguments read from fields or globals are kept alive for the duration of the call. Cycles are found by trial deletion over the objects whose type can form a cycle, which is
 computed once from the type graph.
 
 ## bvm
@@ -51,23 +54,16 @@ general-purpose stack VM with its own assembly language, bytecode format and ver
 can fail carries its source location. When the module is loaded, the verifier computes each function's frame
 size and common sequences are fused into superinstructions for loops, comparisons and field access. Checking and
 compiling a typical program takes a few milliseconds, so running a file feels like using an interpreter.
-`burnc --target bvm` writes the same module to a `.bvmc` file.
+`burnc` writes the same module to a `.bvmc` file, and `--target bar` into an archive.
 
-## Native code
+## Without the standard library
 
-`burn build` turns the IR into x86-64 assembly (Intel syntax): locals live in the stack frame, expressions
-evaluate into `rax`, comparisons in conditions become compare-and-jump, array access and field access are inlined,
-and interface calls go through per-method dispatch tables. The program entry point and the trampoline that starts
-async tasks are hand-written assembly (`entry_x86_64.s`). The assembly is linked with a static build of the
-runtime that is embedded in the `burn` binary, so the result is a standalone executable. Compiling and linking
-usually takes around 100ms.
+Programs built with `--no-std` or `std = false` link only the built-in core of the runtime, and the checker rejects
+the features it leaves out ([details](./no-std.mdx)).
 
-The runtime is embedded twice: the full one, and a `no_std` build of the same crate that uses only `core`, `alloc`
-and a few C library calls. Programs built with `--no-std` or `std = false` link the second one, and the checker
-rejects the features it leaves out ([details](./no-std.mdx)).
+## Bootstrapping
 
-## JavaScript
-
-`--target js` writes a single self-contained script for Node.js. Records become arrays tagged with their type id,
-`any` values are boxed, and the runtime helpers are implemented in a small prelude. Integers are JavaScript numbers,
-so values beyond 2^53 lose precision.
+The compiler builds itself. A released Burn (stage0, named in `compiler/STAGE0`) compiles `compiler/src` once; that
+compiler builds itself again, and both results must be the same module (`scripts/bootstrap.sh`). Releases up to
+`26.1.0-experimental-2` were compiled by a compiler written in Rust, which also had native x86-64 and JavaScript
+backends; it was retired once the compiler written in Burn did everything it did.

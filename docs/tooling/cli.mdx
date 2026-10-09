@@ -15,20 +15,16 @@ This page lists every subcommand of `burn`. The shorter toolchain commands map o
 | `burn <file.bn> [args...]` | type-check and run on bvm |
 | `burn <file.bvm\|file.bvmc\|file.bar> [args...]` | run a bvm module or archive |
 | `burn run <file.bn> [args...]` | the same |
-| `burn init <name> [--lib] [--target native\|js\|bvm]` | create a project ([details](./packages.mdx)) |
+| `burn init <name> [--lib] [--target bvm\|bar] [--workspace]` | create a project ([details](./packages.mdx)) |
 | `burn run`, `burn build`, `burn check` | without a file, work on the project in the current folder |
-| `burn run --native <file.bn> [args...]` | compile to machine code and run it |
-| `burn build <file.bn>` | build a native executable next to the source file |
+| `burn run --bin <name>`, `burn run --example <name>` | run a program of the project's `src/bin/` or `examples/` |
+| `burn build <file.bn>` | write a `.bvmc` bytecode module next to the source file (imported bytecode libraries are linked in) |
 | `burn build <file.bn> -o <path>` | choose the output path |
-| `burn build <file.bn> --target js` | write a Node.js script instead |
-| `burn build <file.bn> --target bvm` | write a `.bvmc` bytecode module (imported bytecode libraries are linked in) |
 | `burn build <file.bn> --target bar` | write a runnable `.bar` archive with the program and its bytecode libraries |
-| `burn build <file.bar\|file.bvmc>` | build a native executable that runs the bytecode |
-| `burn build <file.bn> --emit-asm out.s` | also keep the generated assembly (bvm assembly with `--target bvm`) |
-| `burn build <file.bn> --no-strip` | keep symbols in the executable |
+| `burn build <file.bn> --emit-asm out.bvm` | also write the bvm assembly |
 | `burn build <file.bn> --no-std` | build [without the standard library](./no-std.mdx), like `std = false` in burn.toml |
+| `burn test [filter...]` | run the tests in the project's `tests/` folder |
 | `burn check <files...>` | report errors and warnings without running |
-| `burn run\|check --compiler burn ...`, `burn build --compiler burn --target bvm ...` | use the compiler written in Burn (`share/burn/compiler.bvm`, or the module in `BURN_COMPILER_BVM`) instead of the one written in Rust; it only builds bvm modules so far ([details](https://github.com/burnlang/burn/blob/master/compiler/README.md)) |
 | `burn fix [--dry-run] <files...>` | apply the compiler's certain fixes, then report what is left ([details](./fixing-errors.mdx)) |
 | `burn doc [files...] [-o dir]` | generate an HTML reference from Burndoc comments ([details](./burndoc.mdx)) |
 | `burn fmt <files...>` | print formatted code; `-w` rewrites files, `--check` fails when files are not formatted |
@@ -36,7 +32,7 @@ This page lists every subcommand of `burn`. The shorter toolchain commands map o
 | `burn eval '<code>'` | run a snippet |
 | `burn lsp` | language server over stdio ([details](./editors.mdx)) |
 | `burn sources` | write the sources of the standard library and the built-ins for reading and print the folder |
-| `burn dump --hir/--bytecode/--asm/--js <file.bn>` | show intermediate representations (`--bytecode` prints bvm assembly) |
+| `burn dump --bytecode <file.bn>` | print the bvm assembly of a program, linked with its bytecode libraries |
 | `burn dump --tokens <files...>` | print the tokens and lexer errors of each file, one token per line with byte offsets |
 | `burn dump --ast <files...>` | print the syntax tree and parse errors of each file, one node per line with byte spans |
 | `burn dump --diagnostics <files...>` | print the lexer and parser errors of each file as `burn check` shows them, without colours |
@@ -50,14 +46,14 @@ This page lists every subcommand of `burn`. The shorter toolchain commands map o
 | `burn dump --bvm <files...>` | print the bvm module of each file in bvm assembly, as `burn <file.bvm>` runs it, or the errors |
 | `burn version`, `burn help` | information |
 
-The older flags still work: `-r`, `-e`, `-exe <file> [name]` and `-d`.
+The older flags still work: `-r`, `-e`, `-exe <file>` and `-d`.
 
 ## Environment variables
 
 | Variable | Effect |
 | --- | --- |
-| `BURN_CC` / `CC` | linker driver used by `burn build` (default `cc`) |
 | `NO_COLOR` | disable colored diagnostics |
+| `BURN_CLI_BVM` | the command line module bvm runs when it is started as `burn`, `burni`, `burnc` or `burn-lsp` (default `share/burn/burn.bvm` next to its `bin/`) |
 | `BURN_HOME` | where packages are found (default `~/.burn`, packages in `packages/`) |
 | `BURN_GC_THRESHOLD` | bytes allocated between two searches for unreachable cycles (default 32 MB) |
 | `BURN_GC_STATS` | print a line after every cycle search |

@@ -6,8 +6,9 @@ order: 20
 
 # The toolchain
 
-`burni`, `burnc` and `burn-lsp` are links to the `burn` binary, which checks the name it was started with.
-`burnfmt` is a separate program written in Burn, and `bvm` is the standalone virtual machine.
+`burn` is bvm, the Burn virtual machine. Started as `burn`, `burni`, `burnc` or `burn-lsp` (links to it), it runs
+the command line written in Burn (`share/burn/burn.bvm`), which checks the name it was started with. `burnfmt` runs
+the formatter written in Burn, and `bvm` is the virtual machine on its own.
 
 ## `burni`: the interpreter
 
@@ -33,38 +34,33 @@ understands `:help`, `:reset`, `:source` and `:quit`.
 
 ## `burnc`: the compiler
 
-`burnc` compiles a program to a standalone native executable, to JavaScript or to bvm bytecode.
+`burnc` compiles a program to [bvm](../bvm/overview.mdx) bytecode, which runs anywhere bvm runs.
 
 ```sh
-burnc app.bn                          # ./app
-burnc app.bn -o bin/app               # choose the output path
-burnc app.bn --emit-asm app.s         # also write the generated assembly
-burnc app.bn --target js -o app.js    # Node.js script
-burnc app.bn --target bvm             # app.bvmc, bytecode for bvm
-burnc app.bn --target bar             # app.bar, the program and its bytecode libraries
-burnc app.bar -o app                  # a native executable that runs a bytecode archive
-burnc app.bn --no-strip               # keep symbols for debuggers and profilers
+burnc app.bn                          # app.bvmc, bytecode for bvm
+burnc app.bn -o build/app.bvmc        # choose the output path
+burnc app.bn --emit-asm app.bvm       # also write the bvm assembly
+burnc app.bn --target bar             # app.bar, the program and its bytecode libraries in one archive
+burnc app.bn --no-std                 # without the standard library
 burnc --check a.bn b.bn               # type-check only
 ```
 
 | Option | Description |
 | --- | --- |
-| `-o`, `--output <path>` | output file; defaults to the source name without `.bn` (`.js` for JavaScript) |
-| `--target native` | x86-64 machine code linked into an executable (default) |
-| `--target js` | a self-contained Node.js script |
-| `--target bvm` | a `.bvmc` bytecode module for [bvm](../bvm/overview.mdx), with imported bytecode libraries linked in |
+| `-o`, `--output <path>` | output file; defaults to the source name with `.bvmc` (or `.bar`) |
+| `--target bvm` | a `.bvmc` bytecode module, with imported bytecode libraries linked in (default) |
 | `--target bar` | a runnable [archive](../bvm/archives.mdx) with the program and its bytecode libraries |
-| `--emit-asm <path>` | write the generated assembly as well (bvm assembly for `--target bvm`) |
-| `--no-strip` | keep the symbol table |
+| `--emit-asm <path>` | write the bvm assembly as well |
+| `--no-std` | build [without the standard library](./no-std.mdx) |
 | `--check <files...>` | report errors and warnings without producing output |
 
-Native executables need x86-64 Linux or macOS and a C toolchain (`cc`, or the program named by `BURN_CC`), which is
-used to assemble and link. Compiling usually takes about 100ms. See [how the compiler works](./compiler.mdx).
+Run the result with `burn app.bvmc` or `bvm app.bvmc`; an archive also runs on its own (`./app.bar`) when `bvm` is on
+`PATH`. Releases up to `26.1.0-experimental-2` also compiled to native executables and JavaScript; those backends
+belonged to the compiler written in Rust and were removed with it. See [how the compiler works](./compiler.mdx).
 
 ## `burnfmt`: the formatter
 
-`burnfmt` formats Burn source code. It is written in Burn (`lib/tools/fmt.bn`) and compiled with `burnc`
-by the installer. See [burnfmt](./burnfmt.mdx).
+`burnfmt` formats Burn source code. It is written in Burn (`lib/tools/fmt.bn`) and runs on bvm. See [burnfmt](./burnfmt.mdx).
 
 ```sh
 burnfmt file.bn              # print the formatted file
@@ -96,8 +92,8 @@ bvm runtime                  # list the runtime functions
 
 ## `burn`: everything in one
 
-`burn` includes all of the above as subcommands: `burn run`, `burn build`, `burn check`, `burn fmt`, `burn repl`,
-`burn eval`, `burn lsp` and `burn dump`. See the [command line reference](./cli.mdx).
+`burn` includes all of the above as subcommands: `burn run`, `burn build`, `burn check`, `burn test`, `burn fmt`,
+`burn fix`, `burn doc`, `burn repl`, `burn eval`, `burn lsp` and `burn dump`. See the [command line reference](./cli.mdx).
 
 ## Which one should I use?
 
@@ -105,8 +101,8 @@ bvm runtime                  # list the runtime functions
 | --- | --- |
 | try something quickly | `burni` |
 | run a script or develop a program | `burni app.bn` |
-| ship a program | `burnc app.bn` |
-| ship portable bytecode | `burnc app.bn --target bvm`, run with `bvm` |
+| ship a program | `burnc app.bn --target bar`, one archive that runs where bvm runs |
+| ship portable bytecode | `burnc app.bn`, run with `bvm` |
 | write a language or a code generator | emit bvm assembly or use the `bvm` crate |
 | check a project in CI | `burnc --check` and `burnfmt --check` |
 | format on save in an editor | the language server (`burn-lsp`) or `burnfmt` |
