@@ -656,6 +656,13 @@ fun varDecl(c: Checker, name: Ident, ty: TypeExpr?, init: Expr?, isConst: bool, 
     var t = declared ?? value.ty
     var ctx = c.ctx()
     var isGlobal = ctx.isInit && len(ctx.scopes) == 1
+    if (c.wantIndex) {
+        var kw = "var"
+        if (isConst) {
+            kw = "const"
+        }
+        c.hover(nspan, "${kw} ${name.name}: ${c.show(t)}")
+    }
     if (isGlobal) {
         var m = c.curModule()
         var e = c.mods[m].values[name.name]
@@ -675,7 +682,7 @@ fun varDecl(c: Checker, name: Ident, ty: TypeExpr?, init: Expr?, isConst: bool, 
     if (prev != null) {
         c.warn(nspan, "`${name.name}` shadows a variable declared on line ${c.lineOf(prev.span)} in the same block")
     }
-    var slot = c.declareLocal(name.name, t, nspan, isConst)
+    var slot = c.declareLocal(name.name, t, nspan, isConst, SrcSpan { file: span.file, start: span.start, end: 4294967295 })
     if (has(ctx.cellNames, name.name)) {
         var ct = makeCellLocal(c, slot)
         var cell = hexpr(HKind.NewStruct(ct, [value]), ct)
@@ -699,6 +706,7 @@ fun forIn(c: Checker, binding: Ident, index: Ident?, iter: ForIter, body: Block,
     forgetAssigned(c, assigned)
     var before = copyNarrow(c.ctx().narrow)
     var vspan = c.sp(binding.span)
+    var lscope = span
     [HStmt] out = []
     if (iter is ForIter.Range) {
         if (index != null) {
@@ -710,7 +718,10 @@ fun forIn(c: Checker, binding: Ident, index: Ident?, iter: ForIter, body: Block,
         var end = c.newLocal(T_INT)
         out.push(HStmt.Eval(setLocal(ctr, ha, T_INT)))
         out.push(HStmt.Eval(setLocal(end, hb, T_INT)))
-        var v = c.declareLocal(binding.name, T_INT, vspan, false)
+        var v = c.declareLocal(binding.name, T_INT, vspan, false, lscope)
+        if (c.wantIndex) {
+            c.hover(vspan, "var ${binding.name}: int")
+        }
         var cmp = Cmp.Lt
         if (iter.inclusive) {
             cmp = Cmp.Le
@@ -766,20 +777,31 @@ fun forIn(c: Checker, binding: Ident, index: Ident?, iter: ForIter, body: Block,
         var l = c.loc(span)
         var item = hexpr(HKind.Index(arrE, ctrE, l), elem)
         if (index != null && mapSlot >= 0) {
-            var key = c.declareLocal(index.name, elem, c.sp(index.span), false)
+            var key = c.declareLocal(index.name, elem, c.sp(index.span), false, lscope)
             b.push(HStmt.Eval(setLocal(key, item, elem)))
-            var v = c.declareLocal(binding.name, mapValue, vspan, false)
+            var v = c.declareLocal(binding.name, mapValue, vspan, false, lscope)
             var lx = c.locExpr(span)
             var get = rt("MapGet", [local(mapSlot, mapTy), local(key, elem), lx], mapValue)
             b.push(HStmt.Eval(setLocal(v, get, mapValue)))
+            if (c.wantIndex) {
+                c.hover(c.sp(index.span), "var ${index.name}: ${c.show(elem)}")
+                c.hover(vspan, "var ${binding.name}: ${c.show(mapValue)}")
+            }
         } else if (index != null) {
-            var i = c.declareLocal(index.name, T_INT, c.sp(index.span), false)
+            var i = c.declareLocal(index.name, T_INT, c.sp(index.span), false, lscope)
             b.push(HStmt.Eval(setLocal(i, ctrE, T_INT)))
-            var v = c.declareLocal(binding.name, elem, vspan, false)
+            var v = c.declareLocal(binding.name, elem, vspan, false, lscope)
             b.push(HStmt.Eval(setLocal(v, item, elem)))
+            if (c.wantIndex) {
+                c.hover(c.sp(index.span), "var ${index.name}: int")
+                c.hover(vspan, "var ${binding.name}: ${c.show(elem)}")
+            }
         } else {
-            var v = c.declareLocal(binding.name, elem, vspan, false)
+            var v = c.declareLocal(binding.name, elem, vspan, false, lscope)
             b.push(HStmt.Eval(setLocal(v, item, elem)))
+            if (c.wantIndex) {
+                c.hover(vspan, "var ${binding.name}: ${c.show(elem)}")
+            }
         }
         c.ctx().loops += 1
         for x in blockStmts(c, body.stmts) {

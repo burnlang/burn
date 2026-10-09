@@ -1,0 +1,99 @@
+import "../check/body.bn"
+import "../check/check.bn"
+import "../check/hir.bn"
+import "../check/types.bn"
+import "../project/loader.bn"
+import "../project/project.bn"
+import "../syntax/ast.bn"
+
+priv fun spanText(s: SrcSpan): string {
+    return "${s.file}:${s.start}-${s.end}"
+}
+
+priv fun escaped(t: string): string {
+    return replace(replace(replace(t, "\\", "\\\\"), "\n", "\\n"), "\u{1}", "\\1")
+}
+
+/** The signature of a function as the language server shows it, like the `funcs` of `check::check`. */
+pub fun funcSig(c: Checker, f: FuncInfo): string {
+    [string] ps = []
+    for p in f.params {
+        if (p.name != "self") {
+            ps.push("${p.name}: ${c.show(p.ty)}")
+        }
+    }
+    var ret = ""
+    var r = f.ret
+    if (r != null && r != T_VOID) {
+        ret = ": ${c.show(r)}"
+    }
+    var asyncKw = ""
+    if (f.isAsync) {
+        asyncKw = "async "
+    }
+    return "${asyncKw}fun ${f.name}(${joinWith(ps, ", ")})${ret}"
+}
+
+/** What the checker records for the language server, like `burn dump --index`. */
+pub fun dumpIndexOf(loaded: Loaded): string {
+    var r = checkIndexed(loaded)
+    var c = r.checker
+    var out = ""
+    for h in c.hovers {
+        out += "hover ${spanText(h.span)} ${escaped(h.text)}\n"
+    }
+    for d in c.defs {
+        out += "def ${spanText(d.use)} ${spanText(d.target)}\n"
+    }
+    for l in c.localInfos {
+        out += "local ${l.name} ${c.show(l.ty)} ${spanText(l.decl)} ${spanText(l.scope)}\n"
+    }
+    for t in c.exprTypes {
+        out += "type ${spanText(t.span)} ${c.show(t.ty)}\n"
+    }
+    for g in c.globals {
+        out += "global ${g.name} ${c.show(g.ty ?? T_ERROR)} ${g.module}\n"
+    }
+    for f in c.funcs {
+        if (!contains(f.name, "<")) {
+            out += "func ${f.name} ${escaped(funcSig(c, f))} ${spanText(f.span)} ${f.module}\n"
+        }
+    }
+    for g in c.genericFns {
+        var d = g.decl
+        var head = c.spanIn(g.module, Span { start: d.span.start, end: d.body.span.start })
+        out += "func ${d.name.name} ${escaped(trim(c.srcText(head)))} ${spanText(c.spanIn(g.module, d.name.span))} ${g.module}\n"
+    }
+    [string] names = []
+    for mi in 0..len(c.mods) {
+        var m = c.mods[mi]
+        for n in keys(m.types) {
+            var e = m.types[n]
+            if (e != null) {
+                names.push("typename ${mi} ${n} ${c.show(e.sym)} ${spanText(e.span)}\n")
+            }
+        }
+        for n in keys(m.gtypes) {
+            var e = m.gtypes[n]
+            if (e != null) {
+                names.push("typename ${mi} ${n} ${c.show(T_ERROR)} ${spanText(e.span)}\n")
+            }
+        }
+    }
+    sort(names)
+    for n in names {
+        out += n
+    }
+    return out
+}
+
+/** `burn dump --index <file>`. */
+pub fun dumpIndex(file: string): string {
+    var loader = new Loader()
+    var err = new Problem()
+    var root = loader.loadFile(file, err)
+    if (root < 0) {
+        return "error ${err.message}\n"
+    }
+    return dumpIndexOf(loader.finish(root))
+}

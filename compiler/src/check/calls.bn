@@ -1,4 +1,5 @@
 import "../diag/diag.bn"
+import "../doc/builtin_docs.bn"
 import "../syntax/ast.bn"
 import "body.bn"
 import "builtins.bn"
@@ -98,7 +99,11 @@ pub fun directCall(c: Checker, fid: int, recv: HExpr?, args: [Expr], span: SrcSp
     if (info.private && owner != null && staticOwnerRec(c) != owner) {
         c.error(nameSpan, "method `${info.name}` is private")
     }
+    c.defLink(nameSpan, info.span)
     var sig = funcSignature(c, fid, ret)
+    if (c.wantIndex) {
+        c.hover(nameSpan, c.withDocDep(sig, info.span, info.deprecated))
+    }
     var r = recv
     if (r != null && c.hasDestroy) {
         var rec = c.types.recordOf(r.ty)
@@ -180,6 +185,7 @@ pub fun callExpr(c: Checker, callee: Expr, args: [Expr], span: SrcSpan, expected
     var name = ck.name
     var l = c.lookupLocal(name)
     if (l != null) {
+        c.defLink(cspan, l.span)
         return indirectCall(c, readLocal(c, l.slot), args, span)
     }
     var st = c.enclosingSelf()
@@ -253,6 +259,14 @@ pub fun callExpr(c: Checker, callee: Expr, args: [Expr], span: SrcSpan, expected
     var b = builtinCall(c, name, null, args, span, expected)
     if (b != null) {
         gateBuiltin(c, name, cspan)
+        if (c.wantIndex) {
+            var doc = findBuiltin(c.builtinDocs(), name)
+            if (doc != null) {
+                c.hover(cspan, "${doc.sig}\u{1}${builtinMarkdown(doc)}")
+            } else {
+                c.hover(cspan, "(builtin) ${builtinSignature(name)}")
+            }
+        }
         return b
     }
     identExpr(c, name, cspan)
@@ -294,6 +308,13 @@ pub fun constructRecord(c: Checker, t: int, args: [Expr], span: SrcSpan, nameSpa
         return errExpr()
     }
     var rec = c.types.records[k.index]
+    if (c.wantIndex) {
+        var kw = "type"
+        if (rec.isClass) {
+            kw = "struct"
+        }
+        c.hover(nameSpan, c.withDocDep("${kw} ${rec.name}", rec.span, c.deprecatedTypes[t]))
+    }
     if (len(args) > len(rec.fields)) {
         var s = "s"
         if (len(rec.fields) == 1) {
@@ -446,6 +467,10 @@ pub fun methodCall(c: Checker, obj: Expr, name: Ident, args: [Expr], span: SrcSp
             for p in m.params {
                 ps.push(p)
             }
+            c.defLink(nspan, m.span)
+            if (c.wantIndex) {
+                c.hover(nspan, c.withDoc("${iface.name}.${m.name}: ${methodSigStr(c, m.params, m.ret, m.isAsync)}", m.span))
+            }
             var target = aliveWrap(c, o, nspan)
             var hargs = checkArgs(c, ps, args, target, span, "`${m.name}`")
             invalidateGlobals(c)
@@ -528,6 +553,7 @@ pub fun variantValue(c: Checker, t: int, name: Ident, args: [Expr], called: bool
         return errExpr()
     }
     var v = found
+    c.defLink(nspan, v.span)
     var rec = c.types.records[v.record]
     [string] shape = []
     for f in rec.fields {
@@ -537,6 +563,7 @@ pub fun variantValue(c: Checker, t: int, name: Ident, args: [Expr], called: bool
     if (len(shape) > 0) {
         shown = "${en.name}.${v.name}(${joinWith(shape, ", ")})"
     }
+    c.hover(nspan, shown)
     [HExpr] vals = []
     if (!called) {
         if (len(rec.fields) > 0) {
@@ -578,6 +605,10 @@ pub fun fieldExpr(c: Checker, obj: Expr, name: Ident, span: SrcSpan): HExpr {
             var en = c.types.enums[tk.index]
             for i in 0..len(en.variants) {
                 if (en.variants[i].name == name.name) {
+                    c.defLink(nspan, en.variants[i].span)
+                    if (c.wantIndex) {
+                        c.hover(nspan, "${en.name}.${name.name} = ${i}")
+                    }
                     return hexpr(HKind.Int(i), tt)
                 }
             }
@@ -636,6 +667,10 @@ pub fun fieldExpr(c: Checker, obj: Expr, name: Ident, span: SrcSpan): HExpr {
         var i = fieldIndex(rec, n)
         if (i >= 0) {
             checkFieldAccess(c, rec, i, nspan)
+            c.defLink(nspan, rec.fields[i].span)
+            if (c.wantIndex) {
+                c.hover(nspan, c.withDoc("(field) ${rec.name}.${n}: ${c.show(rec.fields[i].ty)}", rec.fields[i].span))
+            }
             var target = o
             if (rec.isClass) {
                 target = aliveWrap(c, o, nspan)

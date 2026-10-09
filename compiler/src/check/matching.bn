@@ -371,7 +371,10 @@ fun prepareMatch(c: Checker, subject: Expr?, arms: [MatchArm], expected: int?, v
                 } else if (b.ty != declared) {
                     v = payloadConv(c, read, declared, b.ty)
                 }
-                var slot = c.declareLocal(b.name.name, b.ty, c.sp(b.name.span), false)
+                var slot = c.declareLocal(b.name.name, b.ty, c.sp(b.name.span), false, c.sp(arm.span))
+                if (c.wantIndex) {
+                    c.hover(c.sp(b.name.span), "${b.name.name}: ${c.show(b.ty)}")
+                }
                 body.push(HStmt.Eval(setLocal(slot, v, b.ty)))
             } else {
                 c.error(c.sp(b.name.span), "a binding needs a subject stored in a variable")
@@ -660,6 +663,7 @@ fun variantCond(c: Checker, val: HExpr, en: IfaceDef, vp: VariantPat, span: SrcS
     var facts = noFacts()
     var v = en.variants[vp.index]
     var rec = c.types.records[v.record]
+    c.defLink(c.sp(vp.name.span), v.span)
     var rt = rec.ty
     var sty = val.ty
     var cond = isCheck(c, val, rt, span)

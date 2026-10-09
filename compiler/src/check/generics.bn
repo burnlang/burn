@@ -235,6 +235,7 @@ pub fun genericCall(c: Checker, gid: int, recv: HExpr?, args: [Expr], span: SrcS
     if (r != null && expected != null && !allBound(names, binds)) {
         unify(c, r, expected, names, binds)
     }
+    c.defLink(nameSpan, c.spanIn(c.genericFns[gid].module, decl.name.span))
     if (reportUnbound(c, "this call to `${decl.name.name}`", names, binds, span, "[int] items = []")) {
         for a in args {
             exprOf(c, a, null)
@@ -263,6 +264,7 @@ fun genericShape(c: Checker, name: Ident): GenericShape? {
         return null
     }
     var d = c.genericTypes[gid].d
+    c.defLink(c.sp(name.span), c.spanIn(c.genericTypes[gid].module, defName(d).span))
     [string] names = []
     for t in defTparams(d) {
         names.push(t.name)

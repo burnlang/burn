@@ -367,6 +367,15 @@ fun u64Bits(digits: string): int {
 }
 
 pub fun exprOf(c: Checker, e: Expr, expected: int?): HExpr {
+    var h = exprInner(c, e, expected)
+    var k = e.kind
+    if (c.wantIndex && (k is ExprKind.Ident || k is ExprKind.Field || k is ExprKind.Call || k is ExprKind.Index)) {
+        c.noteType(c.sp(e.span), h.ty)
+    }
+    return h
+}
+
+fun exprInner(c: Checker, e: Expr, expected: int?): HExpr {
     var span = c.sp(e.span)
     var k = e.kind
     if (k is ExprKind.Int) {
@@ -643,14 +652,24 @@ pub fun selfField(c: Checker, name: string): [int]? {
 pub fun identExpr(c: Checker, name: string, span: SrcSpan): HExpr {
     var l = c.lookupLocal(name)
     if (l != null) {
+        c.defLink(span, l.span)
         checkAlive(c, l.slot, name, span)
-        return readLocal(c, l.slot)
+        var h = readLocal(c, l.slot)
+        if (c.wantIndex) {
+            c.hover(span, "${name}: ${c.show(h.ty)}")
+        }
+        return h
     }
     var sf = selfField(c, name)
     if (sf != null) {
         var rec = c.types.recordOf(sf[0])
         if (rec != null) {
             checkFieldAccess(c, rec, sf[1], span)
+            if (c.wantIndex) {
+                var fsp = rec.fields[sf[1]].span
+                c.defLink(span, fsp)
+                c.hover(span, c.withDoc("(field) ${name}: ${c.show(sf[2])}", fsp))
+            }
         }
         return hexpr(HKind.GetField(c.selfExpr(sf[0]), sf[1]), sf[2])
     }
@@ -674,12 +693,21 @@ pub fun identExpr(c: Checker, name: string, span: SrcSpan): HExpr {
         var gt = gi.ty
         if (gt != null) {
             checkAlive(c, GLOBAL_KEY + sym.id, name, span)
+            if (c.wantIndex) {
+                c.defLink(span, gi.span)
+                var kw = "var"
+                if (gi.isConst) {
+                    kw = "const"
+                }
+                c.hover(span, c.withDoc("${kw} ${name}: ${c.show(gt)}", gi.span))
+            }
             return readGlobal(c, sym.id, gt)
         }
         c.error(span, "`${name}` is used before it is declared")
         return errExpr()
     }
     if (sym is ValSym.Func) {
+        c.defLink(span, c.funcs[sym.id].span)
         funcType(c, sym.id)
         if (c.funcs[sym.id].isAsync) {
             c.error(span, "async functions cannot be used as values yet; call them directly")
@@ -1180,6 +1208,7 @@ pub fun placeOf(c: Checker, target: Expr, doHoist: bool, pre: [HStmt]): Place {
                 }
                 c.emit(d)
             }
+            c.defLink(tspan, l.span)
             return Place.Local(l.slot, c.ctx().locals[l.slot])
         }
         var sf = selfField(c, name)
@@ -1187,6 +1216,7 @@ pub fun placeOf(c: Checker, target: Expr, doHoist: bool, pre: [HStmt]): Place {
             var rec = c.types.recordOf(sf[0])
             if (rec != null) {
                 checkFieldAccess(c, rec, sf[1], tspan)
+                c.defLink(tspan, rec.fields[sf[1]].span)
             }
             return Place.Field(c.selfExpr(sf[0]), sf[1], sf[2])
         }
@@ -1203,6 +1233,7 @@ pub fun placeOf(c: Checker, target: Expr, doHoist: bool, pre: [HStmt]): Place {
             if (gi.isConst) {
                 c.error(tspan, "cannot assign to constant `${name}`")
             }
+            c.defLink(tspan, gi.span)
             var gt = gi.ty
             if (gt != null) {
                 return Place.Global(sym.id, gt)
@@ -1243,6 +1274,7 @@ pub fun placeOf(c: Checker, target: Expr, doHoist: bool, pre: [HStmt]): Place {
             var i = fieldIndex(rec, name.name)
             if (i >= 0) {
                 checkFieldAccess(c, rec, i, nspan)
+                c.defLink(nspan, rec.fields[i].span)
                 var obj = o
                 if (rec.isClass) {
                     obj = aliveWrap(c, o, nspan)
@@ -1731,6 +1763,9 @@ fun structLit(c: Checker, ty: Ident?, fields: [FieldInit], expected: int?, span:
         for v in vals {
             out.push(v ?? errExpr())
         }
+        if (c.wantIndex) {
+            c.hover(span, "type ${rec.name}")
+        }
         return hexpr(HKind.NewStruct(rec.ty, out), rec.ty)
     }
     [string] keyParts = []
@@ -1778,6 +1813,7 @@ fun buildRecord(c: Checker, ri: int, fields: [FieldInit], span: SrcSpan): HExpr 
         var nspan = c.sp(f.name.span)
         if (i >= 0) {
             checkFieldAccess(c, rec, i, nspan)
+            c.defLink(nspan, rec.fields[i].span)
             vals[i] = exprTo(c, f.value, rec.fields[i].ty)
         } else {
             [string] cands = []
@@ -1935,6 +1971,7 @@ pub fun rawVar(c: Checker, e: Expr): HExpr? {
     }
     var l = c.lookupLocal(k.name)
     if (l != null) {
+        c.defLink(c.sp(e.span), l.span)
         return local(l.slot, c.ctx().locals[l.slot])
     }
     if (selfField(c, k.name) != null) {
@@ -1946,6 +1983,7 @@ pub fun rawVar(c: Checker, e: Expr): HExpr? {
         if (sym is ValSym.Global) {
             var t = c.globals[sym.id].ty
             if (t != null) {
+                c.defLink(c.sp(e.span), entry.span)
                 return hexpr(HKind.Global(sym.id), t)
             }
         }

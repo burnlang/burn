@@ -298,7 +298,7 @@ fn compiler_written_in_burn_matches_the_compiler() {
     let exe = dir.join("dump");
     let (built, code) = output(burn().current_dir(&root).args(["build", "compiler/src/main.bn", "-o"]).arg(&exe));
     assert_eq!(code, 0, "{}", built);
-    let stages: [(&str, &[PathBuf]); 10] = [
+    let stages: [(&str, &[PathBuf]); 11] = [
         ("--tokens", &files),
         ("--ast", &files),
         ("--diagnostics", &files),
@@ -307,6 +307,7 @@ fn compiler_written_in_burn_matches_the_compiler() {
         ("--checked", &files),
         ("--owned", &files),
         ("--bvm", &files),
+        ("--index", &files),
         ("--toml", &tomls),
         ("--project", &places),
     ];
@@ -580,7 +581,7 @@ fn the_command_line_written_in_burn_matches_the_rust_one() {
     std::fs::write(libs.join("unhosted.bn"), "import \"geometry.bvmc\"\nprint(1)\n").unwrap();
     for file in ["app.bn", "missing.bn", "twice.bn", "unhosted.bn"] {
         compare(&[file], &libs);
-        for mode in ["--decls", "--checked", "--owned", "--bvm"] {
+        for mode in ["--decls", "--checked", "--owned", "--bvm", "--index"] {
             compare(&["dump", mode, file], &libs);
         }
     }

@@ -1,4 +1,6 @@
 import "../diag/diag.bn"
+import "../doc/builtin_docs.bn"
+import "../doc/comment.bn"
 import "../project/loader.bn"
 import "../syntax/ast.bn"
 import "body.bn"
@@ -123,6 +125,32 @@ pub def type TypeAlias {
     int module
     string name
     TypeExpr ty
+}
+
+/** Hover text for a span, recorded for the language server. */
+pub def type IndexHover {
+    SrcSpan span
+    string text
+}
+
+/** A use of a name and where it is defined. */
+pub def type IndexDef {
+    SrcSpan use
+    SrcSpan target
+}
+
+/** A local variable, its type, where it is declared and the code it is visible in. */
+pub def type LocalInfo {
+    string name
+    int ty
+    SrcSpan decl
+    SrcSpan scope
+}
+
+/** The type of an expression. */
+pub def type IndexType {
+    SrcSpan span
+    int ty
 }
 
 pub def type LocalSym {
@@ -468,6 +496,12 @@ const MAX_INSTANCES = 256
 pub def struct Checker(loaded: Loaded) {
     Types types = new Types()
     [string] libPaths = []
+    bool wantIndex = false
+    [Builtin]? builtinDocList = null
+    [IndexHover] hovers = []
+    [IndexDef] defs = []
+    [LocalInfo] localInfos = []
+    [IndexType] exprTypes = []
     int skipFile = -1
     int skipBefore = 0
     bool replEcho = false
@@ -681,12 +715,68 @@ pub def struct Checker(loaded: Loaded) {
         return len(c.locals) - 1
     }
 
-    fun declareLocal(name: string, ty: int, span: SrcSpan, isConst: bool): int {
+    fun declareLocal(name: string, ty: int, span: SrcSpan, isConst: bool, scope: SrcSpan): int {
         var slot = newLocal(ty)
         var c = ctx()
         c.scopes[len(c.scopes) - 1][name] = LocalSym { slot: slot, isConst: isConst, span: span }
         remove(c.narrow, slot)
+        if (wantIndex && !isDry()) {
+            localInfos.push(LocalInfo { name: name, ty: ty, decl: span, scope: scope })
+        }
         return slot
+    }
+
+    /** `text` with the Markdown of the doc comment before `decl`, after a `\u{1}`, for hovers. */
+    fun withDoc(text: string, decl: SrcSpan): string {
+        return withDocDep(text, decl, null)
+    }
+
+    fun withDocDep(text: string, decl: SrcSpan, deprecated: string?): string {
+        if (!wantIndex || decl.file >= len(loaded.files)) {
+            return text
+        }
+        var raw = docBefore(loaded.files[decl.file].src, decl.start)
+        var doc = emptyDoc()
+        if (raw != null) {
+            doc = parseDoc(raw)
+        }
+        if (doc.deprecated == null) {
+            doc.deprecated = deprecated
+        }
+        var md = toMarkdown(doc)
+        if (md == "") {
+            return text
+        }
+        return "${text}\u{1}${md}"
+    }
+
+    /** The documented built-in functions, read once. */
+    fun builtinDocs(): [Builtin] {
+        var list = builtinDocList
+        if (list == null) {
+            var all = allBuiltins()
+            builtinDocList = all
+            return all
+        }
+        return list
+    }
+
+    fun hover(span: SrcSpan, text: string) {
+        if (wantIndex && !isDry()) {
+            hovers.push(IndexHover { span: span, text: text })
+        }
+    }
+
+    fun defLink(use: SrcSpan, target: SrcSpan) {
+        if (wantIndex && !isDry()) {
+            defs.push(IndexDef { use: use, target: target })
+        }
+    }
+
+    fun noteType(span: SrcSpan, ty: int) {
+        if (wantIndex && !isDry()) {
+            exprTypes.push(IndexType { span: span, ty: ty })
+        }
     }
 
     fun peekLocal(name: string): LocalSym? {
@@ -1016,6 +1106,7 @@ pub def struct Checker(loaded: Loaded) {
         if (e == null) {
             return null
         }
+        defLink(span, e.span)
         warnDeprecatedType(e.sym, span)
         return e.sym
     }
@@ -1130,6 +1221,7 @@ pub def struct Checker(loaded: Loaded) {
             }
             for x in en.variants {
                 if (x.name == v) {
+                    defLink(span, x.span)
                     return types.records[x.record].ty
                 }
             }
@@ -2011,6 +2103,7 @@ pub def struct Checker(loaded: Loaded) {
         if (rec == null) {
             return null
         }
+        defLink(nspan, rec.span)
         [Const?] given = []
         [int] givenAt = []
         for f in rec.fields {

@@ -106,11 +106,15 @@ pub fun checkFunc(c: Checker, fid: int) {
     c.tenv = slice(c.tenv, 0, len(c.tenv) - 1)
 }
 
-fun bindParams(c: Checker, x: FnCtx, fid: int) {
+fun bindParams(c: Checker, x: FnCtx, fid: int, scope: SrcSpan, dry: bool) {
     var params = c.funcs[fid].params
     for i in 0..len(params) {
         x.locals.push(params[i].ty)
         x.scopes[0][params[i].name] = LocalSym { slot: i, isConst: false, span: params[i].span }
+        if (c.wantIndex && !dry && params[i].name != "self") {
+            c.localInfos.push(LocalInfo { name: params[i].name, ty: params[i].ty, decl: params[i].span, scope: scope })
+            c.hovers.push(IndexHover { span: params[i].span, text: "${params[i].name}: ${c.show(params[i].ty)}" })
+        }
     }
 }
 
@@ -141,7 +145,7 @@ fun checkFuncInner(c: Checker, fid: int) {
     var isLambda = has(c.closures, fid)
     if (c.funcs[fid].ret == null) {
         var dryCtx = newCtx(c, fid, module, true)
-        bindParams(c, dryCtx, fid)
+        bindParams(c, dryCtx, fid, c.spanIn(module, decl.span), true)
         dryCtx.cellNames = cellNames(decl.body.stmts)
         if (isLambda) {
             dryCtx.locals.push(T_INT)
@@ -152,7 +156,7 @@ fun checkFuncInner(c: Checker, fid: int) {
         c.funcs[fid].ret = joinReturns(c, done.returns, c.spanIn(module, decl.name.span))
     }
     var x = newCtx(c, fid, module, false)
-    bindParams(c, x, fid)
+    bindParams(c, x, fid, c.spanIn(module, decl.span), false)
     x.cellNames = cellNames(decl.body.stmts)
     if (isLambda) {
         x.locals.push(T_INT)
@@ -212,6 +216,24 @@ fun checkFuncInner(c: Checker, fid: int) {
     }
     info.hir = HFunc { name: info.name, params: np, locals: locals, ret: ret, body: body, isAsync: info.isAsync, span: info.span, endLoc: endLoc, annotations: info.annotations, external: info.external }
     info.state = FnState.Done
+    if (c.wantIndex) {
+        [string] ps = []
+        for p in info.params {
+            if (p.name != "self") {
+                ps.push("${p.name}: ${c.show(p.ty)}")
+            }
+        }
+        var r = ""
+        if (ret != T_VOID) {
+            r = ": ${c.show(ret)}"
+        }
+        var asyncKw = ""
+        if (info.isAsync) {
+            asyncKw = "async "
+        }
+        var nameSpan = c.spanIn(module, decl.name.span)
+        c.hover(nameSpan, c.withDoc("${asyncKw}fun ${info.name}(${joinWith(ps, ", ")})${r}", nameSpan))
+    }
 }
 
 pub fun joinReturns(c: Checker, rs: [int], span: SrcSpan): int {
@@ -684,6 +706,13 @@ fun anyErrors(ds: [LoadDiag]): bool {
 /** Checks the loaded program, like `check` in `check/mod.rs`. */
 pub fun checkProgram(loaded: Loaded): CheckResult {
     return checkWith(new Checker(loaded))
+}
+
+/** Checks a program and records what the language server needs: hovers, definitions, locals and types. */
+pub fun checkIndexed(loaded: Loaded): CheckResult {
+    var c = new Checker(loaded)
+    c.wantIndex = true
+    return checkWith(c)
 }
 
 /**

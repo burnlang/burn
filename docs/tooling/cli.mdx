@@ -46,6 +46,7 @@ This page lists every subcommand of `burn`. The shorter toolchain commands map o
 | `burn dump --decls <files...>` | print every type, function and global the checker declares for a program, before it checks any body |
 | `burn dump --checked <files...>` | print the checked program of each file (types, functions, globals, strings and source locations), or the errors the checker reports |
 | `burn dump --owned <files...>` | like `--checked`, after the ownership pass has added the reference counting (`Retain`, `Release` and the temporaries they need) |
+| `burn dump --index <files...>` | print what the language server knows about each file: the hover text and the definition of every name, the locals with their scopes, and the type of every expression |
 | `burn dump --bvm <files...>` | print the bvm module of each file in bvm assembly, as `burn <file.bvm>` runs it, or the errors |
 | `burn version`, `burn help` | information |
 
