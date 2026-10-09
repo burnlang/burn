@@ -23,6 +23,7 @@ pub def type LoadedModule {
 pub def type LoadedLib {
     string name
     string path
+    string? info
 }
 
 /** A diagnostic and the index of the file it points into. */
@@ -73,6 +74,12 @@ fun visit(i: int, mods: [LoadedModule], state: [int], order: [int]): void {
     order.push(i)
 }
 
+/** Builds the bytecode a program imports from a package (`import "name.bvmc"`) when it is missing or out of date. */
+pub def interface PackageBuilder {
+    /** Makes `out` the up-to-date bytecode of the package `name` in `dir`; returns why it could not, or `""`. */
+    fun build(name: string, dir: string, project: Project, out: string): string
+}
+
 /** Reads a program and every module it imports, like `Loader` in `loader.rs`. */
 pub def struct Loader() {
     [SourceFile] files = []
@@ -85,6 +92,7 @@ pub def struct Loader() {
     bool projectTried = false
     Project? project = null
     string projectError = ""
+    PackageBuilder? builder = null
 
     fun setProject(root: string) {
         projectTried = true
@@ -224,6 +232,15 @@ pub def struct Loader() {
             return null
         }
         var out = pathJoin(pathJoin(dir, "build"), "${shortName(name)}.bvmc")
+        var b = builder
+        if (b != null) {
+            var problem = b.build(name, dir, p, out)
+            if (problem != "") {
+                err.set(problem)
+                return null
+            }
+            return out
+        }
         if (isFile(out)) {
             return out
         }
@@ -268,7 +285,7 @@ pub def struct Loader() {
                 return i
             }
         }
-        libs.push(LoadedLib { name: pathStem(c) ?? "", path: c })
+        libs.push(LoadedLib { name: pathStem(c) ?? "", path: c, info: null })
         return len(libs) - 1
     }
 

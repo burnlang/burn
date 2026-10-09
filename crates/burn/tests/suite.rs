@@ -490,7 +490,74 @@ fn the_command_line_written_in_burn_matches_the_rust_one() {
         std::fs::read_to_string(fixes.join("rust.bn")).unwrap(),
         std::fs::read_to_string(fixes.join("burn.bn")).unwrap()
     );
+    let libs = dir.join("libs");
+    std::fs::create_dir_all(&libs).unwrap();
+    std::fs::copy(root.join("tests/libs/app.bn"), libs.join("app.bn")).unwrap();
+    let (out, code) = output(
+        Command::new(&cli)
+            .arg("build")
+            .arg(root.join("tests/libs/geometry.bn"))
+            .arg("-o")
+            .arg(libs.join("geometry.bvmc")),
+    );
+    assert_eq!(code, 0, "{}", out);
+    std::fs::write(libs.join("missing.bn"), "import \"nope.bvmc\"\nprint(1)\n").unwrap();
+    std::fs::write(
+        libs.join("twice.bn"),
+        "import \"geometry.bvmc\"\nfun dist(a: int): int {\n    return a\n}\nprint(1)\n",
+    )
+    .unwrap();
+    std::fs::write(libs.join("unhosted.bn"), "import \"geometry.bvmc\"\nprint(1)\n").unwrap();
+    for file in ["app.bn", "missing.bn", "twice.bn", "unhosted.bn"] {
+        compare(&[file], &libs);
+        for mode in ["--decls", "--checked", "--owned", "--bvm"] {
+            compare(&["dump", mode, file], &libs);
+        }
+    }
+    compare(&["build", "app.bn", "--target", "bvm", "-o", "static.bvmc"], &libs);
+    compare(&["static.bvmc"], &libs);
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+    let expected = std::fs::read_to_string(root.join("tests/libs/app.out")).unwrap();
+    let (out, code) = output(
+        Command::new(&cli)
+            .current_dir(&libs)
+            .args(["build", "app.bn", "--target", "bar", "-o", "app.bar"]),
+    );
+    assert_eq!(code, 0, "{}", out);
+    let (out, code) = output(Command::new(&cli).current_dir(&libs).arg("app.bar"));
+    assert_eq!((out.as_str(), code), (expected.as_str(), 0));
+    let packages = dir.join("packages");
+    std::fs::create_dir_all(&packages).unwrap();
+    let run = |cwd: &Path, args: &[&str]| output(Command::new(&cli).current_dir(cwd).env("BURN_HOME", packages.join("home")).args(args));
+    let (out, code) = run(&packages, &["init", "example.com/ada/game", "--no-git"]);
+    assert_eq!(code, 0, "{}", out);
+    let game = packages.join("game/src/main.bn");
+    std::fs::write(&game, "pub fun score(points: int): int {\n    return points * 10\n}\n").unwrap();
+    let (out, code) = run(&packages, &["init", "example.com/ada/mod", "--no-git"]);
+    assert_eq!(code, 0, "{}", out);
+    let m = packages.join("mod");
+    let toml = std::fs::read_to_string(m.join("burn.toml")).unwrap();
+    std::fs::write(
+        m.join("burn.toml"),
+        toml.replace("[dependencies]\n", "[dependencies]\n\"example.com/ada/game\" = { path = \"../game\" }\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        m.join("src/main.bn"),
+        "import \"example.com/ada/game.bvmc\"\n\n@Inject(target: \"score\", at: \"return\")\nfun doubled(points: int, result: int): int {\n    return result * 2\n}\n\nfun main() {\n    print(\"score\", score(3))\n}\n",
+    )
+    .unwrap();
+    let (out, code) = run(&m, &["run"]);
+    assert_eq!((out.as_str(), code), ("score 60\n", 0));
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    std::fs::write(&game, "pub fun score(points: int): int {\n    return missing\n}\n").unwrap();
+    let (out, code) = run(&m, &["run"]);
+    assert_eq!(code, 1);
+    assert!(
+        out.contains("the package `example.com/ada/game` does not compile, so it has no bytecode: cannot find `missing`"),
+        "{}",
+        out
+    );
     let app = dir.join("app");
     let (out, code) = output(Command::new(&cli).current_dir(&dir).args(["init", "github.com/me/app", "--no-git"]));
     assert_eq!(code, 0, "{}", out);

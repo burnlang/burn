@@ -10,26 +10,33 @@ pub fun toolchainVersion(): string
 @Native("burn.colorErrors")
 pub fun colorErrors(): bool
 
-/** Runs a module given in bvm assembly with `args`, then exits with its exit code. */
+/** Runs a module given in bvm assembly, linked with the bytecode libraries in `libs`, then exits with its exit code. */
 @Native("burn.runModule")
-pub fun runModule(module: string, args: [string]): int
+pub fun runModule(module: string, libs: [string], args: [string]): int
 
 /** Runs a bvm module or archive file with `args`, then exits with its exit code. */
 @Native("burn.runFile")
 pub fun runFile(path: string, args: [string]): int
 
-/** Why bvm rejects a module given in bvm assembly, or `""` when it is valid. */
-@Native("burn.checkModule")
-pub fun checkModule(module: string): string
-
-/** Writes a module given in bvm assembly as bytecode to `path`; returns why it could not, or `""`. */
+/**
+ * Links a module given in bvm assembly with the bytecode libraries in `libs`, checks it and writes it as bytecode to
+ * `path`, and its assembly to `asmPath` unless that is `""`. Returns `""`, or the exit code and the error, split by a tab.
+ */
 @Native("burn.writeBytecode")
-pub fun writeBytecode(module: string, path: string): string
+pub fun writeBytecode(module: string, libs: [string], path: string, asmPath: string): string
 
-/** Writes a runnable archive named `name` holding the module to `path`; returns why it could not, or `""`. */
+/** Writes a runnable archive named `name` holding the module and the libraries to `path`, like `writeBytecode`. */
 @Native("burn.writeArchive")
-pub fun writeArchive(module: string, name: string, path: string): string
+pub fun writeArchive(module: string, name: string, libs: [string], path: string): string
 
 /** How to start this toolchain's `burn` again, for running each test in its own process. */
 @Native("burn.launcher")
 pub fun launcher(): string
+
+/** The exported functions and types of the bytecode library at `path`, as the checker reads them. */
+@Native("burn.library")
+pub fun libraryInfo(path: string): string
+
+/** Whether the bytecode `out` of the package in `dir` is missing, older than its sources, or from an older Burn. */
+@Native("burn.stale")
+pub fun isStale(dir: string, out: string): bool

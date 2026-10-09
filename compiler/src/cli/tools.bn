@@ -74,7 +74,7 @@ priv fun overlaps(s: Suggestion, edits: [Edit]): bool {
 }
 
 priv fun collect(file: string, opts: Options, err: Problem): Collected? {
-    var loader = new Loader()
+    var loader = newLoader()
     var root = loader.loadFile(file, err)
     if (root < 0) {
         return null
@@ -83,6 +83,7 @@ priv fun collect(file: string, opts: Options, err: Problem): Collected? {
     if (opts.noStd) {
         loaded.noStd = true
     }
+    readLibraries(loaded)
     var r = checkProgram(loaded)
     [LoadDiag] all = []
     for d in loaded.diags {
