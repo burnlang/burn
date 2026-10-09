@@ -490,6 +490,34 @@ fn the_command_line_written_in_burn_matches_the_rust_one() {
         std::fs::read_to_string(fixes.join("rust.bn")).unwrap(),
         std::fs::read_to_string(fixes.join("burn.bn")).unwrap()
     );
+    let session = |cmd: &mut Command, input: &str| {
+        use std::io::Write;
+        let mut child = cmd
+            .env("NO_COLOR", "1")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.as_mut().unwrap().write_all(input.as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        (
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+            out.status.code(),
+        )
+    };
+    for input in [
+        "var x = 20\nfun twice(n: int): int {\n    return n * 2\n}\ntwice(x) + 2\nx = x + 1\nprint(x)\nundefinedThing\nprint(\"still alive\")\n",
+        ":help\n1 + 2\n\"hi\"\n[1, 2]\n:source\n:reset\n:source\nx\n",
+        "var a = [1]\na[5]\nprint(\"after\")\na\ndef type P {\n    int x\n}\nvar p = P { x: 3 }\np.x = 9\np\n",
+        "import \"std/process\"\nprint(1)\nexit(4)\nprint(2)\n",
+        "var s = \"a\"\ns += \"b\"\ns\nfun f(): int {\n    return 1\n",
+    ] {
+        let rust = session(burn().arg("repl"), input);
+        let written = session(Command::new(&cli).arg("repl"), input);
+        assert_eq!(rust, written, "repl with input {:?}", input);
+    }
     let libs = dir.join("libs");
     std::fs::create_dir_all(&libs).unwrap();
     std::fs::copy(root.join("tests/libs/app.bn"), libs.join("app.bn")).unwrap();

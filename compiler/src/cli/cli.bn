@@ -8,6 +8,7 @@ import "../project/project.bn"
 import "compile.bn"
 import "host.bn"
 import "init.bn"
+import "repl.bn"
 import "std/fs"
 import "std/process"
 import "targets.bn"
@@ -724,7 +725,7 @@ priv fun cmdTest(rest: [string]): int {
 
 priv fun burni(args: [string], opts: Options): int {
     if (len(args) == 0) {
-        return notYet("repl")
+        return cmdRepl()
     }
     var first = args[0]
     if (first == "-h" || first == "--help") {
@@ -804,7 +805,7 @@ pub fun cliMain(argv: [string]): int {
         return cmdEval(rest[0], opts)
     }
     if (first == "-r" || first == "--repl" || first == "repl") {
-        return notYet("repl")
+        return cmdRepl()
     }
     if (first == "fmt") {
         return cmdFmt(rest)

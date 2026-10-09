@@ -40,3 +40,22 @@ pub fun libraryInfo(path: string): string
 /** Whether the bytecode `out` of the package in `dir` is missing, older than its sources, or from an older Burn. */
 @Native("burn.stale")
 pub fun isStale(dir: string, out: string): bool
+
+/** Starts a REPL session: runtime errors stop only the current input, and globals are kept between inputs. */
+@Native("burn.replStart")
+pub fun replStart(): int
+
+/** Forgets the globals and initialized modules of the REPL session. */
+@Native("burn.replReset")
+pub fun replReset(): int
+
+/**
+ * Runs the module initializers `funcs` (named `inits`) of a REPL input with the globals saved from earlier inputs,
+ * and saves them again. Returns `""`, `"error\t<message>"` for a runtime error or `"exit\t<code>"`.
+ */
+@Native("burn.replEval")
+pub fun replEval(module: string, libs: [string], globals: [string], inits: [string], funcs: [int]): string
+
+/** Prints `prompt` and reads a line from stdin without its line break, or null at the end of the input. */
+@Native("burn.readLine")
+pub fun readLine(prompt: string): string?

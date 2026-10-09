@@ -405,33 +405,68 @@ fun checkInit(c: Checker, mi: int) {
     x.cellNames = cellNames(top)
     c.fx.push(x)
     [HStmt] body = []
-    for item in items {
+    var file = c.fileOf(mi)
+    var n = len(items)
+    for idx in 0..n {
+        var item = items[idx]
         var k = item.kind
+        var skipped = c.skipFile == file && item.span.start < c.skipBefore
         if (k is ItemKind.Definition) {
             var d = k.d
             if (d is Def.Struct && len(d.s.statics) > 0) {
+                if (skipped) {
+                    c.fx[len(c.fx) - 1].dry = true
+                }
+                var out = staticInits(c, d.s.name)
+                if (skipped) {
+                    c.fx[len(c.fx) - 1].dry = false
+                } else {
+                    var start = len(body)
+                    for s in out {
+                        body.push(s)
+                    }
+                    c.initSpans.push(InitSpan { module: mi, start: start, end: len(body), span: c.spanIn(mi, item.span) })
+                }
+            }
+        }
+        if (k is ItemKind.Statement) {
+            var echo = c.replEcho && idx + 1 == n && !skipped && c.skipFile == file
+            if (skipped) {
+                c.fx[len(c.fx) - 1].dry = true
+            }
+            [HStmt] out = []
+            var sk = k.stmt.kind
+            if (echo && sk is StmtKind.Eval) {
+                out = replEcho(c, sk.value)
+            } else {
+                out = stmtOf(c, k.stmt)
+            }
+            if (skipped) {
+                c.fx[len(c.fx) - 1].dry = false
+            } else {
                 var start = len(body)
-                for s in staticInits(c, d.s.name) {
+                for s in out {
                     body.push(s)
                 }
                 c.initSpans.push(InitSpan { module: mi, start: start, end: len(body), span: c.spanIn(mi, item.span) })
             }
         }
-        if (k is ItemKind.Statement) {
-            var start = len(body)
-            for s in stmtOf(c, k.stmt) {
-                body.push(s)
-            }
-            c.initSpans.push(InitSpan { module: mi, start: start, end: len(body), span: c.spanIn(mi, item.span) })
-        }
     }
     var done = popCtx(c)
     var locals = done.locals
     body = finishCells(body, locals, done.cells)
-    var file = c.fileOf(mi)
     var endLoc = c.loc(SrcSpan { file: file, start: 0, end: 0 })
     var info = c.funcs[fid]
     info.hir = HFunc { name: info.name, params: 0, locals: locals, ret: T_VOID, body: body, isAsync: false, span: info.span, endLoc: endLoc, annotations: [], external: null }
+}
+
+/** The last expression typed into the REPL: printed unless it has no value or is an assignment. */
+fun replEcho(c: Checker, e: Expr): [HStmt] {
+    var h = exprOf(c, e, null)
+    if (h.ty == T_VOID || h.ty == T_ERROR || e.kind is ExprKind.Assign) {
+        return [HStmt.Eval(h)]
+    }
+    return [HStmt.Eval(rt("Print", [stringify(c, h)], T_VOID))]
 }
 
 fun mainFunc(c: Checker): ValEntry? {
@@ -648,7 +683,23 @@ fun anyErrors(ds: [LoadDiag]): bool {
 
 /** Checks the loaded program, like `check` in `check/mod.rs`. */
 pub fun checkProgram(loaded: Loaded): CheckResult {
+    return checkWith(new Checker(loaded))
+}
+
+/**
+ * Checks a program for the REPL: the root file's code before `before` was checked already, so it is only checked
+ * again, without errors and without code, and the value of the last expression statement is printed.
+ */
+pub fun checkRepl(loaded: Loaded, file: int, before: int): CheckResult {
     var c = new Checker(loaded)
+    c.skipFile = file
+    c.skipBefore = before
+    c.replEcho = true
+    return checkWith(c)
+}
+
+fun checkWith(c: Checker): CheckResult {
+    var loaded = c.loaded
     for m in loaded.modules {
         if (m.ast.hasDestroy) {
             c.hasDestroy = true

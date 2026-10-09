@@ -468,6 +468,9 @@ const MAX_INSTANCES = 256
 pub def struct Checker(loaded: Loaded) {
     Types types = new Types()
     [string] libPaths = []
+    int skipFile = -1
+    int skipBefore = 0
+    bool replEcho = false
     [LoadDiag] diags = []
     [ModScope] mods = []
     [FuncInfo] funcs = []
