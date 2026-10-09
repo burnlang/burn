@@ -1,0 +1,120 @@
+import "std/math"
+import "std/strings"
+
+/** `s.lines()`: the lines of `s` without their `\n` or `\r\n`, and no empty line after a final line break. */
+pub fun textLines(s: string): [string] {
+    if (s == "") {
+        return []
+    }
+    var parts = split(s, "\n")
+    if (endsWith(s, "\n")) {
+        parts = slice(parts, 0, len(parts) - 1)
+    }
+    [string] out = []
+    for p in parts {
+        if (endsWith(p, "\r")) {
+            out.push(substring(p, 0, len(p) - 1))
+        } else {
+            out.push(p)
+        }
+    }
+    return out
+}
+
+/** `s.trim_start()`. */
+pub fun trimStart(s: string): string {
+    var i = 0
+    var n = len(s)
+    while (i < n && isWhitespace(substring(s, i, i + 1))) {
+        i += 1
+    }
+    return substring(s, i, n)
+}
+
+/** `s.trim_end()`. */
+pub fun trimEnd(s: string): string {
+    var n = len(s)
+    while (n > 0 && isWhitespace(substring(s, n - 1, n))) {
+        n -= 1
+    }
+    return substring(s, 0, n)
+}
+
+/** Whether `s` holds nothing but whitespace. */
+pub fun blank(s: string): bool {
+    return trim(s) == ""
+}
+
+/** The index of the first whitespace character of `s`, or -1. */
+pub fun whitespaceAt(s: string): int {
+    var i = 0
+    for c in s {
+        if (isWhitespace(c)) {
+            return i
+        }
+        i += 1
+    }
+    return -1
+}
+
+/** `s.split_whitespace()`. */
+pub fun words(s: string): [string] {
+    [string] out = []
+    var cur = ""
+    for c in s {
+        if (isWhitespace(c)) {
+            if (cur != "") {
+                out.push(cur)
+                cur = ""
+            }
+        } else {
+            cur += c
+        }
+    }
+    if (cur != "") {
+        out.push(cur)
+    }
+    return out
+}
+
+/** The text of `src` between two byte offsets, clamped to the text. */
+pub fun byteSlice(src: string, start: int, end: int): string {
+    var b = bytes(src)
+    var s = min(start, len(b))
+    var e = max(s, min(end, len(b)))
+    return fromBytes(slice(b, s, e))
+}
+
+/** Whether `c` is a letter or a digit in any script, like `char::is_alphanumeric`. */
+pub fun alphanumeric(c: string): bool {
+    return isAlphanumeric(c)
+}
+
+/** Whether `c` is an uppercase letter, like `char::is_uppercase`. */
+pub fun uppercase(c: string): bool {
+    return upper(c) == c && lower(c) != c
+}
+
+/** The words of `s` separated by single spaces, like `s.split_whitespace().collect::<Vec<_>>().join(" ")`. */
+pub fun squeezed(s: string): string {
+    var out = ""
+    for w in words(s) {
+        if (out != "") {
+            out += " "
+        }
+        out += w
+    }
+    return out
+}
+
+/** The parts joined with `sep` between them. */
+pub fun joined(parts: [string], sep: string): string {
+    var out = ""
+    for i in 0..len(parts) {
+        if (i > 0) {
+            out += sep
+        }
+        out += parts[i]
+    }
+    return out
+}

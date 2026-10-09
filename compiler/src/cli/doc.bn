@@ -1,0 +1,132 @@
+import "../diag/diag.bn"
+import "../doc/builtin_docs.bn"
+import "../doc/html.bn"
+import "../doc/model.bn"
+import "../project/loader.bn"
+import "../project/paths.bn"
+import "../project/project.bn"
+import "../project/stdlib.bn"
+import "../syntax/parser.bn"
+import "compile.bn"
+import "host.bn"
+import "std/fs"
+
+priv fun eprintText(text: string) {
+    if (endsWith(text, "\n")) {
+        eprint(substring(text, 0, len(text) - 1))
+    } else if (text != "") {
+        eprint(text)
+    }
+}
+
+/** The path of `path` relative to `base`, without its extension, as a module name. */
+priv fun moduleName(path: string, base: string): string {
+    var rel = stripPrefix(path, base) ?? path
+    var ext = pathExtension(rel)
+    if (ext != null) {
+        rel = substring(rel, 0, len(rel) - len(ext) - 1)
+    }
+    return replace(rel, "\\", "/")
+}
+
+/** `burn doc [files...] [-o dir]`: writes an HTML site from the Burndoc comments, like `doc::cmd`. */
+pub fun cmdDoc(args: [string]): int {
+    var out = "burndoc"
+    var private = false
+    var withStd = true
+    string? title = null
+    [string] files = []
+    var i = 0
+    while (i < len(args)) {
+        var a = args[i]
+        if (a == "-o" || a == "--output") {
+            i += 1
+            if (i >= len(args)) {
+                eprint("error: ${a} needs a directory")
+                return 2
+            }
+            out = args[i]
+        } else if (a == "--title") {
+            i += 1
+            if (i < len(args)) {
+                title = args[i]
+            }
+        } else if (a == "--private") {
+            private = true
+        } else if (a == "--no-std") {
+            withStd = false
+        } else if (startsWith(a, "-")) {
+            eprint("error: unknown option `${a}`")
+            return 2
+        } else {
+            files.push(a)
+        }
+        i += 1
+    }
+    [DocModule] modules = []
+    var base = ""
+    if (len(files) > 0 && (isFile(files[0]) || isDir(files[0]))) {
+        base = pathParent(canonical(files[0])) ?? ""
+    }
+    [string] seen = []
+    var color = colorErrors()
+    for f in files {
+        var loader = newLoader()
+        var err = new Problem()
+        var root = loader.loadFile(f, err)
+        if (root < 0) {
+            eprint("error: ${err.message}")
+            return 1
+        }
+        var loaded = loader.finish(root)
+        var text = ""
+        for d in loaded.diags {
+            if (d.diag.severity == Severity.Error) {
+                text += renderIn(loaded.files[d.file], d.diag, color)
+            }
+        }
+        eprintText(text)
+        for m in loaded.modules {
+            var file = loaded.files[m.file]
+            var p = file.path
+            if (p == null || contains(seen, p)) {
+                continue
+            }
+            seen.push(p)
+            modules.push(buildDocModule(moduleName(p, base), false, file.src, m.ast))
+        }
+    }
+    if (withStd) {
+        for s in stdModules() {
+            modules.push(buildDocModule("std/${s.name}", true, s.src, parse(s.src).module))
+        }
+    }
+    var name = "Burn standard library"
+    if (len(files) > 0) {
+        name = pathStem(files[0]) ?? "Burn"
+    }
+    [Builtin] builtins = []
+    if (withStd) {
+        builtins = allBuiltins()
+    }
+    var site = Site { title: title ?? name, modules: modules, builtins: builtins, private: private }
+    var pages = renderSite(site)
+    Files.makeDir(out)
+    if (!isDir(out)) {
+        eprint("error: cannot create ${out}")
+        return 1
+    }
+    var count = 0
+    for page in pages {
+        var path = pathJoin(out, page.path)
+        if (!writeFile(path, page.content)) {
+            eprint("error: cannot write ${path}")
+            return 1
+        }
+        if (endsWith(page.path, ".html")) {
+            count += 1
+        }
+    }
+    eprint("wrote ${count} pages to ${pathJoin(out, "index.html")}")
+    return 0
+}

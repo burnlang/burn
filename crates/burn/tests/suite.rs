@@ -384,6 +384,17 @@ fn the_compiler_written_in_burn_can_be_chosen() {
 }
 
 #[test]
+fn the_doc_assets_written_in_burn_are_up_to_date() {
+    let root = root();
+    let (generated, code) = output(burn().current_dir(&root).arg("compiler/src/bin/gendoc.bn"));
+    assert_eq!(code, 0, "{}", generated);
+    assert!(
+        generated == std::fs::read_to_string(root.join("compiler/src/doc/assets.bn")).unwrap(),
+        "compiler/src/doc/assets.bn is out of date; run `burn compiler/src/bin/gendoc.bn > compiler/src/doc/assets.bn`"
+    );
+}
+
+#[test]
 fn the_runtime_written_in_burn_is_up_to_date() {
     let root = root();
     let (generated, code) = output(burn().current_dir(&root).args(["dump", "--bvm", "lib/runtime/runtime.bn"]));
@@ -517,6 +528,37 @@ fn the_command_line_written_in_burn_matches_the_rust_one() {
         let rust = session(burn().arg("repl"), input);
         let written = session(Command::new(&cli).arg("repl"), input);
         assert_eq!(rust, written, "repl with input {:?}", input);
+    }
+    for (k, args) in [
+        &["doc"][..],
+        &["doc", "--private", "tests/cases/structs.bn"],
+        &["doc", "--title", "API", "tests/cases/generics.bn", "lib/tools/fmt.bn"],
+    ]
+    .iter()
+    .enumerate()
+    {
+        let rust_site = dir.join(format!("doc-rust-{}", k));
+        let burn_site = dir.join(format!("doc-burn-{}", k));
+        let (_, _, code) = stdout_of(burn().current_dir(&root).args(*args).arg("-o").arg(&rust_site));
+        assert_eq!(code, 0);
+        let (_, err, code) = stdout_of(Command::new(&cli).current_dir(&root).args(*args).arg("-o").arg(&burn_site));
+        assert_eq!(code, 0, "{}", err);
+        let mut pages: Vec<String> = std::fs::read_dir(&rust_site)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        pages.sort();
+        let mut written: Vec<String> = std::fs::read_dir(&burn_site)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        written.sort();
+        assert_eq!(pages, written, "burn {}", args.join(" "));
+        for p in pages {
+            let a = std::fs::read_to_string(rust_site.join(&p)).unwrap();
+            let b = std::fs::read_to_string(burn_site.join(&p)).unwrap();
+            assert!(a == b, "burn {}: {} differs", args.join(" "), p);
+        }
     }
     let libs = dir.join("libs");
     std::fs::create_dir_all(&libs).unwrap();

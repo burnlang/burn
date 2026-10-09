@@ -1,0 +1,440 @@
+import "std/math"
+import "text.bn"
+
+/** A paragraph, a code block or a list in the description of a doc comment. */
+pub def enum DocBlock {
+    Para(text: string),
+    Code(text: string),
+    List(items: [string])
+}
+
+pub def type DocParam {
+    string name
+    string text
+}
+
+/** A parsed Burndoc comment, like `DocComment` in `doc/comment.rs`. */
+pub def type DocComment {
+    string summary
+    [DocBlock] body
+    [DocParam] params
+    string? ret
+    [string] throws
+    [string] see
+    string? since
+    string? deprecated
+    [string] examples
+    [string] authors
+    string? group
+    [string] aliases
+}
+
+pub fun emptyDoc(): DocComment {
+    return DocComment {
+        summary: "",
+        body: [],
+        params: [],
+        ret: null,
+        throws: [],
+        see: [],
+        since: null,
+        deprecated: null,
+        examples: [],
+        authors: [],
+        group: null,
+        aliases: []
+    }
+}
+
+/** The description of the parameter `name`. */
+pub fun paramDoc(d: DocComment, name: string): string? {
+    for p in d.params {
+        if (p.name == name) {
+            return p.text
+        }
+    }
+    return null
+}
+
+priv fun stripLine(l: string): string {
+    var t = trimStart(l)
+    if (startsWith(t, "*")) {
+        t = substring(t, 1, len(t))
+    }
+    if (startsWith(t, " ")) {
+        t = substring(t, 1, len(t))
+    }
+    return trimEnd(t)
+}
+
+/** The lines of a `/** ... */` comment without the comment markers and leading stars. */
+pub fun rawLines(raw: string): [string] {
+    var inner = trim(raw)
+    if (startsWith(inner, "/**")) {
+        inner = substring(inner, 3, len(inner))
+    }
+    if (endsWith(inner, "*/")) {
+        inner = substring(inner, 0, len(inner) - 2)
+    }
+    [string] lines = []
+    for l in textLines(inner) {
+        lines.push(stripLine(l))
+    }
+    var start = 0
+    while (start < len(lines) && blank(lines[start])) {
+        start += 1
+    }
+    var end = len(lines)
+    while (end > start && blank(lines[end - 1])) {
+        end -= 1
+    }
+    return slice(lines, start, end)
+}
+
+priv fun indentOf(l: string): int {
+    return len(l) - len(trimStart(l))
+}
+
+priv fun dedent(lines: [string]): string {
+    var n = -1
+    for l in lines {
+        if (!blank(l)) {
+            var k = indentOf(l)
+            if (n < 0 || k < n) {
+                n = k
+            }
+        }
+    }
+    if (n < 0) {
+        n = 0
+    }
+    [string] out = []
+    for l in lines {
+        if (len(l) >= n) {
+            out.push(substring(l, n, len(l)))
+        } else {
+            out.push(trimStart(l))
+        }
+    }
+    var end = len(out)
+    while (end > 0 && blank(out[end - 1])) {
+        end -= 1
+    }
+    return join(slice(out, 0, end), "\n")
+}
+
+priv fun blocks(lines: [string]): [DocBlock] {
+    [DocBlock] out = []
+    [string] para = []
+    var i = 0
+    while (i < len(lines)) {
+        var l = lines[i]
+        if (blank(l)) {
+            if (len(para) > 0) {
+                out.push(DocBlock.Para(join(para, " ")))
+                para = []
+            }
+            i += 1
+        } else if (startsWith(trimStart(l), "```")) {
+            if (len(para) > 0) {
+                out.push(DocBlock.Para(join(para, " ")))
+                para = []
+            }
+            [string] code = []
+            i += 1
+            while (i < len(lines) && !startsWith(trimStart(lines[i]), "```")) {
+                code.push(lines[i])
+                i += 1
+            }
+            i += 1
+            out.push(DocBlock.Code(dedent(code)))
+        } else if (startsWith(l, "    ") && len(para) == 0) {
+            [string] code = []
+            while (i < len(lines) && (startsWith(lines[i], "    ") || blank(lines[i]))) {
+                code.push(lines[i])
+                i += 1
+            }
+            out.push(DocBlock.Code(dedent(code)))
+        } else if (startsWith(trimStart(l), "- ")) {
+            if (len(para) > 0) {
+                out.push(DocBlock.Para(join(para, " ")))
+                para = []
+            }
+            [string] items = []
+            while (i < len(lines) && !blank(lines[i])) {
+                var t = trimStart(lines[i])
+                if (startsWith(t, "- ")) {
+                    items.push(substring(t, 2, len(t)))
+                } else if (len(items) > 0) {
+                    items[len(items) - 1] = items[len(items) - 1] + " " + t
+                }
+                i += 1
+            }
+            out.push(DocBlock.List(items))
+        } else {
+            para.push(trim(l))
+            i += 1
+        }
+    }
+    if (len(para) > 0) {
+        out.push(DocBlock.Para(join(para, " ")))
+    }
+    return out
+}
+
+/** The text up to and including the first `.` that ends a sentence, outside code and inline tags. */
+pub fun firstSentence(text: string): string {
+    var depth = 0
+    [string] chars = []
+    for c in text {
+        chars.push(c)
+    }
+    for i in 0..len(chars) {
+        var c = chars[i]
+        if (c == "`") {
+            depth = depth ^ 1
+        } else if (c == "{") {
+            depth += 2
+        } else if (c == "}") {
+            depth = depth - 2
+            if (depth < 0) {
+                depth = 0
+            }
+        } else if (c == "." && depth == 0 && (i + 1 >= len(chars) || blank(chars[i + 1]))) {
+            return join(slice(chars, 0, i + 1), "")
+        }
+    }
+    return text
+}
+
+/** Parses a Burndoc comment, given with its `/**` and `*/`. */
+pub fun parseDoc(raw: string): DocComment {
+    var lines = rawLines(raw)
+    var d = emptyDoc()
+    [string] desc = []
+    var i = 0
+    while (i < len(lines) && !startsWith(trimStart(lines[i]), "@")) {
+        desc.push(lines[i])
+        i += 1
+    }
+    d.body = blocks(desc)
+    if (len(d.body) > 0) {
+        var first = d.body[0]
+        if (first is DocBlock.Para) {
+            d.summary = firstSentence(first.text)
+        }
+    }
+    while (i < len(lines)) {
+        var line = trimStart(lines[i])
+        var tag = line
+        var rest = ""
+        var ws = whitespaceAt(line)
+        if (ws >= 0) {
+            tag = substring(line, 0, ws)
+            rest = trim(substring(line, ws + 1, len(line)))
+        }
+        i += 1
+        [string] cont = []
+        while (i < len(lines) && !startsWith(trimStart(lines[i]), "@")) {
+            cont.push(lines[i])
+            i += 1
+        }
+        var text = rest
+        for c in cont {
+            if (!blank(c)) {
+                if (text != "") {
+                    text += " "
+                }
+                text += trim(c)
+            }
+        }
+        if (tag == "@param") {
+            var at = whitespaceAt(text)
+            if (at >= 0) {
+                d.params.push(DocParam { name: substring(text, 0, at), text: trim(substring(text, at + 1, len(text))) })
+            } else {
+                d.params.push(DocParam { name: text, text: "" })
+            }
+        } else if (tag == "@return" || tag == "@returns") {
+            d.ret = text
+        } else if (tag == "@throws" || tag == "@error") {
+            d.throws.push(text)
+        } else if (tag == "@see") {
+            d.see.push(text)
+        } else if (tag == "@since") {
+            d.since = text
+        } else if (tag == "@deprecated") {
+            d.deprecated = text
+        } else if (tag == "@author") {
+            d.authors.push(text)
+        } else if (tag == "@group") {
+            d.group = text
+        } else if (tag == "@alias") {
+            d.aliases.push(text)
+        } else if (tag == "@example") {
+            [string] code = []
+            if (rest != "") {
+                code.push("    ${rest}")
+            }
+            for c in cont {
+                code.push(c)
+            }
+            d.examples.push(dedent(code))
+        } else if (len(d.body) > 0) {
+            var last = d.body[len(d.body) - 1]
+            if (last is DocBlock.Para) {
+                d.body[len(d.body) - 1] = DocBlock.Para(last.text + " " + line)
+            }
+        }
+    }
+    return d
+}
+
+/** The doc comment right before the line that holds the byte offset `offset`, skipping annotation lines. */
+pub fun docBefore(src: string, offset: int): string? {
+    var b = bytes(src)
+    var at = min(offset, len(b))
+    var lineStart = 0
+    var k = at - 1
+    while (k >= 0) {
+        if (b[k] == 10) {
+            lineStart = k + 1
+            break
+        }
+        k -= 1
+    }
+    var lines = textLines(fromBytes(slice(b, 0, lineStart)))
+    while (len(lines) > 0 && startsWith(trimStart(lines[len(lines) - 1]), "@")) {
+        lines = slice(lines, 0, len(lines) - 1)
+    }
+    if (len(lines) == 0) {
+        return null
+    }
+    if (!endsWith(trim(lines[len(lines) - 1]), "*/")) {
+        return null
+    }
+    [string] collected = []
+    var n = len(lines)
+    while (n > 0) {
+        var l = lines[n - 1]
+        n -= 1
+        collected.push(l)
+        var t = trimStart(l)
+        if (startsWith(t, "/**")) {
+            [string] ordered = []
+            var j = len(collected) - 1
+            while (j >= 0) {
+                ordered.push(collected[j])
+                j -= 1
+            }
+            return join(ordered, "\n")
+        }
+        if (startsWith(t, "/*") || (len(collected) > 1 && endsWith(t, "*/"))) {
+            return null
+        }
+    }
+    return null
+}
+
+/** The doc comment at the start of a file, if a blank line separates it from what follows. */
+pub fun moduleDoc(src: string): string? {
+    var t = trimStart(src)
+    if (startsWith(t, "#!")) {
+        var nl = indexOf(t, "\n")
+        if (nl < 0) {
+            t = ""
+        } else {
+            t = trimStart(substring(t, nl + 1, len(t)))
+        }
+    }
+    if (!startsWith(t, "/**")) {
+        return null
+    }
+    var close = indexOf(t, "*/")
+    if (close < 0) {
+        return null
+    }
+    var end = close + 2
+    var after = substring(t, end, len(t))
+    var isBlank = trim(after) == ""
+    if (startsWith(after, "\n")) {
+        var r = substring(after, 1, len(after))
+        var k = 0
+        while (k < len(r) && (substring(r, k, k + 1) == " " || substring(r, k, k + 1) == "\t")) {
+            k += 1
+        }
+        if (startsWith(substring(r, k, len(r)), "\n")) {
+            isBlank = true
+        }
+    }
+    if (!isBlank) {
+        return null
+    }
+    return substring(t, 0, end)
+}
+
+/** Inline tags like `{@link name}` turned into code spans. */
+pub fun inlineMarkdown(text: string): string {
+    var out = ""
+    var rest = text
+    while (true) {
+        var i = indexOf(rest, "{@")
+        if (i < 0) {
+            break
+        }
+        out += substring(rest, 0, i)
+        var after = substring(rest, i + 2, len(rest))
+        var end = indexOf(after, "}")
+        if (end < 0) {
+            out += substring(rest, i, len(rest))
+            return out
+        }
+        var inner = substring(after, 0, end)
+        var arg = ""
+        var ws = whitespaceAt(inner)
+        if (ws >= 0) {
+            arg = substring(inner, ws + 1, len(inner))
+        }
+        out += "`" + trim(arg) + "`"
+        rest = substring(after, end + 1, len(after))
+    }
+    return out + rest
+}
+
+/** The comment as Markdown, the way editors show it on hover. */
+pub fun toMarkdown(d: DocComment): string {
+    var out = ""
+    for b in d.body {
+        if (b is DocBlock.Para) {
+            out += "${inlineMarkdown(b.text)}\n\n"
+        } else if (b is DocBlock.Code) {
+            out += "```burn\n${b.text}\n```\n\n"
+        } else if (b is DocBlock.List) {
+            for it in b.items {
+                out += "- ${inlineMarkdown(it)}\n"
+            }
+            out += "\n"
+        }
+    }
+    var dep = d.deprecated
+    if (dep != null) {
+        out += "**Deprecated.** ${inlineMarkdown(dep)}\n\n"
+    }
+    for p in d.params {
+        out += "*@param* `${p.name}` — ${inlineMarkdown(p.text)}  \n"
+    }
+    var r = d.ret
+    if (r != null) {
+        out += "*@return* ${inlineMarkdown(r)}  \n"
+    }
+    for t in d.throws {
+        out += "*@throws* ${inlineMarkdown(t)}  \n"
+    }
+    for s in d.see {
+        out += "*@see* `${s}`  \n"
+    }
+    if (len(d.examples) > 0) {
+        out += "\n```burn\n${d.examples[0]}\n```\n"
+    }
+    return trimEnd(out)
+}
