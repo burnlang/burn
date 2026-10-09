@@ -1,5 +1,5 @@
 use super::*;
-use burn_runtime::meta::Desc;
+use bvm::runtime::meta::Desc;
 
 pub fn library_module(bytes: &[u8]) -> Result<bvm::Module, String> {
     if bvm::archive::is_archive(bytes) {

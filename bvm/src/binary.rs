@@ -1,6 +1,6 @@
 use crate::module::{Annotation, Function, Import, Module, Sig, Table, Target, Value, FIRST_USER_TYPE};
 use crate::op::{rt_by_name, rt_name, Cmp, Op};
-use burn_runtime::meta::Desc;
+use bvm_runtime::meta::Desc;
 use std::collections::HashMap;
 
 pub const MAGIC: &[u8; 4] = b"BVM\0";
@@ -167,7 +167,7 @@ fn read_desc(r: &mut Rd) -> R<Desc> {
         12 => Desc::Future(r.u32()?),
         16 => {
             let c = r.u8()?;
-            Desc::Num(burn_runtime::meta::Num::from_code(c).ok_or_else(|| format!("bad number type code {}", c))?)
+            Desc::Num(bvm_runtime::meta::Num::from_code(c).ok_or_else(|| format!("bad number type code {}", c))?)
         }
         13 => {
             let name = r.s()?;

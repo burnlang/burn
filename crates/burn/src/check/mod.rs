@@ -20,7 +20,7 @@ use crate::hir::{self, Expr, ExprKind, FuncId, IfaceSlot, Stmt};
 use crate::loader::Loaded;
 use crate::source::{FileId, SourceMap, Span};
 use crate::types::*;
-use burn_runtime::RtFn;
+use bvm::runtime::RtFn;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 

@@ -331,7 +331,7 @@ impl W {
         match &e.kind {
             ExprKind::Int(v) => self.line(label, &format!("Int {} {}", v, s)),
             ExprKind::BigInt(v, hex) => self.line(label, &format!("BigInt {} {} {}", v, if *hex { "hex" } else { "dec" }, s)),
-            ExprKind::Float(v) => self.line(label, &format!("Float {} {}", burn_runtime::fmt::float_str(*v), s)),
+            ExprKind::Float(v) => self.line(label, &format!("Float {} {}", bvm::runtime::fmt::float_str(*v), s)),
             ExprKind::Str(v) => self.line(label, &format!("Str {} {}", escape(v), s)),
             ExprKind::Template(parts) => self.nest(label, &format!("Template {}", s), |w| {
                 for p in parts {

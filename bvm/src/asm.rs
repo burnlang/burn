@@ -1,6 +1,6 @@
 use crate::module::{Annotation, Function, Import, Module, Sig, Table, Target, Value, FIRST_USER_TYPE};
 use crate::op::{rt_by_name, rt_name, Cmp, Op, NO_LOC};
-use burn_runtime::meta::Desc;
+use bvm_runtime::meta::Desc;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::fmt::Write;
@@ -355,8 +355,8 @@ impl Asm {
                 "string" => TyRef::D(Desc::Str),
                 "any" => TyRef::D(Desc::Any),
                 "fun" => TyRef::D(Desc::Func),
-                n if burn_runtime::meta::Num::ALL.iter().any(|k| k.name() == n) => {
-                    TyRef::D(Desc::Num(*burn_runtime::meta::Num::ALL.iter().find(|k| k.name() == n).unwrap()))
+                n if bvm_runtime::meta::Num::ALL.iter().any(|k| k.name() == n) => {
+                    TyRef::D(Desc::Num(*bvm_runtime::meta::Num::ALL.iter().find(|k| k.name() == n).unwrap()))
                 }
                 "map" => {
                     c.expect('<')?;

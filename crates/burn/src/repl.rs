@@ -3,7 +3,7 @@ use crate::diag::{render, Severity};
 use crate::driver;
 use crate::loader::Loader;
 use crate::vm::prepare;
-use burn_runtime::io::{self, BurnError, BurnExit};
+use bvm::runtime::io::{self, BurnError, BurnExit};
 use bvm::Runner;
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Write};

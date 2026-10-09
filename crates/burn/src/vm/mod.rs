@@ -2,7 +2,7 @@ pub mod compile;
 
 use crate::check::libs::library_modules;
 use crate::hir::Program;
-use burn_runtime::io;
+use bvm::runtime::io;
 use bvm::{Host, LoadError, Module, Runner};
 use std::sync::Arc;
 

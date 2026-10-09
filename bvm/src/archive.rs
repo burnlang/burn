@@ -120,9 +120,9 @@ impl Archive {
         let mut host = crate::Host::new();
         let resources = std::sync::Arc::new(self.resources.clone());
         host.register("resource", 1, move |a| {
-            let name = burn_runtime::obj::str_ref(a[0]).to_string();
+            let name = bvm_runtime::obj::str_ref(a[0]).to_string();
             match resources.iter().find(|(n, _)| *n == name) {
-                Some((_, data)) => burn_runtime::obj::string(&String::from_utf8_lossy(data)),
+                Some((_, data)) => bvm_runtime::obj::string(&String::from_utf8_lossy(data)),
                 None => 0,
             }
         });

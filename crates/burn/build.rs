@@ -6,13 +6,13 @@ use std::process::Command;
 fn main() {
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let runtime_src = manifest.join("../burn-runtime/src");
+    let runtime_src = manifest.join("../../bvm/runtime/src");
     let bvm_src = manifest.join("../../bvm/src");
     println!("cargo:rerun-if-changed={}", runtime_src.display());
     println!("cargo:rerun-if-changed={}", bvm_src.display());
     println!("cargo:rerun-if-changed=build.rs");
     let lib = out.join("libburn_runtime.a");
-    let rlib = out.join("libburn_runtime_native.rlib");
+    let rlib = out.join("libbvm_runtime_native.rlib");
     let libs_file = out.join("native_libs.txt");
     let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".into());
     let target = env::var("TARGET").unwrap();
@@ -32,7 +32,7 @@ fn main() {
         "strip=debuginfo",
     ];
     let runtime = Command::new(&rustc)
-        .args(["--crate-name", "burn_runtime", "--crate-type", "rlib"])
+        .args(["--crate-name", "bvm_runtime", "--crate-type", "rlib"])
         .args(flags)
         .args(["--target", &target])
         .arg("-o")
@@ -45,7 +45,7 @@ fn main() {
             .args(flags)
             .args(["--target", &target])
             .arg("--extern")
-            .arg(format!("burn_runtime={}", rlib.display()))
+            .arg(format!("bvm_runtime={}", rlib.display()))
             .arg("-L")
             .arg(&out)
             .args(["--print", "native-static-libs"])
@@ -88,7 +88,7 @@ fn main() {
     fs::write(&libs_file, libs).unwrap();
     let core = out.join("libburn_core.a");
     let built = Command::new(&rustc)
-        .args(["--crate-name", "burn_runtime", "--crate-type", "staticlib", "--cfg", "burn_core"])
+        .args(["--crate-name", "bvm_runtime", "--crate-type", "staticlib", "--cfg", "burn_core"])
         .args(flags)
         .args(["--target", &target])
         .arg("-o")

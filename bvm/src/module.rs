@@ -1,5 +1,5 @@
 use crate::op::Op;
-use burn_runtime::meta::{builtin_descs, Desc, Meta};
+use bvm_runtime::meta::{builtin_descs, Desc, Meta};
 
 pub const FIRST_USER_TYPE: u32 = 12;
 

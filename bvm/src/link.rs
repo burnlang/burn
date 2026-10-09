@@ -1,6 +1,6 @@
 use crate::module::{Annotation, Function, Import, Module, Sig, Table, Target, FIRST_USER_TYPE};
 use crate::op::{Op, NO_LOC};
-use burn_runtime::meta::{builtin_descs, Desc};
+use bvm_runtime::meta::{builtin_descs, Desc};
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, Default)]

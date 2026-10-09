@@ -1,12 +1,12 @@
 [package]
-name = "burn-runtime"
+name = "bvm-runtime"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [lib]
-name = "burn_runtime"
+name = "bvm_runtime"
 path = "src/lib.rs"
 crate-type = ["rlib"]
 

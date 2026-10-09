@@ -1,6 +1,6 @@
 use crate::module::{Module, Target, Value};
 use crate::op::{rt_by_name, Op};
-use burn_runtime::RtFn;
+use bvm_runtime::RtFn;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 

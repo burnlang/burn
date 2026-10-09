@@ -19,7 +19,7 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - name: Clippy for the no-std runtime
-        run: clippy-driver --edition 2021 --crate-name burn_runtime --crate-type staticlib --cfg burn_core -C panic=abort -o "$RUNNER_TEMP/libburn_core.a" crates/burn-runtime/src/lib.rs -D warnings
+        run: clippy-driver --edition 2021 --crate-name bvm_runtime --crate-type staticlib --cfg burn_core -C panic=abort -o "$RUNNER_TEMP/libburn_core.a" bvm/runtime/src/lib.rs -D warnings
       - run: cargo test --release
       - name: Ember, the example language built on bvm
         run: cargo run --release -p bvm --example ember -- examples/bvm/ember/demo.em

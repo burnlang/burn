@@ -1,6 +1,6 @@
 use crate::module::{Annotation, Module, Target, Value};
 use crate::op::{rt_by_name, Op};
-use burn_runtime::meta::Desc;
+use bvm_runtime::meta::Desc;
 
 pub const KINDS: [&str; 3] = ["Inject", "Overwrite", "Redirect"];
 

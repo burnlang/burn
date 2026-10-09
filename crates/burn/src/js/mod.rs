@@ -1,5 +1,5 @@
 use crate::hir::{BinOp, Cmp, Conv, Expr, ExprKind, Program, Stmt, UnOp};
-use burn_runtime::meta::Desc;
+use bvm::runtime::meta::Desc;
 use std::fmt::Write;
 
 const PRELUDE: &str = include_str!("prelude.js");

@@ -9,7 +9,7 @@ fn span(s: Span) -> String {
 fn konst(v: &Const) -> String {
     match v {
         Const::Int(i) => format!("int {}", i),
-        Const::Float(f) => format!("float {}", burn_runtime::fmt::float_str(*f)),
+        Const::Float(f) => format!("float {}", bvm::runtime::fmt::float_str(*f)),
         Const::Bool(b) => format!("bool {}", b),
         Const::Str(s) => format!("str {}", crate::lexer::escape(s)),
         Const::Null => "null".into(),
@@ -30,7 +30,7 @@ fn expr(out: &mut String, depth: usize, e: &Expr) {
         ExprKind::Int(v) => (format!("Int {}", v), vec![], &[]),
         ExprKind::TypeId(t) => (format!("TypeId {}", t), vec![], &[]),
         ExprKind::LocId(l) => (format!("LocId {}", l), vec![], &[]),
-        ExprKind::Float(f) => (format!("Float {}", burn_runtime::fmt::float_str(*f)), vec![], &[]),
+        ExprKind::Float(f) => (format!("Float {}", bvm::runtime::fmt::float_str(*f)), vec![], &[]),
         ExprKind::Bool(b) => (format!("Bool {}", b), vec![], &[]),
         ExprKind::Str(s) => (format!("Str {}", s), vec![], &[]),
         ExprKind::Null => ("Null".into(), vec![], &[]),
