@@ -6,6 +6,7 @@ The release that ships the compiler written in Burn.
 
 - The runtime moves to Burn part by part. Its core (memory, values, collections and the system) becomes part of bvm, and the functions built on it are written in Burn in `lib/runtime/`, compiled to `bvm/runtime.bvm`, which bvm links into every Burn program it runs. The first are `contains`, `replace`, `split`, `startsWith`, `endsWith` and `repeat` on strings, and `min`/`max` on ints.
 - The repository is reorganised: bvm, which stays in Rust, moves from `crates/bvm` to `bvm/` at the root.
+- The formatter moves from `tools/burnfmt/burnfmt.bn` to `lib/tools/fmt.bn`. `lib/tools/` holds tools written in Burn that work both as commands and as libraries: `import "tools/fmt"` gives programs `format(src)`, and `burnfmt` is built from the same file.
 - Projects have a standard layout:
   - `src/` is the source root, and its folders are packages.
   - `src/bin/` holds extra programs (`burn run --bin`), `tests/` holds tests (`burn test`), and `examples/` holds examples (`burn run --example`).

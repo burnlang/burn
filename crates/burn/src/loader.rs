@@ -64,15 +64,24 @@ pub const STDLIB: &[Stdlib] = &[
         name: "testing",
         src: include_str!("../../../lib/std/testing.bn"),
     },
+    Stdlib {
+        name: "tools/fmt",
+        src: include_str!("../../../lib/tools/fmt.bn"),
+    },
 ];
 
 fn std_source(path: &Path) -> Option<&'static Stdlib> {
     let dir = path.parent()?;
-    if dir.file_name()? != "std" || dir.parent()?.file_name()? != "lib" || path.extension()? != "bn" {
+    if dir.parent()?.file_name()? != "lib" || path.extension()? != "bn" {
         return None;
     }
     let stem = path.file_stem()?.to_str()?;
-    STDLIB.iter().find(|s| s.name == stem)
+    let name = match dir.file_name()?.to_str()? {
+        "std" => stem.to_string(),
+        "tools" => format!("tools/{}", stem),
+        _ => return None,
+    };
+    STDLIB.iter().find(|s| s.name == name)
 }
 
 pub fn stdlib_name(path: &str) -> Option<&'static Stdlib> {
@@ -463,7 +472,7 @@ impl Loader {
             candidates.push(cwd.join(format!("{}.bn", p)));
         }
         let std = stdlib_name(p);
-        let explicit_std = p.starts_with("std/") || p.starts_with("std:") || !p.contains('/') && !p.ends_with(".bn");
+        let explicit_std = p.starts_with("std/") || p.starts_with("std:") || p.starts_with("tools/") || !p.contains('/') && !p.ends_with(".bn");
         if let Some(s) = std {
             if explicit_std || from_std {
                 return Ok(self.load_std(s));

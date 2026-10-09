@@ -7,7 +7,7 @@ order: 21
 # burnfmt
 
 `burnfmt` gives every Burn file the same layout. It is a Burn program: the source lives in
-`tools/burnfmt/burnfmt.bn`, and the installer compiles it to a native executable with `burnc`. It produces exactly
+`lib/tools/fmt.bn`, and the installer compiles it to a native executable with `burnc`. It produces exactly
 the same output as the formatter built into the compiler (`burn fmt` and the language server's format command);
 the test suite checks this for every file in the repository.
 
@@ -30,8 +30,22 @@ cat file.bn | burnfmt        # format standard input to standard output
 Without an installed `burnfmt`, the same program runs on the interpreter:
 
 ```sh
-burni tools/burnfmt/burnfmt.bn -w file.bn
+burni lib/tools/fmt.bn -w file.bn
 ```
+
+## From code
+
+The formatter is also a module that programs can import. `lib/tools/` holds the tools written in Burn; each one is
+a library first, and its command is the same file's `main`:
+
+```burn
+import "tools/fmt"
+
+print(format("fun f(){\nreturn 1\n}"))
+```
+
+`format(src)` returns the formatted source. Only `format` is public; the rest of the module is private, so
+importing it adds nothing else to your program.
 
 The older Go build from [bnfmt](https://github.com/burnlang/bnfmt) (`go install github.com/burnlang/burnfmt`) is
 deprecated. Remove it with `rm "$(go env GOPATH)/bin/burnfmt"` and use this one: it takes the same options and

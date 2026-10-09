@@ -338,7 +338,7 @@ examples are in [`examples/bvm/`](examples/bvm/).
 - `crates/burn-runtime/`: runtime shared by bvm and native executables (memory, strings, collections, JSON, HTTP, tasks)
 - `lib/runtime/`: the runtime functions written in Burn, compiled to `bvm/runtime.bvm`, which bvm links into Burn programs
 - `compiler/`: the compiler written in Burn, which builds itself on bvm (see [compiler/README.md](compiler/README.md))
-- `tools/burnfmt/`: the formatter, written in Burn
+- `lib/tools/`: tools written in Burn that programs can also import, such as the formatter (`import "tools/fmt"`), which `burnfmt` is built from
 - `scripts/package.sh`: builds the toolchain into the layout burnup installs and releases ship
 - `scripts/bootstrap.sh`: builds the compiler written in Burn with itself and checks that the result is stable
 - `install.sh`: forwards to [burnup](https://github.com/burnlang/burnup), the installer

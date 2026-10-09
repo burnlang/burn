@@ -12,7 +12,10 @@ pub fn is_cached(path: &Path) -> bool {
 }
 
 pub fn is_stub(path: &Path) -> bool {
-    is_cached(path) && !path.parent().map(|p| p.ends_with("std")).unwrap_or(false)
+    let d = dir().join("std");
+    let d = std::fs::canonicalize(&d).unwrap_or(d);
+    let p = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    is_cached(path) && !p.starts_with(&d)
 }
 
 fn write_read_only(path: &Path, content: &str) -> Option<PathBuf> {
