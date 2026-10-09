@@ -10,7 +10,7 @@ language server are Burn programs that run on **bvm**, the Burn virtual machine,
 run instantly on bvm during development and compile to small **native executables**, portable bytecode,
 self-contained `.bar` archives or JavaScript for shipping.
 
-Current version: **26.1.0-experimental-3**
+Current version: **26.1.0-experimental-4**
 
 > [!WARNING]
 > Burn is **not** ready for production. Syntax may still change. Please report bugs as issues.
