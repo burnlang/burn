@@ -1,0 +1,347 @@
+import "../project/paths.bn"
+import "../project/project.bn"
+import "std/fs"
+import "std/process"
+
+priv const USAGE = "usage: burn init <name> [dir] [--lib] [--target bvm|bar] [--no-git]\n       burn init <name> [dir] --workspace [--targets bvm,bar] [--no-git]\n\n  <name>       where the code lives, for example github.com/you/hello\n  [dir]        the directory to create it in (default: the last part of the name)\n  --lib        create a library instead of an app\n  --target     what `burn build` produces: bvm bytecode (default) or a bar archive\n  --workspace  create a workspace: a `common` library and one app per target that uses it\n  --targets    the apps of the workspace (default: bvm,bar)\n  --no-git     do not create a git repository\n\nInside a workspace, a new project is added to its members."
+
+priv fun failWith(message: string, help: string): int {
+    eprint("error: ${message}")
+    if (help != "") {
+        eprint("  = help: ${help}")
+    }
+    return 2
+}
+
+priv fun buildCommand(short: string, target: string, main: string): string {
+    if (target == "bar") {
+        return "burnc ${main} --target bar -o build/${short}.bar"
+    }
+    return "burnc ${main} -o build/${short}.bvmc"
+}
+
+priv fun startCommand(short: string, target: string): string {
+    if (target == "bar") {
+        return "./build/${short}.bar"
+    }
+    return "burn build/${short}.bvmc"
+}
+
+/** The `burn.toml` of a new project. */
+pub fun manifestText(name: string, kind: ProjectKind, target: string): string {
+    var short = shortName(name)
+    var kindName = "app"
+    var main = "src/main.bn"
+    var scripts = ""
+    if (kind == ProjectKind.Lib) {
+        kindName = "lib"
+        main = "src/lib.bn"
+        scripts = "test = \"burni tests/main.bn\"\n"
+    } else {
+        scripts = "dev = \"burni ${main}\"\nrelease = \"${buildCommand(short, target, main)}\"\nstart = \"${startCommand(short, target)}\"\n"
+    }
+    return "[package]\nname = \"${name}\"\nversion = \"0.1.0\"\nkind = \"${kindName}\"\ntarget = \"${target}\"\nmain = \"${main}\"\n\n[dependencies]\n\n[scripts]\n${scripts}"
+}
+
+priv def type NewFile {
+    string path
+    string text
+}
+
+priv fun files(name: string, kind: ProjectKind, target: string): [NewFile] {
+    var short = shortName(name)
+    [NewFile] out = [NewFile { path: "burn.toml", text: manifestText(name, kind, target) }, NewFile { path: ".gitignore", text: "build/\n" }]
+    if (kind == ProjectKind.App) {
+        out.push(NewFile { path: "src/main.bn", text: "fun main() {\n    print(\"Hello from ${short}!\")\n}\n" })
+        out.push(NewFile { path: "README.md", text: "# ${short}\n\nA Burn app.\n\n```sh\nburn run      # run it\nburn build    # build it into build/\n```\n" })
+        return out
+    }
+    out.push(NewFile { path: "src/lib.bn", text: "/**\n * Returns a friendly greeting.\n *\n * @param name who to greet\n * @return the greeting\n * @since 0.1.0\n * @example\n *     greet(\"Burn\")  // \"Hello, Burn!\"\n */\npub fun greet(name: string): string {\n    return \"Hello, \${name}!\"\n}\n" })
+    out.push(NewFile { path: "tests/main.bn", text: "import \"std/testing\"\nimport \"${name}\"\n\nassert(greet(\"Burn\") == \"Hello, Burn!\")\nprint(\"all tests passed\")\n" })
+    out.push(NewFile { path: "README.md", text: "# ${short}\n\nA Burn library.\n\n```sh\nash install ${name}\n```\n\n```burn\nimport \"${name}\"\n\nprint(greet(\"Burn\"))\n```\n" })
+    return out
+}
+
+priv fun workspaceFiles(name: string, targets: [string]): [NewFile] {
+    var short = shortName(name)
+    var common = "${name}/common"
+    [string] members = ["\"common\""]
+    for t in targets {
+        members.push("\"${t}\"")
+    }
+    [NewFile] out = [
+        NewFile { path: "burn.toml", text: "[workspace]\nname = \"${name}\"\nmembers = [${join(members, ", ")}]\n" },
+        NewFile { path: ".gitignore", text: "build/\n" },
+        NewFile { path: "common/burn.toml", text: manifestText(common, ProjectKind.Lib, "bvm") },
+        NewFile { path: "common/src/lib.bn", text: "/**\n * The code every app shares.\n *\n * @param app the app that runs\n * @return a greeting that names the app\n */\npub fun greeting(app: string): string {\n    return \"Hello from \${app}!\"\n}\n" },
+        NewFile { path: "common/tests/main.bn", text: "import \"std/testing\"\nimport \"${common}\"\n\nassert(greeting(\"tests\") == \"Hello from tests!\")\n" }
+    ]
+    for t in targets {
+        var member = "${name}/${t}"
+        var m = replace(manifestText(member, ProjectKind.App, t), "[dependencies]\n", "[dependencies]\n\"${common}\" = { path = \"../common\" }\n")
+        out.push(NewFile { path: "${t}/burn.toml", text: m })
+        out.push(NewFile { path: "${t}/src/main.bn", text: "import \"${common}\"\n\nfun main() {\n    print(greeting(\"${t}\"))\n}\n" })
+    }
+    [string] list = []
+    for t in targets {
+        list.push("├── ${t}/              the ${t} app, built with `burn build -p ${t}`")
+    }
+    out.push(NewFile { path: "README.md", text: "# ${short}\n\nA Burn workspace: shared code in `common`, and one app per target.\n\n```text\n${short}/\n├── burn.toml           the workspace and its members\n├── common/            the library every app imports\n${join(list, "\n")}\n```\n\n```sh\nburn build            # build every member\nburn run -p ${targets[0]}        # run one app\nburn test             # run every member's tests\n```\n" })
+    return out
+}
+
+priv fun relativeTo(dir: string, root: string): string? {
+    return stripPrefix(canonical(dir), root)
+}
+
+priv fun addMember(ws: Workspace, dir: string, err: Problem): string? {
+    var rel = relativeTo(dir, ws.root)
+    if (rel == null || rel == "") {
+        return null
+    }
+    for m in ws.members {
+        if (m.path == rel) {
+            return null
+        }
+    }
+    var path = pathJoin(ws.root, MANIFEST)
+    var text = readText(path)
+    if (text == null) {
+        err.set(readError(path))
+        return null
+    }
+    var start = indexOf(text, "members")
+    if (start < 0) {
+        err.set("${path} has no `members` list to add ${rel} to")
+        return null
+    }
+    var after = substring(text, start, len(text))
+    var close = indexOf(after, "]")
+    if (close < 0) {
+        err.set("cannot read the `members` list in ${path}")
+        return null
+    }
+    close += start
+    var inside = trimRight(substring(text, start, close))
+    var sep = ", "
+    if (endsWith(inside, "[")) {
+        sep = ""
+    }
+    var updated = substring(text, 0, start + len(inside)) + sep + "\"${rel}\"" + substring(text, close, len(text))
+    if (!writeFile(path, updated)) {
+        err.set("cannot write ${path}")
+        return null
+    }
+    return rel
+}
+
+priv fun trimRight(s: string): string {
+    var end = len(s)
+    while (end > 0 && trim(substring(s, end - 1, end)) == "") {
+        end -= 1
+    }
+    return substring(s, 0, end)
+}
+
+priv fun insideGit(dir: string): bool {
+    var back = currentDir()
+    Process.setCwd(dir)
+    var r = Process.output("git", ["rev-parse", "--is-inside-work-tree"])
+    Process.setCwd(back)
+    return r.code == 0
+}
+
+priv fun gitInit(dir: string) {
+    var back = currentDir()
+    Process.setCwd(dir)
+    Process.output("git", ["init", "-q"])
+    Process.setCwd(back)
+}
+
+priv fun writeNew(dir: string, f: NewFile, err: Problem): bool {
+    var path = pathJoin(dir, f.path)
+    var parent = pathParent(path)
+    if (parent != null && parent != "") {
+        Files.makeDir(parent)
+    }
+    if (!writeFile(path, f.text)) {
+        err.set("cannot write ${path}")
+        return false
+    }
+    return true
+}
+
+/** `burn init <name> [dir]`: creates a project or a workspace. */
+pub fun cmdInit(args: [string]): int {
+    string? name = null
+    string? dir = null
+    var kind = ProjectKind.App
+    var target = "bvm"
+    var git = true
+    var workspace = false
+    [string] targets = ["bvm", "bar"]
+    var i = 0
+    while (i < len(args)) {
+        var a = args[i]
+        if (a == "-h" || a == "--help") {
+            print(USAGE)
+            return 0
+        } else if (a == "--lib") {
+            kind = ProjectKind.Lib
+        } else if (a == "--app") {
+            kind = ProjectKind.App
+        } else if (a == "--no-git") {
+            git = false
+        } else if (a == "--workspace") {
+            workspace = true
+        } else if (a == "--targets") {
+            i += 1
+            targets = []
+            if (i < len(args)) {
+                for t in split(args[i], ",") {
+                    var x = trim(t)
+                    if (x != "") {
+                        targets.push(x)
+                    }
+                }
+            }
+        } else if (a == "--target" || a == "-t") {
+            i += 1
+            target = ""
+            if (i < len(args)) {
+                target = args[i]
+            }
+        } else if (startsWith(a, "--target=")) {
+            target = substring(a, len("--target="), len(a))
+        } else if (startsWith(a, "-")) {
+            return failWith("unknown option `${a}`", USAGE)
+        } else if (name == null) {
+            name = a
+        } else if (dir == null) {
+            dir = a
+        } else {
+            return failWith("unexpected argument `${a}`", "")
+        }
+        i += 1
+    }
+    if (target == "bytecode") {
+        target = "bvm"
+    }
+    if (target != "bvm" && target != "bar") {
+        return failWith("unknown target `${target}`", "choose `bvm` or `bar`")
+    }
+    if (name == null) {
+        eprint(USAGE)
+        return 2
+    }
+    var full = name
+    var ws = findWorkspace(currentDir())
+    if (ws != null) {
+        var wsName = ws.name
+        if (wsName != null && !workspace && !contains(full, "/") && validName("${wsName}/${full}")) {
+            full = "${wsName}/${full}"
+        }
+    }
+    if (!validName(full)) {
+        var parts = split(full, "/")
+        var short = lower(parts[len(parts) - 1])
+        if (short == "") {
+            short = "hello"
+        }
+        return failWith("`${full}` is not a package name", "a package is named after where its code lives, like `github.com/you/${short}`")
+    }
+    var short = shortName(full)
+    var targetDir = dir ?? short
+    if (isFile(pathJoin(targetDir, MANIFEST))) {
+        return failWith("${targetDir} already has a burn.toml", "pick another directory, or edit the existing burn.toml")
+    }
+    Files.makeDir(targetDir)
+    if (!isDir(targetDir)) {
+        return failWith("cannot create ${targetDir}", "")
+    }
+    var err = new Problem()
+    if (workspace) {
+        [string] ts = []
+        for t in targets {
+            if (t != "bvm" && t != "bar") {
+                return failWith("unknown target `${t}`", "choose from bvm and bar, like `--targets bvm,bar`")
+            }
+            if (!contains(ts, t)) {
+                ts.push(t)
+            }
+        }
+        if (len(ts) == 0) {
+            return failWith("a workspace needs at least one target", "for example `--targets bvm`")
+        }
+        for f in workspaceFiles(full, ts) {
+            if (isFile(pathJoin(targetDir, f.path)) || isDir(pathJoin(targetDir, f.path))) {
+                continue
+            }
+            if (!writeNew(targetDir, f, err)) {
+                return failWith(err.message, "")
+            }
+        }
+        if (git && !insideGit(targetDir)) {
+            gitInit(targetDir)
+        }
+        print("created the workspace ${full} in ${targetDir} (common, ${join(ts, ", ")})")
+        print("")
+        if (targetDir != ".") {
+            print("  cd ${targetDir}")
+        }
+        print("  burn build           build every member")
+        var first = ts[0]
+        print("  burn run -p ${first}${repeat(" ", 8 - len(first))} run one app")
+        print("  burn test            run every member's tests")
+        return 0
+    }
+    [string] skipped = []
+    for f in files(full, kind, target) {
+        var path = pathJoin(targetDir, f.path)
+        if (isFile(path) || isDir(path)) {
+            skipped.push(f.path)
+            continue
+        }
+        if (!writeNew(targetDir, f, err)) {
+            return failWith(err.message, "")
+        }
+    }
+    string? joined = null
+    var parent = pathParent(canonical(targetDir))
+    if (parent != null) {
+        var outer = findWorkspace(parent)
+        if (outer != null) {
+            var merr = new Problem()
+            joined = addMember(outer, targetDir, merr)
+            if (merr.message != "") {
+                eprint("warning: ${merr.message}")
+            }
+        }
+    }
+    if (git && joined == null && !insideGit(targetDir)) {
+        gitInit(targetDir)
+    }
+    var what = "library"
+    if (kind == ProjectKind.App) {
+        what = "${target} app"
+    }
+    print("created ${full} in ${targetDir} (${what})")
+    if (joined != null) {
+        print("  added \"${joined}\" to the workspace's members")
+    }
+    for s in skipped {
+        print("  kept the existing ${s}")
+    }
+    print("")
+    if (targetDir != ".") {
+        print("  cd ${targetDir}")
+    }
+    if (kind == ProjectKind.App) {
+        print("  burn run             run it")
+        print("  burn build           build it into build/")
+    } else {
+        print("  ash test             run tests/main.bn")
+    }
+    print("  ash install <name>   add a package")
+    return 0
+}

@@ -468,11 +468,50 @@ fn the_command_line_written_in_burn_matches_the_rust_one() {
         let cwd = root.join("tests/projects").join(p);
         compare(&["run"], &cwd);
         compare(&["check"], &cwd);
+        compare(&["test"], &cwd);
     }
+    for args in [
+        &["fmt", "tests/cases/basics.bn"][..],
+        &["fmt", "--check", "examples/fib.bn", "missing.bn"],
+        &["fix", "--dry-run", "tests/fix/input.bn"],
+    ] {
+        compare(args, &root);
+    }
+    let fixes = dir.join("fixes");
+    std::fs::create_dir_all(&fixes).unwrap();
+    std::fs::copy(root.join("tests/fix/input.bn"), fixes.join("rust.bn")).unwrap();
+    std::fs::copy(root.join("tests/fix/input.bn"), fixes.join("burn.bn")).unwrap();
+    let rust = stdout_of(burn().current_dir(&fixes).args(["fix", "rust.bn"]).env("NO_COLOR", "1"));
+    let written = stdout_of(Command::new(&cli).current_dir(&fixes).args(["fix", "burn.bn"]).env("NO_COLOR", "1"));
+    assert_eq!(rust.0, written.0.replace("burn.bn", "rust.bn"));
+    assert_eq!(rust.1, written.1.replace("burn.bn", "rust.bn"));
+    assert_eq!(rust.2, written.2);
+    assert_eq!(
+        std::fs::read_to_string(fixes.join("rust.bn")).unwrap(),
+        std::fs::read_to_string(fixes.join("burn.bn")).unwrap()
+    );
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
     let app = dir.join("app");
-    let (out, code) = output(burn().current_dir(&dir).args(["init", "github.com/me/app", "--target", "bvm"]));
+    let (out, code) = output(Command::new(&cli).current_dir(&dir).args(["init", "github.com/me/app", "--no-git"]));
     assert_eq!(code, 0, "{}", out);
+    let manifest = std::fs::read_to_string(app.join("burn.toml")).unwrap();
+    assert!(
+        manifest.contains("target = \"bvm\"\n") && manifest.contains("start = \"burn build/app.bvmc\"\n"),
+        "{}",
+        manifest
+    );
+    std::fs::create_dir_all(app.join("tests")).unwrap();
+    std::fs::write(app.join("tests/ok.bn"), "print(\"fine\")\n").unwrap();
+    std::fs::write(app.join("tests/bad.bn"), "print(missing)\n").unwrap();
+    let (out, code) = output(Command::new(&cli).current_dir(&app).arg("test"));
+    assert_eq!(code, 1, "{}", out);
+    assert!(
+        out.starts_with("testing github.com/me/app (2 files)\ntest tests/bad.bn ... FAILED\ntest tests/ok.bn ... ok\n"),
+        "{}",
+        out
+    );
+    assert!(out.ends_with("\n1 passed, 1 failed\n"), "{}", out);
+    std::fs::remove_dir_all(app.join("tests")).unwrap();
     std::fs::create_dir_all(app.join("src/bin")).unwrap();
     std::fs::write(app.join("src/bin/tool.bn"), "fun main() {\n    print(\"tool\")\n}\n").unwrap();
     let (out, code) = output(Command::new(&cli).current_dir(&app).args(["build"]));

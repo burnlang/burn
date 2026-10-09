@@ -39,6 +39,7 @@ pub fun addFix(d: Diag, message: string, start: int, end: int, text: string, app
 
 /** A source file with the byte offset of every line, for turning offsets into lines and columns. */
 pub def struct SourceFile(name: string, src: string) {
+    string? path = null
     [uint8] bytes = []
     [int] lineStarts = []
 

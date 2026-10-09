@@ -355,8 +355,8 @@ pub fun parseManifest(src: string, err: Problem): Manifest? {
         return null
     }
     var target = textOf(lookup(pkg, "target")) ?? "native"
-    if (target != "native" && target != "js" && target != "bvm") {
-        err.set("unknown target `${target}`; use \"native\", \"js\" or \"bvm\"")
+    if (target != "native" && target != "js" && target != "bvm" && target != "bar") {
+        err.set("unknown target `${target}`; use \"bvm\", \"bar\", \"native\" or \"js\"")
         return null
     }
     if (!strField(pkg, "main", "package", err)) {

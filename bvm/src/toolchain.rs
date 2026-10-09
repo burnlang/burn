@@ -35,6 +35,18 @@ pub fn cli_module() -> Result<PathBuf, String> {
     Err("the Burn command line is not installed (share/burn/burn.bvm)\n  = help: install a toolchain that ships it, or set BURN_CLI_BVM to a build of compiler/src/bin/burn.bn".into())
 }
 
+fn launcher() -> String {
+    let Some(first) = std::env::args_os().next().map(PathBuf::from) else {
+        return "burn".into();
+    };
+    if first.components().count() > 1 && first.is_relative() {
+        if let Ok(cwd) = std::env::current_dir() {
+            return cwd.join(&first).display().to_string();
+        }
+    }
+    first.display().to_string()
+}
+
 fn strings(p: u64) -> Vec<String> {
     (0..array_len(p)).map(|i| str_ref(array_at(p, i)).to_string()).collect()
 }
@@ -72,6 +84,7 @@ pub fn host(tool: &str) -> Host {
     let name = tool.to_string();
     host.register("burn.tool", 0, move |_| string(&name));
     host.register("burn.version", 0, |_| string(crate::VERSION));
+    host.register("burn.launcher", 0, |_| string(&launcher()));
     host.register("burn.colorErrors", 0, |_| {
         (std::env::var_os("NO_COLOR").is_none() && std::io::stderr().is_terminal()) as u64
     });

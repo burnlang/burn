@@ -29,3 +29,7 @@ pub fun writeBytecode(module: string, path: string): string
 /** Writes a runnable archive named `name` holding the module to `path`; returns why it could not, or `""`. */
 @Native("burn.writeArchive")
 pub fun writeArchive(module: string, name: string, path: string): string
+
+/** How to start this toolchain's `burn` again, for running each test in its own process. */
+@Native("burn.launcher")
+pub fun launcher(): string
