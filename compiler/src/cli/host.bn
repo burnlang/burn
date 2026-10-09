@@ -1,0 +1,31 @@
+/** The name the toolchain was started as: `burn`, `burni`, `burnc` or `burn-lsp`. */
+@Native("burn.tool")
+pub fun toolName(): string
+
+/** The version of the toolchain. */
+@Native("burn.version")
+pub fun toolchainVersion(): string
+
+/** Whether errors are printed in colour: stderr is a terminal and `NO_COLOR` is not set. */
+@Native("burn.colorErrors")
+pub fun colorErrors(): bool
+
+/** Runs a module given in bvm assembly with `args`, then exits with its exit code. */
+@Native("burn.runModule")
+pub fun runModule(module: string, args: [string]): int
+
+/** Runs a bvm module or archive file with `args`, then exits with its exit code. */
+@Native("burn.runFile")
+pub fun runFile(path: string, args: [string]): int
+
+/** Why bvm rejects a module given in bvm assembly, or `""` when it is valid. */
+@Native("burn.checkModule")
+pub fun checkModule(module: string): string
+
+/** Writes a module given in bvm assembly as bytecode to `path`; returns why it could not, or `""`. */
+@Native("burn.writeBytecode")
+pub fun writeBytecode(module: string, path: string): string
+
+/** Writes a runnable archive named `name` holding the module to `path`; returns why it could not, or `""`. */
+@Native("burn.writeArchive")
+pub fun writeArchive(module: string, name: string, path: string): string

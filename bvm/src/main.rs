@@ -28,6 +28,9 @@ usage:
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(tool) = bvm::toolchain::tool_name() {
+        return bvm::toolchain::main(&tool, args);
+    }
     let rest = args.get(1..).unwrap_or(&[]);
     match args.first().map(|s| s.as_str()) {
         None | Some("help") | Some("-h") | Some("--help") => {

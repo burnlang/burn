@@ -1,0 +1,134 @@
+import "../project/paths.bn"
+import "../project/project.bn"
+import "std/fs"
+
+/** What a program of a project is for. */
+pub def enum Role { Main, Bin, Test, Example }
+
+/** A program of a project: the main file, a program in `src/bin`, a test or an example. */
+pub def type Entry {
+    Role role
+    string name
+    string path
+}
+
+priv fun sources(dir: string, role: Role, nestedMain: bool): [Entry] {
+    [Entry] out = []
+    if (!isDir(dir)) {
+        return out
+    }
+    for name in Files.list(dir) {
+        var path = pathJoin(dir, name)
+        if (isFile(path) && pathExtension(path) == "bn") {
+            var stem = pathStem(path)
+            if (stem != null) {
+                out.push(Entry { role: role, name: stem, path: path })
+            }
+            continue
+        }
+        var main = pathJoin(path, "main.bn")
+        if (nestedMain && isDir(path) && isFile(main)) {
+            var file = pathFileName(path)
+            if (file != null) {
+                out.push(Entry { role: role, name: file, path: main })
+            }
+        }
+    }
+    [Entry] sorted = []
+    for e in out {
+        var at = len(sorted)
+        while (at > 0 && e.name < sorted[at - 1].name) {
+            at -= 1
+        }
+        insert(sorted, at, e)
+    }
+    return sorted
+}
+
+pub fun bins(p: Project): [Entry] {
+    return sources(pathJoin(sourceRoot(p), "bin"), Role.Bin, true)
+}
+
+pub fun tests(p: Project): [Entry] {
+    return sources(pathJoin(p.root, "tests"), Role.Test, false)
+}
+
+pub fun examples(p: Project): [Entry] {
+    return sources(pathJoin(p.root, "examples"), Role.Example, true)
+}
+
+pub fun mainEntry(p: Project): Entry? {
+    var path = mainPath(p)
+    if (!isFile(path)) {
+        return null
+    }
+    return Entry { role: Role.Main, name: shortName(p.manifest.name), path: path }
+}
+
+/** Every program of the project: the main file, `src/bin`, the tests and the examples. */
+pub fun allEntries(p: Project): [Entry] {
+    [Entry] out = []
+    var m = mainEntry(p)
+    if (m != null) {
+        out.push(m)
+    }
+    for e in bins(p) {
+        out.push(e)
+    }
+    for e in tests(p) {
+        out.push(e)
+    }
+    for e in examples(p) {
+        out.push(e)
+    }
+    return out
+}
+
+/** The programs `burn build` builds: the main file of an app and the programs in `src/bin`. */
+pub fun programs(p: Project): [Entry] {
+    [Entry] out = []
+    var m = mainEntry(p)
+    if (m != null && p.manifest.kind == ProjectKind.App) {
+        out.push(m)
+    }
+    for e in bins(p) {
+        out.push(e)
+    }
+    return out
+}
+
+/** The entry called `name`, or why there is none. */
+pub fun findEntry(list: [Entry], what: string, name: string, p: Project, err: Problem): Entry? {
+    [string] names = []
+    for e in list {
+        if (e.name == name) {
+            return e
+        }
+        names.push(e.name)
+    }
+    if (len(names) == 0) {
+        err.set("${p.manifest.name} has no ${what}s")
+    } else {
+        err.set("${p.manifest.name} has no ${what} named `${name}` (it has: ${join(names, ", ")})")
+    }
+    return null
+}
+
+/** Where `burn build` writes a program for `target`. */
+pub fun outputFor(p: Project, e: Entry, target: string): string {
+    var ext = ".bvmc"
+    if (target == "bar") {
+        ext = ".bar"
+    }
+    if (e.role == Role.Main) {
+        var o = p.manifest.output
+        if (o != null) {
+            return pathJoin(p.root, o)
+        }
+        return pathJoin(p.root, "build/${e.name}${ext}")
+    }
+    if (e.role == Role.Example) {
+        return pathJoin(pathJoin(pathJoin(p.root, "build"), "examples"), "${e.name}${ext}")
+    }
+    return pathJoin(pathJoin(p.root, "build"), "${e.name}${ext}")
+}

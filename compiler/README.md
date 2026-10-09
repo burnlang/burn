@@ -16,6 +16,8 @@ This directory holds the self-hosted Burn compiler. It is ported from the compil
 | `src/vm/` | bvm code generation and the bvm assembly text it is written as | `vm/compile.rs`, and from the bvm crate `op.rs`, `module.rs`, `builder.rs` and `asm.rs` |
 | `src/dump/` | the `burn dump` text forms that the tests compare | `astdump.rs`, `loaddump.rs`, `check/declsdump.rs`, `check/hirdump.rs` |
 | `src/main.bn` | the command line: `build <file.bn> [-o <file.bvm>]` and the `burn dump` forms | |
+| `src/cli/` | the `burn` command line: running, checking and building programs and projects, `burni`, `burnc` and the `burn dump` forms | `main.rs`, `driver.rs`, `targets.rs` |
+| `src/bin/burn.bn` | the program bvm runs when it is started as `burn`, `burni` or `burnc` (`share/burn/burn.bvm`) | |
 | `src/build.bn` | loads, checks and compiles a program to bvm assembly | `driver.rs`, `vm/mod.rs` |
 | `src/bin/genstd.bn` | writes `src/project/stdlib.bn` from `lib/std` | |
 | `src/bin/genrt.bn` | writes `src/vm/runtime.bn`, the symbol of each runtime function, from `bvm/runtime/src/lib.rs` | |
@@ -91,7 +93,10 @@ The inputs include the error-recovery fixtures in `tests/lexer` and `tests/parse
 7. **bvm code generation** (done). `src/vm/compile.bn` ports `vm/compile.rs`, and `src/vm/asm.bn` writes the module as bvm assembly (`.bvm`), like `disassemble` in the bvm crate. Burn has no binary file output yet and stage0 cannot get one, so the Burn compiler writes the text form, which `burn <file.bvm>` assembles and runs. `burn dump --bvm` prints it, and the suite compares it on every Burn file in the repository. `src/vm/bits.bn` converts floats to and from their bits for constants, and `src/vm/runtime.bn` (written by `src/bin/genrt.bn`) names the runtime functions.
 8. **Bootstrap** (done, see *Stage0* below). `scripts/bootstrap.sh` runs the compiler in `compiler/src` on itself (stage 1), lets stage 1 build the compiler again (stage 2) and checks that both modules are identical. The CI job `bootstrap` runs it with stage0 on every push, then lets stage 2 compile and run `examples/fib.bn`.
    - `scripts/package.sh` bootstraps the compiler and installs stage 2 as `share/burn/compiler.bvm`, which `--compiler burn` uses.
-9. **After that:** the native x86-64 and JavaScript backends, then the tools (`fmt`, `doc`, `lsp`). The runtime core (`bvm/runtime`) stays in Rust and is shared by both compilers; the rest of the runtime is written in Burn in `lib/runtime`.
+9. **The command line** (in progress). `src/bin/burn.bn` is `burn` written in Burn. bvm runs it when it is started as `burn`, `burni` or `burnc` (a link to `bvm` with that name), from `share/burn/burn.bvm` next to its `bin/` or from the module in `BURN_CLI_BVM`. It reaches bvm through host functions (`@Native("burn.runModule")` and the others in `src/cli/host.bn`), which bvm provides only in that mode. That keeps the compiler in `src/main.bn` free of them, so stage0 can still build it and run it.
+   - Ported: running files and projects (`run`, `--bin`, `--example`, `-p`), `check`, `build` (to `.bvmc` and `.bar`), `eval`, `burni`, `burnc`, `--no-std`, `dump` and the error output with colours. The suite runs the Rust `burn` and the one written in Burn on the test programs and projects and compares stdout, stderr and the exit code.
+   - Next: `init`, `test`, `fmt`, `fix`, `sources`, bytecode libraries, then `repl`, `doc` and `lsp`. It builds bvm bytecode only: the native x86-64 and JavaScript backends stay behind with the Rust compiler.
+   - `scripts/package.sh` builds it with `compiler.bvm` and installs it as `share/burn/burn.bvm`. The runtime core (`bvm/runtime`) stays in Rust and is shared by both compilers; the rest of the runtime is written in Burn in `lib/runtime`.
 
 ## Stage0: the last compiler written in Rust
 

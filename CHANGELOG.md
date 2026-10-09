@@ -5,6 +5,7 @@
 The release that ships the compiler written in Burn.
 
 - The runtime moves to Burn part by part. Its core (memory, values, collections and the system) becomes part of bvm, and the functions built on it are written in Burn in `lib/runtime/`, compiled to `bvm/runtime.bvm`, which bvm links into every Burn program it runs. The first are `contains`, `replace`, `split`, `startsWith`, `endsWith` and `repeat` on strings, and `min`/`max` on ints, then `trim`, `isInt`, `toInt` (also with a radix) and `toString` with a radix, then `parseJSON` and `abs`/`pow` on ints. Functions written in Burn raise runtime errors with the new built-in `__fail(message, loc)`.
+- The `burn` command line is being written in Burn (`compiler/src/bin/burn.bn`). bvm runs it when it is started as `burn`, `burni` or `burnc`, with host functions to run, check and write modules. Running, checking and building programs and projects, `eval`, `burni`, `burnc` and `dump` work and behave exactly like the Rust `burn`; toolchains ship it as `share/burn/burn.bvm`.
 - The repository is reorganised: bvm, which stays in Rust, moves from `crates/bvm` to `bvm/` at the root. The runtime core moves with it, from `crates/burn-runtime` to `bvm/runtime` (the crate `bvm-runtime`, which bvm re-exports as `bvm::runtime`).
 - The formatter moves from `tools/burnfmt/burnfmt.bn` to `lib/tools/fmt.bn`. `lib/tools/` holds tools written in Burn that work both as commands and as libraries: `import "tools/fmt"` gives programs `format(src)`, and `burnfmt` is built from the same file.
 - Projects have a standard layout:

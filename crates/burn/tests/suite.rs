@@ -394,6 +394,97 @@ fn the_runtime_written_in_burn_is_up_to_date() {
     );
 }
 
+fn bvm_exe() -> PathBuf {
+    let burn = PathBuf::from(env!("CARGO_BIN_EXE_burn"));
+    let bvm = burn.with_file_name(format!("bvm{}", std::env::consts::EXE_SUFFIX));
+    if !bvm.is_file() {
+        let mut cargo = Command::new(env!("CARGO"));
+        cargo.current_dir(root()).args(["build", "-p", "bvm", "--bin", "bvm"]);
+        if burn.parent().and_then(|d| d.file_name()).map(|n| n == "release").unwrap_or(false) {
+            cargo.arg("--release");
+        }
+        let (out, code) = output(&mut cargo);
+        assert_eq!(code, 0, "{}", out);
+    }
+    bvm
+}
+
+#[cfg(unix)]
+#[test]
+fn the_command_line_written_in_burn_matches_the_rust_one() {
+    let root = root();
+    let dir = temp_dir("cli");
+    std::fs::create_dir_all(dir.join("bin")).unwrap();
+    std::fs::create_dir_all(dir.join("share/burn")).unwrap();
+    let module = dir.join("share/burn/burn.bvm");
+    let (out, code) = output(
+        burn()
+            .current_dir(&root)
+            .args(["build", "compiler/src/bin/burn.bn", "--target", "bvm", "-o"])
+            .arg(&module),
+    );
+    assert_eq!(code, 0, "{}", out);
+    let cli = dir.join("bin/burn");
+    std::os::unix::fs::symlink(bvm_exe(), &cli).unwrap();
+    let both = |args: &[&str], cwd: &Path| {
+        let rust = stdout_of(burn().current_dir(cwd).args(args).env("NO_COLOR", "1"));
+        let written = stdout_of(Command::new(&cli).current_dir(cwd).args(args).env("NO_COLOR", "1"));
+        (rust, written)
+    };
+    let mut failures = Vec::new();
+    let mut compare = |args: &[&str], cwd: &Path| {
+        let (rust, written) = both(args, cwd);
+        if rust != written {
+            failures.push(format!("burn {}:\n--- rust\n{:?}\n--- burn\n{:?}", args.join(" "), rust, written));
+        }
+    };
+    for (file, _) in cases() {
+        let rel = file.strip_prefix(&root).unwrap().display().to_string();
+        compare(&[&rel], &root);
+        compare(&["check", &rel], &root);
+    }
+    for dir_name in ["tests/check", "tests/errors"] {
+        let mut files: Vec<PathBuf> = std::fs::read_dir(root.join(dir_name)).unwrap().map(|e| e.unwrap().path()).collect();
+        files.sort();
+        for f in files.iter().filter(|f| f.extension().map(|x| x == "bn").unwrap_or(false)) {
+            let rel = f.strip_prefix(&root).unwrap().display().to_string();
+            compare(&["check", &rel], &root);
+            compare(&["run", &rel], &root);
+        }
+    }
+    for code in ["print(1 + 2)", "print(x)", "var a = [1, 2]\nprint(a[5])", "exit(3)"] {
+        compare(&["eval", code], &root);
+    }
+    for args in [
+        &["dump", "--bvm", "tests/cases/basics.bn"][..],
+        &["dump", "--checked", "tests/cases/append.bn"],
+        &["missing.bn"],
+        &["--no-std", "tests/cases/basics.bn"],
+        &["version"],
+    ] {
+        compare(args, &root);
+    }
+    for p in ["app", "bad", "game", "lib", "nolock"] {
+        let cwd = root.join("tests/projects").join(p);
+        compare(&["run"], &cwd);
+        compare(&["check"], &cwd);
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+    let app = dir.join("app");
+    let (out, code) = output(burn().current_dir(&dir).args(["init", "github.com/me/app", "--target", "bvm"]));
+    assert_eq!(code, 0, "{}", out);
+    std::fs::create_dir_all(app.join("src/bin")).unwrap();
+    std::fs::write(app.join("src/bin/tool.bn"), "fun main() {\n    print(\"tool\")\n}\n").unwrap();
+    let (out, code) = output(Command::new(&cli).current_dir(&app).args(["build"]));
+    assert_eq!(code, 0, "{}", out);
+    assert_eq!(out, "building github.com/me/app 0.1.0 (bvm)\nwrote build/app.bvmc\nwrote build/tool.bvmc\n");
+    let (out, code) = output(Command::new(&cli).current_dir(&app).args(["run", "--bin", "tool"]));
+    assert_eq!((out.as_str(), code), ("tool\n", 0));
+    let (out, code) = output(Command::new(&cli).current_dir(&app).arg("build/tool.bvmc"));
+    assert_eq!((out.as_str(), code), ("tool\n", 0));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn projects_use_a_standard_layout() {
     let dir = temp_dir("layout");
