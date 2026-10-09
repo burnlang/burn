@@ -12,12 +12,14 @@ usage() {
 Builds the Burn toolchain and lays it out in a directory:
 
   <prefix>/bin/burn, burni, burnc, burn-lsp, burnfmt, bvm
-  <prefix>/share/burn/compiler.bvm, burn.bvm, tools, examples, LICENSE
+  <prefix>/share/burn/compiler.bvm, burn.bvm, lib, tools, examples, LICENSE
 
 bin/burn is bvm, the Burn virtual machine. Started as burn, burni, burnc or burn-lsp,
 it runs share/burn/burn.bvm, the command line written in Burn. compiler.bvm is the
 compiler written in Burn, built by itself (scripts/bootstrap.sh) starting from a
-released Burn (stage0), and it builds burn.bvm.
+released Burn (stage0), and it builds burn.bvm. lib holds the runtime that native
+executables link against (scripts/native-runtime.sh); it needs rustc, and only
+x86_64 Linux and macOS build native executables.
 
 This is what release archives contain. To install Burn, use burnup:
   curl -fsSL https://raw.githubusercontent.com/burnlang/burnup/master/install.sh | sh
@@ -115,6 +117,14 @@ cli="$(mktemp)"
 (cd "$ROOT" && "$BIN/bvm" "$SHARE/compiler.bvm" build compiler/src/bin/burn.bn -o "$cli.bvm" >/dev/null)
 "$BIN/bvm" asm "$cli.bvm" -o "$SHARE/burn.bvm" >/dev/null
 rm -f "$cli" "$cli.bvm"
+
+rm -rf "$SHARE/lib"
+case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64 | Darwin-x86_64)
+        say "==> Building the runtime for native executables"
+        sh "$ROOT/scripts/native-runtime.sh" "$SHARE/lib"
+        ;;
+esac
 
 rm -rf "$SHARE/tools" "$SHARE/examples"
 cp -R "$ROOT/lib/tools" "$SHARE/tools"

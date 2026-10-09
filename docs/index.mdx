@@ -1,6 +1,6 @@
 ---
 title: Burn
-description: A small, statically typed language with smart casts that runs instantly on its own virtual machine.
+description: A small, statically typed language with smart casts that runs instantly on its own virtual machine and compiles to native code.
 order: 0
 ---
 
@@ -38,12 +38,13 @@ print(describe(new Circle(2)))
 | Command | What happens | Typical use |
 | --- | --- | --- |
 | `burni app.bn` | compiled to a bvm module in memory and run right away, starts in milliseconds | development, scripts |
-| `burnc app.bn` | compiled to a portable `.bvmc` bytecode file, run with `burn` or `bvm` | distributing without a build per platform |
+| `burnc app.bn` | compiled to x86-64 assembly and linked into a standalone executable | shipping |
+| `burnc app.bn --target bvm` | compiled to a portable `.bvmc` bytecode file, run with `burn` or `bvm` | distributing without a build per platform |
 | `burnc app.bn --target bar` | the program and its bytecode libraries in one runnable `.bar` archive | shipping applications that run everywhere bvm runs |
 | `burnc app.bn --target js` | compiled to a JavaScript file that runs with Node.js | running where Node.js is already installed |
 
-On bvm the program always uses the same runtime, so it behaves the same way everywhere; the JavaScript build
-carries a runtime written in JavaScript that matches it.
+All backends share the same type checker and runtime library (the JavaScript build carries a runtime written in
+JavaScript that matches it), so a program behaves the same way everywhere.
 
 The virtual machine, [bvm](./bvm/overview.mdx), is not tied to Burn: it has its own assembly language, bytecode
 format, verifier and Rust API, and other languages can compile to it.

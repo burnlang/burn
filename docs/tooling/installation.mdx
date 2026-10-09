@@ -25,7 +25,7 @@ burni -e 'print("hello")'
 | --- | --- |
 | `burn` | the all-in-one driver: run, build, check, fmt, init, repl, lsp |
 | `burni` | the interpreter: runs programs on bvm and starts the REPL |
-| `burnc` | the compiler: bvm bytecode and runnable `.bar` archives |
+| `burnc` | the compiler: native executables, JavaScript, bvm bytecode and runnable `.bar` archives |
 | `burnfmt` | the code formatter, written in Burn itself |
 | `burn-lsp` | the language server for editors |
 | `bvm` | the Burn virtual machine: runs, assembles and inspects bytecode |
@@ -42,6 +42,7 @@ See [the toolchain](./toolchain.mdx) for what each command does.
   prebuilt release), which builds bvm. Pass `--install-rust` to the installer to get it with rustup. A source build
   also needs a released Burn to compile the compiler written in Burn for the first time; burnup uses the release
   named in `compiler/STAGE0`.
+- A C toolchain (`cc`) to build native executables with `burnc`. Everything else works without it.
 
 ## Versions
 

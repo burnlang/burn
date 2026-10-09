@@ -486,7 +486,85 @@ pub fn host(tool: &str) -> Host {
     host.register("burn.writeArchive", 4, |a| {
         outcome(write_archive(str_ref(a[0]), str_ref(a[1]), &strings(a[2]), Path::new(str_ref(a[3]))))
     });
+    host.register("burn.platform", 0, |_| string(&platform()));
+    host.register("burn.shareDir", 0, |_| {
+        match cli_module().ok().and_then(|p| p.parent().map(|d| d.display().to_string())) {
+            Some(d) => string(&d),
+            None => 0,
+        }
+    });
+    host.register("burn.fileBytes", 1, |a| match std::fs::read(str_ref(a[0])) {
+        Ok(b) => {
+            let items: Vec<u64> = b.iter().map(|x| *x as u64).collect();
+            bvm_runtime::obj::array_from(bvm_runtime::meta::TID_ARR_INT, &items)
+        }
+        Err(_) => 0,
+    });
+    host.register("burn.libraryFunctions", 1, |a| string(&library_functions(Path::new(str_ref(a[0])))));
+    host.register("burn.bundle", 2, |a| string(&bundle(Path::new(str_ref(a[0])), Path::new(str_ref(a[1])))));
     host
+}
+
+pub fn platform() -> String {
+    let os = if cfg!(target_os = "macos") { "macos" } else { std::env::consts::OS };
+    format!("{}-{}", os, std::env::consts::ARCH)
+}
+
+fn library_functions(path: &Path) -> String {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) => return format!("error\t{}: {}", path.display(), e),
+    };
+    let mods = match library_modules(&bytes) {
+        Ok(m) => m,
+        Err(e) => return format!("error\t{}: {}", path.display(), e),
+    };
+    let mut out = Vec::new();
+    for m in mods {
+        for (i, f) in m.funcs.iter().enumerate() {
+            if f.external {
+                continue;
+            }
+            out.push(f.name.clone());
+            if let Some(e) = crate::link::export_name(&m, i as u32) {
+                out.push(e);
+            }
+            if !m.name.is_empty() {
+                out.push(format!("{}::{}", m.name, f.name));
+            }
+        }
+    }
+    out.join("\n")
+}
+
+fn bundle(file: &Path, out: &Path) -> String {
+    let bytes = match std::fs::read(file) {
+        Ok(b) => b,
+        Err(e) => return format!("cannot read {}: {}", file.display(), e),
+    };
+    let bytes = if crate::archive::is_archive(&bytes) || crate::binary::is_binary(&bytes) {
+        bytes
+    } else {
+        match crate::parse(&bytes) {
+            Ok(m) => crate::binary::encode(&m),
+            Err(e) => return format!("{}: {}", file.display(), e),
+        }
+    };
+    match crate::load_bytes(&bytes) {
+        Ok((m, host)) => {
+            if m.entry.is_none() {
+                return format!("{} has no entry function", file.display());
+            }
+            if let Err(e) = crate::load(&m, &host) {
+                return format!("{}: {}", file.display(), e);
+            }
+        }
+        Err(e) => return format!("{}: {}", file.display(), e),
+    }
+    match std::fs::write(out, &bytes) {
+        Ok(()) => String::new(),
+        Err(e) => format!("cannot write {}: {}", out.display(), e),
+    }
 }
 
 fn library_module(bytes: &[u8]) -> Result<crate::Module, String> {

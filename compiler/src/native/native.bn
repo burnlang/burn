@@ -1,0 +1,84 @@
+import "../check/body.bn"
+import "../check/check.bn"
+import "../check/hir.bn"
+import "../lower/own.bn"
+import "meta.bn"
+import "x86.bn"
+
+/** Why the program cannot be compiled to native code, or null, like `validate` in `native/mod.rs`. `libFuncs` names the functions of its bytecode libraries. */
+pub fun nativeProblem(p: HProgram, libFuncs: [string]): string? {
+    for f in p.funcs {
+        if (f.external is External.Native) {
+            return "`${f.name}` is marked @Native: functions provided by a host program only exist on bvm, so build this with `--target bvm` or `--target bar`, or run it with burni"
+        }
+    }
+    for f in p.funcs {
+        for a in f.annotations {
+            if (!contains(MIXINS, a.name)) {
+                continue
+            }
+            var target = strArg(a, "target") ?? ""
+            if (contains(libFuncs, target)) {
+                continue
+            }
+            for g in p.funcs {
+                if (g.name == target && g.external == null) {
+                    return "@${a.name} on `${f.name}` targets `${target}`, which is compiled to native code; mixins can only change bvm bytecode (use burni or `--target bvm`, or target a function in an imported bytecode library)"
+                }
+            }
+            return "@${a.name} on `${f.name}` targets `${target}`, but no imported bytecode library has a function with that name"
+        }
+    }
+    return null
+}
+
+/** The x86-64 assembly of a checked program for `platform` (such as `linux-x86_64`), with the bytes of its bytecode libraries, like `assembly` in `native/mod.rs`. */
+pub fun nativeAssembly(c: Checker, p: HProgram, libs: [[int]], platform: string): string {
+    var meta = encodeMeta(c)
+    var funcs = lowerOwnership(c.types, p.funcs)
+    var np = NativeProgram { checker: c, funcs: funcs, globals: len(p.globals), entry: p.entry, libs: libs }
+    return generateX86(np, meta, asmTarget(platform))
+}
+
+/** The assembly of an executable that runs the bvm module or archive `bundle`, like `launcher_assembly` in `native/mod.rs`. */
+pub fun launcherAssembly(bundle: [int], platform: string): string {
+    var t = asmTarget(platform)
+    var p = t.prefix
+    var plt = "@PLT"
+    if (t.macos) {
+        plt = ""
+    }
+    var s = ".intel_syntax noprefix\n.text\n"
+    s += ".globl ${p}main\n${p}main:\n"
+    s += "    push rbp\n    mov rbp, rsp\n"
+    s += "    mov rdx, rdi\n    mov rcx, rsi\n"
+    s += "    lea rdi, [rip + burn_bundle]\n"
+    s += "    mov rsi, qword ptr [rip + burn_bundle_len]\n"
+    s += "    call ${p}burn_bvm_main${plt}\n"
+    s += "    pop rbp\n    ret\n"
+    if (t.macos) {
+        s += ".section __TEXT,__const\n"
+    } else {
+        s += ".section .rodata\n"
+    }
+    s += ".p2align 4\n"
+    s += "burn_bundle_len:\n    .quad ${len(bundle)}\n"
+    s += "burn_bundle:\n"
+    var i = 0
+    while (i < len(bundle)) {
+        var end = i + 32
+        if (end > len(bundle)) {
+            end = len(bundle)
+        }
+        [string] parts = []
+        for k in i..end {
+            parts.push(toString(bundle[k]))
+        }
+        s += "    .byte ${join(parts, ",")}\n"
+        i = end
+    }
+    if (!t.macos) {
+        s += ".section .note.GNU-stack,\"\",@progbits\n"
+    }
+    return s
+}

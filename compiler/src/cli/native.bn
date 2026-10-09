@@ -1,0 +1,172 @@
+import "../native/native.bn"
+import "../project/paths.bn"
+import "../project/project.bn"
+import "compile.bn"
+import "host.bn"
+import "std/fs"
+import "std/process"
+import "std/random"
+import "std/time"
+
+/** Where `burn build --target native` writes the executable, and what else it keeps. */
+pub def type NativeOptions {
+    string output
+    string? emitAsm
+    bool strip
+}
+
+/** The folder with the runtime that native executables link against, `share/burn/lib` in a toolchain. */
+priv fun runtimeDir(): string {
+    return pathJoin(shareDir() ?? ".", "lib")
+}
+
+/** Why this toolchain cannot build native executables, or null, like `supported` in `native/mod.rs`. */
+pub fun nativeUnsupported(): string? {
+    var p = platform()
+    if (p != "linux-x86_64" && p != "macos-x86_64") {
+        return "native compilation currently supports x86_64 Linux and macOS; use `burn run` or `--target js` on this platform"
+    }
+    if (!Files.isFile(pathJoin(runtimeDir(), "libburn_runtime.a"))) {
+        return "this toolchain has no native runtime library (${pathJoin(runtimeDir(), "libburn_runtime.a")})"
+    }
+    return null
+}
+
+/** A new path in the temporary folder for `burn-<tag>` files; the caller creates and removes it. */
+pub fun tempPath(tag: string): string {
+    var base = env("TMPDIR")
+    if (base == "") {
+        base = "/tmp"
+    }
+    return pathJoin(base, "burn-${tag}-${nowMs()}-${randomInt(0, 999999999)}")
+}
+
+priv fun link(asm: string, output: string, strip: bool, runtime: string, libs: string): string? {
+    var dir = tempPath("build")
+    Files.makeDir(dir)
+    var asmPath = pathJoin(dir, "program.s")
+    if (!writeFile(asmPath, asm)) {
+        Files.remove(dir)
+        return "cannot write ${asmPath}"
+    }
+    var cc = env("BURN_CC")
+    if (cc == "") {
+        cc = env("CC")
+    }
+    if (cc == "") {
+        cc = "cc"
+    }
+    [string] args = [asmPath, runtime, "-o", output]
+    for l in split(libs, " ") {
+        if (trim(l) != "") {
+            args.push(trim(l))
+        }
+    }
+    if (startsWith(platform(), "macos")) {
+        args.push("-Wl,-dead_strip")
+    } else {
+        args.push("-Wl,--gc-sections")
+    }
+    if (strip) {
+        args.push("-s")
+    }
+    var r = Process.output(cc, args)
+    Files.remove(dir)
+    if (r.code < 0) {
+        return "could not run the linker `${cc}`: ${trim(r.err)} (install a C toolchain or set BURN_CC)"
+    }
+    if (r.code != 0) {
+        return "linking failed:\n${r.err}"
+    }
+    return null
+}
+
+priv fun writeAsm(opts: NativeOptions, asm: string): string? {
+    var path = opts.emitAsm
+    if (path != null && !writeFile(path, asm)) {
+        return "cannot write ${path}"
+    }
+    return null
+}
+
+/** Compiles a checked program to a native executable, like `native::build`. Returns null or the error. */
+pub fun buildNative(c: Compiled, opts: NativeOptions): string? {
+    [[int]] libs = []
+    [string] libFuncs = []
+    for path in libraryPaths(c) {
+        var info = libraryFunctions(path)
+        if (startsWith(info, "error\t")) {
+            return substring(info, 6, len(info))
+        }
+        for name in split(info, "\n") {
+            if (name != "") {
+                libFuncs.push(name)
+            }
+        }
+        var b = fileBytes(path)
+        if (b == null) {
+            return "cannot read ${path}"
+        }
+        libs.push(b)
+    }
+    var problem = nativeProblem(c.program, libFuncs)
+    if (problem != null) {
+        return problem
+    }
+    var asm = nativeAssembly(c.checker, c.program, libs, platform())
+    var written = writeAsm(opts, asm)
+    if (written != null) {
+        return written
+    }
+    var unsupported = nativeUnsupported()
+    if (unsupported != null) {
+        return unsupported
+    }
+    var dir = runtimeDir()
+    if (c.program.noStd) {
+        var core = pathJoin(dir, "libburn_core.a")
+        if (!Files.isFile(core)) {
+            return "this toolchain has no no-std runtime library (${core})"
+        }
+        return link(asm, opts.output, opts.strip, core, "-lm")
+    }
+    var libsText = readText(pathJoin(dir, "native-libs.txt")) ?? ""
+    return link(asm, opts.output, opts.strip, pathJoin(dir, "libburn_runtime.a"), trim(libsText))
+}
+
+/** The x86-64 assembly of a checked program, as `burn dump --asm` prints it. */
+pub fun nativeAssemblyOf(c: Compiled): string {
+    [[int]] libs = []
+    for path in libraryPaths(c) {
+        libs.push(fileBytes(path) ?? [])
+    }
+    return nativeAssembly(c.checker, c.program, libs, platform())
+}
+
+/** Builds a native executable that runs the bvm module or archive `file`, like `build_bundle`. Returns null or the error. */
+pub fun buildLauncher(file: string, opts: NativeOptions): string? {
+    var dir = tempPath("build")
+    Files.makeDir(dir)
+    var tmp = pathJoin(dir, "bundle.bvmc")
+    var problem = bundleFile(file, tmp)
+    var b = fileBytes(tmp)
+    Files.remove(dir)
+    if (problem != "") {
+        return problem
+    }
+    if (b == null) {
+        return "cannot read ${file}"
+    }
+    var asm = launcherAssembly(b, platform())
+    var written = writeAsm(opts, asm)
+    if (written != null) {
+        return written
+    }
+    var unsupported = nativeUnsupported()
+    if (unsupported != null) {
+        return unsupported
+    }
+    var rt = runtimeDir()
+    var libsText = readText(pathJoin(rt, "native-libs.txt")) ?? ""
+    return link(asm, opts.output, opts.strip, pathJoin(rt, "libburn_runtime.a"), trim(libsText))
+}

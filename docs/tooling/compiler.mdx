@@ -1,15 +1,15 @@
 ---
 title: How the compiler works
-description: The pipeline from source to bvm bytecode, and how the compiler written in Burn builds itself.
+description: The pipeline from source to bvm bytecode, machine code and JavaScript, and how the compiler written in Burn builds itself.
 order: 25
 ---
 
 # How the compiler works
 
 ```text
-source ──▶ lexer ──▶ parser ──▶ type checker ──▶ typed IR ──▶ ownership ──▶ bvm module ──▶ bvm   (burn run)
-                                    │                                              └──▶ .bvmc, .bar (burn build)
-                                    ▼
+source ──▶ lexer ──▶ parser ──▶ type checker ──▶ typed IR ─┬─▶ ownership ─┬─▶ bvm module ──▶ bvm, .bvmc, .bar
+                                    │                      │              └─▶ x86-64 asm ──▶ cc + runtime (burn build)
+                                    ▼                      └─▶ JavaScript                                (--target js)
                           diagnostics, hover, completion
 ```
 
@@ -54,7 +54,17 @@ general-purpose stack VM with its own assembly language, bytecode format and ver
 can fail carries its source location. When the module is loaded, the verifier computes each function's frame
 size and common sequences are fused into superinstructions for loops, comparisons and field access. Checking and
 compiling a typical program takes a few milliseconds, so running a file feels like using an interpreter.
-`burnc` writes the same module to a `.bvmc` file, and `--target bar` into an archive.
+`burnc --target bvm` writes the same module to a `.bvmc` file, and `--target bar` into an archive.
+
+## Native code
+
+`burn build` turns the IR into x86-64 assembly (Intel syntax, `compiler/src/native/x86.bn`): locals live in the
+stack frame, expressions evaluate into `rax`, comparisons in conditions become compare-and-jump, array access and
+field access are inlined, and interface calls go through per-method dispatch tables. The program entry point and the
+trampoline that starts async tasks are hand-written assembly. The assembly is linked by `cc` with a static build of
+the runtime (bvm and its runtime core, compiled by `scripts/native-runtime.sh` into `share/burn/lib`), so the result
+is a standalone executable. A program that imports bytecode libraries embeds them, and bvm runs them inside the
+executable.
 
 `--target js` turns the IR into one JavaScript file instead (`compiler/src/js/js.bn`), with a runtime written in
 JavaScript in front of it (`lib/js/prelude.js`): every function becomes a JavaScript function, records become arrays
@@ -62,12 +72,13 @@ tagged with their type, and checked operations call small helpers that report th
 
 ## Without the standard library
 
-Programs built with `--no-std` or `std = false` link only the built-in core of the runtime, and the checker rejects
-the features it leaves out ([details](./no-std.mdx)).
+Programs built with `--no-std` or `std = false` link only the built-in core of the runtime (`libburn_core.a`, the
+runtime core built without `std`), and the checker rejects the features it leaves out ([details](./no-std.mdx)).
 
 ## Bootstrapping
 
 The compiler builds itself. A released Burn (stage0, named in `compiler/STAGE0`) compiles `compiler/src` once; that
 compiler builds itself again, and both results must be the same module (`scripts/bootstrap.sh`). Releases up to
-`26.1.0-experimental-2` were compiled by a compiler written in Rust, which also had native x86-64 and JavaScript
-backends; it was retired once the compiler written in Burn did everything it did.
+`26.1.0-experimental-2` were compiled by a compiler written in Rust; it was retired once the compiler written in Burn
+did everything it did. `26.1.0-experimental-3` shipped without the native and JavaScript backends, and
+`26.1.0-experimental-4` brings both back, ported to Burn.

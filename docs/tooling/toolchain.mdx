@@ -34,31 +34,38 @@ understands `:help`, `:reset`, `:source` and `:quit`.
 
 ## `burnc`: the compiler
 
-`burnc` compiles a program to [bvm](../bvm/overview.mdx) bytecode, which runs anywhere bvm runs, or to JavaScript
-for Node.js.
+`burnc` compiles a program to a standalone native executable, to [bvm](../bvm/overview.mdx) bytecode, which runs
+anywhere bvm runs, or to JavaScript for Node.js.
 
 ```sh
-burnc app.bn                          # app.bvmc, bytecode for bvm
-burnc app.bn -o build/app.bvmc        # choose the output path
-burnc app.bn --emit-asm app.bvm       # also write the bvm assembly
+burnc app.bn                          # ./app
+burnc app.bn -o bin/app               # choose the output path
+burnc app.bn --emit-asm app.s         # also write the generated assembly
+burnc app.bn --target bvm             # app.bvmc, bytecode for bvm
 burnc app.bn --target bar             # app.bar, the program and its bytecode libraries in one archive
 burnc app.bn --target js              # app.js, a program for Node.js
+burnc app.bar -o app                  # a native executable that runs a bytecode archive
+burnc app.bn --no-strip               # keep symbols for debuggers and profilers
 burnc app.bn --no-std                 # without the standard library
 burnc --check a.bn b.bn               # type-check only
 ```
 
 | Option | Description |
 | --- | --- |
-| `-o`, `--output <path>` | output file; defaults to the source name with `.bvmc` (or `.bar`, `.js`) |
-| `--target bvm` | a `.bvmc` bytecode module, with imported bytecode libraries linked in (default) |
+| `-o`, `--output <path>` | output file; defaults to the source name without `.bn` (`.bvmc`, `.bar` or `.js` for the other targets) |
+| `--target native` | x86-64 machine code linked into an executable (default) |
+| `--target bvm` | a `.bvmc` bytecode module, with imported bytecode libraries linked in |
 | `--target bar` | a runnable [archive](../bvm/archives.mdx) with the program and its bytecode libraries |
 | `--target js` | a JavaScript file for Node.js; it cannot use bytecode libraries, `@Native` functions or mixins |
-| `--emit-asm <path>` | write the bvm assembly as well |
+| `--emit-asm <path>` | write the generated assembly as well (bvm assembly for `--target bvm`) |
+| `--no-strip` | keep the symbol table |
 | `--no-std` | build [without the standard library](./no-std.mdx) |
 | `--check <files...>` | report errors and warnings without producing output |
 
-Run the result with `burn app.bvmc` or `bvm app.bvmc`; an archive also runs on its own (`./app.bar`) when `bvm` is on
-`PATH`, and a JavaScript build with `node app.js`. See [how the compiler works](./compiler.mdx).
+Native executables need x86-64 Linux or macOS and a C toolchain (`cc`, or the program named by `BURN_CC`), which is
+used to assemble and link them with the runtime in `share/burn/lib`. Run bytecode with `burn app.bvmc` or
+`bvm app.bvmc`; an archive also runs on its own (`./app.bar`) when `bvm` is on `PATH`, and a JavaScript build with
+`node app.js`. See [how the compiler works](./compiler.mdx).
 
 ## `burnfmt`: the formatter
 
@@ -103,8 +110,9 @@ bvm runtime                  # list the runtime functions
 | --- | --- |
 | try something quickly | `burni` |
 | run a script or develop a program | `burni app.bn` |
-| ship a program | `burnc app.bn --target bar`, one archive that runs where bvm runs |
-| ship portable bytecode | `burnc app.bn`, run with `bvm` |
+| ship a program | `burnc app.bn` |
+| ship one archive that runs where bvm runs | `burnc app.bn --target bar` |
+| ship portable bytecode | `burnc app.bn --target bvm`, run with `bvm` |
 | write a language or a code generator | emit bvm assembly or use the `bvm` crate |
 | check a project in CI | `burnc --check` and `burnfmt --check` |
 | format on save in an editor | the language server (`burn-lsp`) or `burnfmt` |

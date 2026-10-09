@@ -1,0 +1,1327 @@
+import "../check/check.bn"
+import "../check/hir.bn"
+import "../check/types.bn"
+import "../vm/asm.bn"
+import "../vm/bits.bn"
+import "../vm/runtime.bn"
+
+/** The entry point of every native program, from `entry_x86_64.s` of the Rust compiler. */
+priv const ENTRY = ".intel_syntax noprefix\n.text\n.globl {P}main\n{P}main:\n    push rbp\n    mov rbp, rsp\n    push rbx\n    push r12\n    push r13\n    push r14\n    push r15\n    sub rsp, 8\n    mov r13, rdi\n    mov r14, rsi\n    lea rdi, [rip + burn_meta]\n    mov rsi, qword ptr [rip + burn_meta_len]\n    lea rdx, [rip + {P}burn_globals]\n    mov rcx, qword ptr [rip + burn_nglobals]\n    mov r8, rbp\n    lea r9, [rip + {P}burn_call_trampoline]\n    mov r12, rsp\n    and rsp, -16\n    call {P}burn_rt_init{PLT}\n    mov rsp, r12\n    mov rdi, r13\n    mov rsi, r14\n    mov r12, rsp\n    and rsp, -16\n    call {P}burn_rt_set_args{PLT}\n    mov rsp, r12\n{PRE_ENTRY}    call burn_entry\n    xor edi, edi\n    mov r12, rsp\n    and rsp, -16\n    call {P}burn_rt_exit{PLT}\n    mov rsp, r12\n    add rsp, 8\n    pop r15\n    pop r14\n    pop r13\n    pop r12\n    pop rbx\n    pop rbp\n    ret\n\n.globl {P}burn_call_trampoline\n{P}burn_call_trampoline:\n    push rbp\n    mov rbp, rsp\n    push rbx\n    push r12\n    push r13\n    push r14\n    push r15\n    sub rsp, 8\n    mov rax, rdi\n    mov r12, rdx\n.Ltramp_loop:\n    test r12, r12\n    jz .Ltramp_done\n    dec r12\n    push qword ptr [rsi + r12*8]\n    jmp .Ltramp_loop\n.Ltramp_done:\n    call rax\n    lea rsp, [rbp - 40]\n    pop r15\n    pop r14\n    pop r13\n    pop r12\n    pop rbx\n    pop rbp\n    ret\n"
+
+/** The annotations that change the bytecode of a library. */
+pub const MIXINS = ["Inject", "Overwrite", "Redirect"]
+
+priv const ARG_REGS = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
+
+/** `u32::MAX`, the location of an operation that cannot fail. */
+priv const NONE = 4294967295
+
+priv const I32_MIN = -2147483648
+priv const I32_MAX = 2147483647
+
+/** How the assembler and linker of a platform name things. */
+pub def type AsmTarget {
+    string prefix
+    bool macos
+}
+
+/** The target of the machine the compiler runs on, from its platform such as `linux-x86_64`. */
+pub fun asmTarget(platform: string): AsmTarget {
+    if (startsWith(platform, "macos")) {
+        return AsmTarget { prefix: "_", macos: true }
+    }
+    return AsmTarget { prefix: "", macos: false }
+}
+
+/** What the code generator needs of a checked program, after the ownership pass. */
+pub def type NativeProgram {
+    Checker checker
+    [HFunc] funcs
+    int globals
+    int entry
+    [[int]] libs
+}
+
+priv fun quote(s: string): string {
+    return "\"${escape(s)}\""
+}
+
+priv fun isMixin(a: HirAnnotation): bool {
+    return contains(MIXINS, a.name)
+}
+
+/** The bvm module that applies the mixins of a native program to its libraries, like `mixin_module` in `x86.rs`. */
+pub fun mixinModule(funcs: [HFunc]): string {
+    var s = ""
+    for i in 0..len(funcs) {
+        var f = funcs[i]
+        [HirAnnotation] anns = []
+        for a in f.annotations {
+            if (isMixin(a)) {
+                anns.push(a)
+            }
+        }
+        if (len(anns) == 0) {
+            continue
+        }
+        var hook = "__mixin_hook_${i}"
+        s += "import ${quote(hook)} ${f.params}\n"
+        for a in anns {
+            s += "@${a.name}"
+            for x in a.args {
+                var v = x.value
+                if (v is Const.Int) {
+                    s += " ${x.key}=${v.value}"
+                } else if (v is Const.Float) {
+                    s += " ${x.key}=${debugFloat(v.value)}"
+                } else if (v is Const.Bool) {
+                    s += " ${x.key}=${v.value}"
+                } else if (v is Const.Str) {
+                    s += " ${x.key}=${quote(v.text)}"
+                }
+            }
+            s += "\n"
+        }
+        s += "func ${quote("__mixin_${i}")}(${f.params})\n"
+        for k in 0..f.params {
+            s += "    load ${k}\n"
+        }
+        s += "    host ${quote(hook)}\n"
+        s += "    ret\nend\n"
+    }
+    return s
+}
+
+priv fun cc(k: Cmp): string {
+    return match k {
+        Cmp.Eq => "e"
+        Cmp.Ne => "ne"
+        Cmp.Lt => "l"
+        Cmp.Le => "le"
+        Cmp.Gt => "g"
+        Cmp.Ge => "ge"
+    }
+}
+
+priv fun ucc(k: Cmp): string {
+    return match k {
+        Cmp.Eq => "e"
+        Cmp.Ne => "ne"
+        Cmp.Lt => "b"
+        Cmp.Le => "be"
+        Cmp.Gt => "a"
+        Cmp.Ge => "ae"
+    }
+}
+
+priv fun inv(k: Cmp): Cmp {
+    return match k {
+        Cmp.Eq => Cmp.Ne
+        Cmp.Ne => Cmp.Eq
+        Cmp.Lt => Cmp.Ge
+        Cmp.Le => Cmp.Gt
+        Cmp.Gt => Cmp.Le
+        Cmp.Ge => Cmp.Lt
+    }
+}
+
+priv fun isConst(e: HExpr): bool {
+    var k = e.kind
+    return k is HKind.Int || k is HKind.TypeId || k is HKind.LocId || k is HKind.Float || k is HKind.Bool || k is HKind.Str || k is HKind.Null || k is HKind.FuncRef
+}
+
+priv fun isSimple(e: HExpr): bool {
+    var k = e.kind
+    return isConst(e) || k is HKind.Local || k is HKind.Global
+}
+
+/** Whether `e` or anything in it writes local `slot`, or a global when `slot` is -1, like `writes_local` and `writes_global`. */
+priv fun writes(e: HExpr, slot: int): bool {
+    var k = e.kind
+    if (slot < 0) {
+        if (k is HKind.SetGlobal || k is HKind.Call || k is HKind.CallIndirect || k is HKind.CallIface || k is HKind.Seq) {
+            return true
+        }
+    } else if (k is HKind.SetLocal && k.slot == slot) {
+        return true
+    }
+    return match k {
+        HKind.SetLocal(s, value) => writes(value, slot)
+        HKind.SetGlobal(id, value) => writes(value, slot)
+        HKind.Unary(op, value) => writes(value, slot)
+        HKind.Conv(conv, value) => writes(value, slot)
+        HKind.GetField(obj, index) => writes(obj, slot)
+        HKind.ArrLen(value) => writes(value, slot)
+        HKind.BoxVal(value) => writes(value, slot)
+        HKind.Retain(value) => writes(value, slot)
+        HKind.Release(value) => writes(value, slot)
+        HKind.Binary(op, left, right) => writes(left, slot) || writes(right, slot)
+        HKind.And(left, right) => writes(left, slot) || writes(right, slot)
+        HKind.Or(left, right) => writes(left, slot) || writes(right, slot)
+        HKind.Index(obj, index, loc) => writes(obj, slot) || writes(index, slot)
+        HKind.SetField(obj, index, value) => writes(obj, slot) || writes(value, slot)
+        HKind.SetIndex(obj, index, value, loc) => writes(obj, slot) || writes(index, slot) || writes(value, slot)
+        HKind.Call(func, args) => writesAny(args, slot)
+        HKind.CallIface(s, args) => writesAny(args, slot)
+        HKind.Rt(name, args) => writesAny(args, slot)
+        HKind.Spawn(func, args) => writesAny(args, slot)
+        HKind.NewStruct(ty, args) => writesAny(args, slot)
+        HKind.NewArray(ty, items) => writesAny(items, slot)
+        HKind.CallIndirect(callee, args) => writes(callee, slot) || writesAny(args, slot)
+        HKind.Seq(stmts, value) => stmtsWrite(stmts, slot) || writes(value, slot)
+        else => false
+    }
+}
+
+priv fun writesAny(xs: [HExpr], slot: int): bool {
+    for x in xs {
+        if (writes(x, slot)) {
+            return true
+        }
+    }
+    return false
+}
+
+priv fun stmtsWrite(ss: [HStmt], slot: int): bool {
+    for s in ss {
+        if (stmtWrites(s, slot)) {
+            return true
+        }
+    }
+    return false
+}
+
+priv fun stmtWrites(s: HStmt, slot: int): bool {
+    if (s is HStmt.Eval) {
+        return writes(s.value, slot)
+    }
+    if (s is HStmt.Return) {
+        var v = s.value
+        return v != null && writes(v, slot)
+    }
+    if (s is HStmt.If) {
+        return writes(s.cond, slot) || stmtsWrite(s.then, slot) || stmtsWrite(s.els, slot)
+    }
+    if (s is HStmt.Loop) {
+        var c = s.cond
+        return (c != null && writes(c, slot)) || stmtsWrite(s.body, slot) || stmtsWrite(s.step, slot)
+    }
+    return false
+}
+
+priv fun lateOk(arg: HExpr, all: [HExpr]): bool {
+    var k = arg.kind
+    if (k is HKind.Local) {
+        return !writesAny(all, k.slot)
+    }
+    if (k is HKind.Global) {
+        return !writesAny(all, -1)
+    }
+    return isConst(arg)
+}
+
+priv fun local(slot: int): string {
+    return "qword ptr [rbp - ${8 * (slot + 1)}]"
+}
+
+priv fun isAscii(s: string): bool {
+    for b in bytes(s) {
+        if (b >= 128) {
+            return false
+        }
+    }
+    return true
+}
+
+/** The width in bytes of the packed numeric types by their code in the checker, from int8 to float32. */
+priv const NUM_WIDTH = [1, 1, 2, 2, 4, 4, 8, 4]
+
+priv const I8 = 0
+priv const U8 = 1
+priv const I16 = 2
+priv const U16 = 3
+priv const I32 = 4
+priv const U32 = 5
+priv const U64 = 6
+priv const F32 = 7
+
+priv def type Export {
+    string name
+    int func
+    int argc
+}
+
+priv def type LoopLabels {
+    string cont
+    string end
+}
+
+priv def struct Gen(p: NativeProgram, t: AsmTarget) {
+    string out = ""
+    string cold = ""
+    int label = 0
+    int fid = 0
+    [LoopLabels] loops = []
+    {string: string} symbols = runtimeSymbols()
+
+    fun sym(name: string): string {
+        return t.prefix + name
+    }
+
+    fun plt(): string {
+        if (t.macos) {
+            return ""
+        }
+        return "@PLT"
+    }
+
+    fun rtSym(name: string): string {
+        return "burn_" + (symbols[name] ?? name)
+    }
+
+    fun l(): string {
+        label += 1
+        return ".L${label}"
+    }
+
+    fun e(s: string) {
+        out += "    "
+        out += s
+        out += "\n"
+    }
+
+    fun lbl(name: string) {
+        out += name
+        out += ":\n"
+    }
+
+    fun global(g: int): string {
+        return "qword ptr [rip + ${sym("burn_globals")} + ${8 * g}]"
+    }
+
+    fun callTarget(name: string): string {
+        return "call ${sym(name)}${plt()}"
+    }
+
+    fun callRtRaw(name: string) {
+        e("mov r12, rsp")
+        e("and rsp, -16")
+        e(callTarget(name))
+        e("mov rsp, r12")
+    }
+
+    fun byteLines(b: [int]) {
+        var i = 0
+        while (i < len(b)) {
+            var end = i + 32
+            if (end > len(b)) {
+                end = len(b)
+            }
+            [string] parts = []
+            for k in i..end {
+                parts.push(toString(b[k]))
+            }
+            out += "    .byte ${join(parts, ",")}\n"
+            i = end
+        }
+    }
+
+    fun textBytes(s: string) {
+        [int] b = []
+        for x in bytes(s) {
+            b.push(x as int)
+        }
+        b.push(0)
+        byteLines(b)
+    }
+
+    fun exports(): [Export] {
+        [Export] v = []
+        if (len(p.libs) == 0) {
+            return v
+        }
+        for i in 0..len(p.funcs) {
+            var f = p.funcs[i]
+            if (f.external != null) {
+                continue
+            }
+            for a in f.annotations {
+                if (a.name == "Export") {
+                    v.push(Export { name: strArg(a, "name") ?? f.name, func: i, argc: f.params })
+                    break
+                }
+            }
+            for a in f.annotations {
+                if (isMixin(a)) {
+                    v.push(Export { name: "__mixin_hook_${i}", func: i, argc: f.params })
+                    break
+                }
+            }
+        }
+        return v
+    }
+
+    fun preEntry(exps: [Export]): string {
+        if (len(p.libs) == 0) {
+            return ""
+        }
+        var pl = t.prefix
+        var s = ""
+        s += "    lea rdi, [rip + burn_exports]\n"
+        s += "    mov rsi, ${len(exps)}\n"
+        s += "    mov r12, rsp\n    and rsp, -16\n"
+        s += "    call ${pl}burn_bvm_register_exports${plt()}\n"
+        s += "    mov rsp, r12\n"
+        s += "    lea rdi, [rip + burn_mixins]\n"
+        s += "    mov r12, rsp\n    and rsp, -16\n"
+        s += "    call ${pl}burn_bvm_register_mixins${plt()}\n"
+        s += "    mov rsp, r12\n"
+        for i in 0..len(p.libs) {
+            s += "    lea rdi, [rip + burn_lib_${i}]\n"
+            s += "    mov rsi, qword ptr [rip + burn_lib_${i}_len]\n"
+            s += "    mov r12, rsp\n    and rsp, -16\n"
+            s += "    call ${pl}burn_bvm_init_lib${plt()}\n"
+            s += "    mov rsp, r12\n"
+        }
+        return s
+    }
+
+    fun emitAll(meta: [int]) {
+        var exps = exports()
+        out += replace(replace(replace(ENTRY, "{P}", t.prefix), "{PLT}", plt()), "{PRE_ENTRY}", preEntry(exps))
+        out += ".set burn_entry, bf_${p.entry}\n"
+        var globSym = sym("burn_globals")
+        for i in 0..len(p.funcs) {
+            fid = i
+            func(p.funcs[i])
+        }
+        if (t.macos) {
+            out += ".section __TEXT,__const\n"
+        } else {
+            out += ".section .rodata\n"
+        }
+        out += ".p2align 4\n"
+        out += "burn_meta_len:\n    .quad ${len(meta)}\n"
+        out += "burn_nglobals:\n    .quad ${p.globals}\n"
+        out += "burn_meta:\n"
+        byteLines(meta)
+        for i in 0..len(p.libs) {
+            out += ".p2align 4\n"
+            out += "burn_lib_${i}_len:\n    .quad ${len(p.libs[i])}\n"
+            out += "burn_lib_${i}:\n"
+            byteLines(p.libs[i])
+        }
+        for i in 0..len(p.funcs) {
+            var ext = p.funcs[i].external
+            if (ext is External.Lib) {
+                out += "burn_libfn_${i}:\n"
+                textBytes(ext.name)
+            }
+        }
+        if (len(p.libs) > 0) {
+            for k in 0..len(exps) {
+                out += "burn_export_name_${k}:\n"
+                textBytes(exps[k].name)
+            }
+            out += "burn_mixins:\n"
+            textBytes(mixinModule(p.funcs))
+        }
+        var strs = p.checker.strings
+        for i in 0..len(strs) {
+            var s = strs[i]
+            var n = len(bytes(s))
+            var flags = 1
+            if (isAscii(s)) {
+                flags = 3
+            }
+            out += ".p2align 4\n"
+            out += "bs_${i}:\n"
+            out += "    .byte 1, 0, ${flags}, 0\n"
+            out += "    .long 6\n"
+            out += "    .long ${24 + n + 1}, 0\n"
+            out += "    .quad ${n}\n"
+            textBytes(s)
+        }
+        if (t.macos) {
+            out += ".section __DATA,__const\n"
+        } else {
+            out += ".section .data.rel.ro\n"
+        }
+        if (len(p.libs) > 0) {
+            out += ".p2align 3\nburn_exports:\n"
+            for k in 0..len(exps) {
+                out += "    .quad burn_export_name_${k}, bf_${exps[k].func}, ${exps[k].argc}\n"
+            }
+            if (len(exps) == 0) {
+                out += "    .quad 0\n"
+            }
+        }
+        var ntypes = p.checker.types.count()
+        var slots = p.checker.slots
+        for i in 0..len(slots) {
+            [string] table = []
+            for k in 0..ntypes {
+                table.push("0")
+            }
+            for im in slots[i].impls {
+                table[im.ty] = "bf_${im.func}"
+            }
+            out += ".p2align 3\n"
+            out += "bi_${i}:\n"
+            var at = 0
+            while (at < len(table)) {
+                var end = at + 8
+                if (end > len(table)) {
+                    end = len(table)
+                }
+                out += "    .quad ${join(slice(table, at, end), ", ")}\n"
+                at = end
+            }
+        }
+        if (t.macos) {
+            out += ".section __DATA,__bss\n"
+        } else {
+            out += ".bss\n"
+        }
+        out += ".p2align 4\n"
+        out += "${globSym}:\n"
+        var g = p.globals
+        if (g < 1) {
+            g = 1
+        }
+        out += "    .zero ${8 * g}\n"
+        if (!t.macos) {
+            out += ".section .note.GNU-stack,\"\",@progbits\n"
+        }
+    }
+
+    fun func(f: HFunc) {
+        out += ".p2align 4\n"
+        out += "bf_${fid}:\n"
+        var ext = f.external
+        if (ext is External.Lib) {
+            e("push rbp")
+            e("mov rbp, rsp")
+            e("lea rdi, [rip + burn_lib_${ext.lib}]")
+            e("mov rsi, qword ptr [rip + burn_lib_${ext.lib}_len]")
+            e("lea rdx, [rip + burn_libfn_${fid}]")
+            e("mov ecx, ${f.params}")
+            e("lea r8, [rbp + 16]")
+            e("and rsp, -16")
+            e("call ${sym("burn_bvm_call")}${plt()}")
+            e("leave")
+            e("ret")
+            return
+        }
+        e("push rbp")
+        e("mov rbp, rsp")
+        var n = len(f.locals)
+        if (f.params > n) {
+            n = f.params
+        }
+        var frame = (n * 8 + 15) / 16 * 16
+        if (frame > 0) {
+            e("sub rsp, ${frame}")
+        }
+        var np = f.params
+        for i in 0..np {
+            e("mov rax, qword ptr [rbp + ${16 + 8 * (np - 1 - i)}]")
+            e("mov ${local(i)}, rax")
+        }
+        stmts(f.body)
+        e("xor eax, eax")
+        e("leave")
+        e("ret")
+        out += cold
+        cold = ""
+    }
+
+    fun stmts(ss: [HStmt]): void {
+        for s in ss {
+            stmt(s)
+        }
+    }
+
+    fun stmt(s: HStmt): void {
+        if (s is HStmt.Eval) {
+            expr(s.value)
+        } else if (s is HStmt.If) {
+            var elseL = l()
+            jumpFalse(s.cond, elseL)
+            stmts(s.then)
+            if (len(s.els) == 0) {
+                lbl(elseL)
+            } else {
+                var end = l()
+                e("jmp ${end}")
+                lbl(elseL)
+                stmts(s.els)
+                lbl(end)
+            }
+        } else if (s is HStmt.Loop) {
+            var top = l()
+            var cont = l()
+            var end = l()
+            lbl(top)
+            var c = s.cond
+            if (c != null) {
+                jumpFalse(c, end)
+            }
+            loops.push(LoopLabels { cont: cont, end: end })
+            stmts(s.body)
+            pop(loops)
+            lbl(cont)
+            stmts(s.step)
+            e("jmp ${top}")
+            lbl(end)
+        } else if (s is HStmt.Return) {
+            var v = s.value
+            if (v != null) {
+                expr(v)
+            } else {
+                e("xor eax, eax")
+            }
+            e("leave")
+            e("ret")
+        } else if (s is HStmt.Break) {
+            e("jmp ${loops[len(loops) - 1].end}")
+        } else if (s is HStmt.Continue) {
+            e("jmp ${loops[len(loops) - 1].cont}")
+        }
+    }
+
+    fun jumpFalse(c: HExpr, target: string): void {
+        var k = c.kind
+        if (k is HKind.Bool && k.value) {
+            return
+        }
+        if (k is HKind.Bool) {
+            e("jmp ${target}")
+            return
+        }
+        if (k is HKind.Binary) {
+            var op = k.op
+            if (op is HBinOp.ICmp) {
+                operands(k.left, k.right)
+                e("cmp rax, rcx")
+                e("j${cc(inv(op.cmp))} ${target}")
+                return
+            }
+        }
+        if (k is HKind.Unary && k.op is HUnOp.Not) {
+            jumpTrue(k.value, target)
+            return
+        }
+        if (k is HKind.And) {
+            jumpFalse(k.left, target)
+            jumpFalse(k.right, target)
+            return
+        }
+        if (k is HKind.Or) {
+            var t2 = l()
+            jumpTrue(k.left, t2)
+            jumpFalse(k.right, target)
+            lbl(t2)
+            return
+        }
+        expr(c)
+        e("test rax, rax")
+        e("jz ${target}")
+    }
+
+    fun jumpTrue(c: HExpr, target: string): void {
+        var k = c.kind
+        if (k is HKind.Bool && !k.value) {
+            return
+        }
+        if (k is HKind.Bool) {
+            e("jmp ${target}")
+            return
+        }
+        if (k is HKind.Binary) {
+            var op = k.op
+            if (op is HBinOp.ICmp) {
+                operands(k.left, k.right)
+                e("cmp rax, rcx")
+                e("j${cc(op.cmp)} ${target}")
+                return
+            }
+        }
+        if (k is HKind.Unary && k.op is HUnOp.Not) {
+            jumpFalse(k.value, target)
+            return
+        }
+        if (k is HKind.Or) {
+            jumpTrue(k.left, target)
+            jumpTrue(k.right, target)
+            return
+        }
+        if (k is HKind.And) {
+            var f = l()
+            jumpFalse(k.left, f)
+            jumpTrue(k.right, target)
+            lbl(f)
+            return
+        }
+        expr(c)
+        e("test rax, rax")
+        e("jnz ${target}")
+    }
+
+    fun simpleLoad(x: HExpr, reg: string): bool {
+        var k = x.kind
+        if (k is HKind.Int) {
+            var v = k.value
+            if (v == 0) {
+                e("xor ${reg}, ${reg}")
+            } else if (v >= I32_MIN && v <= I32_MAX) {
+                e("mov ${reg}, ${v}")
+            } else {
+                e("movabs ${reg}, ${v}")
+            }
+        } else if (k is HKind.TypeId || k is HKind.LocId) {
+            var v = idOf(x)
+            if (v <= I32_MAX) {
+                e("mov ${reg}, ${v}")
+            } else {
+                e("movabs ${reg}, ${v}")
+            }
+        } else if (k is HKind.Float) {
+            var b = floatToBits(k.value)
+            if (b == 0) {
+                e("xor ${reg}, ${reg}")
+            } else {
+                e("movabs ${reg}, ${b}")
+            }
+        } else if (k is HKind.Bool) {
+            if (k.value) {
+                e("mov ${reg}, 1")
+            } else {
+                e("mov ${reg}, 0")
+            }
+        } else if (k is HKind.Null) {
+            e("xor ${reg}, ${reg}")
+        } else if (k is HKind.Str) {
+            e("lea ${reg}, [rip + bs_${k.id}]")
+        } else if (k is HKind.FuncRef) {
+            e("lea ${reg}, [rip + bf_${k.func}]")
+        } else if (k is HKind.Local) {
+            e("mov ${reg}, ${local(k.slot)}")
+        } else if (k is HKind.Global) {
+            e("mov ${reg}, ${global(k.id)}")
+        } else {
+            return false
+        }
+        return true
+    }
+
+    fun idOf(x: HExpr): int {
+        var k = x.kind
+        if (k is HKind.TypeId) {
+            return k.id
+        }
+        if (k is HKind.LocId) {
+            return k.id
+        }
+        return 0
+    }
+
+    fun operands(a: HExpr, b: HExpr): void {
+        if (isSimple(b)) {
+            expr(a)
+            simpleLoad(b, "rcx")
+        } else if (isConst(a)) {
+            expr(b)
+            e("mov rcx, rax")
+            simpleLoad(a, "rax")
+        } else {
+            expr(a)
+            e("push rax")
+            expr(b)
+            e("mov rcx, rax")
+            e("pop rax")
+        }
+    }
+
+    fun rtCall(name: string, args: [HExpr]): void {
+        var n = len(args)
+        [bool] late = []
+        for a in args {
+            late.push(lateOk(a, args))
+        }
+        for i in 0..n {
+            if (!late[i]) {
+                expr(args[i])
+                e("push rax")
+            }
+        }
+        var i = n - 1
+        while (i >= 0) {
+            if (late[i]) {
+                simpleLoad(args[i], ARG_REGS[i])
+            } else {
+                e("pop ${ARG_REGS[i]}")
+            }
+            i -= 1
+        }
+        callRtRaw(rtSym(name))
+    }
+
+    fun pushArgs(args: [HExpr]): void {
+        for a in args {
+            var k = a.kind
+            if (k is HKind.Int && k.value >= I32_MIN && k.value <= I32_MAX) {
+                e("push ${k.value}")
+            } else if ((k is HKind.TypeId || k is HKind.LocId) && idOf(a) <= I32_MAX) {
+                e("push ${idOf(a)}")
+            } else if (k is HKind.Local) {
+                e("push ${local(k.slot)}")
+            } else {
+                expr(a)
+                e("push rax")
+            }
+        }
+    }
+
+    fun popArgs(n: int) {
+        if (n > 0) {
+            e("add rsp, ${8 * n}")
+        }
+    }
+
+    fun overflow(loc: int) {
+        if (loc == NONE) {
+            return
+        }
+        var ov = l()
+        e("jo ${ov}")
+        cold += "${ov}:\n    mov edi, ${loc}\n    and rsp, -16\n    ${callTarget(rtSym("ErrOverflow"))}\n    ud2\n"
+    }
+
+    fun div(isMod: bool, loc: int): void {
+        var dz = l()
+        var normal = l()
+        var done = l()
+        e("test rcx, rcx")
+        e("jz ${dz}")
+        e("cmp rcx, -1")
+        e("jne ${normal}")
+        if (isMod) {
+            e("xor eax, eax")
+        } else {
+            e("neg rax")
+            overflow(loc)
+        }
+        e("jmp ${done}")
+        lbl(normal)
+        e("cqo")
+        e("idiv rcx")
+        if (isMod) {
+            e("mov rax, rdx")
+        }
+        lbl(done)
+        cold += "${dz}:\n    mov edi, ${loc}\n    and rsp, -16\n    ${callTarget(rtSym("ErrDivZero"))}\n    ud2\n"
+    }
+
+    fun shift(op: HBinOp, loc: int): void {
+        if (loc != NONE) {
+            var bad = l()
+            e("cmp rcx, 63")
+            e("ja ${bad}")
+            cold += "${bad}:\n    mov rsi, rcx\n    mov edi, ${loc}\n    and rsp, -16\n    ${callTarget(rtSym("ErrShift"))}\n    ud2\n"
+        }
+        if (op is HBinOp.Shl) {
+            e("shl rax, cl")
+        } else if (op is HBinOp.Shr) {
+            e("sar rax, cl")
+        } else {
+            e("shr rax, cl")
+        }
+    }
+
+    fun binary(op: HBinOp, a: HExpr, b: HExpr): void {
+        operands(a, b)
+        if (op is HBinOp.IAdd) {
+            e("add rax, rcx")
+            overflow(op.loc)
+        } else if (op is HBinOp.ISub) {
+            e("sub rax, rcx")
+            overflow(op.loc)
+        } else if (op is HBinOp.IMul) {
+            e("imul rax, rcx")
+            overflow(op.loc)
+        } else if (op is HBinOp.BitAnd) {
+            e("and rax, rcx")
+        } else if (op is HBinOp.BitOr) {
+            e("or rax, rcx")
+        } else if (op is HBinOp.BitXor) {
+            e("xor rax, rcx")
+        } else if (op is HBinOp.Shl) {
+            shift(op, op.loc)
+        } else if (op is HBinOp.Shr) {
+            shift(op, op.loc)
+        } else if (op is HBinOp.UShr) {
+            shift(op, op.loc)
+        } else if (op is HBinOp.IDiv) {
+            div(false, op.loc)
+        } else if (op is HBinOp.IMod) {
+            div(true, op.loc)
+        } else if (op is HBinOp.FAdd || op is HBinOp.FSub || op is HBinOp.FMul || op is HBinOp.FDiv) {
+            e("movq xmm0, rax")
+            e("movq xmm1, rcx")
+            var ins = "divsd"
+            if (op is HBinOp.FAdd) {
+                ins = "addsd"
+            } else if (op is HBinOp.FSub) {
+                ins = "subsd"
+            } else if (op is HBinOp.FMul) {
+                ins = "mulsd"
+            }
+            e("${ins} xmm0, xmm1")
+            e("movq rax, xmm0")
+        } else if (op is HBinOp.ICmp) {
+            e("cmp rax, rcx")
+            e("set${cc(op.cmp)} al")
+            e("movzx eax, al")
+        } else if (op is HBinOp.UCmp) {
+            e("cmp rax, rcx")
+            e("set${ucc(op.cmp)} al")
+            e("movzx eax, al")
+        } else if (op is HBinOp.WAdd) {
+            e("add rax, rcx")
+        } else if (op is HBinOp.WSub) {
+            e("sub rax, rcx")
+        } else if (op is HBinOp.WMul) {
+            e("imul rax, rcx")
+        } else if (op is HBinOp.FCmp) {
+            fcmp(op.cmp)
+        }
+    }
+
+    fun fcmp(k: Cmp) {
+        e("movq xmm0, rax")
+        e("movq xmm1, rcx")
+        if (k == Cmp.Eq) {
+            e("ucomisd xmm0, xmm1")
+            e("sete al")
+            e("setnp cl")
+            e("and al, cl")
+        } else if (k == Cmp.Ne) {
+            e("ucomisd xmm0, xmm1")
+            e("setne al")
+            e("setp cl")
+            e("or al, cl")
+        } else if (k == Cmp.Lt) {
+            e("ucomisd xmm1, xmm0")
+            e("seta al")
+        } else if (k == Cmp.Le) {
+            e("ucomisd xmm1, xmm0")
+            e("setae al")
+        } else if (k == Cmp.Gt) {
+            e("ucomisd xmm0, xmm1")
+            e("seta al")
+        } else {
+            e("ucomisd xmm0, xmm1")
+            e("setae al")
+        }
+        e("movzx eax, al")
+    }
+
+    fun expr(x: HExpr): void {
+        if (simpleLoad(x, "rax")) {
+            return
+        }
+        var k = x.kind
+        if (k is HKind.SetLocal) {
+            expr(k.value)
+            e("mov ${local(k.slot)}, rax")
+        } else if (k is HKind.SetGlobal) {
+            expr(k.value)
+            e("mov ${global(k.id)}, rax")
+        } else if (k is HKind.Unary) {
+            expr(k.value)
+            var op = k.op
+            if (op is HUnOp.INeg) {
+                e("neg rax")
+                overflow(op.loc)
+            } else if (op is HUnOp.FNeg) {
+                e("btc rax, 63")
+            } else if (op is HUnOp.BitNot) {
+                e("not rax")
+            } else {
+                e("test rax, rax")
+                e("sete al")
+                e("movzx eax, al")
+            }
+        } else if (k is HKind.Binary) {
+            binary(k.op, k.left, k.right)
+        } else if (k is HKind.And) {
+            var end = l()
+            expr(k.left)
+            e("test rax, rax")
+            e("jz ${end}")
+            expr(k.right)
+            lbl(end)
+        } else if (k is HKind.Or) {
+            var end = l()
+            expr(k.left)
+            e("test rax, rax")
+            e("jnz ${end}")
+            expr(k.right)
+            lbl(end)
+        } else if (k is HKind.Conv) {
+            expr(k.value)
+            if (k.conv == Conv.IntToFloat) {
+                e("cvtsi2sd xmm0, rax")
+                e("movq rax, xmm0")
+            } else {
+                e("movq xmm0, rax")
+                e("cvttsd2si rax, xmm0")
+            }
+        } else if (k is HKind.Call) {
+            pushArgs(k.args)
+            e("call bf_${k.func}")
+            popArgs(len(k.args))
+        } else if (k is HKind.CallIndirect) {
+            pushArgs(k.args)
+            expr(k.callee)
+            e("call rax")
+            popArgs(len(k.args))
+        } else if (k is HKind.CallIface) {
+            pushArgs(k.args)
+            var n = len(k.args)
+            e("mov rax, qword ptr [rsp + ${8 * (n - 1)}]")
+            e("mov eax, dword ptr [rax + 4]")
+            e("lea rcx, [rip + bi_${k.slot}]")
+            e("mov rax, qword ptr [rcx + rax*8]")
+            e("call rax")
+            popArgs(n)
+        } else if (k is HKind.Rt) {
+            if (!inlineNum(k.name, k.args)) {
+                rtCall(k.name, k.args)
+            }
+        } else if (k is HKind.Spawn) {
+            pushArgs(k.args)
+            e("lea rdi, [rip + bf_${k.func}]")
+            e("mov rsi, ${len(k.args)}")
+            e("mov rdx, rsp")
+            e("mov rcx, ${x.ty}")
+            callRtRaw(rtSym("Spawn"))
+            popArgs(len(k.args))
+        } else if (k is HKind.NewStruct) {
+            var n = len(k.args)
+            pushArgs(k.args)
+            e("mov edi, ${k.ty}")
+            e("mov esi, ${n}")
+            callRtRaw(rtSym("StructNew"))
+            var i = n - 1
+            while (i >= 0) {
+                e("pop rcx")
+                e("mov qword ptr [rax + ${16 + 8 * i}], rcx")
+                i -= 1
+            }
+        } else if (k is HKind.GetField) {
+            expr(k.obj)
+            e("mov rax, qword ptr [rax + ${16 + 8 * k.index}]")
+        } else if (k is HKind.SetField) {
+            var at = 16 + 8 * k.index
+            if (isSimple(k.value)) {
+                expr(k.obj)
+                simpleLoad(k.value, "rcx")
+                e("mov qword ptr [rax + ${at}], rcx")
+                e("mov rax, rcx")
+            } else {
+                expr(k.obj)
+                e("push rax")
+                expr(k.value)
+                e("pop rcx")
+                e("mov qword ptr [rcx + ${at}], rax")
+            }
+        } else if (k is HKind.NewArray) {
+            newArray(k.ty, k.items)
+        } else if (k is HKind.Index) {
+            index(k.obj, k.index, k.loc)
+        } else if (k is HKind.SetIndex) {
+            setIndex(k.obj, k.index, k.value, k.loc)
+        } else if (k is HKind.ArrLen) {
+            expr(k.value)
+            e("mov rax, qword ptr [rax + 16]")
+        } else if (k is HKind.BoxVal) {
+            expr(k.value)
+            e("mov rax, qword ptr [rax + 16]")
+        } else if (k is HKind.Seq) {
+            stmts(k.stmts)
+            expr(k.value)
+        } else if (k is HKind.Retain) {
+            retain(k.value)
+        } else if (k is HKind.Release) {
+            release(k.value)
+        }
+    }
+
+    fun newArray(ty: int, items: [HExpr]): void {
+        var n = len(items)
+        pushArgs(items)
+        e("mov edi, ${ty}")
+        e("mov esi, ${n}")
+        callRtRaw(rtSym("ArrNew"))
+        if (n == 0) {
+            return
+        }
+        var elem = packedElem(ty)
+        e("mov rdx, qword ptr [rax + 32]")
+        var i = n - 1
+        while (i >= 0) {
+            e("pop rcx")
+            if (elem < 0) {
+                e("mov qword ptr [rdx + ${8 * i}], rcx")
+            } else if (elem == F32) {
+                e("movq xmm0, rcx")
+                e("cvtsd2ss xmm0, xmm0")
+                e("movss dword ptr [rdx + ${4 * i}], xmm0")
+            } else {
+                var w = NUM_WIDTH[elem]
+                if (w == 1) {
+                    e("mov byte ptr [rdx + ${w * i}], cl")
+                } else if (w == 2) {
+                    e("mov word ptr [rdx + ${w * i}], cx")
+                } else {
+                    e("mov dword ptr [rdx + ${w * i}], ecx")
+                }
+            }
+            i -= 1
+        }
+    }
+
+    fun index(obj: HExpr, idx: HExpr, loc: int): void {
+        operands(obj, idx)
+        var bad = l()
+        e("cmp rcx, qword ptr [rax + 16]")
+        e("jae ${bad}")
+        e("mov rdx, qword ptr [rax + 32]")
+        var elem = packedElem(obj.ty)
+        if (elem < 0) {
+            e("mov rax, qword ptr [rdx + rcx*8]")
+        } else if (elem == I8) {
+            e("movsx rax, byte ptr [rdx + rcx]")
+        } else if (elem == U8) {
+            e("movzx eax, byte ptr [rdx + rcx]")
+        } else if (elem == I16) {
+            e("movsx rax, word ptr [rdx + rcx*2]")
+        } else if (elem == U16) {
+            e("movzx eax, word ptr [rdx + rcx*2]")
+        } else if (elem == I32) {
+            e("movsxd rax, dword ptr [rdx + rcx*4]")
+        } else if (elem == U32) {
+            e("mov eax, dword ptr [rdx + rcx*4]")
+        } else {
+            e("cvtss2sd xmm0, dword ptr [rdx + rcx*4]\n    movq rax, xmm0")
+        }
+        indexCold(bad, "rax", loc)
+    }
+
+    fun setIndex(obj: HExpr, idx: HExpr, value: HExpr, loc: int): void {
+        expr(obj)
+        e("push rax")
+        expr(idx)
+        e("push rax")
+        expr(value)
+        e("pop rcx")
+        e("pop rdx")
+        var bad = l()
+        e("cmp rcx, qword ptr [rdx + 16]")
+        e("jae ${bad}")
+        e("mov r8, qword ptr [rdx + 32]")
+        var elem = packedElem(obj.ty)
+        if (elem < 0) {
+            e("mov qword ptr [r8 + rcx*8], rax")
+        } else if (elem == I8 || elem == U8) {
+            e("mov byte ptr [r8 + rcx], al")
+        } else if (elem == I16 || elem == U16) {
+            e("mov word ptr [r8 + rcx*2], ax")
+        } else if (elem == I32 || elem == U32) {
+            e("mov dword ptr [r8 + rcx*4], eax")
+        } else {
+            e("movq xmm0, rax\n    cvtsd2ss xmm0, xmm0\n    movss dword ptr [r8 + rcx*4], xmm0")
+        }
+        indexCold(bad, "rdx", loc)
+    }
+
+    fun retain(value: HExpr): void {
+        expr(value)
+        var done = l()
+        var slow = l()
+        var mt = sym("burn_rc_mt")
+        e("test rax, rax")
+        e("jz ${done}")
+        e("test byte ptr [rax + 2], 1")
+        e("jnz ${done}")
+        e("cmp byte ptr [rip + ${mt}], 0")
+        e("jne ${slow}")
+        e("inc dword ptr [rax + 12]")
+        lbl(done)
+        cold += "${slow}:\n    mov rdi, rax\n${coldCall(rtSym("Retain"))}    jmp ${done}\n"
+    }
+
+    fun release(value: HExpr): void {
+        expr(value)
+        var done = l()
+        var mtL = l()
+        var zero = l()
+        var root = l()
+        var mt = sym("burn_rc_mt")
+        e("test rax, rax")
+        e("jz ${done}")
+        e("test byte ptr [rax + 2], 1")
+        e("jnz ${done}")
+        e("cmp byte ptr [rip + ${mt}], 0")
+        e("jne ${mtL}")
+        e("dec dword ptr [rax + 12]")
+        e("jz ${zero}")
+        e("test byte ptr [rax + 2], 4")
+        e("jnz ${root}")
+        lbl(done)
+        cold += "${mtL}:\n    mov rdi, rax\n${coldCall(rtSym("Release"))}    jmp ${done}\n"
+        cold += "${zero}:\n    mov rdi, rax\n${coldCall(rtSym("ReleaseZero"))}    jmp ${done}\n"
+        cold += "${root}:\n    mov rdi, rax\n${coldCall(rtSym("PossibleRoot"))}    jmp ${done}\n"
+    }
+
+    /** The code of the packed numeric element type of array type `arr` (int8 is 0), or -1, like `packed_elem`. */
+    fun packedElem(arr: int): int {
+        var k = p.checker.types.kindOf(arr)
+        if (k is Ty.Array) {
+            var el = p.checker.types.kindOf(k.elem)
+            if (el is Ty.Num && el.code != U64) {
+                return el.code
+            }
+        }
+        return -1
+    }
+
+    fun rtCold(name: string, setup: string, f: string) {
+        cold += "${name}:\n${setup}    and rsp, -16\n    ${callTarget(rtSym(f))}\n    ud2\n"
+    }
+
+    /** The checker code of a numeric type given as an `Int` argument, or -1, like `Num::from_code`. */
+    fun codeArg(x: HExpr): int {
+        var k = x.kind
+        if (k is HKind.Int) {
+            var c = k.value & 255
+            if (c >= 1 && c <= 8) {
+                return c - 1
+            }
+        }
+        return -1
+    }
+
+    fun locArg(x: HExpr): int {
+        var k = x.kind
+        if (k is HKind.LocId) {
+            return k.id
+        }
+        return NONE
+    }
+
+    fun inlineNum(f: string, args: [HExpr]): bool {
+        if (f == "NumWrap") {
+            var n = codeArg(args[1])
+            if (n < 0) {
+                return false
+            }
+            expr(args[0])
+            if (n == I8) {
+                e("movsx rax, al")
+            } else if (n == U8) {
+                e("movzx eax, al")
+            } else if (n == I16) {
+                e("movsx rax, ax")
+            } else if (n == U16) {
+                e("movzx eax, ax")
+            } else if (n == I32) {
+                e("movsxd rax, eax")
+            } else if (n == U32) {
+                e("mov eax, eax")
+            }
+            return true
+        }
+        if (f == "NumFit") {
+            var n = codeArg(args[1])
+            if (n < 0 || n == U64 || n == F32) {
+                return false
+            }
+            expr(args[0])
+            var bad = l()
+            if (n == U8 || n == U16) {
+                var max = 255
+                if (n == U16) {
+                    max = 65535
+                }
+                e("cmp rax, ${max}")
+                e("ja ${bad}")
+            } else {
+                if (n == I8) {
+                    e("movsx rcx, al")
+                } else if (n == I16) {
+                    e("movsx rcx, ax")
+                } else if (n == I32) {
+                    e("movsxd rcx, eax")
+                } else {
+                    e("mov ecx, eax")
+                }
+                e("cmp rcx, rax")
+                e("jne ${bad}")
+            }
+            rtCold(bad, "    mov rdi, rax\n    mov esi, ${n + 1}\n    mov edx, ${locArg(args[2])}\n", "NumFit")
+            return true
+        }
+        if (f == "F32Round") {
+            expr(args[0])
+            e("movq xmm0, rax")
+            e("cvtsd2ss xmm0, xmm0")
+            e("cvtss2sd xmm0, xmm0")
+            e("movq rax, xmm0")
+            return true
+        }
+        if (f == "UAdd" || f == "USub" || f == "UMul") {
+            operands(args[0], args[1])
+            var bad = l()
+            if (f == "UAdd") {
+                e("mov rdx, rax")
+                e("add rdx, rcx")
+                e("jc ${bad}")
+                e("mov rax, rdx")
+            } else if (f == "USub") {
+                e("mov rdx, rax")
+                e("sub rdx, rcx")
+                e("jc ${bad}")
+                e("mov rax, rdx")
+            } else {
+                e("mov r8, rax")
+                e("mul rcx")
+                e("jo ${bad}")
+            }
+            var first = "rax"
+            if (f == "UMul") {
+                first = "r8"
+            }
+            rtCold(bad, "    mov rdi, ${first}\n    mov rsi, rcx\n    mov edx, ${locArg(args[2])}\n", f)
+            return true
+        }
+        return false
+    }
+
+    fun coldCall(name: string): string {
+        return "    mov r12, rsp\n    and rsp, -16\n    ${callTarget(name)}\n    mov rsp, r12\n"
+    }
+
+    fun indexCold(name: string, arr: string, loc: int) {
+        cold += "${name}:\n    mov rsi, rcx\n    mov rdx, qword ptr [${arr} + 16]\n    mov edi, ${loc}\n    and rsp, -16\n    ${callTarget(rtSym("ErrIndex"))}\n    ud2\n"
+    }
+}
+
+/** The x86-64 assembly of a program, like `generate` in `x86.rs`; `meta` holds its encoded types and locations. */
+pub fun generateX86(p: NativeProgram, meta: [int], t: AsmTarget): string {
+    var g = new Gen(p, t)
+    g.emitAll(meta)
+    return g.out
+}

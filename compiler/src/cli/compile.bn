@@ -16,9 +16,11 @@ pub def type Compiled {
     [LoadDiag] warnings
 }
 
-/** Whether the program is built without the standard library, set by `--no-std`. */
+/** How a program is built: without the standard library (`--no-std`), with symbols (`--no-strip`), or natively before running (`burn run --native`). */
 pub def struct Options() {
     bool noStd = false
+    bool strip = true
+    bool native = false
 }
 
 priv fun before(a: LoadDiag, b: LoadDiag): bool {

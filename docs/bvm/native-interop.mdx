@@ -101,5 +101,6 @@ bvm::run(&module, &host, vec![])?;
 This is how the Burn toolchain itself works: `burn` is bvm running the command line written in Burn, which reaches
 bvm through host functions such as `burn.runModule`, `burn.library` and `burn.readMessage`.
 
-Releases up to `26.1.0-experimental-2` could also compile Burn to native executables that embedded bytecode
-libraries; that backend belonged to the compiler written in Rust and was removed with it.
+Native executables use the same layer: a program built with `burnc app.bn` embeds the bytecode libraries it imports,
+and bvm, linked into the executable, runs them. The library's calls back into the program reach its native
+functions, and mixins in the program rewrite the library's bytecode as they do on bvm.
