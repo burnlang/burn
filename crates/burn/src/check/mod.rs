@@ -312,6 +312,7 @@ pub fn check(loaded: &Loaded, opts: CheckOptions) -> CheckResult {
             type_names.push((n.clone(), T_ERROR, e.span, mi));
         }
     }
+    type_names.sort_by(|a, b| (a.3, &a.0).cmp(&(b.3, &b.0)));
     let mut diags = c.diags;
     diags.sort_by_key(|d| (d.span.file, d.span.start));
     diags.dedup_by(|a, b| a.span == b.span && a.message == b.message);
@@ -342,6 +343,47 @@ pub fn owned(loaded: &Loaded) -> String {
 
 pub fn bytecode(loaded: &Loaded) -> String {
     hirdump::dump(loaded, hirdump::Form::Bytecode)
+}
+
+pub fn index(loaded: &Loaded) -> String {
+    let r = check(
+        loaded,
+        CheckOptions {
+            want_index: true,
+            ..Default::default()
+        },
+    );
+    let span = |s: Span| format!("{}:{}-{}", s.file, s.start, s.end);
+    let text = |t: &str| t.replace('\\', "\\\\").replace('\n', "\\n").replace('\u{1}', "\\1");
+    let mut out = String::new();
+    for (s, t) in &r.index.hovers {
+        out.push_str(&format!("hover {} {}\n", span(*s), text(t)));
+    }
+    for (u, d) in &r.index.defs {
+        out.push_str(&format!("def {} {}\n", span(*u), span(*d)));
+    }
+    for l in &r.index.locals {
+        out.push_str(&format!("local {} {} {} {}\n", l.name, r.types.display(l.ty), span(l.decl), span(l.scope)));
+    }
+    for (s, t) in &r.index.expr_types {
+        out.push_str(&format!("type {} {}\n", span(*s), r.types.display(*t)));
+    }
+    for (n, t, m) in &r.globals {
+        out.push_str(&format!("global {} {} {}\n", n, r.types.display(*t), m));
+    }
+    for (n, sig, s, m) in &r.funcs {
+        out.push_str(&format!("func {} {} {} {}\n", n, text(sig), span(*s), m));
+    }
+    let mut names: Vec<String> = r
+        .type_names
+        .iter()
+        .map(|(n, t, s, m)| format!("typename {} {} {} {}\n", m, n, r.types.display(*t), span(*s)))
+        .collect();
+    names.sort();
+    for n in names {
+        out.push_str(&n);
+    }
+    out
 }
 
 pub fn edit_distance(a: &str, b: &str) -> usize {

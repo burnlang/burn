@@ -59,8 +59,15 @@ pub fun staticValue(c: Checker, rec: RecordDef, name: string, span: SrcSpan): [i
             c.error(span, "`${name}` is private to struct `${rec.name}`")
         }
     }
-    var gt = c.globals[g].ty
+    var gi = c.globals[g]
+    c.defLink(span, gi.span)
+    var gt = gi.ty
     if (gt != null) {
+        var kw = "var"
+        if (gi.isConst) {
+            kw = "const"
+        }
+        c.hover(span, c.withDoc("static ${kw} ${rec.name}.${name}: ${c.show(gt)}", gi.span))
         return [g, gt]
     }
     c.errorNote(span, "`${rec.name}.${name}` is used before it is initialized", "give it a type, e.g. `static var x: int = ...`, or move the use after the struct")
@@ -103,6 +110,8 @@ pub fun virtualCall(c: Checker, ri: int, slot: int, name: Ident, recv: HExpr, ar
     if (sig.isAsync) {
         c.error(nspan, "async methods cannot be called through an abstract struct yet")
     }
+    c.defLink(nspan, sig.span)
+    c.hover(nspan, c.withDoc("${rec.name}.${name.name}: ${methodSigStr(c, sig.params, sig.ret, sig.isAsync)}", sig.span))
     [int] ps = [rec.ty]
     for p in sig.params {
         ps.push(p)
@@ -585,6 +594,11 @@ pub fun staticInits(c: Checker, name: Ident): [HStmt] {
         }
         var v = coerce(c, h, target, c.sp(sv.init.span))
         c.globals[g].ty = target
+        var kw = "var"
+        if (sv.isConst) {
+            kw = "const"
+        }
+        c.hover(c.sp(sv.name.span), "static ${kw} ${name.name}.${sv.name.name}: ${c.show(target)}")
         out.push(HStmt.Eval(hexpr(HKind.SetGlobal(g, v), target)))
     }
     return out
@@ -625,6 +639,13 @@ pub fun newExpr(c: Checker, ty: Ident, targs: [TypeExpr], args: [Expr], span: Sr
     if (!rec.isClass) {
         return constructRecord(c, t, args, span, nspan)
     }
+    var head = "struct ${rec.name}"
+    if (rec.isAbstract) {
+        head = "abstract ${head}"
+    } else if (rec.isStatic) {
+        head = "static ${head}"
+    }
+    c.hover(nspan, c.withDocDep(head, rec.span, c.deprecatedTypes[t]))
     if (rec.isAbstract) {
         c.errorNote(nspan, "cannot create an object of abstract struct `${rec.name}`", "create an object of a struct that extends it instead")
         return evalArgs(c, args)

@@ -166,3 +166,7 @@ pub fn owned(file: &Path) -> String {
 pub fn bytecode(file: &Path) -> String {
     with_loaded(file, crate::check::bytecode)
 }
+
+pub fn index(file: &Path) -> String {
+    with_loaded(file, crate::check::index)
+}

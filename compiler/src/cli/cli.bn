@@ -1,5 +1,6 @@
 import "../dump/checked.bn"
 import "../dump/declarations.bn"
+import "../dump/index.bn"
 import "../dump/loading.bn"
 import "../dump/syntax.bn"
 import "../project/loader.bn"
@@ -15,7 +16,7 @@ import "std/process"
 import "targets.bn"
 import "tools.bn"
 
-priv const TEXT_DUMPS = ["--tokens", "--ast", "--diagnostics", "--toml", "--project", "--modules", "--decls", "--checked", "--owned", "--bvm"]
+priv const TEXT_DUMPS = ["--tokens", "--ast", "--diagnostics", "--toml", "--project", "--modules", "--decls", "--checked", "--owned", "--bvm", "--index"]
 
 priv fun usage() {
     print(join([
@@ -530,7 +531,7 @@ priv fun cmdRun(rest: [string], opts: Options): int {
     return runFileWith(mainPath(p), progArgs, opts)
 }
 
-/** A `--decls`, `--checked`, `--owned` or `--bvm` dump of `file`, with the bytecode libraries it imports. */
+/** A `--decls`, `--checked`, `--owned`, `--bvm` or `--index` dump of `file`, with the bytecode libraries it imports. */
 priv fun dumpLoaded(file: string, mode: string): string {
     var loader = newLoader()
     var err = new Problem()
@@ -545,6 +546,9 @@ priv fun dumpLoaded(file: string, mode: string): string {
     }
     if (mode == "--bvm") {
         return dumpBvmOf(loaded)
+    }
+    if (mode == "--index") {
+        return dumpIndexOf(loaded)
     }
     return dumpCheckedOf(loaded, mode == "--owned")
 }
@@ -562,7 +566,7 @@ priv fun cmdDump(rest: [string], opts: Options): int {
                 write(dumpProject(f))
             } else if (mode == "--modules") {
                 write(dumpModules(f))
-            } else if (mode == "--decls" || mode == "--checked" || mode == "--owned" || mode == "--bvm") {
+            } else if (mode == "--decls" || mode == "--checked" || mode == "--owned" || mode == "--bvm" || mode == "--index") {
                 write(dumpLoaded(f, mode))
             } else {
                 var src = readText(f)
@@ -590,7 +594,7 @@ priv fun cmdDump(rest: [string], opts: Options): int {
         write(moduleOf(c))
         return 0
     }
-    eprint("usage: burn dump --bytecode <file.bn>  |  burn dump --tokens|--ast|--diagnostics|--toml|--project|--modules|--decls|--checked|--owned|--bvm <files...>")
+    eprint("usage: burn dump --bytecode <file.bn>  |  burn dump --tokens|--ast|--diagnostics|--toml|--project|--modules|--decls|--checked|--owned|--bvm|--index <files...>")
     return 2
 }
 

@@ -1,6 +1,7 @@
 import "build.bn"
 import "dump/checked.bn"
 import "dump/declarations.bn"
+import "dump/index.bn"
 import "dump/loading.bn"
 import "dump/syntax.bn"
 import "std/fs"
@@ -69,7 +70,7 @@ fun main() {
         return
     }
     var mode = "--tokens"
-    var modes = ["--tokens", "--ast", "--diagnostics", "--toml", "--project", "--modules", "--decls", "--checked", "--owned", "--bvm"]
+    var modes = ["--tokens", "--ast", "--diagnostics", "--toml", "--project", "--modules", "--decls", "--checked", "--owned", "--bvm", "--index"]
     if (len(files) > 0 && contains(modes, files[0])) {
         mode = files[0]
         files = slice(files, 1, len(files))
@@ -88,6 +89,10 @@ fun main() {
         }
         if (mode == "--bvm") {
             write(dumpBvm(f))
+            continue
+        }
+        if (mode == "--index") {
+            write(dumpIndex(f))
             continue
         }
         if (mode == "--checked" || mode == "--owned") {
