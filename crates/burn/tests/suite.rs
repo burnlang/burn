@@ -196,7 +196,7 @@ fn formatter_is_idempotent() {
 fn repository_sources_are_formatted() {
     let root = root();
     let mut files = Vec::new();
-    let mut dirs: Vec<PathBuf> = ["tests/cases", "examples", "lib/std", "tests/modules", "compiler/src"]
+    let mut dirs: Vec<PathBuf> = ["tests/cases", "examples", "lib/std", "lib/tools", "tests/modules", "compiler/src"]
         .iter()
         .map(|d| root.join(d))
         .collect();
@@ -228,7 +228,7 @@ fn repository_sources_import_the_standard_modules_they_use() {
     }
     let root = root();
     let mut files = Vec::new();
-    for dir in ["tests", "examples", "lib/std", "tools", "compiler"] {
+    for dir in ["tests", "examples", "lib/std", "lib/tools", "compiler"] {
         walk(&root.join(dir), &mut files);
     }
     let mut failures = Vec::new();
@@ -258,7 +258,7 @@ fn compiler_written_in_burn_matches_the_compiler() {
     }
     let root = root();
     let mut files = Vec::new();
-    for dir in ["tests", "examples", "lib/std", "tools", "compiler"] {
+    for dir in ["tests", "examples", "lib/std", "lib/tools", "compiler"] {
         walk(&root.join(dir), "bn", &mut files);
     }
     files.sort();
@@ -489,7 +489,7 @@ fn workspaces_build_every_member() {
 #[test]
 fn burnfmt_written_in_burn_matches_the_builtin_formatter() {
     let root = root();
-    let tool = root.join("tools/burnfmt/burnfmt.bn");
+    let tool = root.join("lib/tools/fmt.bn");
     let mut files = vec![tool.clone()];
     for dir in ["tests/cases", "examples", "lib/std", "compiler"] {
         for e in std::fs::read_dir(root.join(dir)).unwrap() {

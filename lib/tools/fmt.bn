@@ -3,54 +3,54 @@ import "std/math"
 import "std/process"
 import "std/fs"
 
-const VERSION = "2.0.0"
+priv const VERSION = "2.0.0"
 
-def enum Kind { Word, Num, Str, Comment, Op, Open, Close, Comma, Semi, Colon, Dot, GOpen, GClose }
+priv def enum Kind { Word, Num, Str, Comment, Op, Open, Close, Comma, Semi, Colon, Dot, GOpen, GClose }
 
-def type Tok {
+priv def type Tok {
     Kind kind
     string text
     bool tight
 }
 
-var KEYWORDS_SPACE = [
+priv var KEYWORDS_SPACE = [
     "if", "while", "for", "return", "else", "import", "fun", "var", "const", "def", "pub", "priv", "async", "await", "in", "is", "as", "static", "match"
 ]
 
-var TWO_CHAR_OPS = ["==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>", "=>", "..", "->", "!!", "::", "??"]
-var THREE_CHAR_OPS = ["..=", ">>>", "<<=", ">>="]
+priv var TWO_CHAR_OPS = ["==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>", "=>", "..", "->", "!!", "::", "??"]
+priv var THREE_CHAR_OPS = ["..=", ">>>", "<<=", ">>="]
 
-var GENERIC_TYPES = ["Future", "Task", "Map", "Array"]
+priv var GENERIC_TYPES = ["Future", "Task", "Map", "Array"]
 
-var DECL_WORDS = ["fun", "static", "def", "async", "pub", "priv"]
+priv var DECL_WORDS = ["fun", "static", "def", "async", "pub", "priv"]
 
-fun isAsciiDigit(c: string): bool {
+priv fun isAsciiDigit(c: string): bool {
     return c >= "0" && c <= "9"
 }
 
-fun isAsciiAlnum(c: string): bool {
+priv fun isAsciiAlnum(c: string): bool {
     return isAsciiDigit(c) || (c >= "a" && c <= "z") || (c >= "A" && c <= "Z")
 }
 
-fun isWordStart(c: string): bool {
+priv fun isWordStart(c: string): bool {
     return c == "_" || isLetter(c)
 }
 
-fun isWordChar(c: string): bool {
+priv fun isWordChar(c: string): bool {
     return c == "_" || isAlphanumeric(c)
 }
 
-fun isSpace(c: string): bool {
+priv fun isSpace(c: string): bool {
     return isWhitespace(c)
 }
 
-fun tok(kind: Kind, text: string): Tok {
+priv fun tok(kind: Kind, text: string): Tok {
     return Tok { kind: kind, text: text, tight: false }
 }
 
-var GENERIC_CHARS = [" ", ",", "[", "]", "{", "}", ":", "?", "(", ")"]
+priv var GENERIC_CHARS = [" ", ",", "[", "]", "{", "}", ":", "?", "(", ")"]
 
-fun genericMarks(cs: [string], open: int): [int] {
+priv fun genericMarks(cs: [string], open: int): [int] {
     [int] none = []
     if (open == 0 || !isWordChar(cs[open - 1])) {
         return none
@@ -77,7 +77,7 @@ fun genericMarks(cs: [string], open: int): [int] {
     return none
 }
 
-fun lexLine(line: string): [Tok] {
+priv fun lexLine(line: string): [Tok] {
     var cs = chars(line)
     var n = len(cs)
     var out: [Tok] = []
@@ -203,7 +203,7 @@ fun lexLine(line: string): [Tok] {
     return out
 }
 
-fun isOperandEnd(t: Tok): bool {
+priv fun isOperandEnd(t: Tok): bool {
     if (t.kind == Kind.Word) {
         return !contains(KEYWORDS_SPACE, t.text) || t.text == "self"
     }
@@ -216,23 +216,23 @@ fun isOperandEnd(t: Tok): bool {
     return false
 }
 
-fun isRange(t: Tok): bool {
+priv fun isRange(t: Tok): bool {
     return t.kind == Kind.Op && (t.text == ".." || t.text == "..=")
 }
 
-fun isOpen(t: Tok, c: string): bool {
+priv fun isOpen(t: Tok, c: string): bool {
     return t.kind == Kind.Open && t.text == c
 }
 
-fun isClose(t: Tok, c: string): bool {
+priv fun isClose(t: Tok, c: string): bool {
     return t.kind == Kind.Close && t.text == c
 }
 
-fun isPunct(t: Tok): bool {
+priv fun isPunct(t: Tok): bool {
     return t.kind == Kind.Comma || t.kind == Kind.Semi || t.kind == Kind.Colon
 }
 
-fun isStructHead(toks: [Tok]): bool {
+priv fun isStructHead(toks: [Tok]): bool {
     var words: [string] = []
     for t in toks {
         if (len(words) == 5) {
@@ -259,7 +259,7 @@ fun isStructHead(toks: [Tok]): bool {
     return false
 }
 
-fun renderLine(toks: [Tok]): string {
+priv fun renderLine(toks: [Tok]): string {
     var parts: [string] = []
     var genericDepth = 0
     var head = isStructHead(toks)
@@ -340,7 +340,7 @@ fun renderLine(toks: [Tok]): string {
     return join(parts, "")
 }
 
-fun splitSegments(toks: [Tok]): [[Tok]] {
+priv fun splitSegments(toks: [Tok]): [[Tok]] {
     var n = len(toks)
     [bool] openMatched = []
     [bool] closeLocal = []
@@ -385,7 +385,7 @@ fun splitSegments(toks: [Tok]): [[Tok]] {
     return merged
 }
 
-fun sourceLines(src: string): [string] {
+priv fun sourceLines(src: string): [string] {
     var lines = split(src, "\n")
     if (len(lines) > 0 && lines[len(lines) - 1] == "") {
         pop(lines)
@@ -393,7 +393,7 @@ fun sourceLines(src: string): [string] {
     return lines
 }
 
-fun trimEnd(text: string): string {
+priv fun trimEnd(text: string): string {
     var cs = chars(text)
     var end = len(cs)
     while (end > 0 && isSpace(cs[end - 1])) {
@@ -402,7 +402,7 @@ fun trimEnd(text: string): string {
     return join(slice(cs, 0, end), "")
 }
 
-fun indentFor(seg: [Tok], levels: [int]): int {
+priv fun indentFor(seg: [Tok], levels: [int]): int {
     var before = len(levels)
     var touched = 0
     var partial = false
@@ -450,6 +450,16 @@ fun indentFor(seg: [Tok], levels: [int]): int {
     return indent
 }
 
+/**
+ * Formats Burn source code the way `burn fmt` and `burnfmt` do: indentation of four spaces per level, spacing
+ * around operators and commas, and blank lines between declarations.
+ * @param src the source code of a Burn file
+ * @return the formatted source
+ * @example
+ * import "tools/fmt"
+ *
+ * print(format("fun f(){\nreturn 1\n}"))
+ */
 pub fun format(src: string): string {
     [string] out = []
     [int] levels = []
@@ -504,7 +514,7 @@ pub fun format(src: string): string {
     return join(out, "")
 }
 
-fun usage() {
+priv fun usage() {
     print("burnfmt ${VERSION} - the Burn code formatter, written in Burn")
     print("")
     print("Usage:")
@@ -519,7 +529,7 @@ fun usage() {
     print("Without files, burnfmt formats standard input.")
 }
 
-fun main() {
+priv fun main() {
     var writeBack = false
     var check = false
     [string] files = []

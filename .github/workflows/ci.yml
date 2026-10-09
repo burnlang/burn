@@ -26,7 +26,7 @@ jobs:
       - name: Toolchain smoke test
         run: |
           sh scripts/package.sh --prefix "$RUNNER_TEMP/burn"
-          "$RUNNER_TEMP/burn/bin/burnfmt" --check examples/*.bn lib/std/*.bn tools/burnfmt/burnfmt.bn
+          "$RUNNER_TEMP/burn/bin/burnfmt" --check examples/*.bn lib/std/*.bn lib/tools/*.bn
           "$RUNNER_TEMP/burn/bin/burni" examples/fib.bn
           "$RUNNER_TEMP/burn/bin/burn" run --compiler burn examples/fib.bn
           "$RUNNER_TEMP/burn/bin/bvm" examples/bvm/fib.bvm
