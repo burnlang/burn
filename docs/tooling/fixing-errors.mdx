@@ -79,6 +79,5 @@ runtime error: index 5 out of bounds (length 3)
   = help: valid indexes go from 0 to 2; check the index against `len(...)` first
 ```
 
-The bvm, native executables and JavaScript all print the same message. The source line is shown when the file
-is next to where the program runs. A native executable copied somewhere else still prints the location and
-the help.
+The source line is shown when the file is next to where the program runs. Bytecode copied somewhere else still
+prints the location and the help.

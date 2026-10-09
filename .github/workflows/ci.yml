@@ -13,9 +13,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
+      - uses: ./.github/actions/stage0
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - name: Clippy for the no-std runtime
@@ -28,11 +26,11 @@ jobs:
           sh scripts/package.sh --prefix "$RUNNER_TEMP/burn"
           "$RUNNER_TEMP/burn/bin/burnfmt" --check examples/*.bn lib/std/*.bn lib/tools/*.bn
           "$RUNNER_TEMP/burn/bin/burni" examples/fib.bn
-          "$RUNNER_TEMP/burn/bin/burn" run --compiler burn examples/fib.bn
+          "$RUNNER_TEMP/burn/bin/burn" run examples/fib.bn
           "$RUNNER_TEMP/burn/bin/bvm" examples/bvm/fib.bvm
           "$RUNNER_TEMP/burn/bin/bvm" pack examples/bvm/mixins/app.bvm examples/bvm/mixins/greetlib.bvm examples/bvm/mixins/mods.bvm -o "$RUNNER_TEMP/mixins.bar"
           PATH="$RUNNER_TEMP/burn/bin:$PATH" "$RUNNER_TEMP/mixins.bar"
-          cd "$RUNNER_TEMP" && PATH="$RUNNER_TEMP/burn/bin:$PATH" burn init github.com/ci/hello --no-git && cd hello && PATH="$RUNNER_TEMP/burn/bin:$PATH" burn build && ./build/hello
+          cd "$RUNNER_TEMP" && PATH="$RUNNER_TEMP/burn/bin:$PATH" burn init github.com/ci/hello --no-git && cd hello && PATH="$RUNNER_TEMP/burn/bin:$PATH" burn build && "$RUNNER_TEMP/burn/bin/burn" build/hello.bvmc
 
   stage0:
     name: The Burn compiler builds with stage0
@@ -40,7 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/stage0
-      - name: Build the Burn compiler with the released Rust compiler
+      - name: Build the Burn compiler with the released stage0
         run: burn build compiler/src/main.bn -o "$RUNNER_TEMP/stage1-dump"
       - name: Run it on every Burn file in the repository
         run: git ls-files -z '*.bn' | xargs -0 "$RUNNER_TEMP/stage1-dump" > "$RUNNER_TEMP/tokens.txt" && wc -l "$RUNNER_TEMP/tokens.txt"

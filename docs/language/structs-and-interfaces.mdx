@@ -317,7 +317,7 @@ print(f.path)
   until a new object is assigned to it.
 - When the compiler can't see it, for example through another variable that points to the same object or after
   the object was destroyed inside another function, using the object is a runtime error: "this object was
-  destroyed and can no longer be used". This works the same on bvm, in native executables and in JavaScript.
+  destroyed and can no longer be used".
   Printing such an object shows `<destroyed Session>`, with its struct name.
 - Destroying an object twice is a runtime error: "this object was already destroyed".
 - Only struct objects stored in variables can be destroyed.

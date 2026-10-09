@@ -5,8 +5,9 @@
 <h1 align="center">Burn</h1>
 
 Burn is an easy-to-use, statically typed, general-purpose programming language with smart casts.
-Burn is written in **Rust** and **x86-64 assembly**: programs run instantly on **bvm**, the Burn
-virtual machine, during development and compile to small **native executables** for shipping.
+Burn is written in **Burn**: the compiler, the command line, the formatter, the documentation generator and the
+language server are Burn programs that run on **bvm**, the Burn virtual machine, which is written in Rust. Programs
+run instantly on bvm and ship as portable bytecode or as self-contained `.bar` archives.
 
 Current version: **26.1.0-experimental-2**
 
@@ -63,15 +64,15 @@ fun main() {
 - Automatic memory without a garbage collector: the compiler tracks ownership and frees each value as soon as it is no
   longer used, cycles included, with no pauses and nothing to write by hand
 - `async fun` / `await` running on real threads
-- Tiny executables without the standard library: `std = false` in burn.toml or `--no-std` (a hello world is 39 KB)
+- Small programs without the standard library: `std = false` in burn.toml or `--no-std`
 - Modules with `pub` and `priv`
 - Standard library for dates, times, HTTP, JSON, math, strings, processes and files
 - Projects and packages: `burn init github.com/you/app`, `burn.toml`, `burn.lock` and ash, the package manager
-- Three backends sharing one type checker and runtime: bvm bytecode, native x86-64, JavaScript
+- A self-hosted compiler: the Burn compiler is written in Burn and builds itself
 - bvm, a general-purpose virtual machine with its own assembly language, bytecode format and verifier, which other languages can target too
 - Write once, run everywhere: `.bar` archives bundle an application's bytecode and resources and run wherever bvm runs
 - Mixins: `@Inject`, `@Overwrite` and `@Redirect` rewrite existing bytecode functions when modules are linked
-- Native interop: native executables embed bytecode libraries and call them, and the libraries call back into native code
+- Native interop: Rust programs embed bvm, call bytecode libraries and give them host functions
 - Precise error messages with line, column and suggestions
 - Built-in REPL, formatter and language server, plus a VS Code extension
 
@@ -84,8 +85,7 @@ curl -fsSL https://raw.githubusercontent.com/burnlang/burnup/master/install.sh |
 [burnup](https://github.com/burnlang/burnup), the Burn version manager, puts the toolchain and ash into `~/.burn/bin`
 and adds it to your `PATH`. It installs and switches versions (`burnup install 26.1`, `burnup default master`), and
 a project can pin its version with `burn = "26.1"` in `burn.toml`. It builds from source when no
-prebuilt release is available, which needs Rust 1.85 or newer (`--install-rust` sets that up for you). Native
-executables need a C toolchain (`cc`) and currently target x86-64 Linux and macOS.
+prebuilt release is available, which needs Rust 1.85 or newer for bvm (`--install-rust` sets that up for you).
 See [docs/tooling/installation.mdx](docs/tooling/installation.mdx) for all options, updating and uninstalling.
 
 ## The toolchain
@@ -93,7 +93,7 @@ See [docs/tooling/installation.mdx](docs/tooling/installation.mdx) for all optio
 | Command | What it does |
 | --- | --- |
 | `burni` | the interpreter: runs programs instantly on bvm, starts the REPL without arguments |
-| `burnc` | the compiler: standalone native executables, JavaScript with `--target js`, bvm bytecode with `--target bvm` |
+| `burnc` | the compiler: bvm bytecode (`.bvmc`), or a runnable archive with `--target bar` |
 | `burnfmt` | the code formatter, written in Burn itself |
 | `burn-lsp` | the language server for editors |
 | `bvm` | the Burn virtual machine: runs, assembles, disassembles and verifies bytecode |
@@ -104,15 +104,13 @@ See [docs/tooling/installation.mdx](docs/tooling/installation.mdx) for all optio
 burni app.bn                    # run instantly
 burni                           # REPL
 burni -e 'print(6 * 7)'         # run a snippet
-burnc app.bn                    # standalone executable ./app
-burnc app.bn -o bin/app --emit-asm app.s
-burnc app.bn --no-std           # a small executable without the standard library
-burnc app.bn --target js        # Node.js script app.js
-burnc app.bn --target bvm       # portable bytecode app.bvmc
-bvm app.bvmc                    # run bytecode
+burnc app.bn                    # portable bytecode app.bvmc
+burnc app.bn --emit-asm app.bvm # also write the bvm assembly
+burnc app.bn --no-std           # a small program without the standard library
+burnc app.bn --target bar       # a runnable archive app.bar
+burn app.bvmc                   # run bytecode (or bvm app.bvmc)
 burnc --check app.bn            # type-check only
 burnfmt -w app.bn               # format in place
-burn run --native app.bn        # compile to machine code and run
 burn init github.com/you/app    # start a project with burn.toml
 ash install github.com/you/lib  # add a package
 ```
@@ -282,7 +280,7 @@ bvm dis hello.bvmc              # and back
 
 [`bvm/examples/ember.rs`](bvm/examples/ember.rs) is a complete small language built on bvm.
 
-### Libraries, archives, mixins and native code
+### Libraries, archives and mixins
 
 ```burn
 import "geometry.bvmc"
@@ -303,14 +301,12 @@ fun main() {
 ```
 
 ```sh
-burnc geometry.bn --target bvm              # a bytecode library
+burnc geometry.bn                           # a bytecode library
 burni app.bn                                # run it on bvm
 burnc app.bn --target bar -o app.bar        # one archive: ./app.bar runs anywhere bvm runs
-burnc app.bn -o app                         # a native executable with the library embedded
 ```
 
-The library calls `hostName()` back in the program, and the program's mixin rewrites the library's `describe`,
-both on bvm and in the native executable. See [the bvm documentation](docs/bvm/overview.mdx),
+The library calls `hostName()` back in the program, and the program's mixin rewrites the library's `describe`. See [the bvm documentation](docs/bvm/overview.mdx),
 [archives](docs/bvm/archives.mdx), [mixins](docs/bvm/mixins.mdx) and [native interop](docs/bvm/native-interop.mdx).
 
 ## Documentation
@@ -326,18 +322,16 @@ examples are in [`examples/bvm/`](examples/bvm/).
 
 ## Project structure
 
-- `crates/burn/`: the compiler and tools
-  - `lexer.rs`, `parser.rs`, `ast.rs`: front end
-  - `check/`: type checker with smart casts, lowers to the typed IR in `hir.rs`
-  - `vm/`: lowers the typed IR to bvm modules
-  - `native/`: x86-64 code generator, hand-written entry assembly, linker driver
-  - `js/`: JavaScript backend
-  - `lsp/`, `fmt.rs`, `repl.rs`: tooling
-- `bvm/`: the Burn Virtual Machine: instruction set, assembler, bytecode format, verifier, linker, mixins,
-  archives, interpreter, the native bridge, the `bvm` command and the Ember example language
-- `bvm/runtime/`: the runtime core of bvm, shared with native executables (memory, values, collections, printing, numbers and the system)
+- `compiler/`: the compiler and tools, written in Burn (see [compiler/README.md](compiler/README.md))
+  - `src/syntax/`, `src/diag/`, `src/project/`: lexer, parser, error messages, `burn.toml` and the module loader
+  - `src/check/`: type checker with smart casts, lowers to the typed IR in `hir.bn`
+  - `src/lower/`, `src/vm/`: ownership, then bvm code generation
+  - `src/cli/`, `src/lsp/`, `src/doc/`: the command line, the language server and `burn doc`
+  - `src/main.bn` is the compiler on its own, and `src/bin/burn.bn` the command line that toolchains ship
+- `bvm/`: the Burn Virtual Machine, written in Rust: instruction set, assembler, bytecode format, verifier, linker,
+  mixins, archives, interpreter, the host functions of the toolchain, the `bvm` command and the Ember example language
+- `bvm/runtime/`: the runtime core of bvm (memory, values, collections, printing, numbers and the system)
 - `lib/runtime/`: the runtime functions written in Burn, compiled to `bvm/runtime.bvm`, which bvm links into Burn programs
-- `compiler/`: the compiler written in Burn, which builds itself on bvm (see [compiler/README.md](compiler/README.md))
 - `lib/tools/`: tools written in Burn that programs can also import, such as the formatter (`import "tools/fmt"`), which `burnfmt` is built from
 - `scripts/package.sh`: builds the toolchain into the layout burnup installs and releases ship
 - `scripts/bootstrap.sh`: builds the compiler written in Burn with itself and checks that the result is stable
@@ -345,7 +339,7 @@ examples are in [`examples/bvm/`](examples/bvm/).
 - `assets/`: the logo
 - `lib/std/`: the standard library, written in Burn
 - `docs/`: documentation
-- `tests/`: end-to-end tests run against every backend
+- `tests/`: end-to-end tests, which `cargo test` runs with a toolchain bootstrapped from stage0 (`bvm/tests/burn.rs`)
 
 Editor support lives in its own repositories: [vscode-burn](https://github.com/burnlang/vscode-burn),
 [intellij-burn](https://github.com/burnlang/intellij-burn), [zed-burn](https://github.com/burnlang/zed-burn) and
@@ -355,8 +349,12 @@ Editor support lives in its own repositories: [vscode-burn](https://github.com/b
 
 ```sh
 sh scripts/package.sh --prefix ~/.burn   # build and install the toolchain from this checkout
-cargo test            # runs every example on bvm, natively and as JavaScript
+cargo test            # builds bvm, bootstraps the toolchain with stage0 and runs every test
 cargo clippy --all-targets
+```
+
+Building needs a released Burn to start from (stage0, named in `compiler/STAGE0`): `burn` on `PATH`, or the one in
+`BURN_STAGE0`. It compiles the compiler written in Burn once; from then on the compiler builds itself.
 ```
 
 ## Contributing

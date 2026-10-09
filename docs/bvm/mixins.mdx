@@ -67,8 +67,7 @@ before. `priority: n` (default 1000) runs lower numbers first.
 ## When mixins are applied
 
 The linker applies every mixin in the modules it links (see [linking](./linking.mdx)). That covers
-`bvm link`, running an archive, `burn run`/`burni` on a Burn program, and embedded libraries in native
-executables. A target that doesn't exist, or a hook whose signature doesn't fit, is a link error.
+`bvm link`, running an archive, and `burn run`/`burni` on a Burn program. A target that doesn't exist, or a hook whose signature doesn't fit, is a link error.
 
 After linking, the changed function carries an `@Mixed by="hook" kind="..."` annotation and the hook an
 `@Applied target="..."` annotation. `bvm dis` shows both, which makes it easy to see what changed:
@@ -84,11 +83,5 @@ func greet(name: string): string
 
 ## What mixins cannot change
 
-Mixins rewrite bytecode, so they can't change native code:
-
-- A mixin whose target is a host function (an `import`) or an unresolved `extern` is rejected.
-- In a native executable, the program's own functions are machine code. A mixin in a native Burn program may
-  target functions in the bytecode libraries it imports (the hook itself runs as native code, see
-  [native interop](./native-interop.mdx)), but not the program's own functions. `burnc` reports that at
-  compile time.
-- The JavaScript backend has no bytecode and rejects mixins.
+Mixins rewrite bytecode, so they can't change code that isn't bytecode: a mixin whose target is a host function
+(an `import`) or an unresolved `extern` is rejected.

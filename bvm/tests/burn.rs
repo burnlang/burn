@@ -1,12 +1,58 @@
+#![cfg(unix)]
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
 fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap()
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("..").canonicalize().unwrap()
+}
+
+fn bvm_exe() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_bvm"))
+}
+
+fn toolchain() -> &'static Path {
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("burn-toolchain-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::create_dir_all(dir.join("share/burn")).unwrap();
+        let stage0 = std::env::var_os("BURN_STAGE0").unwrap_or_else(|| "burn".into());
+        let cli = dir.join("cli.bvm");
+        let built = Command::new(&stage0)
+            .current_dir(root())
+            .args(["compiler/src/main.bn", "build", "compiler/src/bin/burn.bn", "-o"])
+            .arg(&cli)
+            .output()
+            .unwrap_or_else(|e| {
+                panic!(
+                    "cannot run the bootstrap compiler {:?} ({}); install a Burn toolchain or set BURN_STAGE0 to its burn",
+                    stage0, e
+                )
+            });
+        assert!(
+            built.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&built.stdout),
+            String::from_utf8_lossy(&built.stderr)
+        );
+        let (out, code) = output(Command::new(bvm_exe()).arg("asm").arg(&cli).arg("-o").arg(dir.join("share/burn/burn.bvm")));
+        assert_eq!(code, 0, "{}", out);
+        for tool in ["burn", "burni", "burnc", "burn-lsp"] {
+            std::os::unix::fs::symlink(bvm_exe(), dir.join("bin").join(tool)).unwrap();
+        }
+        dir
+    })
+}
+
+fn tool(name: &str) -> PathBuf {
+    toolchain().join("bin").join(name)
 }
 
 fn burn() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_burn"))
+    Command::new(tool("burn"))
 }
 
 fn output(cmd: &mut Command) -> (String, i32) {
@@ -30,14 +76,6 @@ fn cases() -> Vec<(PathBuf, String)> {
     out
 }
 
-fn has_node() -> bool {
-    Command::new("node").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
-}
-
-fn native_supported() -> bool {
-    cfg!(all(target_arch = "x86_64", any(target_os = "linux", target_os = "macos")))
-}
-
 #[test]
 fn vm_matches_expected_output() {
     let root = root();
@@ -49,71 +87,6 @@ fn vm_matches_expected_output() {
             failures.push(format!("{}:\n--- expected\n{}\n--- got\n{}", rel.display(), expected, out));
         }
     }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
-}
-
-#[test]
-fn native_matches_vm() {
-    if !native_supported() {
-        return;
-    }
-    let root = root();
-    let tmp = std::env::temp_dir().join(format!("burn-suite-native-{}", std::process::id()));
-    std::fs::create_dir_all(&tmp).unwrap();
-    let mut failures = Vec::new();
-    for (file, expected) in cases() {
-        let rel = file.strip_prefix(&root).unwrap();
-        let exe = tmp.join(file.file_stem().unwrap());
-        let (build_out, code) = output(burn().current_dir(&root).arg("build").arg(rel).arg("-o").arg(&exe));
-        if code != 0 {
-            failures.push(format!("{}: build failed\n{}", rel.display(), build_out));
-            continue;
-        }
-        for threshold in [None, Some("16384")] {
-            let mut cmd = Command::new(&exe);
-            cmd.current_dir(&root);
-            if let Some(t) = threshold {
-                cmd.env("BURN_GC_THRESHOLD", t);
-            }
-            let (out, _) = output(&mut cmd);
-            if out != expected {
-                failures.push(format!(
-                    "{} (gc threshold {:?}):\n--- expected\n{}\n--- got\n{}",
-                    rel.display(),
-                    threshold,
-                    expected,
-                    out
-                ));
-            }
-        }
-    }
-    let _ = std::fs::remove_dir_all(&tmp);
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
-}
-
-#[test]
-fn js_matches_vm() {
-    if !has_node() {
-        return;
-    }
-    let root = root();
-    let tmp = std::env::temp_dir().join(format!("burn-suite-js-{}", std::process::id()));
-    std::fs::create_dir_all(&tmp).unwrap();
-    let mut failures = Vec::new();
-    for (file, expected) in cases() {
-        let rel = file.strip_prefix(&root).unwrap();
-        let js = tmp.join(format!("{}.js", file.file_stem().unwrap().to_string_lossy()));
-        let (build_out, code) = output(burn().current_dir(&root).arg("build").arg(rel).arg("--target").arg("js").arg("-o").arg(&js));
-        if code != 0 {
-            failures.push(format!("{}: js build failed\n{}", rel.display(), build_out));
-            continue;
-        }
-        let (out, _) = output(Command::new("node").current_dir(&root).arg(&js));
-        if out != expected {
-            failures.push(format!("{}:\n--- expected\n{}\n--- got\n{}", rel.display(), expected, out));
-        }
-    }
-    let _ = std::fs::remove_dir_all(&tmp);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
@@ -239,10 +212,12 @@ fn repository_sources_import_the_standard_modules_they_use() {
     for dir in ["tests", "examples", "lib/std", "lib/runtime", "lib/tools", "compiler"] {
         walk(&root.join(dir), &mut files);
     }
+    let compiler = root.join("compiler/src");
+    let entry = |f: &PathBuf| !f.starts_with(&compiler) || f.parent() == Some(compiler.as_path()) || f.starts_with(compiler.join("bin"));
     let mut failures = Vec::new();
     for f in files
         .iter()
-        .filter(|f| !f.starts_with(root.join("tests/errors")) && !f.starts_with(root.join("tests/fix")))
+        .filter(|f| !f.starts_with(root.join("tests/errors")) && !f.starts_with(root.join("tests/fix")) && entry(f))
     {
         let (out, _) = output(burn().current_dir(&root).arg("check").arg(f));
         if out.contains("is in the standard library module") {
@@ -250,138 +225,6 @@ fn repository_sources_import_the_standard_modules_they_use() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
-}
-
-#[test]
-fn compiler_written_in_burn_matches_the_compiler() {
-    fn walk(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) {
-        for e in std::fs::read_dir(dir).unwrap() {
-            let p = e.unwrap().path();
-            if p.is_dir() {
-                walk(&p, ext, out);
-            } else if p.extension().map(|x| x == ext).unwrap_or(false) {
-                out.push(p);
-            }
-        }
-    }
-    let root = root();
-    let mut files = Vec::new();
-    for dir in ["tests", "examples", "lib/std", "lib/runtime", "lib/tools", "compiler"] {
-        walk(&root.join(dir), "bn", &mut files);
-    }
-    files.sort();
-    assert!(files.len() > 100, "only {} files", files.len());
-    let projects = root.join("tests/projects");
-    let mut tomls = Vec::new();
-    walk(&root.join("tests/toml"), "toml", &mut tomls);
-    walk(&projects, "toml", &mut tomls);
-    walk(&projects, "lock", &mut tomls);
-    tomls.sort();
-    let mut places: Vec<PathBuf> = tomls.iter().filter_map(|t| t.parent().map(|p| p.to_path_buf())).collect();
-    places.dedup();
-    places.extend(files.iter().filter(|f| f.starts_with(&projects)).cloned());
-    places.extend([projects.clone(), projects.join("home"), projects.join("app/src/net")]);
-    let home = projects.join("home");
-    let (generated, code) = output(burn().current_dir(&root).arg("compiler/src/bin/genstd.bn"));
-    assert_eq!(code, 0, "{}", generated);
-    assert!(
-        generated == std::fs::read_to_string(root.join("compiler/src/project/stdlib.bn")).unwrap(),
-        "compiler/src/project/stdlib.bn is out of date; run `burn compiler/src/bin/genstd.bn > compiler/src/project/stdlib.bn`"
-    );
-    let (generated, code) = output(burn().current_dir(&root).arg("compiler/src/bin/genrt.bn"));
-    assert_eq!(code, 0, "{}", generated);
-    assert!(
-        generated == std::fs::read_to_string(root.join("compiler/src/vm/runtime.bn")).unwrap(),
-        "compiler/src/vm/runtime.bn is out of date; run `burn compiler/src/bin/genrt.bn > compiler/src/vm/runtime.bn`"
-    );
-    let dir = temp_dir("selfhost");
-    let exe = dir.join("dump");
-    let (built, code) = output(burn().current_dir(&root).args(["build", "compiler/src/main.bn", "-o"]).arg(&exe));
-    assert_eq!(code, 0, "{}", built);
-    let stages: [(&str, &[PathBuf]); 11] = [
-        ("--tokens", &files),
-        ("--ast", &files),
-        ("--diagnostics", &files),
-        ("--modules", &files),
-        ("--decls", &files),
-        ("--checked", &files),
-        ("--owned", &files),
-        ("--bvm", &files),
-        ("--index", &files),
-        ("--toml", &tomls),
-        ("--project", &places),
-    ];
-    for (stage, inputs) in stages {
-        let (want, code) = output(burn().current_dir(&root).env("BURN_HOME", &home).args(["dump", stage]).args(inputs));
-        assert_eq!(code, 0, "{}", want);
-        let mut bvm = burn();
-        bvm.current_dir(&root)
-            .env("BURN_HOME", &home)
-            .arg("compiler/src/main.bn")
-            .arg(stage)
-            .args(inputs);
-        let mut native = Command::new(&exe);
-        native.current_dir(&root).env("BURN_HOME", &home).arg(stage).args(inputs);
-        for mut run in [bvm, native] {
-            let (got, code) = output(&mut run);
-            assert_eq!(code, 0, "{}", got);
-            if got != want {
-                let line = got.lines().zip(want.lines()).position(|(a, b)| a != b).unwrap_or(0);
-                let show = |s: &str| s.lines().skip(line.saturating_sub(3)).take(8).collect::<Vec<_>>().join("\n");
-                panic!(
-                    "`burn dump {}` and the compiler written in Burn differ at line {}:\n--- burn\n{}\n--- rust\n{}",
-                    stage,
-                    line + 1,
-                    show(&got),
-                    show(&want)
-                );
-            }
-        }
-    }
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn the_compiler_written_in_burn_can_be_chosen() {
-    let root = root();
-    let dir = temp_dir("compiler-flag");
-    let compiler = dir.join("compiler.bvm");
-    let (text, code) = output(burn().current_dir(&root).args(["dump", "--bvm", "compiler/src/main.bn"]));
-    assert_eq!(code, 0, "{}", text);
-    std::fs::write(&compiler, text).unwrap();
-    let with = |args: &[&str]| output(burn().current_dir(&root).env("BURN_COMPILER_BVM", &compiler).args(args));
-    let (out, code) = with(&["run", "--compiler", "burn", "tests/cases/basics.bn"]);
-    assert_eq!(code, 0, "{}", out);
-    assert_eq!(out, std::fs::read_to_string(root.join("tests/cases/basics.out")).unwrap());
-    let module = dir.join("fib.bvmc");
-    let (out, code) = with(&[
-        "build",
-        "--compiler",
-        "burn",
-        "--target",
-        "bvm",
-        "examples/fib.bn",
-        "-o",
-        module.to_str().unwrap(),
-    ]);
-    assert_eq!(code, 0, "{}", out);
-    let (out, code) = output(burn().arg(&module));
-    assert_eq!(code, 0, "{}", out);
-    assert!(out.starts_with("fib(32) = 2178309"), "{}", out);
-    let (out, code) = with(&["check", "--compiler", "burn", "tests/errors/mismatch.bn"]);
-    assert_eq!(code, 1, "{}", out);
-    assert!(out.contains("expected string but found int"), "{}", out);
-    let (out, code) = with(&["build", "--compiler", "burn", "examples/fib.bn"]);
-    assert_eq!(code, 2, "{}", out);
-    let (out, code) =
-        output(
-            burn()
-                .current_dir(&root)
-                .env("BURN_COMPILER_BVM", dir.join("missing.bvm"))
-                .args(["run", "--compiler", "burn", "tests/cases/basics.bn"]),
-        );
-    assert_ne!(code, 0, "{}", out);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -404,473 +247,6 @@ fn the_runtime_written_in_burn_is_up_to_date() {
         generated == std::fs::read_to_string(root.join("bvm/runtime.bvm")).unwrap(),
         "bvm/runtime.bvm is out of date; run `burn dump --bvm lib/runtime/runtime.bn > bvm/runtime.bvm` from the repository root"
     );
-}
-
-fn bvm_exe() -> PathBuf {
-    let burn = PathBuf::from(env!("CARGO_BIN_EXE_burn"));
-    let bvm = burn.with_file_name(format!("bvm{}", std::env::consts::EXE_SUFFIX));
-    if !bvm.is_file() {
-        let mut cargo = Command::new(env!("CARGO"));
-        cargo.current_dir(root()).args(["build", "-p", "bvm", "--bin", "bvm"]);
-        if burn.parent().and_then(|d| d.file_name()).map(|n| n == "release").unwrap_or(false) {
-            cargo.arg("--release");
-        }
-        let (out, code) = output(&mut cargo);
-        assert_eq!(code, 0, "{}", out);
-    }
-    bvm
-}
-
-fn json_str(s: &str) -> String {
-    let mut out = String::from("\"");
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
-
-fn lsp_session(root: &Path, main: &Path, edits_at: &str, everything: bool) -> String {
-    let uri = format!("file://{}", main.display());
-    let text = std::fs::read_to_string(main).unwrap();
-    let mut msgs: Vec<String> = Vec::new();
-    let mut id = 0;
-    let mut req = |msgs: &mut Vec<String>, method: &str, params: String| {
-        id += 1;
-        msgs.push(format!(r#"{{"jsonrpc":"2.0","id":{},"method":"{}","params":{}}}"#, id, method, params));
-    };
-    let note = |msgs: &mut Vec<String>, method: &str, params: String| {
-        msgs.push(format!(r#"{{"jsonrpc":"2.0","method":"{}","params":{}}}"#, method, params));
-    };
-    let doc = format!(r#"{{"textDocument":{{"uri":"{}"}}}}"#, uri);
-    let at = |l: usize, c: usize| format!(r#"{{"textDocument":{{"uri":"{}"}},"position":{{"line":{},"character":{}}}}}"#, uri, l, c);
-    let whole = r#"{"start":{"line":0,"character":0},"end":{"line":100,"character":0}}"#;
-    req(
-        &mut msgs,
-        "initialize",
-        format!(r#"{{"rootUri":"file://{}","capabilities":{{}}}}"#, root.display()),
-    );
-    note(&mut msgs, "initialized", "{}".into());
-    note(
-        &mut msgs,
-        "textDocument/didOpen",
-        format!(
-            r#"{{"textDocument":{{"uri":"{}","languageId":"burn","version":1,"text":{}}}}}"#,
-            uri,
-            json_str(&text)
-        ),
-    );
-    for (l, line) in text.split('\n').enumerate() {
-        for c in (0..=line.len()).step_by(2) {
-            for m in [
-                "hover",
-                "definition",
-                "typeDefinition",
-                "implementation",
-                "documentHighlight",
-                "prepareRename",
-                "signatureHelp",
-            ] {
-                req(&mut msgs, &format!("textDocument/{}", m), at(l, c));
-            }
-            if everything {
-                let refs = at(l, c).replace("}}}", r#"}},"context":{"includeDeclaration":true}}"#);
-                req(&mut msgs, "textDocument/references", refs);
-                req(&mut msgs, "textDocument/completion", at(l, c));
-            }
-        }
-    }
-    for m in ["documentSymbol", "foldingRange", "documentLink", "formatting"] {
-        req(&mut msgs, &format!("textDocument/{}", m), doc.clone());
-    }
-    req(
-        &mut msgs,
-        "textDocument/inlayHint",
-        format!(r#"{{"textDocument":{{"uri":"{}"}},"range":{}}}"#, uri, whole),
-    );
-    req(
-        &mut msgs,
-        "textDocument/codeAction",
-        format!(
-            r#"{{"textDocument":{{"uri":"{}"}},"range":{},"context":{{"diagnostics":[{{"message":"cannot find `trim` in this scope"}}]}}}}"#,
-            uri, whole
-        ),
-    );
-    req(&mut msgs, "workspace/symbol", r#"{"query":"a"}"#.into());
-    for edit in [
-        "import \"",
-        "import \"@/",
-        "import \"std/",
-        "    var q = d.",
-        "    var q = Dog.",
-        "    var q = p.",
-        "    var q = Token.",
-        "    var q: ",
-        "    @",
-        "    var q = \"a\".",
-        "    twice(",
-        "    var q = new ",
-    ] {
-        let changed = text.replace(edits_at, edit);
-        let line = changed.split('\n').position(|x| x == edit).unwrap();
-        note(
-            &mut msgs,
-            "textDocument/didChange",
-            format!(
-                r#"{{"textDocument":{{"uri":"{}","version":2}},"contentChanges":[{{"text":{}}}]}}"#,
-                uri,
-                json_str(&changed)
-            ),
-        );
-        req(&mut msgs, "textDocument/completion", at(line, edit.len()));
-        req(&mut msgs, "textDocument/signatureHelp", at(line, edit.len()));
-    }
-    note(&mut msgs, "textDocument/didSave", doc.clone());
-    note(&mut msgs, "textDocument/didClose", doc);
-    req(&mut msgs, "shutdown", "null".into());
-    note(&mut msgs, "exit", "null".into());
-    let mut input = String::new();
-    for m in msgs {
-        input.push_str(&format!("Content-Length: {}\r\n\r\n{}", m.len(), m));
-    }
-    input
-}
-
-#[cfg(unix)]
-#[test]
-fn the_language_server_written_in_burn_matches_the_rust_one() {
-    use std::io::Write;
-    let root = root();
-    let dir = temp_dir("lsp-cli").canonicalize().unwrap();
-    std::fs::create_dir_all(dir.join("bin")).unwrap();
-    std::fs::create_dir_all(dir.join("share/burn")).unwrap();
-    let (out, code) = output(
-        burn()
-            .current_dir(&root)
-            .args(["build", "compiler/src/bin/burn.bn", "--target", "bvm", "-o"])
-            .arg(dir.join("share/burn/burn.bvm")),
-    );
-    assert_eq!(code, 0, "{}", out);
-    let cli = dir.join("bin/burn");
-    std::os::unix::fs::symlink(bvm_exe(), &cli).unwrap();
-    let home = dir.join("home");
-    let plain = dir.join("plain");
-    std::fs::create_dir_all(&plain).unwrap();
-    std::fs::write(
-        plain.join("util.bn"),
-        "/** Adds two numbers. */\npub fun add(a: int, b: int): int {\n    return a + b\n}\n\npub def interface Shape {\n    fun area(): float\n}\n\npub def struct Square(side: float) :: Shape {\n    fun area(): float {\n        return side * side\n    }\n}\n",
-    )
-    .unwrap();
-    std::fs::write(
-        plain.join("main.bn"),
-        "import \"util\"\nimport \"std/strings\"\n\ndef enum Token {\n    Word(text: string),\n    End\n}\n\ndef type Point {\n    int x\n    int y\n}\n\n/** Doubles a value. */\nfun twice(n: int): int {\n    return add(n, n)\n}\n\nfun main() {\n    var p = Point { x: 1, y: 2 }\n    var s = new Square(2.0)\n    var total = twice(p.x) + len(\"abc\")\n    for i in 0..3 {\n        total += i\n    }\n    var t = Token.Word(\"hi\")\n    print(s.area(), total, trim(\" x \"), t)\n    print(totl)\n}\n",
-    )
-    .unwrap();
-    let project = dir.join("shapes");
-    std::fs::create_dir_all(project.join("src/geo")).unwrap();
-    std::fs::write(project.join("burn.toml"), "[package]\nname = \"github.com/me/shapes\"\nversion = \"0.1.0\"\n").unwrap();
-    std::fs::write(
-        project.join("src/geo/mod.bn"),
-        "/** A point. */\npub def type Vec2 {\n    float x\n    float y\n}\n\n@Deprecated(\"use len2\")\npub fun length(v: Vec2): float {\n    return v.x + v.y\n}\n\npub fun len2(v: Vec2): float {\n    return v.x * v.x + v.y * v.y\n}\n",
-    )
-    .unwrap();
-    std::fs::write(
-        project.join("src/main.bn"),
-        "import \"@/geo\"\n\ndef abstract struct Animal(name: string) {\n    abstract fun sound(): string\n    fun greet(): string {\n        return \"${name} says ${sound()}\"\n    }\n}\n\ndef struct Dog(name: string) : Animal(name) {\n    static var count: int = 0\n    fun sound(): string {\n        return \"woof\"\n    }\n}\n\nfun first<T>(xs: [T]): T {\n    return xs[0]\n}\n\nfun main() {\n    var v = Vec2 { x: 1.0, y: 2.0 }\n    var d = new Dog(\"rex\")\n    print(length(v), len2(v), d.greet(), Dog.count, first([1, 2]))\n    var m = {\"a\": 1}\n    for k, val in m {\n        print(k, val)\n    }\n    var unused = lenght(v)\n    if (true) {\n        print(\"open\"\n",
-    )
-    .unwrap();
-    let run = |cmd: &mut Command, cwd: &Path, input: &str| {
-        let mut child = cmd
-            .current_dir(cwd)
-            .env("BURN_HOME", &home)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .unwrap();
-        let mut stdin = child.stdin.take().unwrap();
-        let bytes = input.as_bytes().to_vec();
-        let writer = std::thread::spawn(move || {
-            let _ = stdin.write_all(&bytes);
-        });
-        let out = child.wait_with_output().unwrap();
-        writer.join().unwrap();
-        (String::from_utf8_lossy(&out.stdout).into_owned(), out.status.code())
-    };
-    for (cwd, main, anchor, everything) in [
-        (&plain, plain.join("main.bn"), "    print(totl)", true),
-        (&project, project.join("src/main.bn"), "    var unused = lenght(v)", false),
-    ] {
-        let input = lsp_session(cwd, &main, anchor, everything);
-        let (want, want_code) = run(burn().arg("lsp"), cwd, &input);
-        let (got, got_code) = run(Command::new(&cli).arg("lsp"), cwd, &input);
-        assert_eq!(want_code, got_code);
-        assert!(want.len() > 100000, "{}", want);
-        if want != got {
-            let a: Vec<&str> = want.split("Content-Length").collect();
-            let b: Vec<&str> = got.split("Content-Length").collect();
-            let k = a.iter().zip(b.iter()).position(|(x, y)| x != y).unwrap_or(a.len().min(b.len()));
-            panic!(
-                "message {} differs\n--- rust\n{}\n--- burn\n{}",
-                k,
-                a.get(k).unwrap_or(&""),
-                b.get(k).unwrap_or(&"")
-            );
-        }
-    }
-    let (want, _, code) = stdout_of(burn().arg("sources").env("BURN_HOME", dir.join("rust-home")));
-    assert_eq!(code, 0);
-    let (got, _, code) = stdout_of(Command::new(&cli).arg("sources").env("BURN_HOME", dir.join("burn-home")));
-    assert_eq!(code, 0);
-    assert_eq!(want.replace("rust-home", "home"), got.replace("burn-home", "home"));
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[cfg(unix)]
-#[test]
-fn the_command_line_written_in_burn_matches_the_rust_one() {
-    let root = root();
-    let dir = temp_dir("cli");
-    std::fs::create_dir_all(dir.join("bin")).unwrap();
-    std::fs::create_dir_all(dir.join("share/burn")).unwrap();
-    let module = dir.join("share/burn/burn.bvm");
-    let (out, code) = output(
-        burn()
-            .current_dir(&root)
-            .args(["build", "compiler/src/bin/burn.bn", "--target", "bvm", "-o"])
-            .arg(&module),
-    );
-    assert_eq!(code, 0, "{}", out);
-    let cli = dir.join("bin/burn");
-    std::os::unix::fs::symlink(bvm_exe(), &cli).unwrap();
-    let both = |args: &[&str], cwd: &Path| {
-        let rust = stdout_of(burn().current_dir(cwd).args(args).env("NO_COLOR", "1"));
-        let written = stdout_of(Command::new(&cli).current_dir(cwd).args(args).env("NO_COLOR", "1"));
-        (rust, written)
-    };
-    let mut failures = Vec::new();
-    let mut compare = |args: &[&str], cwd: &Path| {
-        let (rust, written) = both(args, cwd);
-        if rust != written {
-            failures.push(format!("burn {}:\n--- rust\n{:?}\n--- burn\n{:?}", args.join(" "), rust, written));
-        }
-    };
-    for (file, _) in cases() {
-        let rel = file.strip_prefix(&root).unwrap().display().to_string();
-        compare(&[&rel], &root);
-        compare(&["check", &rel], &root);
-    }
-    for dir_name in ["tests/check", "tests/errors"] {
-        let mut files: Vec<PathBuf> = std::fs::read_dir(root.join(dir_name)).unwrap().map(|e| e.unwrap().path()).collect();
-        files.sort();
-        for f in files.iter().filter(|f| f.extension().map(|x| x == "bn").unwrap_or(false)) {
-            let rel = f.strip_prefix(&root).unwrap().display().to_string();
-            compare(&["check", &rel], &root);
-            compare(&["run", &rel], &root);
-        }
-    }
-    for code in ["print(1 + 2)", "print(x)", "var a = [1, 2]\nprint(a[5])", "exit(3)"] {
-        compare(&["eval", code], &root);
-    }
-    for args in [
-        &["dump", "--bvm", "tests/cases/basics.bn"][..],
-        &["dump", "--checked", "tests/cases/append.bn"],
-        &["missing.bn"],
-        &["--no-std", "tests/cases/basics.bn"],
-        &["version"],
-    ] {
-        compare(args, &root);
-    }
-    for p in ["app", "bad", "game", "lib", "nolock"] {
-        let cwd = root.join("tests/projects").join(p);
-        compare(&["run"], &cwd);
-        compare(&["check"], &cwd);
-        compare(&["test"], &cwd);
-    }
-    for args in [
-        &["fmt", "tests/cases/basics.bn"][..],
-        &["fmt", "--check", "examples/fib.bn", "missing.bn"],
-        &["fix", "--dry-run", "tests/fix/input.bn"],
-    ] {
-        compare(args, &root);
-    }
-    let fixes = dir.join("fixes");
-    std::fs::create_dir_all(&fixes).unwrap();
-    std::fs::copy(root.join("tests/fix/input.bn"), fixes.join("rust.bn")).unwrap();
-    std::fs::copy(root.join("tests/fix/input.bn"), fixes.join("burn.bn")).unwrap();
-    let rust = stdout_of(burn().current_dir(&fixes).args(["fix", "rust.bn"]).env("NO_COLOR", "1"));
-    let written = stdout_of(Command::new(&cli).current_dir(&fixes).args(["fix", "burn.bn"]).env("NO_COLOR", "1"));
-    assert_eq!(rust.0, written.0.replace("burn.bn", "rust.bn"));
-    assert_eq!(rust.1, written.1.replace("burn.bn", "rust.bn"));
-    assert_eq!(rust.2, written.2);
-    assert_eq!(
-        std::fs::read_to_string(fixes.join("rust.bn")).unwrap(),
-        std::fs::read_to_string(fixes.join("burn.bn")).unwrap()
-    );
-    let session = |cmd: &mut Command, input: &str| {
-        use std::io::Write;
-        let mut child = cmd
-            .env("NO_COLOR", "1")
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        child.stdin.as_mut().unwrap().write_all(input.as_bytes()).unwrap();
-        let out = child.wait_with_output().unwrap();
-        (
-            String::from_utf8_lossy(&out.stdout).into_owned(),
-            String::from_utf8_lossy(&out.stderr).into_owned(),
-            out.status.code(),
-        )
-    };
-    for input in [
-        "var x = 20\nfun twice(n: int): int {\n    return n * 2\n}\ntwice(x) + 2\nx = x + 1\nprint(x)\nundefinedThing\nprint(\"still alive\")\n",
-        ":help\n1 + 2\n\"hi\"\n[1, 2]\n:source\n:reset\n:source\nx\n",
-        "var a = [1]\na[5]\nprint(\"after\")\na\ndef type P {\n    int x\n}\nvar p = P { x: 3 }\np.x = 9\np\n",
-        "import \"std/process\"\nprint(1)\nexit(4)\nprint(2)\n",
-        "var s = \"a\"\ns += \"b\"\ns\nfun f(): int {\n    return 1\n",
-    ] {
-        let rust = session(burn().arg("repl"), input);
-        let written = session(Command::new(&cli).arg("repl"), input);
-        assert_eq!(rust, written, "repl with input {:?}", input);
-    }
-    for (k, args) in [
-        &["doc"][..],
-        &["doc", "--private", "tests/cases/structs.bn"],
-        &["doc", "--title", "API", "tests/cases/generics.bn", "lib/tools/fmt.bn"],
-    ]
-    .iter()
-    .enumerate()
-    {
-        let rust_site = dir.join(format!("doc-rust-{}", k));
-        let burn_site = dir.join(format!("doc-burn-{}", k));
-        let (_, _, code) = stdout_of(burn().current_dir(&root).args(*args).arg("-o").arg(&rust_site));
-        assert_eq!(code, 0);
-        let (_, err, code) = stdout_of(Command::new(&cli).current_dir(&root).args(*args).arg("-o").arg(&burn_site));
-        assert_eq!(code, 0, "{}", err);
-        let mut pages: Vec<String> = std::fs::read_dir(&rust_site)
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        pages.sort();
-        let mut written: Vec<String> = std::fs::read_dir(&burn_site)
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        written.sort();
-        assert_eq!(pages, written, "burn {}", args.join(" "));
-        for p in pages {
-            let a = std::fs::read_to_string(rust_site.join(&p)).unwrap();
-            let b = std::fs::read_to_string(burn_site.join(&p)).unwrap();
-            assert!(a == b, "burn {}: {} differs", args.join(" "), p);
-        }
-    }
-    let libs = dir.join("libs");
-    std::fs::create_dir_all(&libs).unwrap();
-    std::fs::copy(root.join("tests/libs/app.bn"), libs.join("app.bn")).unwrap();
-    let (out, code) = output(
-        Command::new(&cli)
-            .arg("build")
-            .arg(root.join("tests/libs/geometry.bn"))
-            .arg("-o")
-            .arg(libs.join("geometry.bvmc")),
-    );
-    assert_eq!(code, 0, "{}", out);
-    std::fs::write(libs.join("missing.bn"), "import \"nope.bvmc\"\nprint(1)\n").unwrap();
-    std::fs::write(
-        libs.join("twice.bn"),
-        "import \"geometry.bvmc\"\nfun dist(a: int): int {\n    return a\n}\nprint(1)\n",
-    )
-    .unwrap();
-    std::fs::write(libs.join("unhosted.bn"), "import \"geometry.bvmc\"\nprint(1)\n").unwrap();
-    for file in ["app.bn", "missing.bn", "twice.bn", "unhosted.bn"] {
-        compare(&[file], &libs);
-        for mode in ["--decls", "--checked", "--owned", "--bvm", "--index"] {
-            compare(&["dump", mode, file], &libs);
-        }
-    }
-    compare(&["build", "app.bn", "--target", "bvm", "-o", "static.bvmc"], &libs);
-    compare(&["static.bvmc"], &libs);
-    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
-    let expected = std::fs::read_to_string(root.join("tests/libs/app.out")).unwrap();
-    let (out, code) = output(
-        Command::new(&cli)
-            .current_dir(&libs)
-            .args(["build", "app.bn", "--target", "bar", "-o", "app.bar"]),
-    );
-    assert_eq!(code, 0, "{}", out);
-    let (out, code) = output(Command::new(&cli).current_dir(&libs).arg("app.bar"));
-    assert_eq!((out.as_str(), code), (expected.as_str(), 0));
-    let packages = dir.join("packages");
-    std::fs::create_dir_all(&packages).unwrap();
-    let run = |cwd: &Path, args: &[&str]| output(Command::new(&cli).current_dir(cwd).env("BURN_HOME", packages.join("home")).args(args));
-    let (out, code) = run(&packages, &["init", "example.com/ada/game", "--no-git"]);
-    assert_eq!(code, 0, "{}", out);
-    let game = packages.join("game/src/main.bn");
-    std::fs::write(&game, "pub fun score(points: int): int {\n    return points * 10\n}\n").unwrap();
-    let (out, code) = run(&packages, &["init", "example.com/ada/mod", "--no-git"]);
-    assert_eq!(code, 0, "{}", out);
-    let m = packages.join("mod");
-    let toml = std::fs::read_to_string(m.join("burn.toml")).unwrap();
-    std::fs::write(
-        m.join("burn.toml"),
-        toml.replace("[dependencies]\n", "[dependencies]\n\"example.com/ada/game\" = { path = \"../game\" }\n"),
-    )
-    .unwrap();
-    std::fs::write(
-        m.join("src/main.bn"),
-        "import \"example.com/ada/game.bvmc\"\n\n@Inject(target: \"score\", at: \"return\")\nfun doubled(points: int, result: int): int {\n    return result * 2\n}\n\nfun main() {\n    print(\"score\", score(3))\n}\n",
-    )
-    .unwrap();
-    let (out, code) = run(&m, &["run"]);
-    assert_eq!((out.as_str(), code), ("score 60\n", 0));
-    std::thread::sleep(std::time::Duration::from_millis(1100));
-    std::fs::write(&game, "pub fun score(points: int): int {\n    return missing\n}\n").unwrap();
-    let (out, code) = run(&m, &["run"]);
-    assert_eq!(code, 1);
-    assert!(
-        out.contains("the package `example.com/ada/game` does not compile, so it has no bytecode: cannot find `missing`"),
-        "{}",
-        out
-    );
-    let app = dir.join("app");
-    let (out, code) = output(Command::new(&cli).current_dir(&dir).args(["init", "github.com/me/app", "--no-git"]));
-    assert_eq!(code, 0, "{}", out);
-    let manifest = std::fs::read_to_string(app.join("burn.toml")).unwrap();
-    assert!(
-        manifest.contains("target = \"bvm\"\n") && manifest.contains("start = \"burn build/app.bvmc\"\n"),
-        "{}",
-        manifest
-    );
-    std::fs::create_dir_all(app.join("tests")).unwrap();
-    std::fs::write(app.join("tests/ok.bn"), "print(\"fine\")\n").unwrap();
-    std::fs::write(app.join("tests/bad.bn"), "print(missing)\n").unwrap();
-    let (out, code) = output(Command::new(&cli).current_dir(&app).arg("test"));
-    assert_eq!(code, 1, "{}", out);
-    assert!(
-        out.starts_with("testing github.com/me/app (2 files)\ntest tests/bad.bn ... FAILED\ntest tests/ok.bn ... ok\n"),
-        "{}",
-        out
-    );
-    assert!(out.ends_with("\n1 passed, 1 failed\n"), "{}", out);
-    std::fs::remove_dir_all(app.join("tests")).unwrap();
-    std::fs::create_dir_all(app.join("src/bin")).unwrap();
-    std::fs::write(app.join("src/bin/tool.bn"), "fun main() {\n    print(\"tool\")\n}\n").unwrap();
-    let (out, code) = output(Command::new(&cli).current_dir(&app).args(["build"]));
-    assert_eq!(code, 0, "{}", out);
-    assert_eq!(out, "building github.com/me/app 0.1.0 (bvm)\nwrote build/app.bvmc\nwrote build/tool.bvmc\n");
-    let (out, code) = output(Command::new(&cli).current_dir(&app).args(["run", "--bin", "tool"]));
-    assert_eq!((out.as_str(), code), ("tool\n", 0));
-    let (out, code) = output(Command::new(&cli).current_dir(&app).arg("build/tool.bvmc"));
-    assert_eq!((out.as_str(), code), ("tool\n", 0));
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -947,18 +323,18 @@ fn workspaces_build_every_member() {
     let ws = dir.join("game");
     let run = |cwd: &Path, args: &[&str]| output(burn().current_dir(cwd).args(args));
     let toml = std::fs::read_to_string(ws.join("burn.toml")).unwrap();
-    assert!(toml.contains("members = [\"common\", \"native\", \"js\", \"bvm\"]"), "{}", toml);
+    assert!(toml.contains("members = [\"common\", \"bvm\", \"bar\"]"), "{}", toml);
     let (out, code) = run(&ws, &["build"]);
     assert_eq!(code, 0, "{}", out);
-    for f in ["native/build/native", "js/build/js.js", "bvm/build/bvm.bvmc"] {
+    for f in ["bvm/build/bvm.bvmc", "bar/build/bar.bar"] {
         assert!(ws.join(f).is_file(), "{} missing after:\n{}", f, out);
     }
-    for t in ["native", "js", "bvm"] {
+    for t in ["bvm", "bar"] {
         assert_eq!(run(&ws, &["run", "-p", t]), (format!("Hello from {}!\n", t), 0));
     }
     let (out, code) = run(&ws, &["run"]);
-    assert!(code != 0 && out.contains("pick one with `-p` (native, js, bvm)"), "{}", out);
-    assert_eq!(run(&ws.join("native"), &["run"]), ("Hello from native!\n".to_string(), 0));
+    assert!(code != 0 && out.contains("pick one with `-p` (bvm, bar)"), "{}", out);
+    assert_eq!(run(&ws.join("bvm"), &["run"]), ("Hello from bvm!\n".to_string(), 0));
     let (out, code) = run(&ws, &["run", "-p", "nope"]);
     assert!(code != 0 && out.contains("has no member `nope`"), "{}", out);
     let (out, code) = run(&ws, &["init", "tools", "--lib", "--no-git"]);
@@ -967,11 +343,11 @@ fn workspaces_build_every_member() {
         .unwrap()
         .contains("name = \"github.com/ada/game/tools\""));
     std::fs::write(
-        ws.join("native/src/main.bn"),
-        "import \"github.com/ada/game/common\"\nimport \"github.com/ada/game/tools\"\n\nfun main() {\n    print(greeting(\"native\"), greet(\"tools\"))\n}\n",
+        ws.join("bvm/src/main.bn"),
+        "import \"github.com/ada/game/common\"\nimport \"github.com/ada/game/tools\"\n\nfun main() {\n    print(greeting(\"bvm\"), greet(\"tools\"))\n}\n",
     )
     .unwrap();
-    assert_eq!(run(&ws, &["run", "-p", "native"]), ("Hello from native! Hello, tools!\n".to_string(), 0));
+    assert_eq!(run(&ws, &["run", "-p", "bvm"]), ("Hello from bvm! Hello, tools!\n".to_string(), 0));
     let (out, code) = run(&ws, &["test"]);
     assert!(
         code == 0 && out.contains("common/tests/main.bn ... ok") && out.contains("tools/tests/main.bn ... ok") && out.contains("2 passed"),
@@ -979,7 +355,7 @@ fn workspaces_build_every_member() {
         out
     );
     assert_eq!(run(&ws, &["check"]).1, 0);
-    let (out, code) = run(&ws, &["check", "-p", "native"]);
+    let (out, code) = run(&ws, &["check", "-p", "bvm"]);
     assert_eq!(code, 0, "{}", out);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1021,20 +397,14 @@ fn burnfmt_written_in_burn_matches_the_builtin_formatter() {
 
 #[test]
 fn toolchain_names_select_the_right_mode() {
-    let dir = std::env::temp_dir().join(format!("burn-toolchain-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let exe = std::path::PathBuf::from(env!("CARGO_BIN_EXE_burn"));
-    let burni = dir.join("burni");
-    let burnc = dir.join("burnc");
-    std::fs::copy(&exe, &burni).unwrap();
-    std::fs::copy(&exe, &burnc).unwrap();
+    let burni = tool("burni");
+    let burnc = tool("burnc");
     let (out, code) = output(Command::new(&burni).args(["-e", "print(6 * 7)"]));
     assert_eq!((out.as_str(), code), ("42\n", 0));
     let (out, _) = output(Command::new(&burnc).arg("--version"));
     assert!(out.starts_with("burnc "), "{}", out);
     let (out, code) = output(Command::new(&burnc).arg("--check").arg(root().join("examples/fib.bn")));
     assert_eq!(code, 0, "{}", out);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -1093,7 +463,7 @@ fn stdout_of(cmd: &mut Command) -> (String, String, i32) {
 }
 
 #[test]
-fn mixins_rewrite_bytecode_and_are_rejected_for_native_code() {
+fn mixins_rewrite_bytecode() {
     let root = root();
     let expected = std::fs::read_to_string(root.join("tests/mixins/mixins.out")).unwrap();
     let (out, err, code) = stdout_of(burn().current_dir(&root).arg("tests/mixins/mixins.bn"));
@@ -1101,24 +471,21 @@ fn mixins_rewrite_bytecode_and_are_rejected_for_native_code() {
     assert_eq!(out, expected);
     assert!(err.contains("`oldGreet` is deprecated: use greet"), "{}", err);
     let dir = temp_dir("mixins");
-    if native_supported() {
-        let (_, err, code) = stdout_of(burn().current_dir(&root).args(["build", "tests/mixins/mixins.bn", "-o"]).arg(dir.join("m")));
-        assert_ne!(code, 0);
-        assert!(err.contains("compiled to native code; mixins can only change bvm bytecode"), "{}", err);
-    }
+    let archive = dir.join("m.bar");
     let (_, err, code) = stdout_of(
         burn()
             .current_dir(&root)
-            .args(["build", "--target", "js", "tests/mixins/mixins.bn", "-o"])
-            .arg(dir.join("m.js")),
+            .args(["build", "--target", "bar", "tests/mixins/mixins.bn", "-o"])
+            .arg(&archive),
     );
-    assert_ne!(code, 0);
-    assert!(err.contains("mixin"), "{}", err);
+    assert_eq!(code, 0, "{}", err);
+    let (out, _, _) = stdout_of(burn().arg(&archive));
+    assert_eq!(out, expected);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn bytecode_libraries_run_on_bvm_in_archives_and_in_native_executables() {
+fn bytecode_libraries_run_on_bvm_and_in_archives() {
     let root = root();
     let expected = std::fs::read_to_string(root.join("tests/libs/app.out")).unwrap();
     let dir = temp_dir("libs");
@@ -1142,20 +509,9 @@ fn bytecode_libraries_run_on_bvm_in_archives_and_in_native_executables() {
     assert_eq!(code, 0, "{}", err);
     let (out, err, _) = stdout_of(burn().arg(dir.join("static.bvmc")));
     assert_eq!(out, expected, "static bvmc: {}", err);
-    if native_supported() {
-        let (out, err, _) = stdout_of(burn().args(["run", "--native"]).arg(&app));
-        assert_eq!(out, expected, "native: {}", err);
-        let exe = dir.join("bundled");
-        let (_, err, code) = stdout_of(burn().arg("build").arg(dir.join("app.bar")).arg("-o").arg(&exe));
-        assert_eq!(code, 0, "{}", err);
-        let (out, err, _) = stdout_of(&mut Command::new(&exe));
-        assert_eq!(out, expected, "bundled bar: {}", err);
-        let (out, _, _) = stdout_of(Command::new(&exe).env("BURN_GC_THRESHOLD", "4096"));
-        assert_eq!(out, expected, "bundled bar with a small GC threshold");
-    }
     let (_, err, code) = stdout_of(burn().args(["build", "--target", "js"]).arg(&app).arg("-o").arg(dir.join("app.js")));
     assert_ne!(code, 0);
-    assert!(err.contains("bytecode library"), "{}", err);
+    assert!(err.contains("unknown target `js`"), "{}", err);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1263,10 +619,13 @@ fn init_creates_projects_that_build_and_import_packages() {
     assert!(out.contains("case"), "{}", out);
 
     let (out, code) = run(&dir, &["init", "example.com/ada/app", "--target", "js", "--no-git"]);
+    assert_eq!(code, 2, "{}", out);
+    assert!(out.contains("unknown target `js`"), "{}", out);
+    let (out, code) = run(&dir, &["init", "example.com/ada/app", "--target", "bar", "--no-git"]);
     assert_eq!(code, 0, "{}", out);
     let app = dir.join("app");
     let toml = std::fs::read_to_string(app.join("burn.toml")).unwrap();
-    assert!(toml.contains("target = \"js\"") && toml.contains("[scripts]"), "{}", toml);
+    assert!(toml.contains("target = \"bar\"") && toml.contains("[scripts]"), "{}", toml);
     let (out, code) = run(&app, &["run"]);
     assert_eq!((out.as_str(), code), ("Hello from app!\n", 0));
 
@@ -1302,11 +661,9 @@ fn init_creates_projects_that_build_and_import_packages() {
     assert_eq!((out.as_str(), code), ("Hello, packages! 42 more\n", 0));
     let (out, code) = run(&app, &["build"]);
     assert_eq!(code, 0, "{}", out);
-    assert!(out.contains("building example.com/ada/app 0.1.0 (js)"), "{}", out);
-    if has_node() {
-        let (out, _) = output(Command::new("node").arg(app.join("build/app.js")));
-        assert_eq!(out, "Hello, packages! 42 more\n");
-    }
+    assert!(out.contains("building example.com/ada/app 0.1.0 (bar)"), "{}", out);
+    let (out, _) = output(burn().arg(app.join("build/app.bar")));
+    assert_eq!(out, "Hello, packages! 42 more\n");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1322,11 +679,6 @@ fn runaway_programs_stop_at_the_heap_limit() {
     let (out, code) = output(burn().env("BURN_MAX_HEAP_MB", "64").arg(&file));
     assert_eq!(code, 1, "{}", out);
     assert!(out.contains("out of memory") && out.contains("BURN_MAX_HEAP_MB"), "{}", out);
-    if native_supported() {
-        let (out, code) = output(burn().env("BURN_MAX_HEAP_MB", "64").args(["run", "--native"]).arg(&file));
-        assert_eq!(code, 1, "{}", out);
-        assert!(out.contains("out of memory"), "{}", out);
-    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1355,10 +707,6 @@ fn values_that_only_reference_each_other_are_freed() {
     .unwrap();
     let (out, code) = output(burn().env("BURN_MAX_HEAP_MB", "24").arg(&file));
     assert_eq!((out.as_str(), code), ("600000\n", 0));
-    if native_supported() {
-        let (out, code) = output(burn().env("BURN_MAX_HEAP_MB", "24").args(["run", "--native"]).arg(&file));
-        assert_eq!((out.as_str(), code), ("600000\n", 0));
-    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1461,10 +809,6 @@ fn apps_can_be_imported_as_bytecode_and_changed_with_mixins() {
     let (out, code) = run(&m, &["run"]);
     assert_eq!((out.as_str(), code), ("score 60\n", 0));
     assert!(dir.join("game/build/game.bvmc").is_file());
-    if native_supported() {
-        let (out, code) = run(&m, &["run", "--native"]);
-        assert_eq!((out.as_str(), code), ("score 60\n", 0));
-    }
     std::thread::sleep(std::time::Duration::from_millis(1100));
     std::fs::write(
         &game,
@@ -1481,51 +825,32 @@ fn apps_can_be_imported_as_bytecode_and_changed_with_mixins() {
 }
 
 #[test]
-fn programs_without_the_standard_runtime_are_small_and_behave_the_same() {
-    if !native_supported() {
-        return;
-    }
+fn programs_without_the_standard_runtime_behave_the_same() {
     let root = root();
     let tmp = temp_dir("nostd");
     let mut failures = Vec::new();
-    let mut built = 0;
+    let mut ran = 0;
     for (file, expected) in cases() {
         let rel = file.strip_prefix(&root).unwrap();
         let (_, code) = output(burn().current_dir(&root).args(["check", "--no-std"]).arg(rel));
         if code != 0 {
             continue;
         }
-        let exe = tmp.join(file.file_stem().unwrap());
-        let (build_out, code) = output(burn().current_dir(&root).args(["build", "--no-std"]).arg(rel).arg("-o").arg(&exe));
-        if code != 0 {
-            failures.push(format!("{}: build failed\n{}", rel.display(), build_out));
-            continue;
-        }
-        built += 1;
-        let (out, _) = output(Command::new(&exe).current_dir(&root).env("BURN_RC_CHECK", "1").env("BURN_GC_THRESHOLD", "4096"));
+        ran += 1;
+        let (out, _) = output(
+            burn()
+                .current_dir(&root)
+                .env("BURN_RC_CHECK", "1")
+                .env("BURN_GC_THRESHOLD", "4096")
+                .arg("--no-std")
+                .arg(rel),
+        );
         if out != expected {
             failures.push(format!("{}:\n--- expected\n{}\n--- got\n{}", rel.display(), expected, out));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
-    assert!(built >= 15, "only {} cases built without the standard runtime", built);
-
-    let hello = tmp.join("hello.bn");
-    std::fs::write(&hello, "fun main() {\n    print(\"hello\")\n}\n").unwrap();
-    let size = |no_std: bool| {
-        let exe = tmp.join(if no_std { "small" } else { "full" });
-        let mut cmd = burn();
-        cmd.arg("build").arg(&hello).arg("-o").arg(&exe);
-        if no_std {
-            cmd.arg("--no-std");
-        }
-        let (out, code) = output(&mut cmd);
-        assert_eq!(code, 0, "{}", out);
-        assert_eq!(output(&mut Command::new(&exe)).0, "hello\n");
-        std::fs::metadata(&exe).unwrap().len()
-    };
-    let (small, full) = (size(true), size(false));
-    assert!(small * 4 < full, "no-std hello is {} bytes, the full one {}", small, full);
+    assert!(ran >= 15, "only {} cases run without the standard runtime", ran);
 
     let project = tmp.join("app");
     std::fs::create_dir_all(project.join("src")).unwrap();
@@ -1556,7 +881,7 @@ fn programs_without_the_standard_runtime_are_small_and_behave_the_same() {
     .unwrap();
     let (out, code) = output(burn().current_dir(&project).arg("build"));
     assert_eq!(code, 0, "{}", out);
-    let (out, code) = output(Command::new(project.join("build/app")).current_dir(&project));
+    let (out, code) = output(burn().current_dir(&project).arg("build/app.bvmc"));
     assert_eq!((out.as_str(), code), ("a,b X 42\n", 0));
     std::fs::write(
         project.join("src/main.bn"),
@@ -1570,7 +895,7 @@ fn programs_without_the_standard_runtime_are_small_and_behave_the_same() {
 }
 
 #[test]
-fn uint64_uses_all_64_bits_on_bvm_and_natively() {
+fn uint64_uses_all_64_bits() {
     let dir = temp_dir("uint64");
     let src = dir.join("hash.bn");
     std::fs::write(
@@ -1583,20 +908,6 @@ fn uint64_uses_all_64_bits_on_bvm_and_natively() {
     assert_eq!(code, 1, "{}", out);
     assert!(out.starts_with(expected), "{}", out);
     assert!(out.contains("integer overflow: 18446744073709551615 + 1 does not fit in uint64"), "{}", out);
-    if native_supported() {
-        for no_std in [false, true] {
-            let exe = dir.join(if no_std { "small" } else { "full" });
-            let mut cmd = burn();
-            cmd.arg("build").arg(&src).arg("-o").arg(&exe);
-            if no_std {
-                cmd.arg("--no-std");
-            }
-            let (build, code) = output(&mut cmd);
-            assert_eq!(code, 0, "{}", build);
-            let (native, _) = output(&mut Command::new(&exe));
-            assert_eq!(native, out);
-        }
-    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 

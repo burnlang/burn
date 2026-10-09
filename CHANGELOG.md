@@ -4,6 +4,12 @@
 
 The release that ships the compiler written in Burn.
 
+- The compiler written in Rust (`crates/burn`) is removed. Burn is now written in Burn: the compiler, the command line, the REPL, the formatter, `burn doc` and the language server all run on bvm, and the compiler builds itself. Only bvm and its runtime core stay in Rust.
+- `bin/burn` is bvm: started as `burn`, `burni`, `burnc` or `burn-lsp`, it runs the command line written in Burn from `share/burn/burn.bvm`. Commands and output are the same as before.
+- Programs build to bvm bytecode (`.bvmc`, the default) or runnable archives (`.bar`). The native x86-64 and JavaScript backends belonged to the compiler written in Rust and are gone with it, and so are `burn run --native`, `--target native`/`js`, `--no-strip`, `--compiler` and `BURN_CC`. `burn.toml` defaults to `target = "bvm"`, and projects that still say `"native"` or `"js"` build bytecode.
+- `burnfmt` runs `lib/tools/fmt.bn` on bvm.
+- Building Burn needs a released Burn to start from (stage0, named in `compiler/STAGE0`): `scripts/package.sh --stage0 <burn>` and `cargo test` (with `BURN_STAGE0` or `burn` on `PATH`) let it compile the compiler written in Burn once. The end-to-end tests moved to `bvm/tests/burn.rs` and run against that toolchain.
+
 - The runtime moves to Burn part by part. Its core (memory, values, collections and the system) becomes part of bvm, and the functions built on it are written in Burn in `lib/runtime/`, compiled to `bvm/runtime.bvm`, which bvm links into every Burn program it runs. The first are `contains`, `replace`, `split`, `startsWith`, `endsWith` and `repeat` on strings, and `min`/`max` on ints, then `trim`, `isInt`, `toInt` (also with a radix) and `toString` with a radix, then `parseJSON` and `abs`/`pow` on ints. Functions written in Burn raise runtime errors with the new built-in `__fail(message, loc)`.
 - The `burn` command line is written in Burn (`compiler/src/bin/burn.bn`). bvm runs it when it is started as `burn`, `burni`, `burnc` or `burn-lsp`, with host functions to run, check and write modules. Running, checking, building and testing programs and projects, `eval`, `fmt`, `fix`, `repl`, `doc`, `lsp`, `sources`, `burni`, `burnc` and `dump` work and behave exactly like the Rust `burn`, `burn init` creates bvm projects (`--target bvm` or `bar`), and programs import bytecode libraries and packages (`.bvmc`), which are rebuilt when their sources change; toolchains ship it as `share/burn/burn.bvm`.
 - `burn.toml` accepts `target = "bar"`: `burn build` makes a runnable archive.

@@ -77,16 +77,6 @@ end
 
 In Burn: `@Native fun resource(name: string): string?`.
 
-## Native executables from archives
-
-`burnc` turns an archive, or a single module, into a native executable. The executable contains the bvm
-runtime and the bytecode, needs no `bvm` installed, and starts like any other program:
-
-```sh
-burnc app.bar -o app
-./app
-```
-
 ## Format
 
 ```text

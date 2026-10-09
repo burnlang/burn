@@ -1,21 +1,21 @@
 ---
 title: Native interop
-description: Native executables that use bytecode libraries, and bytecode that calls native code.
+description: Bytecode libraries, the functions they share, and host functions that a Rust program gives them.
 order: 41
 ---
 
 # Native interop
 
-Native code is the fastest way to run Burn, and bytecode is the portable way to ship it. You don't have to pick
-one for the whole program: a native executable can embed bytecode libraries and call them, the libraries can call
-back into the native program, and native code can mix into the libraries' bytecode.
+Bytecode is how Burn ships. Programs and libraries talk to each other, and to the program that runs bvm, through
+functions with typed signatures:
 
 ```text
-native program (machine code)                     bytecode library (.bvmc / .bar)
-───────────────────────────────                   ───────────────────────────────
-dist(a, b) ───── burn_bvm_call ─────────────────▶ @Export dist(a: Point, b: Point): float
-@Export hostName() ◀── host import ───────────── @Native fun hostName(): string
-@Inject(target: "describe") ── native mixin ────▶ describe(p: Point): string   (rewritten)
+program (bytecode)                                bytecode library (.bvmc / .bar)
+───────────────────                               ───────────────────────────────
+dist(a, b) ───── call ──────────────────────────▶ @Export dist(a: Point, b: Point): float
+@Export hostName() ◀── import ─────────────────── @Native fun hostName(): string
+@Inject(target: "describe") ── mixin ──────────▶ describe(p: Point): string   (rewritten)
+Rust host: host.register("log", 1, ...) ◀──────── @Native("log") fun log(s: string)
 ```
 
 ## The translation layer
@@ -27,13 +27,13 @@ Both sides describe the functions they share the same way:
 - **Imports**: host functions a library needs. In Burn: `@Native fun hostName(): string`. In assembly:
   `import hostName 0`.
 - **Values**: both sides use the same runtime, the same heap and the same reference counts, so ints, floats,
-  strings, arrays, maps and records pass between them without conversion. When a library is loaded into a
-  native program, its types are merged into the program's types: a record that looks the same on both sides
-  (same name, same fields) is the same type.
+  strings, arrays, maps and records pass between them without conversion. When a library is linked into a
+  program, its types are merged into the program's types: a record that looks the same on both sides (same name,
+  same fields) is the same type.
 
-bvm resolves imports against exports whether the exporter is bytecode (in a linked program or an archive) or
-machine code (in a native executable). That makes a library portable: the same `.bvmc` runs under `bvm`, in a
-`.bar` and inside a native executable.
+bvm resolves imports against exports whether the exporter is another module (in a linked program or an archive)
+or the program that embeds bvm. That makes a library portable: the same `.bvmc` runs under `bvm`, in a `.bar` and
+inside any Rust program that embeds bvm.
 
 ## Using a library from Burn
 
@@ -48,18 +48,16 @@ fun main() {
 
 `import` with a `.bvmc`, `.bvm` or `.bar` path makes every exported function of the library callable, with its
 real parameter and result types. Record, enum and interface types that appear in those signatures become
-available under their names. Build the library from Burn with `burnc geometry.bn --target bvm`, or write it in
-any language that produces bvm modules.
+available under their names. Build the library from Burn with `burnc geometry.bn`, or write it in any language
+that produces bvm modules.
 
 | Command | What happens to the library |
 | --- | --- |
 | `burni app.bn` | linked with the program and run on bvm |
-| `burnc app.bn --target bvm` | linked into a single `.bvmc` |
+| `burnc app.bn` | linked into a single `.bvmc` |
 | `burnc app.bn --target bar` | stored next to the program in an archive, linked at start |
-| `burnc app.bn` | embedded in the native executable, loaded the first time it is called |
-| `burnc app.bn --target js` | rejected: JavaScript can't run bytecode |
 
-## Calling native code from a library
+## Calling the program from a library
 
 The library declares what it needs:
 
@@ -77,43 +75,31 @@ The program provides it:
 ```burn
 @Export
 fun hostName(): string {
-    return "a native program"
+    return "the program"
 }
 ```
 
-In a native executable the call goes through a small trampoline into the machine code. On bvm the linker turns it
-into a direct bytecode call. A library whose imports nobody provides fails to load, with an error that names the
-missing function.
+The linker turns the call into a direct bytecode call. A library whose imports nobody provides fails to load,
+with an error that names the missing function. Programs can also apply [mixins](./mixins.mdx) to the libraries
+they import.
 
-## Native mixins
+## Host functions from Rust
 
-A native Burn program can apply [mixins](./mixins.mdx) to the libraries it embeds. The hook is native code; the
-library's bytecode is rewritten to call it when the library loads:
+A Rust program that embeds bvm gives modules host functions with `Host::register`, by name and argument count;
+the module declares them with `@Native("name")` in Burn or `import name <argc>` in assembly:
 
-```burn
-@Inject(target: "describe", at: "return")
-fun bracket(p: Point, result: string): string {
-    return "<" + result + ">"
-}
+```rust
+let mut host = bvm::Host::new();
+host.register("log", 1, |args| {
+    println!("{}", bvm::runtime::obj::str_ref(args[0]));
+    0
+});
+let module = bvm::parse(&std::fs::read("app.bvmc")?)?;
+bvm::run(&module, &host, vec![])?;
 ```
 
-A mixin can't target the program's own functions when they are compiled to native code, and `burnc` rejects it.
+This is how the Burn toolchain itself works: `burn` is bvm running the command line written in Burn, which reaches
+bvm through host functions such as `burn.runModule`, `burn.library` and `burn.readMessage`.
 
-## Bundling bytecode into a native executable
-
-`burnc app.bar -o app` (or `burnc app.bvmc`) produces a native executable that contains the bvm runtime and the
-bytecode. It runs without `bvm` installed.
-
-## The C interface
-
-The native runtime (`libburn_runtime.a`, embedded in `burn`) includes bvm and exposes:
-
-| Function | Purpose |
-| --- | --- |
-| `burn_bvm_call(bytes, len, name, argc, argv)` | call an exported function of an embedded library (loaded and initialized on first use) |
-| `burn_bvm_register_exports(table, count)` | register native functions as host functions, as `(name, function, argc)` triples |
-| `burn_bvm_register_mixins(assembly)` | register native mixins, as bvm assembly |
-| `burn_bvm_main(bytes, len, argc, argv)` | run a bundled module or archive as a program |
-
-`burnc` generates the calls to these functions. They are listed for anyone who wants to build a front end or an
-embedder on the same runtime.
+Releases up to `26.1.0-experimental-2` could also compile Burn to native executables that embedded bytecode
+libraries; that backend belonged to the compiler written in Rust and was removed with it.

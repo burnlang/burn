@@ -45,6 +45,11 @@ priv fun usage() {
         "  burn fix [--dry-run] <files...>     apply the compiler's suggested fixes",
         "  burn fmt [-w] [--check] <files...>  format source files",
         "  burn eval '<code>'                  evaluate code from the command line",
+        "  burn repl                           start an interactive session",
+        "  burn doc [files...] [-o <dir>]      generate HTML documentation from Burndoc comments",
+        "  burn lsp                            run the language server over stdio",
+        "  burn sources                        write the standard library and built-in sources editors show",
+        "  burn dump --<stage> <files...>      print a compiler stage, such as --tokens, --checked or --bvm",
         "  burn version                        print the version"
     ], "\n"))
 }

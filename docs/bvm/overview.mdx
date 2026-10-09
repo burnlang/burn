@@ -35,8 +35,8 @@ What a language gets by targeting bvm:
   runs: write once, run everywhere (see [archives](./archives.mdx)).
 - **Mixins.** `@Inject`, `@Overwrite` and `@Redirect` change existing functions' bytecode when modules are linked
   (see [mixins](./mixins.mdx)).
-- **Native interop.** Native Burn executables embed bytecode libraries and call them, and the libraries call back
-  into native code (see [native interop](./native-interop.mdx)).
+- **Native interop.** Libraries export functions to programs, call back into them, and use host functions from the
+  Rust program that embeds bvm (see [native interop](./native-interop.mdx)).
 - **Host functions.** Programs can import functions that the embedding Rust program provides.
 - **Threads.** `spawn` runs a function on its own thread and returns a future that can be awaited.
 

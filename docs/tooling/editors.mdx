@@ -98,7 +98,7 @@ vim.fs.root(0, { "burn.toml", ".git" }) })`. `burn` must be on the `PATH` Neovim
 
 The extension lives in [vscode-burn](https://github.com/burnlang/vscode-burn). It adds syntax highlighting, snippets, the language server client and:
 
-- **Run | Run natively | Build** links above `fun main` (turn them off with `burn.codeLens.run`) and a run button
+- **Run | Build** links above `fun main` (turn them off with `burn.codeLens.run`) and a run button
   in the editor title
 - **Burn: Open Standard Library Module...** and **Burn: Show Built-in Functions** to read the library sources
 - library sources open read-only, so they are not edited by accident
@@ -132,7 +132,7 @@ JetBrains IDEs from 2024.2 on. It uses [LSP4IJ](https://github.com/redhat-develo
 so the IDE installs LSP4IJ along with it, and the TextMate grammar of the VS Code extension for highlighting. You get
 everything the language server offers: completion, hover, parameter info, inlay hints, go to declaration (also into
 the library sources), find usages, rename, formatting and quick fixes. **Tools | Burn** and the editor context menu
-run, natively run and build the current file, open a standard module or show the built-ins.
+run and build the current file, open a standard module or show the built-ins.
 
 ```sh
 git clone https://github.com/burnlang/intellij-burn
@@ -151,7 +151,7 @@ Servers** shows the server and its log.
 The Zed extension in [zed-burn](https://github.com/burnlang/zed-burn) uses the grammar from
 [tree-sitter-burn](https://github.com/burnlang/tree-sitter-burn) for highlighting,
 outline, indentation and bracket matching, and starts `burn lsp` for everything else. A run button appears next to
-`fun main`, and the tasks `burn run`, `burn run --native` and `burn build` work on the current file.
+`fun main`, and the tasks `burn run` and `burn build` work on the current file.
 
 To install it, clone zed-burn, run **zed: install dev extension** and choose the cloned folder. Zed needs Rust installed through rustup
 to build it. To use another `burn`, set the path in Zed's settings:

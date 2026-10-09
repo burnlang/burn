@@ -21,9 +21,8 @@ There is nothing to register. Push the code, tag a version, and everyone can ins
 ## Creating a project
 
 ```sh
-burn init github.com/you/hello                 # a native app
-burn init github.com/you/hello --target js     # an app that builds to a Node.js script
-burn init github.com/you/hello --target bvm    # an app that builds to bvm bytecode
+burn init github.com/you/hello                 # an app that builds to bvm bytecode
+burn init github.com/you/hello --target bar    # an app that builds to a runnable archive
 burn init github.com/you/colors --lib          # a library
 ```
 
@@ -67,7 +66,7 @@ Inside a project, `burn` commands work without a file name:
 
 | Command | What it does |
 | --- | --- |
-| `burn run [args]` | run `main` on bvm; `--native` compiles it first |
+| `burn run [args]` | run `main` on bvm |
 | `burn run --bin <name>` | run `src/bin/<name>.bn` (or `src/bin/<name>/main.bn`) |
 | `burn run --example <name>` | run `examples/<name>.bn` |
 | `burn build` | build `main` and every program in `src/bin` for the project's target into `build/`; `--target` overrides it, `--bin` and `--example` build one program |
@@ -80,11 +79,11 @@ In a [workspace](#workspaces), each of these takes `-p <member>`.
 
 A workspace is one repository with several projects that are built together, like a Gradle multi-project build or
 a Cargo workspace. The usual shape keeps the shared code in one library and adds one app per target, so the same
-program ships as a native executable, a JavaScript file and bvm bytecode:
+program ships as bvm bytecode and as a runnable archive:
 
 ```sh
-burn init github.com/you/game --workspace                    # common + native, js and bvm apps
-burn init github.com/you/game --workspace --targets native,js
+burn init github.com/you/game --workspace                    # common + bvm and bar apps
+burn init github.com/you/game --workspace --targets bvm
 ```
 
 ```text
@@ -93,23 +92,22 @@ game/
 ├── burn.lock            one lock file for every member
 ├── common/              github.com/you/game/common, a library
 │   └── src/lib.bn
-├── native/              github.com/you/game/native, target = "native"
+├── bvm/                 github.com/you/game/bvm, target = "bvm"
 │   └── src/main.bn      import "github.com/you/game/common"
-├── js/                  github.com/you/game/js, target = "js"
-└── bvm/                 github.com/you/game/bvm, target = "bvm"
+└── bar/                 github.com/you/game/bar, target = "bar"
 ```
 
 ```toml
 [workspace]
 name = "github.com/you/game"
-members = ["common", "native", "js", "bvm"]
+members = ["common", "bvm", "bar"]
 ```
 
 - Members are ordinary projects named under the workspace (`github.com/you/game/common`). They import each other by
   name without listing each other as dependencies; a `path` dependency works too.
 - All members share the `burn.lock` at the root, so they always use the same versions of their packages.
 - At the root, `burn build`, `burn check` and `burn test` work on every member, and `-p <member>` picks one
-  (`burn run -p native`, `burn build -p js`). Inside a member's folder, commands work on that member alone.
+  (`burn run -p bvm`, `burn build -p bar`). Inside a member's folder, commands work on that member alone.
 - `burn init <name>` inside a workspace creates a new member and adds it to `members`; a plain name such as
   `burn init tools --lib` is named after the workspace (`github.com/you/game/tools`).
 - Other projects can install a member like any package: `ash install github.com/you/game/common` downloads the
@@ -123,7 +121,7 @@ members = ["common", "native", "js", "bvm"]
 name = "github.com/you/hello"
 version = "0.1.0"
 kind = "app"
-target = "native"
+target = "bvm"
 main = "src/main.bn"
 description = "Says hello"
 
@@ -134,8 +132,8 @@ description = "Says hello"
 
 [scripts]
 dev = "burni src/main.bn"
-release = "burnc src/main.bn -o build/hello"
-start = "./build/hello"
+release = "burnc src/main.bn -o build/hello.bvmc"
+start = "burn build/hello.bvmc"
 ```
 
 | Key | Meaning |
@@ -143,10 +141,10 @@ start = "./build/hello"
 | `name` | where the code lives: `<domain>.<tld>/<owner>/<project>` |
 | `version` | the version, tagged in git as `v<version>` when it is published |
 | `kind` | `"app"` (a program) or `"lib"` (a library that others import) |
-| `target` | what `burn build` makes: `"bvm"` (bytecode), `"bar"` (a runnable archive), `"native"` or `"js"` |
+| `target` | what `burn build` makes: `"bvm"` (bytecode, the default) or `"bar"` (a runnable archive); `"native"` and `"js"`, from releases with the compiler written in Rust, build bytecode |
 | `main` | the entry file (default `src/main.bn`, or `src/lib.bn` for a library) |
 | `output` | where `burn build` writes, relative to the project (default `build/<project>`) |
-| `std` | `false` builds [without the standard library](./no-std.mdx) for much smaller executables (default `true`) |
+| `std` | `false` builds [without the standard library](./no-std.mdx) (default `true`) |
 | `burn` | the Burn version the project uses, installed and selected by [burnup](./installation.mdx#a-version-per-project) |
 | `[dependencies]` | packages, with a version, or a table with `version`, `git` and `path` |
 | `[scripts]` | shell commands for `ash run <name>`, or just `ash <name>` |
@@ -226,7 +224,7 @@ fun doubled(points: int, result: int): int {
 
 `.bvmc` after a package name compiles the package to a bytecode library (into its `build/` folder, again only when
 its sources change) and links it in. Its top-level code and `main` run first, so running this program runs the game
-with the change applied, on bvm, in `.bar` archives and in native executables alike.
+with the change applied, on bvm and in `.bar` archives alike.
 
 ## Scripts and commands
 

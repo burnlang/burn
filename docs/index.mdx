@@ -1,6 +1,6 @@
 ---
 title: Burn
-description: A small, statically typed language with smart casts that runs instantly and compiles to native code.
+description: A small, statically typed language with smart casts that runs instantly on its own virtual machine.
 order: 0
 ---
 
@@ -9,7 +9,8 @@ order: 0
 # Burn
 
 Burn is a general purpose programming language with a clean syntax, static types that you rarely have to write,
-and smart casts that follow your `if` checks. The compiler is written in Rust and x86-64 assembly.
+and smart casts that follow your `if` checks. The compiler and its tools are written in Burn and run on bvm, the Burn
+virtual machine, which is written in Rust.
 
 ```burn
 def interface Shape {
@@ -37,12 +38,10 @@ print(describe(new Circle(2)))
 | Command | What happens | Typical use |
 | --- | --- | --- |
 | `burni app.bn` | compiled to a bvm module in memory and run right away, starts in milliseconds | development, scripts |
-| `burnc app.bn` | compiled to x86-64 assembly and linked into a standalone executable | shipping |
-| `burnc app.bn --target js` | compiled to a Node.js script | the web and JS tooling |
-| `burnc app.bn --target bvm` | compiled to a portable `.bvmc` bytecode file, run with `bvm` | distributing without a build per platform |
+| `burnc app.bn` | compiled to a portable `.bvmc` bytecode file, run with `burn` or `bvm` | distributing without a build per platform |
 | `burnc app.bn --target bar` | the program and its bytecode libraries in one runnable `.bar` archive | shipping applications that run everywhere bvm runs |
 
-All backends share the same type checker and runtime library, so a program behaves the same way everywhere.
+Either way the program runs on bvm with the same runtime, so it behaves the same way everywhere.
 
 The virtual machine, [bvm](./bvm/overview.mdx), is not tied to Burn: it has its own assembly language, bytecode
 format, verifier and Rust API, and other languages can compile to it.

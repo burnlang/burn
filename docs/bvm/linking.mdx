@@ -64,7 +64,7 @@ bvm itself gives meaning to a few annotations: `@Export` (below) and the mixins 
 `@Export` marks a function that other modules may call through an `import`. When the linker finds an import
 with the same name and argument count as an exported function, it turns the `host` calls into direct calls. The
 same library therefore works in two places: inside an application that exports the function in bytecode, and
-inside a [native executable](./native-interop.mdx) that exports a machine-code function.
+inside a [Rust program](./native-interop.mdx) that embeds bvm and registers a host function.
 
 ```bvm
 module plugin
