@@ -93,7 +93,7 @@ See [docs/tooling/installation.mdx](docs/tooling/installation.mdx) for all optio
 | Command | What it does |
 | --- | --- |
 | `burni` | the interpreter: runs programs instantly on bvm, starts the REPL without arguments |
-| `burnc` | the compiler: bvm bytecode (`.bvmc`), or a runnable archive with `--target bar` |
+| `burnc` | the compiler: bvm bytecode (`.bvmc`), a runnable archive with `--target bar`, or JavaScript with `--target js` |
 | `burnfmt` | the code formatter, written in Burn itself |
 | `burn-lsp` | the language server for editors |
 | `bvm` | the Burn virtual machine: runs, assembles, disassembles and verifies bytecode |
@@ -108,6 +108,7 @@ burnc app.bn                    # portable bytecode app.bvmc
 burnc app.bn --emit-asm app.bvm # also write the bvm assembly
 burnc app.bn --no-std           # a small program without the standard library
 burnc app.bn --target bar       # a runnable archive app.bar
+burnc app.bn --target js        # app.js for Node.js
 burn app.bvmc                   # run bytecode (or bvm app.bvmc)
 burnc --check app.bn            # type-check only
 burnfmt -w app.bn               # format in place

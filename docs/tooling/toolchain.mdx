@@ -34,29 +34,31 @@ understands `:help`, `:reset`, `:source` and `:quit`.
 
 ## `burnc`: the compiler
 
-`burnc` compiles a program to [bvm](../bvm/overview.mdx) bytecode, which runs anywhere bvm runs.
+`burnc` compiles a program to [bvm](../bvm/overview.mdx) bytecode, which runs anywhere bvm runs, or to JavaScript
+for Node.js.
 
 ```sh
 burnc app.bn                          # app.bvmc, bytecode for bvm
 burnc app.bn -o build/app.bvmc        # choose the output path
 burnc app.bn --emit-asm app.bvm       # also write the bvm assembly
 burnc app.bn --target bar             # app.bar, the program and its bytecode libraries in one archive
+burnc app.bn --target js              # app.js, a program for Node.js
 burnc app.bn --no-std                 # without the standard library
 burnc --check a.bn b.bn               # type-check only
 ```
 
 | Option | Description |
 | --- | --- |
-| `-o`, `--output <path>` | output file; defaults to the source name with `.bvmc` (or `.bar`) |
+| `-o`, `--output <path>` | output file; defaults to the source name with `.bvmc` (or `.bar`, `.js`) |
 | `--target bvm` | a `.bvmc` bytecode module, with imported bytecode libraries linked in (default) |
 | `--target bar` | a runnable [archive](../bvm/archives.mdx) with the program and its bytecode libraries |
+| `--target js` | a JavaScript file for Node.js; it cannot use bytecode libraries, `@Native` functions or mixins |
 | `--emit-asm <path>` | write the bvm assembly as well |
 | `--no-std` | build [without the standard library](./no-std.mdx) |
 | `--check <files...>` | report errors and warnings without producing output |
 
 Run the result with `burn app.bvmc` or `bvm app.bvmc`; an archive also runs on its own (`./app.bar`) when `bvm` is on
-`PATH`. Releases up to `26.1.0-experimental-2` also compiled to native executables and JavaScript; those backends
-belonged to the compiler written in Rust and were removed with it. See [how the compiler works](./compiler.mdx).
+`PATH`, and a JavaScript build with `node app.js`. See [how the compiler works](./compiler.mdx).
 
 ## `burnfmt`: the formatter
 

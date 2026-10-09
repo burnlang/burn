@@ -3,6 +3,7 @@ import "../dump/declarations.bn"
 import "../dump/index.bn"
 import "../dump/loading.bn"
 import "../dump/syntax.bn"
+import "../js/js.bn"
 import "../lsp/server.bn"
 import "../lsp/sources.bn"
 import "../project/loader.bn"
@@ -28,7 +29,7 @@ priv fun usage() {
         "  burn <file.bn> [args...]            run a program instantly on the Burn VM (bvm)",
         "  burn <file.bvm|file.bvmc|file.bar> [args...]",
         "                                      run a bvm module or archive",
-        "  burn init <name> [--lib] [--target <bvm|bar>]",
+        "  burn init <name> [--lib] [--target <bvm|bar|js>]",
         "                                      create a project, named like github.com/you/app",
         "  burn run [file.bn] [args...]        run a program, or the project's main file",
         "      --bin <name>                    run src/bin/<name>.bn of the project",
@@ -36,8 +37,8 @@ priv fun usage() {
         "  burn build [file.bn] [options]      compile to bvm bytecode, or build the project",
         "                                      (its main file and every program in src/bin, into build/)",
         "      --bin <name>, --example <name>  build only that program",
-        "      -o, --output <path>             output file (default: the file name with .bvmc or .bar)",
-        "      --target <bvm|bar>              a bvm module (default) or a runnable archive",
+        "      -o, --output <path>             output file (default: the file name with .bvmc, .bar or .js)",
+        "      --target <bvm|bar|js>           a bvm module (default), a runnable archive or JavaScript for Node.js",
         "      --emit-asm <path>               also write the bvm assembly",
         "      --no-std                        build without the standard library (same as `std = false` in burn.toml)",
         "  burn check [files...]               type-check without running (default: the whole project)",
@@ -49,7 +50,7 @@ priv fun usage() {
         "  burn doc [files...] [-o <dir>]      generate HTML documentation from Burndoc comments",
         "  burn lsp                            run the language server over stdio",
         "  burn sources                        write the standard library and built-in sources editors show",
-        "  burn dump --<stage> <files...>      print a compiler stage, such as --tokens, --checked or --bvm",
+        "  burn dump --<stage> <files...>      print a compiler stage, such as --tokens, --checked, --bvm or --js",
         "  burn version                        print the version"
     ], "\n"))
 }
@@ -72,8 +73,8 @@ priv fun burncUsage() {
         "",
         "Usage:",
         "  burnc <file.bn> [options]   compile to bvm bytecode",
-        "      -o, --output <path>     output file (default: the file name with .bvmc or .bar)",
-        "      --target <bvm|bar>      a bvm module (default) or a runnable archive",
+        "      -o, --output <path>     output file (default: the file name with .bvmc, .bar or .js)",
+        "      --target <bvm|bar|js>   a bvm module (default), a runnable archive or JavaScript for Node.js",
         "      --emit-asm <path>       also write the bvm assembly",
         "      --no-std                build without the standard library",
         "  burnc --check <files...>    type-check without producing output",
@@ -287,8 +288,8 @@ priv fun buildOne(file: string, output: string?, target: string, emitAsm: string
             Files.makeDir(parent)
         }
     }
-    if (target != "bvm" && target != "bytecode" && target != "bar") {
-        return fail("unknown target `${target}` (expected `bvm` or `bar`)", 2)
+    if (target != "bvm" && target != "bytecode" && target != "bar" && target != "js" && target != "javascript" && target != "node") {
+        return fail("unknown target `${target}` (expected `bvm`, `bar` or `js`)", 2)
     }
     if (isBvmFile(file)) {
         return fail("${file} is bytecode already; run it with `burn ${file}`", 2)
@@ -296,6 +297,9 @@ priv fun buildOne(file: string, output: string?, target: string, emitAsm: string
     var c = compilePath(file, opts)
     if (c == null) {
         return 1
+    }
+    if (target == "js" || target == "javascript" || target == "node") {
+        return writeJs(c, output ?? defaultOutput(file, "js"))
     }
     var module = moduleOf(c)
     var libs = libraryPaths(c)
@@ -316,9 +320,22 @@ priv fun buildOne(file: string, output: string?, target: string, emitAsm: string
     return 0
 }
 
+priv fun writeJs(c: Compiled, out: string): int {
+    var problem = jsProblem(c.checker, c.program)
+    if (problem != null) {
+        return fail(problem, 1)
+    }
+    if (!writeFile(out, generateJs(c.checker, c.program))) {
+        return fail("cannot write ${out}", 1)
+    }
+    print("wrote ${out}")
+    return 0
+}
+
 priv fun projectTarget(p: Project): string {
-    if (p.manifest.target == "bar") {
-        return "bar"
+    var t = p.manifest.target
+    if (t == "bar" || t == "js") {
+        return t
     }
     return "bvm"
 }
@@ -597,7 +614,15 @@ priv fun cmdDump(rest: [string], opts: Options): int {
         write(moduleOf(c))
         return 0
     }
-    eprint("usage: burn dump --bytecode <file.bn>  |  burn dump --tokens|--ast|--diagnostics|--toml|--project|--modules|--decls|--checked|--owned|--bvm|--index <files...>")
+    if (len(rest) == 2 && rest[0] == "--js") {
+        var c = compilePath(rest[1], opts)
+        if (c == null) {
+            return 1
+        }
+        write(generateJs(c.checker, c.program))
+        return 0
+    }
+    eprint("usage: burn dump --bytecode|--js <file.bn>  |  burn dump --tokens|--ast|--diagnostics|--toml|--project|--modules|--decls|--checked|--owned|--bvm|--index <files...>")
     return 2
 }
 

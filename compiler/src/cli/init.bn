@@ -3,7 +3,7 @@ import "../project/project.bn"
 import "std/fs"
 import "std/process"
 
-priv const USAGE = "usage: burn init <name> [dir] [--lib] [--target bvm|bar] [--no-git]\n       burn init <name> [dir] --workspace [--targets bvm,bar] [--no-git]\n\n  <name>       where the code lives, for example github.com/you/hello\n  [dir]        the directory to create it in (default: the last part of the name)\n  --lib        create a library instead of an app\n  --target     what `burn build` produces: bvm bytecode (default) or a bar archive\n  --workspace  create a workspace: a `common` library and one app per target that uses it\n  --targets    the apps of the workspace (default: bvm,bar)\n  --no-git     do not create a git repository\n\nInside a workspace, a new project is added to its members."
+priv const USAGE = "usage: burn init <name> [dir] [--lib] [--target bvm|bar|js] [--no-git]\n       burn init <name> [dir] --workspace [--targets bvm,bar,js] [--no-git]\n\n  <name>       where the code lives, for example github.com/you/hello\n  [dir]        the directory to create it in (default: the last part of the name)\n  --lib        create a library instead of an app\n  --target     what `burn build` produces: bvm bytecode (default), a bar archive or JavaScript\n  --workspace  create a workspace: a `common` library and one app per target that uses it\n  --targets    the apps of the workspace (default: bvm,bar)\n  --no-git     do not create a git repository\n\nInside a workspace, a new project is added to its members."
 
 priv fun failWith(message: string, help: string): int {
     eprint("error: ${message}")
@@ -14,6 +14,9 @@ priv fun failWith(message: string, help: string): int {
 }
 
 priv fun buildCommand(short: string, target: string, main: string): string {
+    if (target == "js") {
+        return "burnc ${main} --target js -o build/${short}.js"
+    }
     if (target == "bar") {
         return "burnc ${main} --target bar -o build/${short}.bar"
     }
@@ -21,6 +24,9 @@ priv fun buildCommand(short: string, target: string, main: string): string {
 }
 
 priv fun startCommand(short: string, target: string): string {
+    if (target == "js") {
+        return "node build/${short}.js"
+    }
     if (target == "bar") {
         return "./build/${short}.bar"
     }
@@ -227,8 +233,11 @@ pub fun cmdInit(args: [string]): int {
     if (target == "bytecode") {
         target = "bvm"
     }
-    if (target != "bvm" && target != "bar") {
-        return failWith("unknown target `${target}`", "choose `bvm` or `bar`")
+    if (target == "javascript" || target == "node") {
+        target = "js"
+    }
+    if (target != "bvm" && target != "bar" && target != "js") {
+        return failWith("unknown target `${target}`", "choose `bvm`, `bar` or `js`")
     }
     if (name == null) {
         eprint(USAGE)
@@ -263,8 +272,8 @@ pub fun cmdInit(args: [string]): int {
     if (workspace) {
         [string] ts = []
         for t in targets {
-            if (t != "bvm" && t != "bar") {
-                return failWith("unknown target `${t}`", "choose from bvm and bar, like `--targets bvm,bar`")
+            if (t != "bvm" && t != "bar" && t != "js") {
+                return failWith("unknown target `${t}`", "choose from bvm, bar and js, like `--targets bvm,js`")
             }
             if (!contains(ts, t)) {
                 ts.push(t)

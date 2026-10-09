@@ -1,0 +1,463 @@
+import "../check/check.bn"
+import "../check/body.bn"
+import "../check/hir.bn"
+import "../check/types.bn"
+import "../vm/bits.bn"
+import "../vm/compile.bn"
+import "../vm/module.bn"
+import "prelude.bn"
+
+/** A string literal in JavaScript, like `js_str` in `js/mod.rs`. */
+pub fun jsStr(s: string): string {
+    var out = "\""
+    for c in s {
+        var code = charCode(c)
+        if (c == "\"") {
+            out += "\\\""
+        } else if (c == "\\") {
+            out += "\\\\"
+        } else if (c == "\n") {
+            out += "\\n"
+        } else if (c == "\r") {
+            out += "\\r"
+        } else if (c == "\t") {
+            out += "\\t"
+        } else if (code == 8232) {
+            out += "\\u2028"
+        } else if (code == 8233) {
+            out += "\\u2029"
+        } else if (code < 32) {
+            var hex = toString(code, 16)
+            out += "\\u${repeat("0", 4 - len(hex))}${hex}"
+        } else {
+            out += c
+        }
+    }
+    return out + "\""
+}
+
+priv fun num(f: float): string {
+    if (isNan(f)) {
+        return "NaN"
+    }
+    if (isInfinite(f)) {
+        if (f > 0.0) {
+            return "Infinity"
+        }
+        return "(-Infinity)"
+    }
+    var s = debugFloat(f)
+    if (f < 0.0) {
+        return "(${s})"
+    }
+    return s
+}
+
+/** The decimal digits of the bits of `v` read as an unsigned 64-bit number. */
+pub fun unsignedText(v: int): string {
+    if (v >= 0) {
+        return toString(v)
+    }
+    var q = (v >>> 1) / 5
+    var r = wrappingSub(v, wrappingMul(q, 10))
+    return toString(q) + toString(r)
+}
+
+priv const NUM_NAMES = ["int8", "uint8", "int16", "uint16", "int32", "uint32", "uint64", "float32"]
+
+priv fun desc(d: Desc): string {
+    return match d {
+        Desc.Error => "[\"err\"]"
+        Desc.Void => "[\"void\"]"
+        Desc.Null => "[\"null\"]"
+        Desc.Int => "[\"int\"]"
+        Desc.Float => "[\"float\"]"
+        Desc.Bool => "[\"bool\"]"
+        Desc.Str => "[\"str\"]"
+        Desc.Any => "[\"any\"]"
+        Desc.Num(code) => "[\"num\",${jsStr(NUM_NAMES[code])}]"
+        Desc.Array(elem) => "[\"arr\",${elem}]"
+        Desc.Map(key, value) => "[\"map\",${key},${value}]"
+        Desc.Optional(inner) => "[\"opt\",${inner}]"
+        Desc.Func => "[\"fun\"]"
+        Desc.Future(inner) => "[\"future\",${inner}]"
+        Desc.Record(name, fields, isClass, implements) => recordDesc(name, fields, isClass, implements)
+        Desc.Interface(name) => "[\"iface\",${jsStr(name)}]"
+        Desc.Enum(name, variants) => enumDesc(name, variants)
+    }
+}
+
+priv fun recordDesc(name: string, fields: [DescField], isClass: bool, implements: [int]): string {
+    [string] fs = []
+    for f in fields {
+        fs.push("[${jsStr(f.name)},${f.ty}]")
+    }
+    [string] impls = []
+    for i in implements {
+        impls.push(toString(i))
+    }
+    return "[\"rec\",${jsStr(name)},[${join(fs, ",")}],${isClass},[${join(impls, ",")}]]"
+}
+
+priv fun enumDesc(name: string, variants: [string]): string {
+    [string] vs = []
+    for v in variants {
+        vs.push(jsStr(v))
+    }
+    return "[\"enum\",${jsStr(name)},[${join(vs, ",")}]]"
+}
+
+/** Why the program cannot be compiled to JavaScript, or null when it can, like `validate` in `js/mod.rs`. */
+pub fun jsProblem(c: Checker, p: HProgram): string? {
+    if (len(c.libPaths) > 0) {
+        return "`${c.libPaths[0]}` is a bytecode library; the JavaScript backend cannot run bvm code, so use burni, `--target bvm`, `--target bar` or a native build"
+    }
+    for f in p.funcs {
+        if (f.external is External.Native) {
+            return "`${f.name}` is marked @Native, which needs bvm; the JavaScript backend has no host functions"
+        }
+        for a in f.annotations {
+            if (a.name == "Inject" || a.name == "Overwrite" || a.name == "Redirect") {
+                return "@${a.name} on `${f.name}` is a mixin, and mixins change bvm bytecode; the JavaScript backend does not support them"
+            }
+        }
+    }
+    return null
+}
+
+priv def type Labels {
+    string brk
+    string cont
+}
+
+priv def struct Gen(c: Checker, p: HProgram) {
+    string out = ""
+    int label = 0
+    [Labels] loops = []
+    int indent = 0
+
+    fun line(s: string) {
+        out += repeat("  ", indent)
+        out += s
+        out += "\n"
+    }
+
+    fun program() {
+        out += "#!/usr/bin/env node\n"
+        out += PRELUDE_JS
+        [string] descs = []
+        for t in 0..c.types.count() {
+            descs.push(desc(descOf(c.types, t)))
+        }
+        out += "const $T = [${join(descs, ",")}];\n"
+        [string] locs = []
+        for l in c.locs {
+            locs.push(jsStr(l))
+        }
+        out += "const $LOCS = [${join(locs, ",")}];\n"
+        out += "function $ci(t, ...a) { const f = t[a[0][0]]; if (!f) $err(\"interface method not implemented\", -1); return f(...a); }\n"
+        for i in 0..len(c.slots) {
+            [string] entries = []
+            for im in c.slots[i].impls {
+                entries.push("${im.ty}: f${im.func}")
+            }
+            out += "const $I${i} = {${join(entries, ", ")}};\n"
+        }
+        if (len(p.globals) > 0) {
+            [string] gs = []
+            for i in 0..len(p.globals) {
+                gs.push("g${i} = null")
+            }
+            out += "let ${join(gs, ", ")};\n"
+        }
+        for i in 0..len(p.funcs) {
+            var f = p.funcs[i]
+            [string] params = []
+            for s in 0..f.params {
+                params.push("l${s}")
+            }
+            out += "function f${i}(${join(params, ", ")}) {\n"
+            indent = 1
+            var n = len(f.locals)
+            if (n > f.params) {
+                [string] ls = []
+                for s in f.params..n {
+                    ls.push("l${s}")
+                }
+                line("let ${join(ls, ", ")};")
+            }
+            stmts(f.body)
+            indent = 0
+            out += "}\n"
+        }
+        out += "try {\n  f${p.entry}();\n  $flush();\n} catch (e) {\n  $flush();\n  if (e instanceof BurnExit) process.exit(e.code);\n  if (e instanceof BurnError) { process.stderr.write(e.message + \"\\n\"); process.exit(1); }\n  if (e instanceof RangeError) { process.stderr.write(\"runtime error: stack overflow (recursion is too deep)\\n\"); process.exit(1); }\n  throw e;\n}\n"
+    }
+
+    fun stmts(ss: [HStmt]): void {
+        for s in ss {
+            stmt(s)
+        }
+    }
+
+    fun stmt(s: HStmt): void {
+        if (s is HStmt.Eval) {
+            line("${expr(s.value)};")
+        } else if (s is HStmt.If) {
+            line("if (${expr(s.cond)}) {")
+            indent += 1
+            stmts(s.then)
+            indent -= 1
+            if (len(s.els) == 0) {
+                line("}")
+            } else {
+                line("} else {")
+                indent += 1
+                stmts(s.els)
+                indent -= 1
+                line("}")
+            }
+        } else if (s is HStmt.Loop) {
+            label += 1
+            var outer = "L${label}"
+            var inner = "B${label}"
+            line("${outer}: for (;;) {")
+            indent += 1
+            var cond = s.cond
+            if (cond != null) {
+                line("if (!(${expr(cond)})) break;")
+            }
+            line("${inner}: {")
+            indent += 1
+            loops.push(Labels { brk: outer, cont: inner })
+            stmts(s.body)
+            pop(loops)
+            indent -= 1
+            line("}")
+            stmts(s.step)
+            indent -= 1
+            line("}")
+        } else if (s is HStmt.Return) {
+            var v = s.value
+            if (v != null) {
+                line("return ${expr(v)};")
+            } else {
+                line("return 0;")
+            }
+        } else if (s is HStmt.Break) {
+            line("break ${loops[len(loops) - 1].brk};")
+        } else if (s is HStmt.Continue) {
+            line("break ${loops[len(loops) - 1].cont};")
+        }
+    }
+
+    fun args(xs: [HExpr]): string {
+        [string] parts = []
+        for x in xs {
+            parts.push(expr(x))
+        }
+        return join(parts, ", ")
+    }
+
+    fun cmpOp(k: Cmp): string {
+        return match k {
+            Cmp.Eq => "==="
+            Cmp.Ne => "!=="
+            Cmp.Lt => "<"
+            Cmp.Le => "<="
+            Cmp.Gt => ">"
+            Cmp.Ge => ">="
+        }
+    }
+
+    fun unary(op: HUnOp, x: string, ty: int): string {
+        if (op is HUnOp.INeg) {
+            return "$ov(-${x}, ${op.loc})"
+        }
+        if (op is HUnOp.FNeg) {
+            return "(-${x})"
+        }
+        if (op is HUnOp.Not) {
+            return "(!${x})"
+        }
+        if (ty == T_U64) {
+            return "$u($bit(\"~\", ${x}, 0, 0))"
+        }
+        return "$bit(\"~\", ${x}, 0, 0)"
+    }
+
+    fun binary(op: HBinOp, a: string, b: string, ty: int): string {
+        var u = ty == T_U64
+        if (u && (op is HBinOp.BitAnd || op is HBinOp.BitOr || op is HBinOp.BitXor || op is HBinOp.Shl || op is HBinOp.UShr)) {
+            var sym = ">>>"
+            var l = 0
+            if (op is HBinOp.BitAnd) {
+                sym = "&"
+            } else if (op is HBinOp.BitOr) {
+                sym = "|"
+            } else if (op is HBinOp.BitXor) {
+                sym = "^"
+            } else if (op is HBinOp.Shl) {
+                sym = "<<"
+                l = op.loc
+            } else if (op is HBinOp.UShr) {
+                l = op.loc
+            }
+            return "$u($bit(${jsStr(sym)}, ${a}, ${b}, ${l}))"
+        }
+        return match op {
+            HBinOp.UCmp(k) => "(${a} ${cmpOp(k)} ${b})"
+            HBinOp.WAdd => "$wrap(\"+\", ${a}, ${b}, ${u})"
+            HBinOp.WSub => "$wrap(\"-\", ${a}, ${b}, ${u})"
+            HBinOp.WMul => "$wrap(\"*\", ${a}, ${b}, ${u})"
+            HBinOp.IAdd(loc) => addText(a, b, loc)
+            HBinOp.ISub(loc) => "$ov(${a} - ${b}, ${loc})"
+            HBinOp.IMul(loc) => "$ov(${a} * ${b}, ${loc})"
+            HBinOp.FAdd => "(${a} + ${b})"
+            HBinOp.FSub => "(${a} - ${b})"
+            HBinOp.FMul => "(${a} * ${b})"
+            HBinOp.FDiv => "(${a} / ${b})"
+            HBinOp.IDiv(loc) => "$idiv(${a}, ${b}, ${loc})"
+            HBinOp.IMod(loc) => "$imod(${a}, ${b}, ${loc})"
+            HBinOp.ICmp(k) => "(${a} ${cmpOp(k)} ${b})"
+            HBinOp.FCmp(k) => "(${a} ${cmpOp(k)} ${b})"
+            HBinOp.BitAnd => "$bit(\"&\", ${a}, ${b}, 0)"
+            HBinOp.BitOr => "$bit(\"|\", ${a}, ${b}, 0)"
+            HBinOp.BitXor => "$bit(\"^\", ${a}, ${b}, 0)"
+            HBinOp.Shl(loc) => "$bit(\"<<\", ${a}, ${b}, ${loc})"
+            HBinOp.Shr(loc) => "$bit(\">>\", ${a}, ${b}, ${loc})"
+            HBinOp.UShr(loc) => "$bit(\">>>\", ${a}, ${b}, ${loc})"
+        }
+    }
+
+    fun addText(a: string, b: string, loc: int): string {
+        if (loc == 4294967295) {
+            return "(${a} + ${b})"
+        }
+        return "$ov(${a} + ${b}, ${loc})"
+    }
+
+    fun seqText(ss: [HStmt], x: HExpr): string {
+        var plain = true
+        for s in ss {
+            if (!(s is HStmt.Eval)) {
+                plain = false
+            }
+        }
+        if (plain) {
+            [string] parts = []
+            for s in ss {
+                if (s is HStmt.Eval) {
+                    parts.push(expr(s.value))
+                }
+            }
+            parts.push(expr(x))
+            return "(${join(parts, ", ")})"
+        }
+        var saved = out
+        var savedIndent = indent
+        out = ""
+        indent = 0
+        stmts(ss)
+        var body = out
+        out = saved
+        indent = savedIndent
+        var v = expr(x)
+        return "(() => { ${replace(body, "\n", " ")} return ${v}; })()"
+    }
+
+    fun expr(e: HExpr): string {
+        var k = e.kind
+        return match k {
+            HKind.TypeId(id) => toString(id)
+            HKind.LocId(id) => toString(id)
+            HKind.Int(value) => intText(value, e.ty)
+            HKind.Float(value) => num(value)
+            HKind.Bool(value) => toString(value)
+            HKind.Str(id) => jsStr(c.strings[id])
+            HKind.Null => "null"
+            HKind.Local(slot) => "l${slot}"
+            HKind.Global(id) => "g${id}"
+            HKind.SetLocal(slot, value) => "(l${slot} = ${expr(value)})"
+            HKind.SetGlobal(id, value) => "(g${id} = ${expr(value)})"
+            HKind.Unary(op, value) => unary(op, expr(value), e.ty)
+            HKind.Binary(op, left, right) => binaryOf(op, left, right, e.ty)
+            HKind.And(left, right) => andText(left, right, "&&")
+            HKind.Or(left, right) => andText(left, right, "||")
+            HKind.Conv(conv, value) => convText(conv, expr(value))
+            HKind.Call(func, xs) => "f${func}(${args(xs)})"
+            HKind.CallIndirect(callee, xs) => indirect(callee, xs)
+            HKind.CallIface(slot, xs) => "$ci($I${slot}, ${args(xs)})"
+            HKind.Rt(name, xs) => "$R.${name}(${args(xs)})"
+            HKind.Spawn(func, xs) => "({v: f${func}(${args(xs)})})"
+            HKind.FuncRef(func) => "f${func}"
+            HKind.NewStruct(ty, xs) => "$rec(${ty}, [${args(xs)}])"
+            HKind.GetField(obj, index) => "${expr(obj)}[${index + 1}]"
+            HKind.SetField(obj, index, value) => setField(obj, index, value)
+            HKind.NewArray(ty, items) => "[${args(items)}]"
+            HKind.Index(obj, index, loc) => indexText(obj, index, loc)
+            HKind.SetIndex(obj, index, value, loc) => setIndex(obj, index, value, loc)
+            HKind.ArrLen(value) => "${expr(value)}.length"
+            HKind.BoxVal(value) => "${expr(value)}.v"
+            HKind.Retain(value) => expr(value)
+            HKind.Release(value) => "(${expr(value)}, 0)"
+            HKind.Seq(ss, value) => seqText(ss, value)
+        }
+    }
+
+    fun intText(v: int, ty: int): string {
+        if (ty == T_U64) {
+            return unsignedText(v)
+        }
+        if (v < 0) {
+            return "(${v})"
+        }
+        return toString(v)
+    }
+
+    fun binaryOf(op: HBinOp, left: HExpr, right: HExpr, ty: int): string {
+        var a = expr(left)
+        var b = expr(right)
+        return binary(op, a, b, ty)
+    }
+
+    fun andText(left: HExpr, right: HExpr, op: string): string {
+        var a = expr(left)
+        var b = expr(right)
+        return "(${a} ${op} ${b})"
+    }
+
+    fun convText(conv: Conv, x: string): string {
+        if (conv == Conv.IntToFloat) {
+            return x
+        }
+        return "$f2i(${x})"
+    }
+
+    fun indirect(callee: HExpr, xs: [HExpr]): string {
+        var a = args(xs)
+        return "(${expr(callee)})(${a})"
+    }
+
+    fun setField(obj: HExpr, index: int, value: HExpr): string {
+        var o = expr(obj)
+        return "(${o}[${index + 1}] = ${expr(value)})"
+    }
+
+    fun indexText(obj: HExpr, index: HExpr, loc: int): string {
+        var a = expr(obj)
+        return "$idx(${a}, ${expr(index)}, ${loc})"
+    }
+
+    fun setIndex(obj: HExpr, index: HExpr, value: HExpr, loc: int): string {
+        var a = expr(obj)
+        var i = expr(index)
+        return "$sidx(${a}, ${i}, ${expr(value)}, ${loc})"
+    }
+}
+
+/** The program as a JavaScript file for Node.js, like `generate` in `js/mod.rs`. */
+pub fun generateJs(c: Checker, p: HProgram): string {
+    var g = new Gen(c, p)
+    g.program()
+    return g.out
+}

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- JavaScript is back: `burn build --target js` (and `burnc --target js`, `target = "js"` in `burn.toml`, `burn init --target js`) compiles a program to one JavaScript file for Node.js, and `burn dump --js` prints it. The backend is ported to Burn (`compiler/src/js/js.bn`) and writes the same JavaScript as the Rust compiler did; its runtime is `lib/js/prelude.js`.
+
 ## 26.1.0-experimental-3
 
 The release that ships the compiler written in Burn.

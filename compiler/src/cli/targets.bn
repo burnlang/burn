@@ -119,6 +119,8 @@ pub fun outputFor(p: Project, e: Entry, target: string): string {
     var ext = ".bvmc"
     if (target == "bar") {
         ext = ".bar"
+    } else if (target == "js" || target == "javascript" || target == "node") {
+        ext = ".js"
     }
     if (e.role == Role.Main) {
         var o = p.manifest.output

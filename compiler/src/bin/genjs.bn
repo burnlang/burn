@@ -1,0 +1,33 @@
+import "std/fs"
+
+/**
+ * Prints `compiler/src/js/prelude.bn`, which holds `lib/js/prelude.js`, the runtime of programs compiled to
+ * JavaScript, the way the Rust compiler embedded it with `include_str!`. Run it from the repository root:
+ * `burn compiler/src/bin/genjs.bn > compiler/src/js/prelude.bn`.
+ */
+fun literal(s: string): string {
+    var out = "\""
+    for c in s {
+        if (c == "\\") {
+            out += "\\\\"
+        } else if (c == "\"") {
+            out += "\\\""
+        } else if (c == "$") {
+            out += "\\$"
+        } else if (c == "\n") {
+            out += "\\n"
+        } else if (c == "\t") {
+            out += "\\t"
+        } else if (c == "\r") {
+            out += "\\r"
+        } else {
+            out += c
+        }
+    }
+    return out + "\""
+}
+
+fun main() {
+    print("/** The runtime of programs compiled to JavaScript, from `lib/js/prelude.js`, written by `compiler/src/bin/genjs.bn`. */")
+    print("pub const PRELUDE_JS = ${literal(readFile("lib/js/prelude.js"))}")
+}

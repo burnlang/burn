@@ -15,12 +15,13 @@ This page lists every subcommand of `burn`. The shorter toolchain commands map o
 | `burn <file.bn> [args...]` | type-check and run on bvm |
 | `burn <file.bvm\|file.bvmc\|file.bar> [args...]` | run a bvm module or archive |
 | `burn run <file.bn> [args...]` | the same |
-| `burn init <name> [--lib] [--target bvm\|bar] [--workspace]` | create a project ([details](./packages.mdx)) |
+| `burn init <name> [--lib] [--target bvm\|bar\|js] [--workspace]` | create a project ([details](./packages.mdx)) |
 | `burn run`, `burn build`, `burn check` | without a file, work on the project in the current folder |
 | `burn run --bin <name>`, `burn run --example <name>` | run a program of the project's `src/bin/` or `examples/` |
 | `burn build <file.bn>` | write a `.bvmc` bytecode module next to the source file (imported bytecode libraries are linked in) |
 | `burn build <file.bn> -o <path>` | choose the output path |
 | `burn build <file.bn> --target bar` | write a runnable `.bar` archive with the program and its bytecode libraries |
+| `burn build <file.bn> --target js` | write a `.js` file that runs with Node.js |
 | `burn build <file.bn> --emit-asm out.bvm` | also write the bvm assembly |
 | `burn build <file.bn> --no-std` | build [without the standard library](./no-std.mdx), like `std = false` in burn.toml |
 | `burn test [filter...]` | run the tests in the project's `tests/` folder |
