@@ -11,24 +11,131 @@ type #17 = uint32
 type #18 = uint64
 type #19 = float32
 type Runtime = record { name: string }
-type #21 = int?
-type #22 = [#13]
+type JsonError = record { message: string }
+type JsonReader = struct { text: #23, at: int, error: #24 }
+type #23 = [#13]
+type #24 = JsonError?
+type #25 = int?
 
+string " at offset "
+string "unexpected end of input"
+string "true"
+string "false"
+string "null"
+string "unexpected character"
+string "expected string key"
+string "expected ':'"
+string "expected ',' or '}'"
+string "expected ',' or ']'"
+string "invalid number"
+string "invalid unicode escape"
+string ""
+string "\n"
+string "\t"
+string "\r"
+string "\u{8}"
+string "\u{c}"
+string "unterminated string"
+string "trailing characters"
+string "invalid JSON: "
+string "integer overflow"
 string "radix "
 string " is out of range, it must be between 2 and 36"
 string "cannot convert \""
 string "\" to int"
 string "\" to an int in base "
-string ""
 string "0123456789abcdefghijklmnopqrstuvwxyz"
 string "-"
 
+loc "lib/runtime/json.bn:7:17"
+loc "lib/runtime/json.bn:1:1"
 loc "lib/runtime/math.bn:1:1"
 loc "lib/runtime/strings.bn:1:1"
 loc "lib/runtime/numbers.bn:1:1"
 loc "lib/runtime/runtime.bn:1:1"
+loc "lib/runtime/json.bn:11:5"
+loc "lib/runtime/json.bn:17:20"
+loc "lib/runtime/json.bn:15:5"
+loc "lib/runtime/json.bn:24:21"
+loc "lib/runtime/json.bn:28:13"
+loc "lib/runtime/json.bn:22:5"
+loc "lib/runtime/json.bn:32:5"
+loc "lib/runtime/json.bn:40:13"
+loc "lib/runtime/json.bn:44:22"
+loc "lib/runtime/json.bn:44:17"
+loc "lib/runtime/json.bn:44:33"
+loc "lib/runtime/json.bn:48:9"
+loc "lib/runtime/json.bn:38:5"
+loc "lib/runtime/json.bn:58:17"
+loc "lib/runtime/json.bn:52:5"
+loc "lib/runtime/json.bn:89:9"
+loc "lib/runtime/json.bn:93:13"
+loc "lib/runtime/json.bn:111:13"
+loc "lib/runtime/json.bn:120:17"
+loc "lib/runtime/json.bn:124:17"
+loc "lib/runtime/json.bn:88:5"
+loc "lib/runtime/json.bn:133:9"
+loc "lib/runtime/json.bn:137:13"
+loc "lib/runtime/json.bn:149:17"
+loc "lib/runtime/json.bn:153:17"
+loc "lib/runtime/json.bn:132:5"
+loc "lib/runtime/json.bn:163:9"
+loc "lib/runtime/json.bn:166:21"
+loc "lib/runtime/json.bn:168:17"
+loc "lib/runtime/json.bn:171:17"
+loc "lib/runtime/json.bn:184:20"
+loc "lib/runtime/json.bn:161:5"
+loc "lib/runtime/json.bn:192:24"
+loc "lib/runtime/json.bn:194:13"
+loc "lib/runtime/json.bn:201:22"
+loc "lib/runtime/json.bn:201:21"
+loc "lib/runtime/json.bn:205:17"
+loc "lib/runtime/json.bn:206:13"
+loc "lib/runtime/json.bn:214:16"
+loc "lib/runtime/json.bn:190:5"
+loc "lib/runtime/json.bn:218:13"
+loc "lib/runtime/json.bn:223:19"
+loc "lib/runtime/json.bn:225:13"
+loc "lib/runtime/json.bn:226:13"
+loc "lib/runtime/json.bn:230:21"
+loc "lib/runtime/json.bn:233:21"
+loc "lib/runtime/json.bn:235:21"
+loc "lib/runtime/json.bn:237:21"
+loc "lib/runtime/json.bn:245:17"
+loc "lib/runtime/json.bn:246:13"
+loc "lib/runtime/json.bn:217:5"
+loc "lib/runtime/json.bn:256:42"
+loc "lib/runtime/json.bn:256:64"
+loc "lib/runtime/json.bn:256:87"
+loc "lib/runtime/json.bn:256:82"
+loc "lib/runtime/json.bn:257:13"
+loc "lib/runtime/json.bn:262:27"
+loc "lib/runtime/json.bn:262:18"
+loc "lib/runtime/json.bn:262:50"
+loc "lib/runtime/json.bn:251:5"
+loc "lib/runtime/json.bn:271:9"
+loc "lib/runtime/json.bn:276:21"
+loc "lib/runtime/json.bn:281:17"
+loc "lib/runtime/json.bn:285:17"
+loc "lib/runtime/json.bn:291:13"
+loc "lib/runtime/json.bn:295:21"
+loc "lib/runtime/json.bn:296:13"
+loc "lib/runtime/json.bn:316:25"
+loc "lib/runtime/json.bn:270:5"
+loc "lib/runtime/json.bn:326:5"
 loc "lib/runtime/math.bn:5:5"
 loc "lib/runtime/math.bn:14:5"
+loc "lib/runtime/math.bn:27:25"
+loc "lib/runtime/math.bn:29:21"
+loc "lib/runtime/math.bn:32:21"
+loc "lib/runtime/math.bn:34:17"
+loc "lib/runtime/math.bn:21:6"
+loc "lib/runtime/math.bn:37:6"
+loc "lib/runtime/math.bn:48:16"
+loc "lib/runtime/math.bn:43:5"
+loc "lib/runtime/math.bn:67:17"
+loc "lib/runtime/math.bn:74:17"
+loc "lib/runtime/math.bn:55:5"
 loc "lib/runtime/numbers.bn:6:16"
 loc "lib/runtime/numbers.bn:9:16"
 loc "lib/runtime/numbers.bn:12:16"
@@ -100,6 +207,10 @@ func "<init lib/runtime/runtime.bn>"(): void
     retv
 end
 
+func "<init lib/runtime/json.bn>"(): void
+    retv
+end
+
 func "<init lib/runtime/math.bn>"(): void
     retv
 end
@@ -110,6 +221,1865 @@ end
 
 func "<init lib/runtime/strings.bn>"(): void
     retv
+end
+
+func JsonReader.more(_: JsonReader): bool
+    locals 1
+    load 0
+    getf 1
+    load 0
+    getf 0
+    len
+    ilt
+    store 1
+    load 1
+    ret
+end
+
+func JsonReader.peek(_: JsonReader): int
+    locals 2
+    load 0
+    getf 1
+    load 0
+    getf 0
+    len
+    ilt
+    jz L0
+    load 0
+    getf 0
+    load 0
+    getf 1
+    index 7
+    store 1
+    load 1
+    ret
+L0:
+    const -1
+    store 2
+    load 2
+    ret
+end
+
+func JsonReader.skipSpace(_: JsonReader): void
+    locals 1
+L0:
+    load 0
+    getf 1
+    load 0
+    getf 0
+    len
+    ilt
+    jz L5
+    load 0
+    getf 0
+    load 0
+    getf 1
+    index 9
+    store 1
+    load 1
+    const 32
+    ine
+    jzk L1
+    pop
+    load 1
+    const 10
+    ine
+L1:
+    jzk L2
+    pop
+    load 1
+    const 13
+    ine
+L2:
+    jzk L3
+    pop
+    load 1
+    const 9
+    ine
+L3:
+    jz L4
+    retv
+L4:
+    load 0
+    load 0
+    getf 1
+    const 1
+    iadd.ovf 10
+    setf 1
+    pop
+    jmp L0
+L5:
+    retv
+end
+
+func JsonReader.fail(_: JsonReader, _: string): void
+    locals 4
+    const 0
+    store 2
+    const 0
+    store 3
+    load 0
+    getf 2
+    const 0
+    ieq
+    jz L0
+    load 1
+    str " at offset "
+    rt str_concat
+    tee 2
+    load 0
+    getf 1
+    tconst int
+    rt to_str
+    tee 3
+    rt str_concat
+    new JsonError
+    store 4
+    load 0
+    getf 2
+    store 5
+    load 0
+    load 4
+    setf 2
+    pop
+    load 5
+    rt release
+    pop
+    load 2
+    rt release
+    pop
+    const 0
+    store 2
+    load 3
+    rt release
+    pop
+    const 0
+    store 3
+L0:
+    load 2
+    rt release
+    pop
+    load 3
+    rt release
+    pop
+    retv
+end
+
+func JsonReader.word(_: JsonReader, _: string): bool
+    locals 8
+    const 0
+    store 2
+    load 2
+    store 6
+    load 1
+    tconst #23
+    rt str_to_bytes
+    store 2
+    load 6
+    rt release
+    pop
+    load 0
+    getf 1
+    load 2
+    len
+    iadd.ovf 13
+    load 0
+    getf 0
+    len
+    igt
+    jz L0
+    const 0
+    store 7
+    load 2
+    rt release
+    pop
+    load 7
+    ret
+L0:
+    const 0
+    store 3
+    load 2
+    len
+    store 4
+L1:
+    load 3
+    load 4
+    ilt
+    jz L3
+    load 3
+    store 5
+    load 0
+    getf 0
+    load 0
+    getf 1
+    load 5
+    iadd.ovf 14
+    index 15
+    load 2
+    load 5
+    index 16
+    ine
+    jz L2
+    const 0
+    store 8
+    load 2
+    rt release
+    pop
+    load 8
+    ret
+L2:
+    load 3
+    const 1
+    iadd
+    store 3
+    jmp L1
+L3:
+    load 0
+    load 0
+    getf 1
+    load 2
+    len
+    iadd.ovf 17
+    setf 1
+    pop
+    const 1
+    store 9
+    load 2
+    rt release
+    pop
+    load 9
+    ret
+end
+
+func JsonReader.value(_: JsonReader): any
+    locals 13
+    const 0
+    store 2
+    load 0
+    call JsonReader.skipSpace
+    pop
+    load 0
+    getf 1
+    load 0
+    getf 0
+    len
+    ige
+    jz L0
+    load 0
+    str "unexpected end of input"
+    call JsonReader.fail
+    pop
+    const 0
+    store 3
+    load 2
+    rt release
+    pop
+    load 3
+    ret
+L0:
+    load 0
+    getf 0
+    load 0
+    getf 1
+    index 19
+    store 1
+    load 1
+    const 123
+    ieq
+    jz L1
+    load 0
+    call JsonReader.object
+    store 4
+    load 2
+    rt release
+    pop
+    load 4
+    ret
+L1:
+    load 1
+    const 91
+    ieq
+    jz L2
+    load 0
+    call JsonReader.array
+    store 5
+    load 2
+    rt release
+    pop
+    load 5
+    ret
+L2:
+    load 1
+    const 34
+    ieq
+    jz L4
+    load 2
+    store 6
+    load 0
+    call JsonReader.string
+    store 2
+    load 6
+    rt release
+    pop
+    load 0
+    getf 2
+    const 0
+    ine
+    jz L3
+    const 0
+    store 7
+    load 2
+    rt release
+    pop
+    load 7
+    ret
+L3:
+    load 2
+    tconst string
+    rt box
+    store 8
+    load 2
+    rt release
+    pop
+    load 8
+    ret
+L4:
+    load 1
+    const 116
+    ieq
+    jzk L5
+    pop
+    load 0
+    str "true"
+    call JsonReader.word
+L5:
+    jz L6
+    const 1
+    tconst bool
+    rt box
+    store 9
+    load 2
+    rt release
+    pop
+    load 9
+    ret
+L6:
+    load 1
+    const 102
+    ieq
+    jzk L7
+    pop
+    load 0
+    str "false"
+    call JsonReader.word
+L7:
+    jz L8
+    const 0
+    tconst bool
+    rt box
+    store 10
+    load 2
+    rt release
+    pop
+    load 10
+    ret
+L8:
+    load 1
+    const 110
+    ieq
+    jzk L9
+    pop
+    load 0
+    str "null"
+    call JsonReader.word
+L9:
+    jz L10
+    const 0
+    store 11
+    load 2
+    rt release
+    pop
+    load 11
+    ret
+L10:
+    load 1
+    const 45
+    ieq
+    jnzk L11
+    pop
+    load 1
+    const 48
+    ige
+    jzk L11
+    pop
+    load 1
+    const 57
+    ile
+L11:
+    jz L12
+    load 0
+    call JsonReader.number
+    store 12
+    load 2
+    rt release
+    pop
+    load 12
+    ret
+L12:
+    load 0
+    str "unexpected character"
+    call JsonReader.fail
+    pop
+    const 0
+    store 13
+    load 2
+    rt release
+    pop
+    load 13
+    ret
+end
+
+func JsonReader.object(_: JsonReader): any
+    locals 14
+    const 0
+    store 1
+    const 0
+    store 2
+    const 0
+    store 3
+    const 0
+    store 4
+    load 0
+    load 0
+    getf 1
+    const 1
+    iadd.ovf 21
+    setf 1
+    pop
+    load 2
+    store 6
+    load 1
+    store 7
+    tconst map<string, any>
+    rt map_new
+    store 1
+    load 7
+    rt release
+    pop
+    load 1
+    rt retain
+    store 2
+    load 6
+    rt release
+    pop
+    load 0
+    call JsonReader.skipSpace
+    pop
+    load 0
+    call JsonReader.peek
+    const 125
+    ieq
+    jz L0
+    load 0
+    load 0
+    getf 1
+    const 1
+    iadd.ovf 22
+    setf 1
+    pop
+    load 2
+    tconst map<string, any>
+    rt box
+    store 8
+    load 1
+    rt release
+    pop
+    load 2
+    rt release
+    pop
+    load 3
+    rt release
+    pop
+    load 4
+    rt release
+    pop
+    load 8
+    ret
+L0:
+    load 0
+    call JsonReader.skipSpace
+    pop
+    load 0
+    call JsonReader.peek
+    const 34
+    ine
+    jz L1
+    load 0
+    str "expected string key"
+    call JsonReader.fail
+    pop
+    const 0
+    store 9
+    load 1
+    rt release
+    pop
+    load 2
+    rt release
+    pop
+    load 3
+    rt release
+    pop
+    load 4
+    rt release
+    pop
+    load 9
+    ret
+L1:
+    load 3
+    store 6
+    load 0
+    call JsonReader.string
+    store 3
+    load 6
+    rt release
+    pop
+    load 0
+    getf 2
+    const 0
+    ine
+    jz L2
+    const 0
+    store 10
+    load 1
+    rt release
+    pop
+    load 2
+    rt release
+    pop
+    load 3
+    rt release
+    pop
+    load 4
+    rt release
+    pop
+    load 10
+    ret
+L2:
+    load 0
+    call JsonReader.skipSpace
+    pop
+    load 0
+    call JsonReader.peek
+    const 58
+    ine
+    jz L3
+    load 0
+    str "expected ':'"
+    call JsonReader.fail
+    pop
+    const 0
+    store 11
+    load 1
+    rt release
+    pop
+    load 2
+    rt release
+    pop
+    load 3
+    rt release
+    pop
+    load 4
+    rt release
+    pop
+    load 11
+    ret
+L3:
+    load 0
+    load 0
+    getf 1
+    const 1
+    iadd.ovf 23
+    setf 1
+    pop
+    load 4
+    store 6
+    load 0
+    call JsonReader.value
+    store 4
+    load 6
+    rt release
+    pop
+    load 0
+    getf 2
+    const 0
+    ine
+    jz L4
+    const 0
+    store 12
+    load 1
+    rt release
+    pop
+    load 2
+    rt release
+    pop
+    load 3
+    rt release
+    pop
+    load 4
+    rt release
+    pop
+    load 12
+    ret
+L4:
+    load 2
+    load 3
+    load 4
+    rt map_set
+    rt release
+    pop
+    load 0
+    call JsonReader.skipSpace
+    pop
+    load 0
+    call JsonReader.peek
+    store 5
+    load 5
+    const 44
+    ieq
+    jz L5
+    load 0
+    load 0
+    getf 1
+    const 1
+    iadd.ovf 24
+    setf 1
+    pop
+    jmp L7
+L5:
+    load 5
+    const 125
+    ieq
+    jz L6
+    load 0
+    load 0
+    getf 1
+    const 1
+    iadd.ovf 25
+    setf 1
+    pop
+    load 2
+    tconst map<string, any>
+    rt box
+    store 13
+    load 1
+    rt release
+    pop
+    load 2
+    rt release
+    pop
+    load 3
+    rt release
+    pop
+    load 4
+    rt release
+    pop
+    load 13
+    ret
+L6:
+    load 0
+    str "expected ',' or '}'"
+    call JsonReader.fail
+    pop
+    const 0
+    store 14
+    load 1
+    rt release
+    pop
+    load 2
+    rt release
+    pop
+    load 3
+    rt release
+    pop
+    load 4
+    rt release
+    pop
+    load 14
+    ret
+L7:
+    jmp L0
+    load 1
+    rt release
+    pop
+    load 2
+    rt release
+    pop
+    load 3
+    rt release
+    pop
+    load 4
+    rt release
+    pop
+    retv
+end
+
+func JsonReader.array(_: JsonReader): any
+    locals 8
+    const 0
+    store 1
+    const 0
+    store 2
+    load 0
+    load 0
+    getf 1
+    const 1
+    iadd.ovf 27
+    setf 1
+    pop
+    load 1
+    store 4
+    newarr [any] 0
+    store 1
+    load 4
+    rt release
+    pop
+    load 0
+    call JsonReader.skipSpace
+    pop
+    load 0
+    call JsonReader.peek
+    const 93
+    ieq
+    jz L0
+    load 0
+    load 0
+    getf 1
+    const 1
+    iadd.ovf 28
+    setf 1
+    pop
+    load 1
+    tconst [any]
+    rt box
+    store 5
+    load 1
+    rt release
+    pop
+    load 2
+    rt release
+    pop
+    load 5
+    ret
+L0:
+    load 2
+    store 4
+    load 0
+    call JsonReader.value
+    store 2
+    load 4
+    rt release
+    pop
+    load 0
+    getf 2
+    const 0
+    ine
+    jz L1
+    const 0
+    store 6
+    load 1
+    rt release
+    pop
+    load 2
+    rt release
+    pop
+    load 6
+    ret
+L1:
+    load 1
+    load 2
+    rt arr_push
+    pop
+    load 0
+    call JsonReader.skipSpace
+    pop
+    load 0
+    call JsonReader.peek
+    store 3
+    load 3
+    const 44
+    ieq
+    jz L2
+    load 0
+    load 0
+    getf 1
+    const 1
+    iadd.ovf 29
+    setf 1
+    pop
+    jmp L4
+L2:
+    load 3
+    const 93
+    ieq
+    jz L3
+    load 0
+    load 0
+    getf 1
+    const 1
+    iadd.ovf 30
+    setf 1
+    pop
+    load 1
+    tconst [any]
+    rt box
+    store 7
+    load 1
+    rt release
+    pop
+    load 2
+    rt release
+    pop
+    load 7
+    ret
+L3:
+    load 0
+    str "expected ',' or ']'"
+    call JsonReader.fail
+    pop
+    const 0
+    store 8
+    load 1
+    rt release
+    pop
+    load 2
+    rt release
+    pop
+    load 8
+    ret
+L4:
+    jmp L0
+    load 1
+    rt release
+    pop
+    load 2
+    rt release
+    pop
+    retv
+end
+
+func JsonReader.number(_: JsonReader): any
+    locals 11
+    const 0
+    store 4
+    const 0
+    store 5
+    const 0
+    store 8
+    const 0
+    store 9
+    load 0
+    getf 1
+    store 1
+    load 0
+    load 0
+    getf 1
+    const 1
+    iadd.ovf 32
+    setf 1
+    pop
+    const 0
+    store 2
+L0:
+    load 0
+    getf 1
+    load 0
+    getf 0
+    len
+    ilt
+    jz L9
+    load 0
+    getf 0
+    load 0
+    getf 1
+    index 33
+    store 3
+    load 3
+    const 48
+    ige
+    jzk L1
+    pop
+    load 3
+    const 57
+    ile
+L1:
+    jz L2
+    load 0
+    load 0
+    getf 1
+    const 1
+    iadd.ovf 34
+    setf 1
+    pop
+    jmp L8
+L2:
+    load 3
+    const 46
+    ieq
+    jnzk L3
+    pop
+    load 3
+    const 101
+    ieq
+L3:
+    jnzk L4
+    pop
+    load 3
+    const 69
+    ieq
+L4:
+    jnzk L5
+    pop
+    load 3
+    const 43
+    ieq
+L5:
+    jnzk L6
+    pop
+    load 3
+    const 45
+    ieq
+L6:
+    jz L7
+    const 1
+    store 2
+    load 0
+    load 0
+    getf 1
+    const 1
+    iadd.ovf 35
+    setf 1
+    pop
+    jmp L8
+L7:
+    jmp L9
+L8:
+    jmp L0
+L9:
+    load 2
+    not
+    jz L10
+    load 4
+    store 6
+    load 0
+    load 1
+    load 0
+    getf 1
+    call JsonReader.integer
+    store 4
+    load 6
+    rt release
+    pop
+    load 4
+    const 0
+    ine
+    jz L10
+    load 4
+    unbox
+    tconst int
+    rt box
+    store 7
+    load 4
+    rt release
+    pop
+    load 5
+    rt release
+    pop
+    load 7
+    ret
+L10:
+    load 5
+    store 6
+    load 0
+    getf 0
+    rt retain
+    tee 8
+    load 1
+    load 0
+    getf 1
+    rt arr_slice
+    tee 9
+    rt str_from_bytes
+    store 5
+    load 6
+    rt release
+    pop
+    load 8
+    rt release
+    pop
+    const 0
+    store 8
+    load 9
+    rt release
+    pop
+    const 0
+    store 9
+    load 5
+    rt is_float_str
+    jz L11
+    load 5
+    lconst 36
+    rt parse_float
+    tconst float
+    rt box
+    store 10
+    load 4
+    rt release
+    pop
+    load 5
+    rt release
+    pop
+    load 8
+    rt release
+    pop
+    load 9
+    rt release
+    pop
+    load 10
+    ret
+L11:
+    load 0
+    str "invalid number"
+    call JsonReader.fail
+    pop
+    const 0
+    store 11
+    load 4
+    rt release
+    pop
+    load 5
+    rt release
+    pop
+    load 8
+    rt release
+    pop
+    load 9
+    rt release
+    pop
+    load 11
+    ret
+end
+
+func JsonReader.integer(_: JsonReader, _: int, _: int): #25
+    locals 4
+    load 1
+    store 3
+    load 0
+    getf 0
+    load 3
+    index 38
+    const 45
+    ieq
+    store 4
+    load 4
+    jz L0
+    load 3
+    const 1
+    iadd.ovf 39
+    store 3
+L0:
+    load 3
+    load 2
+    ige
+    jz L1
+    const 0
+    ret
+L1:
+    const 0
+    store 5
+L2:
+    load 3
+    load 2
+    ilt
+    jz L5
+    load 0
+    getf 0
+    load 3
+    index 40
+    const 48
+    isub.ovf 41
+    store 6
+    load 5
+    const -8.390303882365713e246
+    ilt
+    jnzk L3
+    pop
+    load 5
+    const -8.390303882365713e246
+    ieq
+    jzk L3
+    pop
+    load 6
+    const 8
+    igt
+L3:
+    jz L4
+    const 0
+    ret
+L4:
+    load 5
+    const 10
+    imul.ovf 42
+    load 6
+    isub.ovf 42
+    store 5
+    load 3
+    const 1
+    iadd.ovf 43
+    store 3
+    jmp L2
+L5:
+    load 4
+    jz L6
+    load 5
+    tconst int
+    rt box
+    ret
+L6:
+    load 5
+    const -9223372036854775808
+    ieq
+    jz L7
+    const 0
+    ret
+L7:
+    load 5
+    ineg.ovf 44
+    tconst int
+    rt box
+    ret
+end
+
+func JsonReader.hexDigits(_: JsonReader): int
+    locals 10
+    load 0
+    getf 1
+    const 4
+    iadd.ovf 46
+    load 0
+    getf 0
+    len
+    igt
+    jz L0
+    load 0
+    str "invalid unicode escape"
+    call JsonReader.fail
+    pop
+    const 0
+    store 6
+    load 6
+    ret
+L0:
+    load 0
+    getf 1
+    store 1
+    load 0
+    getf 1
+    const 4
+    iadd.ovf 47
+    store 2
+    load 0
+    load 2
+    setf 1
+    pop
+    load 0
+    getf 0
+    load 1
+    index 48
+    const 43
+    ieq
+    jz L1
+    load 1
+    const 1
+    iadd.ovf 49
+    store 1
+L1:
+    const 0
+    store 3
+L2:
+    load 1
+    load 2
+    ilt
+    jz L11
+    load 0
+    getf 0
+    load 1
+    index 50
+    store 4
+    const -1
+    store 5
+    load 4
+    const 48
+    ige
+    jzk L3
+    pop
+    load 4
+    const 57
+    ile
+L3:
+    jz L4
+    load 4
+    const 48
+    isub.ovf 51
+    const 2
+    lconst 51
+    rt num_fit
+    store 5
+    jmp L8
+L4:
+    load 4
+    const 97
+    ige
+    jzk L5
+    pop
+    load 4
+    const 102
+    ile
+L5:
+    jz L6
+    load 4
+    const 87
+    isub.ovf 52
+    const 2
+    lconst 52
+    rt num_fit
+    store 5
+    jmp L8
+L6:
+    load 4
+    const 65
+    ige
+    jzk L7
+    pop
+    load 4
+    const 70
+    ile
+L7:
+    jz L8
+    load 4
+    const 55
+    isub.ovf 53
+    const 2
+    lconst 53
+    rt num_fit
+    store 5
+L8:
+    load 5
+    const 0
+    ilt
+    jz L10
+    load 0
+    getf 2
+    const 0
+    ieq
+    jz L9
+    str "invalid unicode escape"
+    new JsonError
+    store 7
+    load 0
+    getf 2
+    store 8
+    load 0
+    load 7
+    setf 2
+    pop
+    load 8
+    rt release
+    pop
+L9:
+    const 0
+    store 9
+    load 9
+    ret
+L10:
+    load 3
+    const 16
+    imul.ovf 54
+    load 5
+    iadd.ovf 54
+    store 3
+    load 1
+    const 1
+    iadd.ovf 55
+    store 1
+    jmp L2
+L11:
+    load 3
+    store 10
+    load 10
+    ret
+end
+
+func JsonReader.escape(_: JsonReader): string
+    locals 2
+    load 0
+    call JsonReader.hexDigits
+    store 1
+    load 0
+    getf 2
+    const 0
+    ine
+    jz L0
+    str ""
+    ret
+L0:
+    load 1
+    const 55296
+    ige
+    jzk L1
+    pop
+    load 1
+    const 56320
+    ilt
+L1:
+    jzk L2
+    pop
+    load 0
+    getf 1
+    const 1
+    iadd.ovf 57
+    load 0
+    getf 0
+    len
+    ilt
+L2:
+    jzk L3
+    pop
+    load 0
+    getf 0
+    load 0
+    getf 1
+    index 58
+    const 92
+    ieq
+L3:
+    jzk L4
+    pop
+    load 0
+    getf 0
+    load 0
+    getf 1
+    const 1
+    iadd.ovf 59
+    index 60
+    const 117
+    ieq
+L4:
+    jz L6
+    load 0
+    load 0
+    getf 1
+    const 2
+    iadd.ovf 61
+    setf 1
+    pop
+    load 0
+    call JsonReader.hexDigits
+    store 2
+    load 0
+    getf 2
+    const 0
+    ine
+    jz L5
+    str ""
+    ret
+L5:
+    const 65536
+    load 1
+    const 55296
+    isub.ovf 62
+    const 10
+    shl
+    iadd.ovf 63
+    load 2
+    const 56320
+    isub.ovf 64
+    const 1023
+    and
+    iadd.ovf 63
+    store 1
+L6:
+    load 1
+    const 55296
+    ige
+    jzk L7
+    pop
+    load 1
+    const 57344
+    ilt
+L7:
+    jz L8
+    const 65533
+    store 1
+L8:
+    load 1
+    rt str_from_code
+    ret
+end
+
+func JsonReader.string(_: JsonReader): string
+    locals 13
+    const 0
+    store 2
+    const 0
+    store 6
+    const 0
+    store 8
+    const 0
+    store 9
+    const 0
+    store 10
+    load 0
+    load 0
+    getf 1
+    const 1
+    iadd.ovf 66
+    setf 1
+    pop
+    load 0
+    getf 0
+    len
+    store 1
+    load 2
+    store 7
+    str ""
+    store 2
+    load 7
+    rt release
+    pop
+    load 0
+    getf 1
+    store 3
+L0:
+    load 0
+    getf 1
+    load 1
+    ilt
+    jz L14
+    load 0
+    getf 0
+    load 0
+    getf 1
+    index 67
+    store 4
+    load 4
+    const 34
+    ieq
+    jz L2
+    load 3
+    load 0
+    getf 1
+    ilt
+    jz L1
+    load 2
+    load 0
+    getf 0
+    rt retain
+    tee 8
+    load 3
+    load 0
+    getf 1
+    rt arr_slice
+    tee 9
+    rt str_from_bytes
+    tee 10
+    rt str_append
+    store 2
+    load 8
+    rt release
+    pop
+    const 0
+    store 8
+    load 9
+    rt release
+    pop
+    const 0
+    store 9
+    load 10
+    rt release
+    pop
+    const 0
+    store 10
+L1:
+    load 0
+    load 0
+    getf 1
+    const 1
+    iadd.ovf 68
+    setf 1
+    pop
+    load 2
+    store 11
+    const 0
+    store 2
+    load 2
+    rt release
+    pop
+    load 6
+    rt release
+    pop
+    load 8
+    rt release
+    pop
+    load 9
+    rt release
+    pop
+    load 10
+    rt release
+    pop
+    load 11
+    ret
+L2:
+    load 4
+    const 92
+    ine
+    jz L3
+    load 0
+    load 0
+    getf 1
+    const 1
+    iadd.ovf 69
+    setf 1
+    pop
+    jmp L13
+L3:
+    load 3
+    load 0
+    getf 1
+    ilt
+    jz L4
+    load 2
+    load 0
+    getf 0
+    rt retain
+    tee 10
+    load 3
+    load 0
+    getf 1
+    rt arr_slice
+    tee 9
+    rt str_from_bytes
+    tee 8
+    rt str_append
+    store 2
+    load 10
+    rt release
+    pop
+    const 0
+    store 10
+    load 9
+    rt release
+    pop
+    const 0
+    store 9
+    load 8
+    rt release
+    pop
+    const 0
+    store 8
+L4:
+    load 0
+    load 0
+    getf 1
+    const 1
+    iadd.ovf 70
+    setf 1
+    pop
+    load 0
+    getf 1
+    load 1
+    ige
+    jz L5
+    jmp L14
+L5:
+    load 0
+    getf 0
+    load 0
+    getf 1
+    index 71
+    store 5
+    load 0
+    load 0
+    getf 1
+    const 1
+    iadd.ovf 72
+    setf 1
+    pop
+    load 0
+    getf 1
+    store 3
+    load 5
+    const 110
+    ieq
+    jz L6
+    load 2
+    str "\n"
+    rt str_append
+    store 2
+    jmp L13
+L6:
+    load 5
+    const 116
+    ieq
+    jz L7
+    load 2
+    str "\t"
+    rt str_append
+    store 2
+    jmp L13
+L7:
+    load 5
+    const 114
+    ieq
+    jz L8
+    load 2
+    str "\r"
+    rt str_append
+    store 2
+    jmp L13
+L8:
+    load 5
+    const 98
+    ieq
+    jz L9
+    load 2
+    str "\u{8}"
+    rt str_append
+    store 2
+    jmp L13
+L9:
+    load 5
+    const 102
+    ieq
+    jz L10
+    load 2
+    str "\u{c}"
+    rt str_append
+    store 2
+    jmp L13
+L10:
+    load 5
+    const 117
+    ieq
+    jz L12
+    load 6
+    store 7
+    load 0
+    call JsonReader.escape
+    store 6
+    load 7
+    rt release
+    pop
+    load 0
+    getf 2
+    const 0
+    ine
+    jz L11
+    str ""
+    store 12
+    load 2
+    rt release
+    pop
+    load 6
+    rt release
+    pop
+    load 8
+    rt release
+    pop
+    load 9
+    rt release
+    pop
+    load 10
+    rt release
+    pop
+    load 12
+    ret
+L11:
+    load 2
+    load 6
+    rt str_append
+    store 2
+    load 0
+    getf 1
+    store 3
+    jmp L13
+L12:
+    load 0
+    getf 1
+    const 1
+    isub.ovf 73
+    store 3
+L13:
+    jmp L0
+L14:
+    load 0
+    str "unterminated string"
+    call JsonReader.fail
+    pop
+    str ""
+    store 13
+    load 2
+    rt release
+    pop
+    load 6
+    rt release
+    pop
+    load 8
+    rt release
+    pop
+    load 9
+    rt release
+    pop
+    load 10
+    rt release
+    pop
+    load 13
+    ret
+end
+
+func "new JsonReader"(_: #23): JsonReader
+    locals 3
+    const 0
+    store 1
+    load 1
+    store 2
+    load 0
+    rt retain
+    const 0
+    const 0
+    new JsonReader
+    store 1
+    load 2
+    rt release
+    pop
+    load 1
+    store 3
+    const 0
+    store 1
+    load 1
+    rt release
+    pop
+    load 3
+    ret
+end
+
+@Runtime name="json_parse"
+func jsonParse(_: string, _: int): any
+    locals 7
+    const 0
+    store 2
+    const 0
+    store 3
+    const 0
+    store 4
+    const 0
+    store 6
+    load 2
+    store 5
+    load 0
+    tconst #23
+    rt str_to_bytes
+    const 0
+    const 0
+    new JsonReader
+    store 2
+    load 5
+    rt release
+    pop
+    load 3
+    store 5
+    load 2
+    call JsonReader.value
+    store 3
+    load 5
+    rt release
+    pop
+    load 2
+    getf 2
+    const 0
+    ieq
+    jz L0
+    load 2
+    call JsonReader.skipSpace
+    pop
+    load 2
+    call JsonReader.more
+    jz L0
+    load 2
+    str "trailing characters"
+    call JsonReader.fail
+    pop
+L0:
+    load 4
+    store 5
+    load 2
+    getf 2
+    rt retain
+    store 4
+    load 5
+    rt release
+    pop
+    load 4
+    const 0
+    ine
+    jz L1
+    str "invalid JSON: "
+    load 4
+    getf 0
+    rt str_concat
+    tee 6
+    load 1
+    rt fail
+    pop
+    load 6
+    rt release
+    pop
+    const 0
+    store 6
+    const 0
+    store 7
+    load 2
+    rt release
+    pop
+    load 3
+    rt release
+    pop
+    load 4
+    rt release
+    pop
+    load 6
+    rt release
+    pop
+    load 7
+    ret
+L1:
+    load 3
+    store 8
+    const 0
+    store 3
+    load 2
+    rt release
+    pop
+    load 3
+    rt release
+    pop
+    load 4
+    rt release
+    pop
+    load 6
+    rt release
+    pop
+    load 8
+    ret
 end
 
 @Runtime name="imin"
@@ -148,6 +2118,177 @@ L0:
     ret
 end
 
+func productFits(_: int, _: int): bool
+    locals 5
+    load 0
+    const 0
+    ieq
+    jnzk L0
+    pop
+    load 1
+    const 0
+    ieq
+L0:
+    jz L1
+    const 1
+    store 2
+    load 2
+    ret
+L1:
+    load 0
+    const 0
+    igt
+    jz L3
+    load 1
+    const 0
+    igt
+    jz L2
+    load 0
+    const 9223372036854775807
+    load 1
+    idiv 78
+    ile
+    store 3
+    load 3
+    ret
+L2:
+    load 1
+    const -9223372036854775808
+    load 0
+    idiv 79
+    ige
+    store 4
+    load 4
+    ret
+L3:
+    load 1
+    const 0
+    igt
+    jz L4
+    load 0
+    const -9223372036854775808
+    load 1
+    idiv 80
+    ige
+    store 5
+    load 5
+    ret
+L4:
+    load 0
+    const 9223372036854775807
+    load 1
+    idiv 81
+    ige
+    store 6
+    load 6
+    ret
+end
+
+func overflow(): void
+    str "integer overflow"
+    const -1
+    rt fail
+    pop
+    retv
+end
+
+@Runtime name="iabs"
+func intAbs(_: int): int
+    locals 2
+    load 0
+    const -9223372036854775808
+    ieq
+    jz L0
+    call overflow
+    pop
+L0:
+    load 0
+    const 0
+    ilt
+    jz L1
+    load 0
+    ineg.ovf 84
+    store 1
+    load 1
+    ret
+L1:
+    load 0
+    store 2
+    load 2
+    ret
+end
+
+@Runtime name="ipow"
+func intPow(_: int, _: int): int
+    locals 5
+    load 1
+    const 0
+    ilt
+    jz L0
+    const 0
+    store 5
+    load 5
+    ret
+L0:
+    load 0
+    store 2
+    load 1
+    store 3
+    const 1
+    store 4
+L1:
+    load 3
+    const 0
+    igt
+    jz L6
+    load 3
+    const 1
+    and
+    const 1
+    ieq
+    jz L3
+    load 4
+    load 2
+    call productFits
+    not
+    jz L2
+    call overflow
+    pop
+L2:
+    load 4
+    load 2
+    imul.ovf 86
+    store 4
+L3:
+    load 3
+    const 1
+    shr
+    store 3
+    load 3
+    const 0
+    igt
+    jz L5
+    load 2
+    load 2
+    call productFits
+    not
+    jz L4
+    call overflow
+    pop
+L4:
+    load 2
+    load 2
+    imul.ovf 87
+    store 2
+L5:
+    jmp L1
+L6:
+    load 4
+    store 6
+    load 6
+    ret
+end
+
 func digitOf(_: #13): int
     locals 4
     load 0
@@ -162,9 +2303,9 @@ L0:
     jz L1
     load 0
     const 48
-    isub.ovf 6
+    isub.ovf 89
     const 2
-    lconst 6
+    lconst 89
     rt num_fit
     store 1
     load 1
@@ -182,9 +2323,9 @@ L2:
     jz L3
     load 0
     const 87
-    isub.ovf 7
+    isub.ovf 90
     const 2
-    lconst 7
+    lconst 90
     rt num_fit
     store 2
     load 2
@@ -202,9 +2343,9 @@ L4:
     jz L5
     load 0
     const 55
-    isub.ovf 8
+    isub.ovf 91
     const 2
-    lconst 8
+    lconst 91
     rt num_fit
     store 3
     load 3
@@ -216,14 +2357,14 @@ L5:
     ret
 end
 
-func intIn(_: string, _: int): #21
+func intIn(_: string, _: int): #25
     locals 13
     const 0
     store 2
     load 2
     store 8
     load 0
-    tconst #22
+    tconst #23
     rt str_to_bytes
     store 2
     load 8
@@ -243,21 +2384,21 @@ func intIn(_: string, _: int): #21
     pop
     load 2
     const 0
-    index 10
+    index 93
     const 43
     ieq
     jnzk L0
     pop
     load 2
     const 0
-    index 11
+    index 94
     const 45
     ieq
 L0:
     jz L1
     load 2
     const 0
-    index 12
+    index 95
     const 45
     ieq
     store 5
@@ -285,7 +2426,7 @@ L3:
     jz L7
     load 2
     load 4
-    index 13
+    index 96
     call digitOf
     store 7
     load 7
@@ -309,11 +2450,11 @@ L5:
     load 6
     load 7
     const 9223372036854775807
-    isub.ovf 14
+    isub.ovf 97
     const 1
-    isub.ovf 15
+    isub.ovf 98
     load 1
-    idiv 15
+    idiv 98
     ilt
     jz L6
     const 0
@@ -326,13 +2467,13 @@ L5:
 L6:
     load 6
     load 1
-    imul.ovf 16
+    imul.ovf 99
     load 7
-    isub.ovf 16
+    isub.ovf 99
     store 6
     load 4
     const 1
-    iadd.ovf 17
+    iadd.ovf 100
     store 4
     jmp L3
 L7:
@@ -361,7 +2502,7 @@ L8:
     ret
 L9:
     load 6
-    ineg.ovf 18
+    ineg.ovf 101
     tconst int
     rt box
     store 14
@@ -542,7 +2683,7 @@ L0:
     rt is_float_str
     jz L2
     load 2
-    lconst 23
+    lconst 106
     rt parse_float
     store 4
     load 4
@@ -789,7 +2930,7 @@ func intToText(_: int, _: int, _: int): string
     igt
     jz L0
     load 0
-    ineg.ovf 27
+    ineg.ovf 110
     store 3
 L0:
     load 4
@@ -803,8 +2944,8 @@ L1:
     const 0
     load 3
     load 1
-    irem 28
-    isub.ovf 29
+    irem 111
+    isub.ovf 112
     store 5
     load 4
     store 6
@@ -812,7 +2953,7 @@ L1:
     load 5
     load 5
     const 1
-    iadd.ovf 30
+    iadd.ovf 113
     rt str_sub
     tee 7
     load 4
@@ -828,7 +2969,7 @@ L1:
     store 7
     load 3
     load 1
-    idiv 31
+    idiv 114
     store 3
     load 3
     const 0
@@ -869,14 +3010,14 @@ L4:
     ret
 end
 
-func matchesAt(_: #22, _: #22, _: int): bool
+func matchesAt(_: #23, _: #23, _: int): bool
     locals 6
     load 0
     load 2
-    index 33
+    index 116
     load 1
     const 0
-    index 34
+    index 117
     ine
     jz L0
     const 0
@@ -899,11 +3040,11 @@ L1:
     load 0
     load 2
     load 5
-    iadd.ovf 35
-    index 36
+    iadd.ovf 118
+    index 119
     load 1
     load 5
-    index 37
+    index 120
     ine
     jz L2
     const 0
@@ -990,7 +3131,7 @@ func textEndsWith(_: string, _: string): bool
     load 0
     load 2
     load 3
-    isub.ovf 41
+    isub.ovf 124
     load 2
     rt str_sub
     tee 4
@@ -1090,7 +3231,7 @@ L0:
     load 2
     store 10
     load 0
-    tconst #22
+    tconst #23
     rt str_to_bytes
     store 2
     load 10
@@ -1099,7 +3240,7 @@ L0:
     load 3
     store 10
     load 1
-    tconst #22
+    tconst #23
     rt str_to_bytes
     store 3
     load 10
@@ -1125,7 +3266,7 @@ L0:
 L1:
     load 8
     load 5
-    iadd.ovf 44
+    iadd.ovf 127
     load 4
     ile
     jz L4
@@ -1156,7 +3297,7 @@ L1:
     store 12
     load 8
     load 5
-    iadd.ovf 45
+    iadd.ovf 128
     store 8
     load 8
     store 7
@@ -1164,7 +3305,7 @@ L1:
 L2:
     load 8
     const 1
-    iadd.ovf 46
+    iadd.ovf 129
     store 8
 L3:
     jmp L1
@@ -1248,7 +3389,7 @@ L0:
     load 3
     store 11
     load 0
-    tconst #22
+    tconst #23
     rt str_to_bytes
     store 3
     load 11
@@ -1257,7 +3398,7 @@ L0:
     load 4
     store 11
     load 1
-    tconst #22
+    tconst #23
     rt str_to_bytes
     store 4
     load 11
@@ -1283,7 +3424,7 @@ L0:
 L1:
     load 9
     load 6
-    iadd.ovf 48
+    iadd.ovf 131
     load 5
     ile
     jz L4
@@ -1318,7 +3459,7 @@ L1:
     store 7
     load 9
     load 6
-    iadd.ovf 49
+    iadd.ovf 132
     store 9
     load 9
     store 8
@@ -1326,7 +3467,7 @@ L1:
 L2:
     load 9
     const 1
-    iadd.ovf 50
+    iadd.ovf 133
     store 9
 L3:
     jmp L1
@@ -1425,7 +3566,7 @@ L0:
     ret
 end
 
-func codeAt(_: #22, _: int, _: int): int
+func codeAt(_: #23, _: int, _: int): int
     locals 6
     load 2
     const 1
@@ -1433,17 +3574,17 @@ func codeAt(_: #22, _: int, _: int): int
     jz L0
     load 0
     load 1
-    index 54
+    index 137
     store 7
     load 7
     ret
 L0:
     load 0
     load 1
-    index 55
+    index 138
     const 127
     load 2
-    lconst 56
+    lconst 139
     rt shift_check
     shr
     and
@@ -1465,8 +3606,8 @@ L1:
     load 0
     load 1
     load 6
-    iadd.ovf 58
-    index 59
+    iadd.ovf 141
+    index 142
     const 63
     and
     or
@@ -1578,7 +3719,7 @@ func textTrim(_: string): string
     load 1
     store 7
     load 0
-    tconst #22
+    tconst #23
     rt str_to_bytes
     store 1
     load 7
@@ -1596,7 +3737,7 @@ L0:
     jz L2
     load 1
     load 3
-    index 63
+    index 146
     call byteWidth
     store 4
     load 1
@@ -1610,7 +3751,7 @@ L0:
 L1:
     load 3
     load 4
-    iadd.ovf 64
+    iadd.ovf 147
     store 3
     jmp L0
 L2:
@@ -1623,7 +3764,7 @@ L3:
     jz L8
     load 5
     const 1
-    isub.ovf 65
+    isub.ovf 148
     store 6
 L4:
     load 6
@@ -1633,13 +3774,13 @@ L4:
     pop
     load 1
     load 6
-    index 66
+    index 149
     call isContinuation
 L5:
     jz L6
     load 6
     const 1
-    isub.ovf 67
+    isub.ovf 150
     store 6
     jmp L4
 L6:
@@ -1647,7 +3788,7 @@ L6:
     load 6
     load 5
     load 6
-    isub.ovf 68
+    isub.ovf 151
     call codeAt
     call isSpaceCode
     not
@@ -1700,6 +3841,8 @@ L10:
 end
 
 func "<entry>"(): void
+    call "<init lib/runtime/json.bn>"
+    pop
     call "<init lib/runtime/math.bn>"
     pop
     call "<init lib/runtime/strings.bn>"

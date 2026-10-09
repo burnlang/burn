@@ -1,3 +1,4 @@
+import "json.bn"
 import "math.bn"
 import "numbers.bn"
 import "strings.bn"

@@ -17,3 +17,62 @@ pub fun intMax(a: int, b: int): int {
     }
     return a
 }
+
+priv fun productFits(a: int, b: int): bool {
+    if (a == 0 || b == 0) {
+        return true
+    }
+    if (a > 0) {
+        if (b > 0) {
+            return a <= 9223372036854775807 / b
+        }
+        return b >= (-9223372036854775807 - 1) / a
+    }
+    if (b > 0) {
+        return a >= (-9223372036854775807 - 1) / b
+    }
+    return a >= 9223372036854775807 / b
+}
+
+priv fun overflow() {
+    __fail("integer overflow", -1)
+}
+
+/** `abs(n)` on ints. */
+@Runtime("iabs")
+pub fun intAbs(n: int): int {
+    if (n == (-9223372036854775807 - 1)) {
+        overflow()
+    }
+    if (n < 0) {
+        return -n
+    }
+    return n
+}
+
+/** `pow(base, exponent)` on ints: 0 for a negative exponent. */
+@Runtime("ipow")
+pub fun intPow(base: int, exponent: int): int {
+    if (exponent < 0) {
+        return 0
+    }
+    var b = base
+    var e = exponent
+    var r = 1
+    while (e > 0) {
+        if (e & 1 == 1) {
+            if (!productFits(r, b)) {
+                overflow()
+            }
+            r = r * b
+        }
+        e = e >> 1
+        if (e > 0) {
+            if (!productFits(b, b)) {
+                overflow()
+            }
+            b = b * b
+        }
+    }
+    return r
+}

@@ -1,0 +1,341 @@
+import "runtime.bn"
+
+priv def type JsonError {
+    string message
+}
+
+priv def struct JsonReader(text: [uint8]) {
+    int at = 0
+    JsonError? error = null
+
+    fun more(): bool {
+        return at < len(text)
+    }
+
+    fun peek(): int {
+        if (at < len(text)) {
+            return text[at]
+        }
+        return -1
+    }
+
+    fun skipSpace() {
+        while (at < len(text)) {
+            var c = text[at]
+            if (c != 32 && c != 10 && c != 13 && c != 9) {
+                return
+            }
+            at += 1
+        }
+    }
+
+    fun fail(message: string) {
+        if (error == null) {
+            error = JsonError { message: "${message} at offset ${at}" }
+        }
+    }
+
+    fun word(w: string): bool {
+        var b = bytes(w)
+        if (at + len(b) > len(text)) {
+            return false
+        }
+        for k in 0..len(b) {
+            if (text[at + k] != b[k]) {
+                return false
+            }
+        }
+        at += len(b)
+        return true
+    }
+
+    fun value(): any {
+        skipSpace()
+        if (at >= len(text)) {
+            fail("unexpected end of input")
+            return null
+        }
+        var c = text[at] as int
+        if (c == 123) {
+            return object()
+        }
+        if (c == 91) {
+            return array()
+        }
+        if (c == 34) {
+            var s = string()
+            if (error != null) {
+                return null
+            }
+            return s
+        }
+        if (c == 116 && word("true")) {
+            return true
+        }
+        if (c == 102 && word("false")) {
+            return false
+        }
+        if (c == 110 && word("null")) {
+            return null
+        }
+        if (c == 45 || c >= 48 && c <= 57) {
+            return number()
+        }
+        fail("unexpected character")
+        return null
+    }
+
+    fun object(): any {
+        at += 1
+        var m: {string: any} = {}
+        skipSpace()
+        if (peek() == 125) {
+            at += 1
+            return m
+        }
+        while (true) {
+            skipSpace()
+            if (peek() != 34) {
+                fail("expected string key")
+                return null
+            }
+            var k = string()
+            if (error != null) {
+                return null
+            }
+            skipSpace()
+            if (peek() != 58) {
+                fail("expected ':'")
+                return null
+            }
+            at += 1
+            var v = value()
+            if (error != null) {
+                return null
+            }
+            m[k] = v
+            skipSpace()
+            var next = peek()
+            if (next == 44) {
+                at += 1
+                continue
+            }
+            if (next == 125) {
+                at += 1
+                return m
+            }
+            fail("expected ',' or '}'")
+            return null
+        }
+    }
+
+    fun array(): any {
+        at += 1
+        var a: [any] = []
+        skipSpace()
+        if (peek() == 93) {
+            at += 1
+            return a
+        }
+        while (true) {
+            var v = value()
+            if (error != null) {
+                return null
+            }
+            push(a, v)
+            skipSpace()
+            var next = peek()
+            if (next == 44) {
+                at += 1
+                continue
+            }
+            if (next == 93) {
+                at += 1
+                return a
+            }
+            fail("expected ',' or ']'")
+            return null
+        }
+    }
+
+    fun number(): any {
+        var start = at
+        at += 1
+        var isFloat = false
+        while (at < len(text)) {
+            var c = text[at]
+            if (c >= 48 && c <= 57) {
+                at += 1
+            } else if (c == 46 || c == 101 || c == 69 || c == 43 || c == 45) {
+                isFloat = true
+                at += 1
+            } else {
+                break
+            }
+        }
+        if (!isFloat) {
+            var v = integer(start, at)
+            if (v != null) {
+                return v
+            }
+        }
+        var t = fromBytes(slice(text, start, at))
+        if (isNumber(t)) {
+            return toFloat(t)
+        }
+        fail("invalid number")
+        return null
+    }
+
+    fun integer(start: int, end: int): int? {
+        var k = start
+        var negative = text[k] == 45
+        if (negative) {
+            k += 1
+        }
+        if (k >= end) {
+            return null
+        }
+        var v = 0
+        while (k < end) {
+            var d = (text[k] as int) - 48
+            if (v < -922337203685477580 || v == -922337203685477580 && d > 8) {
+                return null
+            }
+            v = v * 10 - d
+            k += 1
+        }
+        if (negative) {
+            return v
+        }
+        if (v == -9223372036854775807 - 1) {
+            return null
+        }
+        return -v
+    }
+
+    fun hexDigits(): int {
+        if (at + 4 > len(text)) {
+            fail("invalid unicode escape")
+            return 0
+        }
+        var k = at
+        var end = at + 4
+        at = end
+        if (text[k] == 43) {
+            k += 1
+        }
+        var v = 0
+        while (k < end) {
+            var c = text[k]
+            var d = -1
+            if (c >= 48 && c <= 57) {
+                d = c - 48
+            } else if (c >= 97 && c <= 102) {
+                d = c - 87
+            } else if (c >= 65 && c <= 70) {
+                d = c - 55
+            }
+            if (d < 0) {
+                if (error == null) {
+                    error = JsonError { message: "invalid unicode escape" }
+                }
+                return 0
+            }
+            v = v * 16 + d
+            k += 1
+        }
+        return v
+    }
+
+    fun escape(): string {
+        var cp = hexDigits()
+        if (error != null) {
+            return ""
+        }
+        if (cp >= 55296 && cp < 56320 && at + 1 < len(text) && text[at] == 92 && text[at + 1] == 117) {
+            at += 2
+            var lo = hexDigits()
+            if (error != null) {
+                return ""
+            }
+            cp = 65536 + ((cp - 55296) << 10) + ((lo - 56320) & 1023)
+        }
+        if (cp >= 55296 && cp < 57344) {
+            cp = 65533
+        }
+        return fromCharCode(cp)
+    }
+
+    fun string(): string {
+        at += 1
+        var n = len(text)
+        var out = ""
+        var start = at
+        while (at < n) {
+            var c = text[at]
+            if (c == 34) {
+                if (start < at) {
+                    out += fromBytes(slice(text, start, at))
+                }
+                at += 1
+                return out
+            }
+            if (c != 92) {
+                at += 1
+                continue
+            }
+            if (start < at) {
+                out += fromBytes(slice(text, start, at))
+            }
+            at += 1
+            if (at >= n) {
+                break
+            }
+            var e = text[at]
+            at += 1
+            start = at
+            if (e == 110) {
+                out += "\n"
+            } else if (e == 116) {
+                out += "\t"
+            } else if (e == 114) {
+                out += "\r"
+            } else if (e == 98) {
+                out += "\u{8}"
+            } else if (e == 102) {
+                out += "\u{c}"
+            } else if (e == 117) {
+                var u = escape()
+                if (error != null) {
+                    return ""
+                }
+                out += u
+                start = at
+            } else {
+                start = at - 1
+            }
+        }
+        fail("unterminated string")
+        return ""
+    }
+}
+
+/** `parseJSON(text)`: the JSON value in `text` as `any`, with objects as `{string: any}` and arrays as `[any]`. */
+@Runtime("json_parse")
+pub fun jsonParse(text: string, loc: int): any {
+    var r = new JsonReader(bytes(text))
+    var v = r.value()
+    if (r.error == null) {
+        r.skipSpace()
+        if (r.more()) {
+            r.fail("trailing characters")
+        }
+    }
+    var e = r.error
+    if (e != null) {
+        __fail("invalid JSON: ${e.message}", loc)
+        return null
+    }
+    return v
+}
