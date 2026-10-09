@@ -6,8 +6,11 @@ import "../project/paths.bn"
 import "../project/project.bn"
 import "compile.bn"
 import "host.bn"
+import "init.bn"
 import "std/fs"
+import "std/process"
 import "targets.bn"
+import "tools.bn"
 
 priv const TEXT_DUMPS = ["--tokens", "--ast", "--diagnostics", "--toml", "--project", "--modules", "--decls", "--checked", "--owned", "--bvm"]
 
@@ -19,6 +22,8 @@ priv fun usage() {
         "  burn <file.bn> [args...]            run a program instantly on the Burn VM (bvm)",
         "  burn <file.bvm|file.bvmc|file.bar> [args...]",
         "                                      run a bvm module or archive",
+        "  burn init <name> [--lib] [--target <bvm|bar>]",
+        "                                      create a project, named like github.com/you/app",
         "  burn run [file.bn] [args...]        run a program, or the project's main file",
         "      --bin <name>                    run src/bin/<name>.bn of the project",
         "      --example <name>                run examples/<name>.bn of the project",
@@ -30,6 +35,9 @@ priv fun usage() {
         "      --emit-asm <path>               also write the bvm assembly",
         "      --no-std                        build without the standard library (same as `std = false` in burn.toml)",
         "  burn check [files...]               type-check without running (default: the whole project)",
+        "  burn test [filter...]               run every test in the project's tests/ folder",
+        "  burn fix [--dry-run] <files...>     apply the compiler's suggested fixes",
+        "  burn fmt [-w] [--check] <files...>  format source files",
         "  burn eval '<code>'                  evaluate code from the command line",
         "  burn version                        print the version"
     ], "\n"))
@@ -611,6 +619,103 @@ priv fun cmdCheckArgs(rest: [string], opts: Options): int {
     return cmdCheck(all, opts)
 }
 
+priv fun testFiles(exe: string, p: Project, tests: [Entry], failures: [string]) {
+    var back = currentDir()
+    for t in tests {
+        var shownPath = shown(t.path)
+        Process.setCwd(p.root)
+        var r = Process.output(exe, [t.path])
+        Process.setCwd(back)
+        if (r.code == 0) {
+            print("test ${shownPath} ... ok")
+        } else {
+            print("test ${shownPath} ... FAILED")
+            failures.push(shownPath)
+            if (r.code < 0 && r.out == "" && r.err == "") {
+                failures.push("could not start ${exe}")
+            } else {
+                failures.push(r.out + r.err)
+            }
+        }
+    }
+}
+
+priv fun trimEnd(s: string): string {
+    var b = bytes(s)
+    var end = len(b)
+    while (end > 0 && (b[end - 1] == 32 || b[end - 1] == 10 || b[end - 1] == 13 || b[end - 1] == 9)) {
+        end -= 1
+    }
+    return fromBytes(slice(b, 0, end))
+}
+
+priv fun cmdTest(rest: [string]): int {
+    string? package = null
+    [string] filters = []
+    var i = 0
+    while (i < len(rest)) {
+        if (rest[i] == "-p" || rest[i] == "--package") {
+            if (i + 1 >= len(rest)) {
+                return fail("`${rest[i]}` needs the name of a workspace member", 2)
+            }
+            package = rest[i + 1]
+            i += 2
+            continue
+        }
+        filters.push(rest[i])
+        i += 1
+    }
+    var err = new Problem()
+    var projects = selectedProjects(package, err)
+    if (projects == null) {
+        return fail(err.message, 2)
+    }
+    var exe = launcher()
+    var total = 0
+    [string] failures = []
+    for p in projects {
+        [Entry] picked = []
+        for t in tests(p) {
+            var keep = len(filters) == 0
+            for f in filters {
+                if (contains(t.name, f)) {
+                    keep = true
+                }
+            }
+            if (keep) {
+                picked.push(t)
+            }
+        }
+        if (len(picked) == 0) {
+            if (len(projects) == 1) {
+                print("no tests in ${shown(pathJoin(p.root, "tests"))}")
+            }
+            continue
+        }
+        total += len(picked)
+        var plural = "s"
+        if (len(picked) == 1) {
+            plural = ""
+        }
+        print("testing ${p.manifest.name} (${len(picked)} file${plural})")
+        testFiles(exe, p, picked, failures)
+    }
+    if (total == 0) {
+        return 0
+    }
+    var k = 0
+    while (k < len(failures)) {
+        print("\n---- ${failures[k]} ----\n${trimEnd(failures[k + 1])}")
+        k += 2
+    }
+    var failed = len(failures) / 2
+    print("\n${total - failed} passed, ${failed} failed")
+    if (failed == 0) {
+        return 0
+    }
+    return 1
+}
+
 priv fun burni(args: [string], opts: Options): int {
     if (len(args) == 0) {
         return notYet("repl")
@@ -695,7 +800,19 @@ pub fun cliMain(argv: [string]): int {
     if (first == "-r" || first == "--repl" || first == "repl") {
         return notYet("repl")
     }
-    if (first == "lsp" || first == "--lsp" || first == "sources" || first == "fmt" || first == "fix" || first == "doc" || first == "init" || first == "new" || first == "test") {
+    if (first == "fmt") {
+        return cmdFmt(rest)
+    }
+    if (first == "fix") {
+        return cmdFix(rest, opts)
+    }
+    if (first == "test") {
+        return cmdTest(rest)
+    }
+    if (first == "init" || first == "new") {
+        return cmdInit(rest)
+    }
+    if (first == "lsp" || first == "--lsp" || first == "sources" || first == "doc") {
         return notYet(first)
     }
     if (first == "check") {

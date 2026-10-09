@@ -1,0 +1,223 @@
+import "../check/body.bn"
+import "../diag/diag.bn"
+import "../project/loader.bn"
+import "../project/project.bn"
+import "compile.bn"
+import "std/fs"
+import "tools/fmt"
+
+/** `burn fmt [-w] [--check] <files...>`: formats files, or stdin when no file is given. */
+pub fun cmdFmt(args: [string]): int {
+    var writeBack = false
+    var check = false
+    [string] files = []
+    for a in args {
+        if (a == "-w" || a == "--write") {
+            writeBack = true
+        } else if (a == "--check") {
+            check = true
+        } else {
+            files.push(a)
+        }
+    }
+    if (len(files) == 0) {
+        write(format(readStdin()))
+        return 0
+    }
+    var code = 0
+    for f in files {
+        var src = readText(f)
+        if (src == null) {
+            eprint("error: ${readError(f)}")
+            code = 1
+            continue
+        }
+        var formatted = format(src)
+        if (check) {
+            if (formatted != src) {
+                print("${f} is not formatted")
+                code = 1
+            }
+        } else if (writeBack) {
+            if (formatted != src && !writeFile(f, formatted)) {
+                eprint("error: cannot write ${f}")
+                code = 1
+            }
+        } else {
+            write(formatted)
+        }
+    }
+    return code
+}
+
+/** The edits `burn fix` makes to one file. */
+priv def type FileEdits {
+    string path
+    string src
+    [Edit] edits
+}
+
+priv def type Collected {
+    [FileEdits] files
+    int count
+}
+
+priv fun overlaps(s: Suggestion, edits: [Edit]): bool {
+    for e in s.edits {
+        for o in edits {
+            if ((e.start < o.end && o.start < e.end) || e.start == o.start) {
+                return true
+            }
+        }
+    }
+    return false
+}
+
+priv fun collect(file: string, opts: Options, err: Problem): Collected? {
+    var loader = new Loader()
+    var root = loader.loadFile(file, err)
+    if (root < 0) {
+        return null
+    }
+    var loaded = loader.finish(root)
+    if (opts.noStd) {
+        loaded.noStd = true
+    }
+    var r = checkProgram(loaded)
+    [LoadDiag] all = []
+    for d in loaded.diags {
+        all.push(d)
+    }
+    for d in r.diags {
+        all.push(d)
+    }
+    [FileEdits] out = []
+    var count = 0
+    for d in all {
+        Suggestion? found = null
+        for s in d.diag.suggestions {
+            if (found == null && s.applicable) {
+                found = s
+            }
+        }
+        if (found == null || len(found.edits) == 0) {
+            continue
+        }
+        var f = loaded.files[d.file]
+        var path = f.path
+        if (path == null) {
+            continue
+        }
+        FileEdits? entry = null
+        for fe in out {
+            if (fe.path == path) {
+                entry = fe
+            }
+        }
+        if (entry == null) {
+            entry = FileEdits { path: path, src: f.src, edits: [] }
+            out.push(entry)
+        }
+        if (overlaps(found, entry.edits)) {
+            continue
+        }
+        for e in found.edits {
+            entry.edits.push(e)
+        }
+        count += 1
+    }
+    return Collected { files: out, count: count }
+}
+
+/** `src` with every edit made, in order of position; edits that overlap an earlier one are left out. */
+pub fun applyEdits(src: string, edits: [Edit]): string {
+    [Edit] sorted = []
+    for e in edits {
+        var at = len(sorted)
+        while (at > 0 && (e.start < sorted[at - 1].start || (e.start == sorted[at - 1].start && e.end < sorted[at - 1].end))) {
+            at -= 1
+        }
+        insert(sorted, at, e)
+    }
+    var b = bytes(src)
+    var out = ""
+    var pos = 0
+    for e in sorted {
+        if (e.start < pos || e.end > len(b)) {
+            continue
+        }
+        out += fromBytes(slice(b, pos, e.start))
+        out += e.text
+        pos = e.end
+    }
+    out += fromBytes(slice(b, pos, len(b)))
+    return out
+}
+
+/** `burn fix [--dry-run] <files...>`: makes the fixes the compiler marks as safe, then checks the files. */
+pub fun cmdFix(args: [string], opts: Options): int {
+    var dry = false
+    [string] files = []
+    for a in args {
+        if (a == "--dry-run") {
+            dry = true
+        }
+        if (!startsWith(a, "--")) {
+            files.push(a)
+        }
+    }
+    if (len(files) == 0) {
+        eprint("error: no source file given")
+        return 2
+    }
+    var failed = false
+    for f in files {
+        var fixed = 0
+        [string] touched = []
+        for round in 0..8 {
+            var err = new Problem()
+            var c = collect(f, opts, err)
+            if (c == null) {
+                eprint("error: ${err.message}")
+                failed = true
+                break
+            }
+            if (c.count == 0) {
+                break
+            }
+            fixed += c.count
+            for fe in c.files {
+                if (dry) {
+                    print("would fix ${len(fe.edits)} in ${fe.path}")
+                } else if (!writeFile(fe.path, applyEdits(fe.src, fe.edits))) {
+                    eprint("error: cannot write ${fe.path}")
+                    failed = true
+                }
+                if (!contains(touched, fe.path)) {
+                    touched.push(fe.path)
+                }
+            }
+            if (dry) {
+                break
+            }
+        }
+        if (fixed > 0) {
+            var verb = "fixed"
+            if (dry) {
+                verb = "can fix"
+            }
+            var plural = "s"
+            if (fixed == 1) {
+                plural = ""
+            }
+            eprint("${verb} ${fixed} problem${plural} in ${join(touched, ", ")}")
+        }
+        if (compilePath(f, opts) == null) {
+            failed = true
+        }
+    }
+    if (failed) {
+        return 1
+    }
+    return 0
+}

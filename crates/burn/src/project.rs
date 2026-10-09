@@ -543,8 +543,8 @@ pub fn parse_manifest(src: &str) -> Result<Manifest, String> {
         Some(k) => return Err(format!("unknown kind `{}`; use \"app\" or \"lib\"", k)),
     };
     let target = str_field(pkg, "target", "package")?.unwrap_or_else(|| "native".into());
-    if !matches!(target.as_str(), "native" | "js" | "bvm") {
-        return Err(format!("unknown target `{}`; use \"native\", \"js\" or \"bvm\"", target));
+    if !matches!(target.as_str(), "native" | "js" | "bvm" | "bar") {
+        return Err(format!("unknown target `{}`; use \"bvm\", \"bar\", \"native\" or \"js\"", target));
     }
     let main = str_field(pkg, "main", "package")?.unwrap_or_else(|| if kind == Kind::Lib { "src/lib.bn".into() } else { "src/main.bn".into() });
     let std = match get(pkg, "std") {

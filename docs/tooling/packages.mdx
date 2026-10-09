@@ -143,7 +143,7 @@ start = "./build/hello"
 | `name` | where the code lives: `<domain>.<tld>/<owner>/<project>` |
 | `version` | the version, tagged in git as `v<version>` when it is published |
 | `kind` | `"app"` (a program) or `"lib"` (a library that others import) |
-| `target` | what `burn build` makes: `"native"`, `"js"` or `"bvm"` |
+| `target` | what `burn build` makes: `"bvm"` (bytecode), `"bar"` (a runnable archive), `"native"` or `"js"` |
 | `main` | the entry file (default `src/main.bn`, or `src/lib.bn` for a library) |
 | `output` | where `burn build` writes, relative to the project (default `build/<project>`) |
 | `std` | `false` builds [without the standard library](./no-std.mdx) for much smaller executables (default `true`) |

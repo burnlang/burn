@@ -316,7 +316,9 @@ pub def struct Loader() {
 
     fun addModule(key: string, name: string, path: string?, src: string, isStd: bool): int {
         var file = len(files)
-        files.push(new SourceFile(name, src))
+        var source = new SourceFile(name, src)
+        source.path = path
+        files.push(source)
         var parsed = parse(src)
         for d in parsed.diags {
             diags.push(LoadDiag { file: file, diag: d })
