@@ -1,0 +1,97 @@
+import "runtime.bn"
+
+priv fun matchesAt(text: [uint8], part: [uint8], at: int): bool {
+    if (text[at] != part[0]) {
+        return false
+    }
+    for k in 1..len(part) {
+        if (text[at + k] != part[k]) {
+            return false
+        }
+    }
+    return true
+}
+
+/** `contains(text, part)` on strings: whether `part` occurs in `text`. */
+@Runtime("str_contains")
+pub fun textContains(text: string, part: string): bool {
+    return indexOf(text, part) >= 0
+}
+
+/** `startsWith(text, prefix)`. */
+@Runtime("str_starts")
+pub fun textStartsWith(text: string, prefix: string): bool {
+    var n = len(prefix)
+    return n <= len(text) && substring(text, 0, n) == prefix
+}
+
+/** `endsWith(text, suffix)`. */
+@Runtime("str_ends")
+pub fun textEndsWith(text: string, suffix: string): bool {
+    var n = len(text)
+    var m = len(suffix)
+    return m <= n && substring(text, n - m, n) == suffix
+}
+
+/** `repeat(text, count)`: `text` written `count` times; nothing for a count below 1. */
+@Runtime("str_repeat")
+pub fun textRepeat(text: string, count: int): string {
+    var out = ""
+    for i in 0..count {
+        out += text
+    }
+    return out
+}
+
+/** `split(text, separator)`: the parts between each separator, or the characters for an empty separator. */
+@Runtime("str_split")
+pub fun textSplit(text: string, separator: string): [string] {
+    if (len(separator) == 0) {
+        return chars(text)
+    }
+    var b = bytes(text)
+    var sep = bytes(separator)
+    var n = len(b)
+    var m = len(sep)
+    [string] out = []
+    var start = 0
+    var i = 0
+    while (i + m <= n) {
+        if (matchesAt(b, sep, i)) {
+            out.push(fromBytes(slice(b, start, i)))
+            i += m
+            start = i
+        } else {
+            i += 1
+        }
+    }
+    out.push(fromBytes(slice(b, start, n)))
+    return out
+}
+
+/** `replace(text, from, to)`: every `from` in `text` replaced by `to`, left to right. */
+@Runtime("str_replace")
+pub fun textReplace(text: string, from: string, to: string): string {
+    if (len(from) == 0) {
+        return text
+    }
+    var b = bytes(text)
+    var pat = bytes(from)
+    var n = len(b)
+    var m = len(pat)
+    var out = ""
+    var start = 0
+    var i = 0
+    while (i + m <= n) {
+        if (matchesAt(b, pat, i)) {
+            out += fromBytes(slice(b, start, i))
+            out += to
+            i += m
+            start = i
+        } else {
+            i += 1
+        }
+    }
+    out += fromBytes(slice(b, start, n))
+    return out
+}

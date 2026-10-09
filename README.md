@@ -336,6 +336,7 @@ examples are in [`examples/bvm/`](examples/bvm/).
 - `bvm/`: the Burn Virtual Machine: instruction set, assembler, bytecode format, verifier, linker, mixins,
   archives, interpreter, the native bridge, the `bvm` command and the Ember example language
 - `crates/burn-runtime/`: runtime shared by bvm and native executables (memory, strings, collections, JSON, HTTP, tasks)
+- `lib/runtime/`: the runtime functions written in Burn, compiled to `bvm/runtime.bvm`, which bvm links into Burn programs
 - `compiler/`: the compiler written in Burn, which builds itself on bvm (see [compiler/README.md](compiler/README.md))
 - `lib/tools/`: tools written in Burn that programs can also import, such as the formatter (`import "tools/fmt"`), which `burnfmt` is built from
 - `scripts/package.sh`: builds the toolchain into the layout burnup installs and releases ship

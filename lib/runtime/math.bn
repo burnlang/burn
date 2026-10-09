@@ -1,0 +1,19 @@
+import "runtime.bn"
+
+/** `min(a, b)` on ints. */
+@Runtime("imin")
+pub fun intMin(a: int, b: int): int {
+    if (b < a) {
+        return b
+    }
+    return a
+}
+
+/** `max(a, b)` on ints. */
+@Runtime("imax")
+pub fun intMax(a: int, b: int): int {
+    if (b > a) {
+        return b
+    }
+    return a
+}

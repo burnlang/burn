@@ -1,0 +1,10 @@
+import "math.bn"
+import "strings.bn"
+
+/**
+ * Marks a function of the runtime written in Burn: bvm runs it wherever a program calls the runtime function
+ * `name` (the name `rt` instructions use in bvm assembly).
+ */
+pub def annotation Runtime {
+    string name
+}

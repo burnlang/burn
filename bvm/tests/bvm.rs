@@ -528,3 +528,18 @@ fn archives_bundle_modules_and_resources() {
     entry.manifest.entry = Some("missing".into());
     assert!(entry.link().is_err());
 }
+
+#[test]
+fn the_runtime_written_in_burn_replaces_runtime_functions() {
+    let w = bvm::burnrt::written();
+    for r in [bvm::RtFn::StrSplit, bvm::RtFn::StrReplace, bvm::RtFn::StrContains, bvm::RtFn::IMin] {
+        assert!(w.funcs.contains_key(&r), "{:?} is not written in Burn", r);
+    }
+    for f in &w.module.funcs {
+        for op in &f.code {
+            if let bvm::Op::Rt(r) = op {
+                assert!(!w.funcs.contains_key(r), "{} calls {:?}, which is itself written in Burn", f.name, r);
+            }
+        }
+    }
+}
