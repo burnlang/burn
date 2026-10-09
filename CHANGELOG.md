@@ -4,6 +4,7 @@
 
 The release that ships the compiler written in Burn.
 
+- The repository is reorganised: bvm, which stays in Rust, moves from `crates/bvm` to `bvm/` at the root.
 - Projects have a standard layout:
   - `src/` is the source root, and its folders are packages.
   - `src/bin/` holds extra programs (`burn run --bin`), `tests/` holds tests (`burn test`), and `examples/` holds examples (`burn run --example`).

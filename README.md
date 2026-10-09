@@ -280,7 +280,7 @@ bvm asm hello.bvm -o hello.bvmc # bytecode
 bvm dis hello.bvmc              # and back
 ```
 
-[`crates/bvm/examples/ember.rs`](crates/bvm/examples/ember.rs) is a complete small language built on bvm.
+[`bvm/examples/ember.rs`](bvm/examples/ember.rs) is a complete small language built on bvm.
 
 ### Libraries, archives, mixins and native code
 
@@ -333,7 +333,7 @@ examples are in [`examples/bvm/`](examples/bvm/).
   - `native/`: x86-64 code generator, hand-written entry assembly, linker driver
   - `js/`: JavaScript backend
   - `lsp/`, `fmt.rs`, `repl.rs`: tooling
-- `crates/bvm/`: the Burn Virtual Machine: instruction set, assembler, bytecode format, verifier, linker, mixins,
+- `bvm/`: the Burn Virtual Machine: instruction set, assembler, bytecode format, verifier, linker, mixins,
   archives, interpreter, the native bridge, the `bvm` command and the Ember example language
 - `crates/burn-runtime/`: runtime shared by bvm and native executables (memory, strings, collections, JSON, HTTP, tasks)
 - `compiler/`: the compiler written in Burn, which builds itself on bvm (see [compiler/README.md](compiler/README.md))

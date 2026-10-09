@@ -494,7 +494,7 @@ fun funcText(n: Names, m: VModule, f: VFunc, firstStr: {string: int}): string {
     return o + "end\n"
 }
 
-/** The module in bvm assembly, like `disassemble` in `crates/bvm/src/asm.rs`. */
+/** The module in bvm assembly, like `disassemble` in `bvm/src/asm.rs`. */
 pub fun disassemble(m: VModule): string {
     var n = namesOf(m)
     [string] o = ["; bvm module, format 2\n"]
