@@ -1,10 +1,6 @@
 import "runtime.bn"
 import "strings.bn"
 
-priv const MIN_INT = -9223372036854775807 - 1
-priv const DIGITS = "0123456789abcdefghijklmnopqrstuvwxyz"
-priv const TWO_63 = 9223372036854775808.0
-
 priv fun digitOf(c: uint8): int {
     if (c >= 48 && c <= 57) {
         return c - 48
@@ -36,7 +32,7 @@ priv fun intIn(text: string, radix: int): int? {
         if (d < 0 || d >= radix) {
             return null
         }
-        if (v < (MIN_INT + d) / radix) {
+        if (v < (d - 9223372036854775807 - 1) / radix) {
             return null
         }
         v = v * radix - d
@@ -45,7 +41,7 @@ priv fun intIn(text: string, radix: int): int? {
     if (negative) {
         return v
     }
-    if (v == MIN_INT) {
+    if (v == -9223372036854775807 - 1) {
         return null
     }
     return -v
@@ -58,11 +54,11 @@ priv fun checkRadix(radix: int, loc: int) {
 }
 
 priv fun truncate(f: float): int {
-    if (f >= TWO_63) {
+    if (f >= 9223372036854775808.0) {
         return 9223372036854775807
     }
-    if (f <= -TWO_63) {
-        return MIN_INT
+    if (f <= -9223372036854775808.0) {
+        return -9223372036854775807 - 1
     }
     return toInt(f)
 }
@@ -122,7 +118,7 @@ pub fun intToText(value: int, radix: int, loc: int): string {
     var out = ""
     while (true) {
         var d = 0 - x % radix
-        out = substring(DIGITS, d, d + 1) + out
+        out = substring("0123456789abcdefghijklmnopqrstuvwxyz", d, d + 1) + out
         x = x / radix
         if (x == 0) {
             break
