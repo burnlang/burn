@@ -1,0 +1,99 @@
+import "../cli/host.bn"
+import "../doc/builtin_docs.bn"
+import "../project/loader.bn"
+import "../project/paths.bn"
+import "analysis.bn"
+import "json.bn"
+import "text.bn"
+
+/** A fix the compiler proposes for a problem in a document. */
+pub def type QuickFix {
+    int start
+    int end
+    string title
+    bool preferred
+    Json diagnostic
+    [Json] edits
+}
+
+/** The documents the editor has open and what the server knows about them, like `Server` in `lsp/mod.rs`. */
+pub def struct Server() {
+    {string: string} docs = {}
+    {string: Analysis} analyses = {}
+    {string: [string]} published = {}
+    {string: [QuickFix]} fixes = {}
+    [string] roots = []
+    bool watch = false
+    bool shutdown = false
+    [Builtin] builtins = allBuiltins()
+
+    /** The URIs of the open documents in order, like iterating the `BTreeMap` of the Rust server. */
+    fun openUris(): [string] {
+        var out = keys(docs)
+        sort(out)
+        return out
+    }
+
+    /** A loader that reads open documents from the editor instead of the disk. */
+    fun loader(): Loader {
+        var l = new Loader()
+        for u in openUris() {
+            l.overrides[canonical(uriToPath(u))] = docs[u] ?? ""
+        }
+        return l
+    }
+
+    fun analysisOf(uri: string): Analysis? {
+        return analyses[uri]
+    }
+}
+
+/** Writes one message to the editor. */
+pub fun send(msg: Json) {
+    sendMessage(encode(msg))
+}
+
+/** Answers the request `id`. */
+pub fun respond(id: Json, result: Json) {
+    send(jo(["jsonrpc", "id", "result"], [js("2.0"), id, result]))
+}
+
+/** Answers the request `id` with an error. */
+pub fun respondErr(id: Json, code: int, message: string) {
+    var err = jo(["code", "message"], [jn(code), js(message)])
+    send(jo(["jsonrpc", "id", "error"], [js("2.0"), id, err]))
+}
+
+/** Sends a notification to the editor. */
+pub fun notify(method: string, params: Json) {
+    send(jo(["jsonrpc", "method", "params"], [js("2.0"), js(method), params]))
+}
+
+/** The diagnostics of `uri` are now `diags`. */
+pub fun publish(uri: string, diags: [Json]) {
+    notify("textDocument/publishDiagnostics", jo(["uri", "diagnostics"], [js(uri), ja(diags)]))
+}
+
+/** The Markdown of a hover text: the code, and the documentation after a `\u{1}`. */
+pub fun hoverMarkdown(text: string): string {
+    var at = indexOf(text, "\u{1}")
+    if (at >= 0) {
+        return "```burn\n${substring(text, 0, at)}\n```\n---\n${substring(text, at + 1, len(text))}"
+    }
+    return "```burn\n${text}\n```"
+}
+
+/** A Markdown value for hovers and documentation. */
+pub fun markdown(value: string): Json {
+    return jo(["kind", "value"], [js("markdown"), js(value)])
+}
+
+/** The byte offset of the `position` of a request in the analysed document, like `Server::offset`. */
+pub fun offsetIn(a: Analysis, params: Json): int? {
+    var line = jnum(jat(params, ["position", "line"]))
+    var ch = jnum(jat(params, ["position", "character"]))
+    if (line == null || ch == null) {
+        return null
+    }
+    return utf16Offset(a.root(), toInt(line), toInt(ch))
+}

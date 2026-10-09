@@ -59,3 +59,34 @@ pub fun replEval(module: string, libs: [string], globals: [string], inits: [stri
 /** Prints `prompt` and reads a line from stdin without its line break, or null at the end of the input. */
 @Native("burn.readLine")
 pub fun readLine(prompt: string): string?
+
+/** Starts the language server: caps its memory, and runtime errors stop only the request that raised them. */
+@Native("burn.lspStart")
+pub fun lspStart(): int
+
+/** Reads one language server message from stdin (a `Content-Length` header, then the body), or null at the end of the input. */
+@Native("burn.readMessage")
+pub fun readMessage(): string?
+
+/** Writes one language server message to stdout with its `Content-Length` header. */
+@Native("burn.send")
+pub fun sendMessage(body: string): int
+
+/** The absolute path of `path` with every symbolic link resolved, or null when it does not exist. */
+@Native("burn.realPath")
+pub fun realPath(path: string): string?
+
+/** Writes `content` to `path` unless it already holds it, creating its folders, and makes the file read-only. */
+@Native("burn.writeReadOnly")
+pub fun writeReadOnly(path: string, content: string): bool
+
+/** The folder of the running executable, or null when it is unknown. */
+@Native("burn.exeDir")
+pub fun exeDir(): string?
+
+/**
+ * Runs `program` with `args` in the folder `dir`, with `NO_COLOR` set and no input. Returns `"ok"` or `"failed"` and its
+ * output, or `"error"` and why it could not start, split by a tab.
+ */
+@Native("burn.runIn")
+pub fun runIn(program: string, args: [string], dir: string): string

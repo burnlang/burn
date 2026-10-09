@@ -1,0 +1,812 @@
+import "../check/builtins.bn"
+import "../check/check.bn"
+import "../check/types.bn"
+import "../cli/host.bn"
+import "../diag/diag.bn"
+import "../doc/builtin_docs.bn"
+import "../doc/text.bn"
+import "../project/loader.bn"
+import "../project/paths.bn"
+import "../project/project.bn"
+import "../project/stdlib.bn"
+import "analysis.bn"
+import "assist.bn"
+import "complete.bn"
+import "ide.bn"
+import "imports.bn"
+import "json.bn"
+import "members.bn"
+import "nav.bn"
+import "reload.bn"
+import "repair.bn"
+import "sources.bn"
+import "state.bn"
+import "std/fs"
+import "std/strings"
+import "text.bn"
+import "tools/fmt"
+
+priv fun loadDoc(s: Server, loader: Loader, path: string, text: string): int {
+    var err = new Problem()
+    var root = loader.loadFile(path, err)
+    if (root >= 0) {
+        return root
+    }
+    return loader.loadSource(pathFileName(path) ?? "", text, pathParent(path))
+}
+
+priv fun rootErrors(loaded: Loaded, rootFile: int): int {
+    var n = 0
+    for d in loaded.diags {
+        if (d.file == rootFile && d.diag.severity == Severity.Error) {
+            n += 1
+        }
+    }
+    return n
+}
+
+priv fun repaired(s: Server, path: string, text: string, errors: int): Analysis? {
+    var r = closeBraces(text)
+    if (r == null) {
+        return null
+    }
+    var loader = s.loader()
+    loader.overrides[canonical(path)] = r.text
+    var root = loadDoc(s, loader, path, r.text)
+    var loaded = loader.finish(root)
+    var rootFile = loaded.modules[root].file
+    if (rootErrors(loaded, rootFile) >= errors) {
+        return null
+    }
+    return buildAnalysis(loaded, root, r.inserts).analysis
+}
+
+/** Checks a document and publishes its problems, like `Server::analyze`. */
+pub fun analyze(s: Server, uri: string) {
+    var path = uriToPath(uri)
+    if (isStub(path)) {
+        publish(uri, [])
+        return
+    }
+    var loader = s.loader()
+    var root = loadDoc(s, loader, path, s.docs[uri] ?? "")
+    var loaded = loader.finish(root)
+    var rootFile = loaded.modules[root].file
+    var syntaxErrors = rootErrors(loaded, rootFile)
+    var built = buildAnalysis(loaded, root, [])
+    var a = built.analysis
+    [string] uris = [uri]
+    [[Json]] lists = [[]]
+    [QuickFix] fixes = []
+    for d in built.diags {
+        if (d.file >= len(loaded.files)) {
+            continue
+        }
+        var file = loaded.files[d.file]
+        var target = uri
+        if (d.file != rootFile) {
+            var p = file.path
+            if (p == null) {
+                continue
+            }
+            target = pathToUri(p)
+        }
+        var diag = d.diag
+        var message = diag.message
+        for n in diag.notes {
+            message += "\n${n}"
+        }
+        for h in diag.helps {
+            message += "\n${h}"
+        }
+        var severity = 2
+        if (diag.severity == Severity.Error) {
+            severity = 1
+        }
+        var span = SrcSpan { file: d.file, start: diag.start, end: diag.end }
+        var dj = jo(["range", "severity", "source", "message"], [a.range(span), jn(severity), js("burn"), js(message)])
+        if (d.file == rootFile) {
+            for sg in diag.suggestions {
+                [Json] edits = []
+                for e in sg.edits {
+                    edits.push(jo(["range", "newText"], [a.editRange(SrcSpan { file: d.file, start: e.start, end: e.end }), js(e.text)]))
+                }
+                fixes.push(QuickFix { start: diag.start, end: diag.end, title: sg.message, preferred: sg.applicable, diagnostic: dj, edits: edits })
+            }
+        }
+        var at = indexOf(uris, target)
+        if (at < 0) {
+            uris.push(target)
+            lists.push([dj])
+        } else {
+            lists[at].push(dj)
+        }
+    }
+    var previous = s.published[uri] ?? []
+    remove(s.published, uri)
+    for i in 0..len(uris) {
+        publish(uris[i], lists[i])
+    }
+    for u in previous {
+        if (!contains(uris, u)) {
+            publish(u, [])
+        }
+    }
+    s.published[uri] = uris
+    s.fixes[uri] = fixes
+    Analysis? better = null
+    if (syntaxErrors > 0) {
+        var text = s.docs[uri]
+        if (text != null) {
+            better = repaired(s, path, text, syntaxErrors)
+        }
+    }
+    s.analyses[uri] = better ?? a
+}
+
+/** Checks every open document again. */
+pub fun reanalyzeAll(s: Server) {
+    for u in s.openUris() {
+        analyze(s, u)
+    }
+}
+
+priv fun wants(only: [string], kind: string): bool {
+    if (len(only) == 0) {
+        return true
+    }
+    for o in only {
+        if (kind == o || startsWith(kind, "${o}.")) {
+            return true
+        }
+    }
+    return false
+}
+
+priv fun editOf(uri: string, edits: [Json]): Json {
+    return jo(["changes"], [jo([uri], [ja(edits)])])
+}
+
+pub fun codeActions(s: Server, uri: string, params: Json): Json {
+    var a = s.analyses[uri]
+    var fixes = s.fixes[uri]
+    if (a == null || fixes == null) {
+        return ja([])
+    }
+    [string] only = []
+    for k in jarr(jat(params, ["context", "only"])) {
+        var t = jstr(k)
+        if (t != null) {
+            only.push(t)
+        }
+    }
+    [Json] out = []
+    if (wants(only, "quickfix")) {
+        var f = a.root()
+        var sl = jint(jat(params, ["range", "start", "line"]), 0)
+        var sc = jint(jat(params, ["range", "start", "character"]), 0)
+        var el = jint(jat(params, ["range", "end", "line"]), 0)
+        var ec = jint(jat(params, ["range", "end", "character"]), 0)
+        var start = unshiftOffset(a.inserts, utf16Offset(f, sl, sc))
+        var end = unshiftOffset(a.inserts, utf16Offset(f, el, ec))
+        for q in fixes {
+            if (q.start <= end && start <= q.end) {
+                out.push(jo(["title", "kind", "isPreferred", "diagnostics", "edit"], [js(q.title), js("quickfix"), jb(q.preferred), ja([q.diagnostic]), editOf(uri, q.edits)]))
+            }
+        }
+        for x in importActions(s, uri, params) {
+            out.push(x)
+        }
+        for x in reloadActions(uri, params) {
+            out.push(x)
+        }
+    }
+    [QuickFix] all = []
+    for q in fixes {
+        if (!q.preferred) {
+            continue
+        }
+        var apart = true
+        for p in all {
+            if (!(q.end < p.start || p.end < q.start)) {
+                apart = false
+            }
+        }
+        if (apart) {
+            all.push(q)
+        }
+    }
+    if (len(all) > 0 && (wants(only, "source.fixAll.burn") || (wants(only, "quickfix") && len(all) > 1 && len(only) == 0))) {
+        var kind = "quickfix"
+        for o in only {
+            if (startsWith(o, "source")) {
+                kind = "source.fixAll.burn"
+            }
+        }
+        [Json] edits = []
+        for q in all {
+            for e in q.edits {
+                edits.push(e)
+            }
+        }
+        out.push(jo(["title", "kind", "edit"], [js("Fix all auto-fixable problems in this file (${len(all)})"), js(kind), editOf(uri, edits)]))
+    }
+    return ja(out)
+}
+
+pub fun hover(s: Server, uri: string, params: Json): Json {
+    var a = s.analyses[uri]
+    if (a == null) {
+        return Json.Null
+    }
+    var off = offsetIn(a, params)
+    if (off == null) {
+        return Json.Null
+    }
+    var h = importHover(s, a, off)
+    if (h != null) {
+        return h
+    }
+    IndexHover? best = null
+    for x in a.c.hovers {
+        if (spanHas(x.span, a.rootFile, off) && (best == null || x.span.end - x.span.start < best.span.end - best.span.start)) {
+            best = x
+        }
+    }
+    if (best != null) {
+        return jo(["contents", "range"], [markdown(hoverMarkdown(best.text)), a.range(best.span)])
+    }
+    var word = wordAt(a.root(), off)
+    if (isBuiltin(word) && !startsWith(word, "__")) {
+        var b = findBuiltin(s.builtins, word)
+        var value = "```burn\n${builtinSignature(word)}\n```"
+        if (b != null) {
+            value = hoverMarkdown("${b.sig}\u{1}${builtinMarkdown(b)}")
+        }
+        return jo(["contents"], [markdown(value)])
+    }
+    return Json.Null
+}
+
+priv fun importPrefix(before: [uint8]): string? {
+    var ls = len(before)
+    while (ls > 0 && before[ls - 1] != 10) {
+        ls -= 1
+    }
+    var quote = -1
+    var quotes = 0
+    for i in ls..len(before) {
+        if (before[i] == 34) {
+            quote = i
+        }
+    }
+    if (quote < 0) {
+        return null
+    }
+    for i in ls..quote {
+        if (before[i] == 34) {
+            quotes += 1
+        }
+    }
+    if (quotes % 2 != 0) {
+        return null
+    }
+    var head = trim(fromBytes(slice(before, ls, quote)))
+    var inBlock = false
+    if (head == "") {
+        var prior = fromBytes(slice(before, 0, ls))
+        var open = lastIndexOf(prior, "import (")
+        var close = lastIndexOf(prior, ")")
+        inBlock = open >= 0 && (close < 0 || open > close)
+    }
+    if (head == "import" || inBlock) {
+        return fromBytes(slice(before, quote + 1, len(before)))
+    }
+    return null
+}
+
+priv def type Labeled {
+    [Json] items
+    [string] seen
+    string typed
+}
+
+priv fun addLabel(l: Labeled, label: string, kind: int, detail: string) {
+    if (startsWith(lower(label), lower(l.typed)) && !contains(l.seen, label)) {
+        l.seen.push(label)
+        l.items.push(jo(["label", "kind", "detail"], [js(label), jn(kind), js(detail)]))
+    }
+}
+
+priv def type Listed {
+    string label
+    int kind
+}
+
+priv fun listSources(dir: string, base: string): [Listed] {
+    [Listed] out = []
+    var count = 0
+    for n in Files.list(dir) {
+        if (startsWith(n, ".") || n == "build" || n == "target" || n == "node_modules") {
+            continue
+        }
+        if (count >= 200) {
+            break
+        }
+        count += 1
+        var full = n
+        if (base != "") {
+            full = "${base}/${n}"
+        }
+        if (isDir(pathJoin(dir, n))) {
+            out.push(Listed { label: "${full}/", kind: 19 })
+        } else if (endsWith(full, ".bn")) {
+            out.push(Listed { label: substring(full, 0, len(full) - 3), kind: 17 })
+        } else if (endsWith(full, ".bvmc") || endsWith(full, ".bar")) {
+            out.push(Listed { label: full, kind: 17 })
+        }
+    }
+    return out
+}
+
+priv fun trimLeading(s: string, c: string): string {
+    var out = s
+    while (startsWith(out, c)) {
+        out = substring(out, len(c), len(out))
+    }
+    return out
+}
+
+priv fun trimTrailing(s: string, suffix: string): string {
+    var out = s
+    while (suffix != "" && endsWith(out, suffix)) {
+        out = substring(out, 0, len(out) - len(suffix))
+    }
+    return out
+}
+
+priv fun folderOf(s: string): string {
+    var parts = splitLast(s, "/")
+    if (parts == null) {
+        return ""
+    }
+    return parts[0]
+}
+
+priv fun importItems(file: string, typed: string): [Json] {
+    var l = Labeled { items: [], seen: [], typed: typed }
+    Project? project = null
+    var root = findRoot(file)
+    if (root != null) {
+        var err = new Problem()
+        project = loadProject(root, err)
+    }
+    if (project == null || project.manifest.std) {
+        for m in stdModules() {
+            addLabel(l, m.name, 9, "standard library")
+        }
+    }
+    if (project != null) {
+        var src = sourceRoot(project)
+        if (startsWith(typed, "@")) {
+            var rest = trimLeading(trimLeading(typed, "@"), "/")
+            var folder = folderOf(rest)
+            var base = "@"
+            if (folder != "") {
+                base = "@/${folder}"
+            }
+            for x in listSources(pathJoin(src, folder), base) {
+                addLabel(l, trimTrailing(x.label, "/mod"), x.kind, "project file")
+            }
+        } else {
+            addLabel(l, "@/", 19, "this project's sources")
+        }
+        addLabel(l, project.manifest.name, 9, "this project")
+        for d in project.manifest.dependencies {
+            addLabel(l, d.name, 9, "dependency")
+        }
+        for k in project.lock {
+            addLabel(l, k.name, 9, "installed package")
+        }
+        var ws = project.workspace
+        if (ws != null) {
+            for m in ws.members {
+                var n = m.name
+                if (n != null) {
+                    addLabel(l, n, 9, "workspace member")
+                }
+            }
+        }
+        var split = splitImport(project, trimTrailing(typed, "/"))
+        if (split != null) {
+            var err = new Problem()
+            var dir = resolvePackage(project, split.name, err)
+            if (dir != null) {
+                var sub = trimLeading(substring(typed, len(split.name), len(typed)), "/")
+                var folder = folderOf(sub)
+                var base = split.name
+                if (folder != "") {
+                    base = "${split.name}/${folder}"
+                }
+                var perr = new Problem()
+                var src2 = packageSourceRoot(dir, perr) ?? dir
+                for x in listSources(pathJoin(src2, folder), base) {
+                    addLabel(l, x.label, x.kind, "package file")
+                }
+            }
+        }
+    }
+    var dir = pathParent(file)
+    if (dir != null) {
+        var folder = folderOf(typed)
+        var target = dir
+        if (folder != "") {
+            target = pathJoin(dir, folder)
+        }
+        var own = pathStem(file) ?? ""
+        for x in listSources(target, folder) {
+            if (!(folder == "" && x.label == own)) {
+                addLabel(l, x.label, x.kind, "file")
+            }
+        }
+    }
+    return l.items
+}
+
+/** The byte offset where the identifier ending at `end` starts. */
+priv fun identStart(b: [uint8], end: int): int {
+    var s = end
+    while (s > 0) {
+        var cs = s - 1
+        while (cs > 0 && (b[cs] & 192) == 128) {
+            cs -= 1
+        }
+        var c = b[cs] as int
+        var ok = false
+        if (c < 128) {
+            ok = wordByte(c)
+        } else {
+            ok = isAlphanumeric(fromBytes(slice(b, cs, s)))
+        }
+        if (!ok) {
+            break
+        }
+        s = cs
+    }
+    return s
+}
+
+priv fun pushGeneral(items: Items, label: string, kind: int, detail: string) {
+    if (!items.fresh(label)) {
+        return
+    }
+    var rank = 4
+    if (kind == 6) {
+        rank = 0
+    } else if (kind == 3 && !isBuiltin(label)) {
+        rank = 1
+    } else if (kind == 7 || kind == 8 || kind == 13 || kind == 22) {
+        rank = 2
+    } else if (kind == 3) {
+        rank = 3
+    }
+    var j = jo(["label", "kind", "detail", "sortText"], [js(label), jn(kind), js(detail), js("${rank}${label}")])
+    if (kind == 3) {
+        jput(j, "insertText", js("${label}($0)"))
+        jput(j, "insertTextFormat", jn(2))
+        jput(j, "command", jo(["title", "command"], [js(""), js("editor.action.triggerParameterHints")]))
+    }
+    items.items.push(j)
+}
+
+pub fun completion(s: Server, uri: string, params: Json): Json {
+    var text = s.docs[uri]
+    if (text == null) {
+        return ja([])
+    }
+    var a = s.analyses[uri]
+    if (a == null) {
+        return ja([])
+    }
+    var line = jint(jat(params, ["position", "line"]), 0)
+    var ch = jint(jat(params, ["position", "character"]), 0)
+    var tmp = textFile(text)
+    var docOff = utf16Offset(tmp, line, ch)
+    var before = slice(tmp.bytes, 0, docOff)
+    var off = shiftOffset(a.inserts, docOff)
+    var typed = importPrefix(before)
+    if (typed != null) {
+        return ja(importItems(uriToPath(uri), typed))
+    }
+    var prefixEnd = identStart(before, len(before))
+    if (prefixEnd > 0 && before[prefixEnd - 1] == 46) {
+        [string] chain = []
+        var restEnd = prefixEnd - 1
+        while (true) {
+            var st = identStart(before, restEnd)
+            if (st == restEnd) {
+                break
+            }
+            insert(chain, 0, fromBytes(slice(before, st, restEnd)))
+            if (st > 0 && before[st - 1] == 46) {
+                restEnd = st - 1
+            } else {
+                break
+            }
+        }
+        var r = resolveChain(a, chain, off)
+        if (r != null) {
+            return ja(memberItems(s, uri, a, r.ty, r.statics))
+        }
+        return ja([])
+    }
+    var head = fromBytes(slice(before, 0, prefixEnd))
+    var ctx = context(head)
+    if (ctx is Ctx.Annotation) {
+        return ja(annotationItems(s, uri, a))
+    }
+    if (ctx is Ctx.AnnotationArgs) {
+        return ja(annotationArgItems(s, uri, a, ctx.name))
+    }
+    if (ctx is Ctx.DefKind) {
+        return ja(defKindItems())
+    }
+    if (ctx is Ctx.Type) {
+        return ja(typeItems(s, uri, a))
+    }
+    var items = new Items()
+    var inNew = endsWithNew(before, prefixEnd)
+    var k = len(a.c.localInfos) - 1
+    while (k >= 0) {
+        var l = a.c.localInfos[k]
+        if (l.decl.file == a.rootFile && l.decl.start < off && off <= l.scope.end && !startsWith(l.name, "<")) {
+            pushGeneral(items, l.name, 6, a.show(l.ty))
+        }
+        k -= 1
+    }
+    for g in a.globals {
+        if (g.module == a.rootModule) {
+            pushGeneral(items, g.name, 6, a.show(g.ty))
+        }
+    }
+    if (!inNew) {
+        for f in a.funcs {
+            if (!contains(f.name, ".") && !startsWith(f.name, "<") && !startsWith(f.name, "new ")) {
+                pushGeneral(items, f.name, 3, f.sig)
+            }
+        }
+    }
+    for t in a.typeNames {
+        var kind = 22
+        var tk = a.kind(t.ty)
+        if (tk is Ty.Interface && len(a.c.types.ifaces[tk.index].variants) > 0) {
+            kind = 13
+        } else if (tk is Ty.Interface) {
+            kind = 8
+        } else if (tk is Ty.Enum) {
+            kind = 13
+        } else if (tk is Ty.Record && a.c.types.records[tk.index].isClass) {
+            kind = 7
+        }
+        if (inNew && kind != 7) {
+            continue
+        }
+        var detail = a.show(t.ty)
+        if (t.ty == T_ERROR) {
+            detail = "generic type"
+        }
+        pushGeneral(items, t.name, kind, detail)
+    }
+    if (inNew) {
+        return ja(items.items)
+    }
+    for b in BUILTIN_NAMES {
+        var m = homeModule(b)
+        var hidden = m != null && !imported(a, m, null)
+        if (!startsWith(b, "__") && !hidden) {
+            pushGeneral(items, b, 3, builtinSignature(b))
+            var doc = findBuiltin(s.builtins, b)
+            if (doc != null && len(items.items) > 0) {
+                var last = items.items[len(items.items) - 1]
+                if (jstr(jget(last, "label")) == b) {
+                    jset(last, "detail", js(doc.sig))
+                    jput(last, "documentation", markdown(builtinMarkdown(doc)))
+                }
+            }
+        }
+    }
+    for kw in KEYWORDS {
+        pushGeneral(items, kw, 14, keywordDoc(kw))
+    }
+    for d in BUILTIN_TYPES {
+        pushGeneral(items, d.name, 22, "built-in type: ${replace(d.doc, "`", "")}")
+    }
+    for x in autoImportItems(s, uri, a, items.seen) {
+        items.items.push(x)
+    }
+    return ja(items.items)
+}
+
+priv fun endsWithNew(b: [uint8], end: int): bool {
+    var e = end
+    while (e > 0 && (b[e - 1] == 32 || b[e - 1] == 9 || b[e - 1] == 10 || b[e - 1] == 13 || b[e - 1] == 11 || b[e - 1] == 12)) {
+        e -= 1
+    }
+    return e >= 3 && b[e - 3] == 110 && b[e - 2] == 101 && b[e - 1] == 119
+}
+
+pub fun formatting(s: Server, uri: string): Json {
+    var text = s.docs[uri]
+    if (text == null) {
+        return Json.Null
+    }
+    var formatted = format(text)
+    if (formatted == text) {
+        return ja([])
+    }
+    var lines = len(textLines(text)) + 1
+    return ja([jo(["range", "newText"], [lineRange(0, lines), js(formatted)])])
+}
+
+priv fun capabilities(): Json {
+    var codeActions = jo(["codeActionKinds"], [ja([js("quickfix"), js("source.fixAll.burn")])])
+    var completion = jo(["triggerCharacters"], [ja([js("."), js("\""), js("/"), js("@")])])
+    var commands = jo(["commands"], [ja([js(RELOAD)])])
+    var links = jo(["resolveProvider"], [jb(false)])
+    var rename = jo(["prepareProvider"], [jb(true)])
+    var signature = jo(["triggerCharacters", "retriggerCharacters"], [ja([js("("), js(",")]), ja([js(",")])])
+    return jo(["textDocumentSync", "hoverProvider", "definitionProvider", "documentSymbolProvider", "documentFormattingProvider", "codeActionProvider", "completionProvider", "executeCommandProvider", "documentLinkProvider", "foldingRangeProvider", "typeDefinitionProvider", "implementationProvider", "referencesProvider", "documentHighlightProvider", "workspaceSymbolProvider", "renameProvider", "inlayHintProvider", "signatureHelpProvider"], [jn(1), jb(true), jb(true), jb(true), jb(true), codeActions, completion, commands, links, jb(true), jb(true), jb(true), jb(true), jb(true), jb(true), rename, jb(true), signature])
+}
+
+priv fun renamed(id: Json, r: Renamed) {
+    var result = r.result
+    if (result != null) {
+        respond(id, result)
+    } else {
+        respondErr(id, -32803, r.error)
+    }
+}
+
+/** Handles one message; a runtime error while it runs ends only this task. */
+priv async fun handle(s: Server, method: string, id: Json, params: Json): bool {
+    var uri = jstr(jat(params, ["textDocument", "uri"])) ?? ""
+    if (method == "initialize") {
+        s.watch = wantsWatchers(params)
+        for f in jarr(jget(params, "workspaceFolders")) {
+            var u = jstr(jget(f, "uri"))
+            if (u != null) {
+                s.roots.push(uriToPath(u))
+            }
+        }
+        if (len(s.roots) == 0) {
+            var u = jstr(jget(params, "rootUri"))
+            if (u != null) {
+                s.roots.push(uriToPath(u))
+            }
+        }
+        var info = jo(["name", "version"], [js("burn"), js(toolchainVersion())])
+        respond(id, jo(["capabilities", "serverInfo"], [capabilities(), info]))
+    } else if (method == "initialized") {
+        if (s.watch) {
+            registerWatchers()
+        }
+    } else if (method == "$/cancelRequest" || method == "workspace/didChangeConfiguration") {
+        return true
+    } else if (method == "workspace/didChangeWatchedFiles") {
+        reanalyzeAll(s)
+    } else if (method == "workspace/executeCommand") {
+        if (jstr(jget(params, "command")) == RELOAD) {
+            if (reloadProject(s, params)) {
+                reanalyzeAll(s)
+            }
+            respond(id, Json.Null)
+        } else {
+            respondErr(id, -32601, "unknown command")
+        }
+    } else if (method == "shutdown") {
+        s.shutdown = true
+        respond(id, Json.Null)
+    } else if (method == "textDocument/didOpen") {
+        s.docs[uri] = jstr(jat(params, ["textDocument", "text"])) ?? ""
+        analyze(s, uri)
+    } else if (method == "textDocument/didChange") {
+        var changes = jarr(jget(params, "contentChanges"))
+        if (len(changes) > 0) {
+            var t = jstr(jget(changes[len(changes) - 1], "text"))
+            if (t != null) {
+                s.docs[uri] = t
+            }
+        }
+        analyze(s, uri)
+    } else if (method == "textDocument/didSave") {
+        [string] open = [uri]
+        for u in s.openUris() {
+            if (u != uri) {
+                open.push(u)
+            }
+        }
+        for u in open {
+            analyze(s, u)
+        }
+    } else if (method == "textDocument/didClose") {
+        remove(s.docs, uri)
+        remove(s.analyses, uri)
+        var list = s.published[uri]
+        if (list != null) {
+            remove(s.published, uri)
+            for u in list {
+                publish(u, [])
+            }
+        }
+    } else if (method == "textDocument/hover") {
+        respond(id, hover(s, uri, params))
+    } else if (method == "textDocument/definition") {
+        respond(id, definition(s, uri, params))
+    } else if (method == "textDocument/completion") {
+        respond(id, completion(s, uri, params))
+    } else if (method == "textDocument/documentSymbol") {
+        respond(id, documentSymbols(s, uri))
+    } else if (method == "textDocument/documentLink") {
+        respond(id, documentLinks(s, uri))
+    } else if (method == "textDocument/foldingRange") {
+        respond(id, foldingRanges(s, uri))
+    } else if (method == "textDocument/typeDefinition") {
+        respond(id, typeDefinition(s, uri, params))
+    } else if (method == "textDocument/implementation") {
+        respond(id, implementation(s, uri, params))
+    } else if (method == "textDocument/formatting") {
+        respond(id, formatting(s, uri))
+    } else if (method == "textDocument/codeAction") {
+        respond(id, codeActions(s, uri, params))
+    } else if (method == "textDocument/references") {
+        respond(id, references(s, uri, params))
+    } else if (method == "textDocument/documentHighlight") {
+        respond(id, highlights(s, uri, params))
+    } else if (method == "textDocument/signatureHelp") {
+        respond(id, signatureHelp(s, uri, params))
+    } else if (method == "textDocument/inlayHint") {
+        respond(id, inlayHints(s, uri, params))
+    } else if (method == "workspace/symbol") {
+        respond(id, workspaceSymbols(s, params))
+    } else if (method == "textDocument/prepareRename") {
+        renamed(id, prepareRename(s, uri, params))
+    } else if (method == "textDocument/rename") {
+        renamed(id, rename(s, uri, params))
+    } else if (!jnull(id)) {
+        respondErr(id, -32601, "method not found: ${method}")
+    }
+    return true
+}
+
+/** `burn lsp`: the language server, reading messages from stdin until `exit`, like `lsp::run`. */
+pub fun runServer(): int {
+    lspStart()
+    var s = new Server()
+    while (true) {
+        var body = readMessage()
+        if (body == null) {
+            break
+        }
+        var msg = parseJson(body)
+        if (msg == null) {
+            break
+        }
+        var method = jstr(jget(msg, "method")) ?? ""
+        if (method == "") {
+            continue
+        }
+        var id = jget(msg, "id")
+        var params = jget(msg, "params")
+        var ok = await handle(s, method, id, params)
+        if (!ok && !jnull(id)) {
+            respondErr(id, -32603, "internal error")
+        }
+        if (method == "exit") {
+            if (s.shutdown) {
+                return 0
+            }
+            return 1
+        }
+    }
+    return 0
+}

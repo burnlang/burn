@@ -1,0 +1,88 @@
+import "../syntax/lexer.bn"
+
+priv fun indentAt(b: [uint8], offset: int): int {
+    var start = offset
+    while (start > 0 && b[start - 1] != 10) {
+        start -= 1
+    }
+    var n = 0
+    var i = start
+    while (i < len(b) && (b[i] == 32 || b[i] == 9)) {
+        if (b[i] == 9) {
+            n += 4
+        } else {
+            n += 1
+        }
+        i += 1
+    }
+    return n
+}
+
+/** Source with the braces closed that typing left open, and where a `}` was inserted before existing text. */
+pub def type Repaired {
+    string text
+    [int] inserts
+}
+
+/** Closes the braces left open in `src`, like `repair::close_braces`; null when they are all closed. */
+pub fun closeBraces(src: string): Repaired? {
+    var tokens = lex(src).tokens
+    var b = bytes(src)
+    [int] open = []
+    [int] inserts = []
+    for i in 0..len(tokens) {
+        var t = tokens[i]
+        if (t.kind == Kind.LBrace) {
+            open.push(indentAt(b, t.start))
+        } else if (t.kind == Kind.RBrace) {
+            if (i == 0 || t.nl) {
+                var ind = indentAt(b, t.start)
+                while (len(open) > 1 && open[len(open) - 1] > ind) {
+                    pop(open)
+                    inserts.push(t.start)
+                }
+            }
+            if (len(open) > 0) {
+                pop(open)
+            }
+        }
+    }
+    var tail = len(open)
+    if (len(inserts) == 0 && tail == 0) {
+        return null
+    }
+    var out = ""
+    var last = 0
+    for at in inserts {
+        out += fromBytes(slice(b, last, at))
+        out += "}"
+        last = at
+    }
+    out += fromBytes(slice(b, last, len(b)))
+    for k in 0..tail {
+        out += "\n}"
+    }
+    return Repaired { text: out, inserts: inserts }
+}
+
+/** An offset in the edited text as an offset in the repaired text. */
+pub fun shiftOffset(inserts: [int], offset: int): int {
+    var n = offset
+    for i in inserts {
+        if (i <= offset) {
+            n += 1
+        }
+    }
+    return n
+}
+
+/** An offset in the repaired text as an offset in the edited text. */
+pub fun unshiftOffset(inserts: [int], offset: int): int {
+    var o = offset
+    for n in 0..len(inserts) {
+        if (offset > inserts[n] + n) {
+            o -= 1
+        }
+    }
+    return o
+}

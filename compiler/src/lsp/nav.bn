@@ -1,0 +1,677 @@
+import "../check/builtins.bn"
+import "../check/check.bn"
+import "../check/types.bn"
+import "../cli/host.bn"
+import "../doc/builtin_docs.bn"
+import "../project/paths.bn"
+import "../project/project.bn"
+import "../syntax/lexer.bn"
+import "analysis.bn"
+import "ide.bn"
+import "json.bn"
+import "sources.bn"
+import "state.bn"
+import "std/fs"
+import "std/strings"
+import "text.bn"
+
+/** The keywords of Burn, which cannot be used as names. */
+pub const KEYWORDS = ["fun", "var", "const", "def", "type", "interface", "struct", "abstract", "new", "destroy", "enum", "annotation", "static", "if", "else", "while", "for", "in", "match", "return", "break", "continue", "true", "false", "null", "import", "pub", "priv", "async", "await", "is", "as", "self"]
+
+/** Whether `name` can be used as a name, like `nav::valid_name`. */
+pub fun validName(name: string): bool {
+    var first = true
+    for c in name {
+        if (first) {
+            if (!isLetter(c) && c != "_") {
+                return false
+            }
+            first = false
+        } else if (!identChar(c)) {
+            return false
+        }
+    }
+    return !first && !contains(KEYWORDS, name)
+}
+
+priv fun point(path: string, line: int, col: int, length: int): Json {
+    var s = jo(["line", "character"], [jn(line), jn(col)])
+    var e = jo(["line", "character"], [jn(line), jn(col + length)])
+    return location(pathToUri(path), jo(["start", "end"], [s, e]))
+}
+
+/** Where a declaration is, by file and byte range, to find it from other documents. */
+priv fun keyOf(a: Analysis, span: SrcSpan): string? {
+    var p = filePath(a, span)
+    if (p == null) {
+        return null
+    }
+    return "${p}\t${span.start}\t${span.end}"
+}
+
+/** The declaration of the name at an offset, like `Analysis::target_at`. */
+pub fun targetAt(a: Analysis, off: int): SrcSpan? {
+    IndexDef? best = null
+    for d in a.c.defs {
+        if (spanHas(d.use, a.rootFile, off) && (best == null || d.use.end - d.use.start < best.use.end - best.use.start)) {
+            best = d
+        }
+    }
+    if (best != null) {
+        return best.target
+    }
+    [SrcSpan] decls = []
+    for d in a.c.defs {
+        decls.push(d.target)
+    }
+    for f in a.funcs {
+        decls.push(f.span)
+    }
+    for t in a.typeNames {
+        decls.push(t.span)
+    }
+    for l in a.c.localInfos {
+        decls.push(l.decl)
+    }
+    for r in a.c.types.records {
+        for f in r.fields {
+            decls.push(f.span)
+        }
+    }
+    for e in a.c.types.enums {
+        for v in e.variants {
+            decls.push(v.span)
+        }
+    }
+    for i in a.c.types.ifaces {
+        for m in i.methods {
+            decls.push(m.span)
+        }
+        for v in i.variants {
+            decls.push(v.span)
+        }
+    }
+    SrcSpan? found = null
+    for x in decls {
+        if (spanHas(x, a.rootFile, off) && (found == null || x.end - x.start < found.end - found.start)) {
+            found = x
+        }
+    }
+    return found
+}
+
+/** A declaration with the interface methods it implements or is implemented by, like `Analysis::related`. */
+pub fun related(a: Analysis, d: SrcSpan): [SrcSpan] {
+    var name = a.text(d)
+    [int] ifaces = []
+    for ii in 0..len(a.c.types.ifaces) {
+        for m in a.c.types.ifaces[ii].methods {
+            if (sameSpan(m.span, d)) {
+                ifaces.push(ii)
+                break
+            }
+        }
+    }
+    for f in a.funcs {
+        if (!sameSpan(f.span, d)) {
+            continue
+        }
+        var parts = splitLast(f.name, ".")
+        if (parts == null) {
+            continue
+        }
+        for rec in a.c.types.records {
+            if (rec.name == parts[0]) {
+                for ii in rec.implements {
+                    for m in a.c.types.ifaces[ii].methods {
+                        if (m.name == name) {
+                            ifaces.push(ii)
+                            break
+                        }
+                    }
+                }
+                break
+            }
+        }
+    }
+    [SrcSpan] out = [d]
+    for ii in ifaces {
+        var iface = a.c.types.ifaces[ii]
+        for m in iface.methods {
+            if (m.name == name) {
+                out.push(m.span)
+            }
+        }
+        for rec in a.c.types.records {
+            if (contains(rec.implements, ii)) {
+                var full = "${rec.name}.${name}"
+                for f in a.funcs {
+                    if (f.name == full) {
+                        out.push(f.span)
+                    }
+                }
+            }
+        }
+    }
+    [SrcSpan] sorted = []
+    for s in out {
+        var at = len(sorted)
+        while (at > 0 && (s.file < sorted[at - 1].file || (s.file == sorted[at - 1].file && s.start < sorted[at - 1].start))) {
+            at -= 1
+        }
+        insert(sorted, at, s)
+    }
+    [SrcSpan] dedup = []
+    for s in sorted {
+        if (len(dedup) == 0 || !sameSpan(dedup[len(dedup) - 1], s)) {
+            dedup.push(s)
+        }
+    }
+    return dedup
+}
+
+/** One reference: its document, its range, and whether it is the declaration. */
+pub def type Ref {
+    string uri
+    Json range
+    bool decl
+}
+
+priv fun usesOf(a: Analysis, targets: [string], rootUri: string, out: [Ref]) {
+    for d in a.c.defs {
+        var k = keyOf(a, d.target)
+        if (k != null && contains(targets, k)) {
+            var u = uriOf(a, d.use, rootUri)
+            if (u != null) {
+                out.push(Ref { uri: u, range: a.range(d.use), decl: false })
+            }
+        }
+    }
+}
+
+pub fun definition(s: Server, uri: string, params: Json): Json {
+    var a = s.analyses[uri]
+    if (a == null) {
+        return Json.Null
+    }
+    var off = offsetIn(a, params)
+    if (off == null) {
+        return Json.Null
+    }
+    var imp = importDefinition(a, off)
+    if (imp != null) {
+        return imp
+    }
+    var d = targetAt(a, off)
+    if (d != null) {
+        var text = a.text(d)
+        if (endsWith(text, ".bvmc\"") || endsWith(text, ".bar\"") || endsWith(text, ".bvm\"")) {
+            var name = wordAt(a.root(), off)
+            var lib = replace(text, "\"", "")
+            var parts = split(lib, "/")
+            lib = parts[len(parts) - 1]
+            var fs = libFuncs(a, d)
+            var stub = libraryStub(lib, fs[0], fs[1], name)
+            if (stub != null) {
+                return point(stub.path, stub.line, 4, len(bytes(name)))
+            }
+        }
+        var target = uriOf(a, d, uri)
+        if (target != null) {
+            return location(target, a.range(d))
+        }
+    }
+    var word = wordAt(a.root(), off)
+    if (isBuiltin(word)) {
+        var loc = builtinLocation(s.builtins, word)
+        if (loc != null) {
+            var nameLen = len(bytes(word))
+            var b = findBuiltin(s.builtins, word)
+            if (b != null) {
+                nameLen = len(bytes(b.name))
+            }
+            return point(loc.path, loc.line, loc.col, nameLen)
+        }
+    }
+    return Json.Null
+}
+
+priv fun collectFiles(dir: string, depth: int, out: [string]) {
+    if (depth > 8 || len(out) >= 500) {
+        return
+    }
+    for name in Files.list(dir) {
+        if (startsWith(name, ".") || name == "build" || name == "target" || name == "node_modules" || name == "out" || name == "dist") {
+            continue
+        }
+        var p = pathJoin(dir, name)
+        if (isDir(p)) {
+            collectFiles(p, depth + 1, out)
+        } else if (endsWith(name, ".bn")) {
+            out.push(resolved(p))
+        }
+    }
+}
+
+/** Every Burn file of the projects around `current`, like `Server::project_files`. */
+pub fun projectFiles(s: Server, current: string): [string] {
+    [string] roots = []
+    var r = findRoot(current)
+    if (r != null) {
+        roots.push(r)
+    }
+    for root in s.roots {
+        if (underDir(current, root)) {
+            var overlaps = false
+            for x in roots {
+                if (underDir(x, root) || underDir(root, x)) {
+                    overlaps = true
+                }
+            }
+            if (!overlaps) {
+                roots.push(root)
+            }
+        }
+    }
+    if (len(roots) == 0) {
+        var p = pathParent(current)
+        if (p != null) {
+            roots.push(p)
+        }
+    }
+    [string] out = []
+    for root in roots {
+        collectFiles(root, 0, out)
+    }
+    return sortedUnique(out)
+}
+
+/** The strings sorted, without repeats. */
+pub fun sortedUnique(xs: [string]): [string] {
+    var c = copy(xs)
+    sort(c)
+    [string] out = []
+    for x in c {
+        if (len(out) == 0 || out[len(out) - 1] != x) {
+            out.push(x)
+        }
+    }
+    return out
+}
+
+/** The URI of a file: the editor's URI when the file is open. */
+pub fun uriFor(s: Server, path: string): string {
+    var c = resolved(path)
+    for u in s.openUris() {
+        if (resolved(uriToPath(u)) == c) {
+            return u
+        }
+    }
+    return pathToUri(c)
+}
+
+/** Checks a file for the language server without reporting anything, like `Server::quick_analysis`. */
+pub fun quickAnalysis(s: Server, path: string): Analysis? {
+    var loader = s.loader()
+    var err = new Problem()
+    var root = loader.loadFile(path, err)
+    if (root < 0) {
+        return null
+    }
+    return buildAnalysis(loader.finish(root), root, []).analysis
+}
+
+priv def type Refs {
+    [Ref] refs
+    string name
+}
+
+priv fun referencesOf(s: Server, uri: string, params: Json, includeDecl: bool, everywhere: bool): Refs? {
+    var a = s.analyses[uri]
+    if (a == null) {
+        return null
+    }
+    var off = offsetIn(a, params)
+    if (off == null) {
+        return null
+    }
+    var d = targetAt(a, off)
+    if (d == null) {
+        return null
+    }
+    if (keyOf(a, d) == null) {
+        return null
+    }
+    var name = a.text(d)
+    var group = related(a, d)
+    [string] keys = []
+    for g in group {
+        var k = keyOf(a, g)
+        if (k != null) {
+            keys.push(k)
+        }
+    }
+    [Ref] out = []
+    if (includeDecl) {
+        for g in group {
+            var u = uriOf(a, g, uri)
+            if (u != null) {
+                out.push(Ref { uri: u, range: a.range(g), decl: true })
+            }
+        }
+    }
+    usesOf(a, keys, uri, out)
+    if (everywhere) {
+        var here = resolved(uriToPath(uri))
+        for f in projectFiles(s, here) {
+            if (resolved(f) == here || isCached(f)) {
+                continue
+            }
+            var other = quickAnalysis(s, f)
+            if (other != null) {
+                usesOf(other, keys, uriFor(s, f), out)
+            }
+        }
+    }
+    [string] seen = []
+    [Ref] kept = []
+    for r in out {
+        var k = "${r.uri}\t${encode(r.range)}"
+        if (!contains(seen, k)) {
+            seen.push(k)
+            kept.push(r)
+        }
+    }
+    return Refs { refs: kept, name: name }
+}
+
+pub fun references(s: Server, uri: string, params: Json): Json {
+    var include = jbool(jat(params, ["context", "includeDeclaration"])) ?? true
+    var r = referencesOf(s, uri, params, include, true)
+    if (r == null) {
+        return ja([])
+    }
+    [Json] out = []
+    for x in r.refs {
+        out.push(location(x.uri, x.range))
+    }
+    return ja(out)
+}
+
+pub fun highlights(s: Server, uri: string, params: Json): Json {
+    var r = referencesOf(s, uri, params, true, false)
+    if (r == null) {
+        return ja([])
+    }
+    [Json] out = []
+    for x in r.refs {
+        if (x.uri == uri) {
+            var kind = 2
+            if (x.decl) {
+                kind = 3
+            }
+            out.push(jo(["range", "kind"], [x.range, jn(kind)]))
+        }
+    }
+    return ja(out)
+}
+
+/** The answer to a rename request, or why the name cannot be renamed. */
+pub def type Renamed {
+    Json? result
+    string error
+}
+
+pub fun prepareRename(s: Server, uri: string, params: Json): Renamed {
+    var a = s.analyses[uri]
+    var off: int? = null
+    if (a != null) {
+        off = offsetIn(a, params)
+    }
+    if (a == null || off == null) {
+        return Renamed { result: null, error: "nothing to rename here" }
+    }
+    var d = targetAt(a, off)
+    if (d == null) {
+        var word = wordAt(a.root(), off)
+        if (isBuiltin(word)) {
+            return Renamed { result: null, error: "`${word}` is built into Burn and cannot be renamed" }
+        }
+        return Renamed { result: null, error: "nothing to rename here" }
+    }
+    var path = filePath(a, d)
+    if (path == null) {
+        return Renamed { result: null, error: "this name cannot be renamed" }
+    }
+    if (isCached(path)) {
+        return Renamed { result: null, error: "names from the standard library and built-ins cannot be renamed" }
+    }
+    var name = a.text(d)
+    if (!validName(name)) {
+        return Renamed { result: null, error: "this is not a name that can be renamed" }
+    }
+    IndexDef? best = null
+    for x in a.c.defs {
+        if (spanHas(x.use, a.rootFile, off) && (best == null || x.use.end - x.use.start < best.use.end - best.use.start)) {
+            best = x
+        }
+    }
+    var span = d
+    if (best != null && best.use.file == a.rootFile) {
+        span = best.use
+    }
+    return Renamed { result: jo(["range", "placeholder"], [a.range(span), js(name)]), error: "" }
+}
+
+pub fun rename(s: Server, uri: string, params: Json): Renamed {
+    var p = prepareRename(s, uri, params)
+    if (p.result == null) {
+        return p
+    }
+    var newName = jstr(jget(params, "newName")) ?? ""
+    if (!validName(newName)) {
+        return Renamed { result: null, error: "`${newName}` is not a valid name" }
+    }
+    var r = referencesOf(s, uri, params, true, true)
+    if (r == null) {
+        return Renamed { result: null, error: "nothing to rename here" }
+    }
+    [string] uris = []
+    [Json] edits = []
+    for x in r.refs {
+        var edit = jo(["range", "newText"], [x.range, js(newName)])
+        var at = indexOf(uris, x.uri)
+        if (at < 0) {
+            uris.push(x.uri)
+            edits.push(ja([edit]))
+        } else {
+            jarr(edits[at]).push(edit)
+        }
+    }
+    return Renamed { result: jo(["changes"], [jo(uris, edits)]), error: "" }
+}
+
+priv def type TopLevel {
+    string name
+    int kind
+    int start
+    int end
+}
+
+priv fun identAt(tokens: [Token], i: int): string? {
+    if (i < len(tokens) && tokens[i].kind == Kind.Ident) {
+        return tokens[i].text
+    }
+    return null
+}
+
+priv fun topLevel(text: string): [TopLevel] {
+    var tokens = lex(text).tokens
+    [TopLevel] out = []
+    var depth = 0
+    for i in 0..len(tokens) {
+        var k = tokens[i].kind
+        if (k == Kind.LBrace) {
+            depth += 1
+        } else if (k == Kind.RBrace) {
+            depth -= 1
+        } else if (k == Kind.Fun && depth <= 1) {
+            var name = identAt(tokens, i + 1)
+            if (name != null) {
+                var t = tokens[i + 1]
+                var kind = 6
+                if (depth == 0) {
+                    kind = 12
+                }
+                out.push(TopLevel { name: name, kind: kind, start: t.start, end: t.end })
+            }
+        } else if (k == Kind.Def && depth == 0) {
+            var j = i + 1
+            var w = identAt(tokens, j)
+            while (w == "abstract" || w == "static" || w == "pub" || w == "priv") {
+                j += 1
+                w = identAt(tokens, j)
+            }
+            var kind = -1
+            if (w == "struct") {
+                kind = 5
+            } else if (w == "interface") {
+                kind = 11
+            } else if (w == "enum") {
+                kind = 10
+            } else if (w == "type" || w == "annotation") {
+                kind = 23
+            }
+            if (kind < 0) {
+                continue
+            }
+            var name = identAt(tokens, j + 1)
+            if (name != null) {
+                var t = tokens[j + 1]
+                out.push(TopLevel { name: name, kind: kind, start: t.start, end: t.end })
+            }
+        }
+    }
+    return out
+}
+
+pub fun workspaceSymbols(s: Server, params: Json): Json {
+    var query = lower(jstr(jget(params, "query")) ?? "")
+    [string] files = []
+    for r in s.roots {
+        collectFiles(r, 0, files)
+    }
+    for u in s.openUris() {
+        for f in projectFiles(s, uriToPath(u)) {
+            files.push(f)
+        }
+    }
+    files = sortedUnique(files)
+    if (len(files) > 500) {
+        files = slice(files, 0, 500)
+    }
+    [Json] out = []
+    for f in files {
+        var text: string? = null
+        var c = resolved(f)
+        for u in s.openUris() {
+            if (text == null && resolved(uriToPath(u)) == c) {
+                text = s.docs[u]
+            }
+        }
+        if (text == null) {
+            text = readText(f)
+        }
+        if (text == null) {
+            continue
+        }
+        var uri = uriFor(s, f)
+        var file = textFile(text)
+        for t in topLevel(text) {
+            if (query != "" && !contains(lower(t.name), query)) {
+                continue
+            }
+            out.push(jo(["name", "kind", "location"], [js(t.name), jn(t.kind), location(uri, rangeOf(file, t.start, t.end))]))
+        }
+    }
+    return ja(out)
+}
+
+pub fun implementation(s: Server, uri: string, params: Json): Json {
+    var a = s.analyses[uri]
+    if (a == null) {
+        return Json.Null
+    }
+    var off = offsetIn(a, params)
+    if (off == null) {
+        return Json.Null
+    }
+    var d = targetAt(a, off)
+    if (d == null) {
+        return ja([])
+    }
+    [SrcSpan] spans = []
+    TypeName? named = null
+    for t in a.typeNames {
+        if (named == null && sameSpan(t.span, d)) {
+            named = t
+        }
+    }
+    if (named != null) {
+        var k = a.kind(named.ty)
+        if (k is Ty.Interface) {
+            for r in a.c.types.records {
+                if (contains(r.implements, k.index)) {
+                    var sp = typeDecl(a, r.ty)
+                    if (sp != null) {
+                        spans.push(sp)
+                    }
+                }
+            }
+        } else if (k is Ty.Record) {
+            [int] frontier = [k.index]
+            while (len(frontier) > 0) {
+                var p = pop(frontier)
+                for ci in 0..len(a.c.types.records) {
+                    var r = a.c.types.records[ci]
+                    if (r.parent == p) {
+                        frontier.push(ci)
+                        var sp = typeDecl(a, r.ty)
+                        if (sp != null) {
+                            spans.push(sp)
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        [SrcSpan] ifaceMethods = []
+        for i in a.c.types.ifaces {
+            for m in i.methods {
+                ifaceMethods.push(m.span)
+            }
+        }
+        for sp in related(a, d) {
+            if (sameSpan(sp, d)) {
+                continue
+            }
+            var isIface = false
+            for m in ifaceMethods {
+                if (sameSpan(m, sp)) {
+                    isIface = true
+                }
+            }
+            if (!isIface) {
+                spans.push(sp)
+            }
+        }
+    }
+    [Json] out = []
+    for sp in spans {
+        var u = uriOf(a, sp, uri)
+        if (u != null) {
+            out.push(location(u, a.range(sp)))
+        }
+    }
+    return ja(out)
+}

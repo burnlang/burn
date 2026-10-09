@@ -1,0 +1,206 @@
+import "../diag/diag.bn"
+import "json.bn"
+import "std/strings"
+
+/** The 0-based line and UTF-16 column of a byte offset, like `SourceFile::line_utf16_col`. */
+pub fun utf16Pos(f: SourceFile, offset: int): [int] {
+    f.index()
+    var at = offset
+    if (at > len(f.bytes)) {
+        at = len(f.bytes)
+    }
+    var line = f.lineOf(at)
+    var col = 0
+    for i in f.lineStarts[line]..at {
+        var b = f.bytes[i] as int
+        if ((b & 192) != 128) {
+            col += 1
+            if (b >= 240) {
+                col += 1
+            }
+        }
+    }
+    return [line, col]
+}
+
+/** The byte offset of a 0-based line and UTF-16 column, like `SourceFile::offset_of_utf16`. */
+pub fun utf16Offset(f: SourceFile, line: int, col: int): int {
+    f.index()
+    if (line >= len(f.lineStarts) || line < 0) {
+        return len(f.bytes)
+    }
+    var start = f.lineStarts[line]
+    var units = 0
+    for i in start..len(f.bytes) {
+        var b = f.bytes[i] as int
+        if ((b & 192) == 128) {
+            continue
+        }
+        if (units >= col || b == 10) {
+            return i
+        }
+        units += 1
+        if (b >= 240) {
+            units += 1
+        }
+    }
+    return len(f.bytes)
+}
+
+/** A source file for text that is not loaded, like `SourceFile::new(String::new(), None, text)`. */
+pub fun textFile(text: string): SourceFile {
+    var f = new SourceFile("", text)
+    f.index()
+    return f
+}
+
+/** The LSP position of a byte offset. */
+pub fun posJson(f: SourceFile, offset: int): Json {
+    var p = utf16Pos(f, offset)
+    return jo(["line", "character"], [jn(p[0]), jn(p[1])])
+}
+
+/** The LSP range between two byte offsets. */
+pub fun rangeOf(f: SourceFile, start: int, end: int): Json {
+    return jo(["start", "end"], [posJson(f, start), posJson(f, end)])
+}
+
+/** The LSP range of whole lines. */
+pub fun lineRange(startLine: int, endLine: int): Json {
+    var s = jo(["line", "character"], [jn(startLine), jn(0)])
+    var e = jo(["line", "character"], [jn(endLine), jn(0)])
+    return jo(["start", "end"], [s, e])
+}
+
+priv fun hexValue(c: int): int {
+    if (c >= 48 && c <= 57) {
+        return c - 48
+    }
+    if (c >= 97 && c <= 102) {
+        return c - 87
+    }
+    if (c >= 65 && c <= 70) {
+        return c - 55
+    }
+    return -1
+}
+
+/** The file path of a `file://` URI, like `uri_to_path`. */
+pub fun uriToPath(uri: string): string {
+    var rest = uri
+    if (startsWith(uri, "file://")) {
+        rest = substring(uri, 7, len(uri))
+    }
+    var b = bytes(rest)
+    [uint8] out = []
+    var i = 0
+    while (i < len(b)) {
+        if (b[i] == 37 && i + 2 < len(b)) {
+            var hi = hexValue(b[i + 1])
+            var lo = hexValue(b[i + 2])
+            if (hi >= 0 && lo >= 0) {
+                out.push((hi * 16 + lo) as uint8)
+                i += 3
+                continue
+            }
+        }
+        out.push(b[i])
+        i += 1
+    }
+    if (len(out) > 2 && out[0] == 47 && out[2] == 58) {
+        out = slice(out, 1, len(out))
+    }
+    return fromBytes(out)
+}
+
+priv fun hexUpper(n: int): string {
+    return substring("0123456789ABCDEF", n, n + 1)
+}
+
+/** The `file://` URI of a path, like `path_to_uri`. */
+pub fun pathToUri(p: string): string {
+    var s = replace(p, "\\", "/")
+    var out = "file://"
+    if (!startsWith(s, "/")) {
+        out += "/"
+    }
+    for b in bytes(s) {
+        var c = b as int
+        if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 47 || c == 45 || c == 95 || c == 46 || c == 126 || c == 58) {
+            out += fromCharCode(c)
+        } else {
+            out += "%${hexUpper(c / 16)}${hexUpper(c % 16)}"
+        }
+    }
+    return out
+}
+
+/** Whether a byte is an ASCII letter, digit or `_`. */
+pub fun wordByte(c: int): bool {
+    return (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 95
+}
+
+/** The word of ASCII letters, digits and `_` around a byte offset, like `word_at`. */
+pub fun wordAt(f: SourceFile, off: int): string {
+    f.index()
+    var b = f.bytes
+    var s = off
+    if (s > len(b)) {
+        s = len(b)
+    }
+    var e = s
+    while (s > 0 && wordByte(b[s - 1])) {
+        s -= 1
+    }
+    while (e < len(b) && wordByte(b[e])) {
+        e += 1
+    }
+    return f.text(s, e)
+}
+
+/** The text of `src` up to a byte offset. */
+pub fun bytesBefore(f: SourceFile, off: int): string {
+    f.index()
+    var e = off
+    if (e > len(f.bytes)) {
+        e = len(f.bytes)
+    }
+    return f.text(0, e)
+}
+
+/** Whether `c` is a letter or digit in any script, or `_`. */
+pub fun identChar(c: string): bool {
+    return isAlphanumeric(c) || c == "_"
+}
+
+/** The parts of `s` split at the last `sep`, or null, like `str::rsplit_once`. */
+pub fun splitLast(s: string, sep: string): [string]? {
+    var at = lastIndexOf(s, sep)
+    if (at < 0) {
+        return null
+    }
+    return [substring(s, 0, at), substring(s, at + len(sep), len(s))]
+}
+
+/** The parts of `s` split at the first `sep`, or null, like `str::split_once`. */
+pub fun splitFirst(s: string, sep: string): [string]? {
+    var at = indexOf(s, sep)
+    if (at < 0) {
+        return null
+    }
+    return [substring(s, 0, at), substring(s, at + len(sep), len(s))]
+}
+
+/** The index of the last `sub` in `s`, in characters, or -1. */
+pub fun lastIndexOf(s: string, sub: string): int {
+    var n = len(s)
+    var m = len(sub)
+    var i = n - m
+    while (i >= 0) {
+        if (substring(s, i, i + m) == sub) {
+            return i
+        }
+        i -= 1
+    }
+    return -1
+}

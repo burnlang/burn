@@ -241,6 +241,103 @@ fn repl_eval(text: &str, libs: &[String], globals: &[String], inits: &[String], 
     result
 }
 
+fn read_message() -> Option<String> {
+    use std::io::{BufRead, Read};
+    let stdin = std::io::stdin();
+    let mut r = stdin.lock();
+    let mut len: Option<usize> = None;
+    loop {
+        let mut line = String::new();
+        if r.read_line(&mut line).ok()? == 0 {
+            return None;
+        }
+        let t = line.trim();
+        if t.is_empty() {
+            break;
+        }
+        if let Some(v) = t.strip_prefix("Content-Length:") {
+            len = v.trim().parse().ok();
+        }
+    }
+    let mut buf = vec![0u8; len?];
+    r.read_exact(&mut buf).ok()?;
+    Some(String::from_utf8_lossy(&buf).into_owned())
+}
+
+#[cfg(target_os = "linux")]
+fn cap_memory() {
+    #[repr(C)]
+    struct Rlimit {
+        cur: u64,
+        max: u64,
+    }
+    extern "C" {
+        fn getrlimit(resource: i32, rlim: *mut Rlimit) -> i32;
+        fn setrlimit(resource: i32, rlim: *const Rlimit) -> i32;
+    }
+    const RLIMIT_AS: i32 = 9;
+    let mb: u64 = std::env::var("BURN_LSP_MEMORY_MB").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(4096);
+    if mb == 0 {
+        return;
+    }
+    let want = mb.saturating_mul(1 << 20);
+    let mut cur = Rlimit { cur: 0, max: 0 };
+    unsafe {
+        if getrlimit(RLIMIT_AS, &mut cur) != 0 || cur.cur <= want {
+            return;
+        }
+        let next = Rlimit { cur: want, max: cur.max };
+        setrlimit(RLIMIT_AS, &next);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn cap_memory() {}
+
+fn write_read_only(path: &Path, content: &str) -> bool {
+    if std::fs::read_to_string(path).ok().as_deref() == Some(content) {
+        return true;
+    }
+    if let Some(dir) = path.parent() {
+        if std::fs::create_dir_all(dir).is_err() {
+            return false;
+        }
+    }
+    if let Ok(meta) = std::fs::metadata(path) {
+        let mut perm = meta.permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        perm.set_readonly(false);
+        let _ = std::fs::set_permissions(path, perm);
+    }
+    if std::fs::write(path, content).is_err() {
+        return false;
+    }
+    if let Ok(meta) = std::fs::metadata(path) {
+        let mut perm = meta.permissions();
+        perm.set_readonly(true);
+        let _ = std::fs::set_permissions(path, perm);
+    }
+    true
+}
+
+fn run_in(program: &str, args: &[String], dir: &Path) -> String {
+    let result = std::process::Command::new(program)
+        .args(args)
+        .current_dir(dir)
+        .env("NO_COLOR", "1")
+        .stdin(std::process::Stdio::null())
+        .output();
+    match result {
+        Ok(out) => format!(
+            "{}\t{}{}",
+            if out.status.success() { "ok" } else { "failed" },
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+        Err(e) => format!("error\t{}", e),
+    }
+}
+
 fn ints(p: u64) -> Vec<u64> {
     (0..array_len(p)).map(|i| array_at(p, i)).collect()
 }
@@ -325,6 +422,37 @@ pub fn host(tool: &str) -> Host {
             _ => 0,
         }
     });
+    host.register("burn.lspStart", 0, |_| {
+        cap_memory();
+        repl_start();
+        0
+    });
+    host.register("burn.readMessage", 0, |_| match read_message() {
+        Some(body) => string(&body),
+        None => 0,
+    });
+    host.register("burn.send", 1, |a| {
+        use std::io::Write;
+        bvm_runtime::io::flush();
+        let body = str_ref(a[0]);
+        let out = std::io::stdout();
+        let mut l = out.lock();
+        let _ = write!(l, "Content-Length: {}\r\n\r\n{}", body.len(), body);
+        let _ = l.flush();
+        0
+    });
+    host.register("burn.realPath", 1, |a| match std::fs::canonicalize(str_ref(a[0])) {
+        Ok(p) => string(&p.display().to_string()),
+        Err(_) => 0,
+    });
+    host.register("burn.writeReadOnly", 2, |a| write_read_only(Path::new(str_ref(a[0])), str_ref(a[1])) as u64);
+    host.register("burn.exeDir", 0, |_| {
+        match std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.display().to_string())) {
+            Some(d) => string(&d),
+            None => 0,
+        }
+    });
+    host.register("burn.runIn", 3, |a| string(&run_in(str_ref(a[0]), &strings(a[1]), Path::new(str_ref(a[2])))));
     host.register("burn.stale", 2, |a| stale(Path::new(str_ref(a[0])), Path::new(str_ref(a[1]))) as u64);
     host.register("burn.library", 1, |a| string(&describe_library(Path::new(str_ref(a[0])))));
     host.register("burn.colorErrors", 0, |_| {

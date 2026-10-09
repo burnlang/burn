@@ -1,0 +1,816 @@
+import "../check/check.bn"
+import "../check/types.bn"
+import "../cli/host.bn"
+import "../diag/diag.bn"
+import "../doc/builtin_docs.bn"
+import "../project/paths.bn"
+import "../project/project.bn"
+import "../project/stdlib.bn"
+import "../syntax/lexer.bn"
+import "analysis.bn"
+import "json.bn"
+import "sources.bn"
+import "state.bn"
+import "text.bn"
+
+/** A name a module exports, with its completion kind and the line that declares it. */
+pub def type Export {
+    string name
+    int kind
+    string detail
+}
+
+priv fun identAt(tokens: [Token], i: int): string? {
+    if (i < len(tokens) && tokens[i].kind == Kind.Ident) {
+        return tokens[i].text
+    }
+    return null
+}
+
+priv fun declLine(b: [uint8], t: Token): string {
+    var s = t.start
+    while (s > 0 && b[s - 1] != 10) {
+        s -= 1
+    }
+    var e = t.start
+    while (e < len(b) && b[e] != 10) {
+        e += 1
+    }
+    var line = trim(fromBytes(slice(b, s, e)))
+    while (endsWith(line, "{")) {
+        line = substring(line, 0, len(line) - 1)
+    }
+    return trim(line)
+}
+
+/** The public functions and types declared at the top of `text`, like `ide::exports_of`. */
+pub fun exportsOf(text: string): [Export] {
+    var tokens = lex(text).tokens
+    var b = bytes(text)
+    [Export] out = []
+    var depth = 0
+    var private = false
+    for i in 0..len(tokens) {
+        var t = tokens[i]
+        if (t.nl) {
+            private = false
+        }
+        var k = t.kind
+        if (k == Kind.LBrace || k == Kind.LParen || k == Kind.LBracket) {
+            depth += 1
+        } else if (k == Kind.RBrace || k == Kind.RParen || k == Kind.RBracket) {
+            depth -= 1
+        } else if (k == Kind.Priv && depth == 0) {
+            private = true
+        } else if (k == Kind.Fun && depth == 0 && !private) {
+            var name = identAt(tokens, i + 1)
+            if (name != null) {
+                out.push(Export { name: name, kind: 3, detail: declLine(b, t) })
+            }
+        } else if (k == Kind.Def && depth == 0 && !private) {
+            var j = i + 1
+            while (identAt(tokens, j) == "abstract" || identAt(tokens, j) == "static") {
+                j += 1
+            }
+            var what = identAt(tokens, j)
+            var kind = -1
+            if (what == "struct" || what == "type" || what == "annotation") {
+                kind = 22
+            } else if (what == "interface") {
+                kind = 8
+            } else if (what == "enum") {
+                kind = 13
+            }
+            if (kind < 0) {
+                continue
+            }
+            var name = identAt(tokens, j + 1)
+            if (name != null) {
+                out.push(Export { name: name, kind: kind, detail: declLine(b, t) })
+            }
+        }
+    }
+    return out
+}
+
+/** The exports of one standard library module, with the built-in functions that need it. */
+pub def type StdExports {
+    string module
+    [Export] exports
+}
+
+priv const STD_EXPORTS: [StdExports] = []
+
+/** The exports of every standard library module, like `ide::std_exports`. */
+pub fun stdExports(all: [Builtin]): [StdExports] {
+    if (len(STD_EXPORTS) > 0) {
+        return STD_EXPORTS
+    }
+    for s in stdModules() {
+        var exports = exportsOf(s.src)
+        for b in all {
+            if (builtinModule(b) == s.name) {
+                exports.push(Export { name: b.name, kind: 3, detail: b.sig })
+            }
+        }
+        STD_EXPORTS.push(StdExports { module: s.name, exports: exports })
+    }
+    return STD_EXPORTS
+}
+
+priv fun matchingBrace(tokens: [Token], open: int): int {
+    var depth = 0
+    for i in open..len(tokens) {
+        if (tokens[i].kind == Kind.LBrace) {
+            depth += 1
+        } else if (tokens[i].kind == Kind.RBrace) {
+            depth -= 1
+            if (depth == 0) {
+                return i
+            }
+        }
+    }
+    return -1
+}
+
+/** The end of the body that follows a declared name, or -1, like `ide::body_end`. */
+pub fun bodyEnd(tokens: [Token], nameEnd: int): int {
+    var start = -1
+    for i in 0..len(tokens) {
+        if (tokens[i].start >= nameEnd) {
+            start = i
+            break
+        }
+    }
+    if (start < 0) {
+        return -1
+    }
+    var parens = 0
+    for i in start..len(tokens) {
+        var t = tokens[i]
+        var k = t.kind
+        if (k == Kind.LParen || k == Kind.LBracket) {
+            parens += 1
+        } else if (k == Kind.RParen || k == Kind.RBracket) {
+            parens -= 1
+        } else if (k == Kind.LBrace && parens == 0) {
+            var j = matchingBrace(tokens, i)
+            if (j < 0) {
+                return -1
+            }
+            return tokens[j].end
+        } else if (k == Kind.RBrace || k == Kind.Eof) {
+            return -1
+        }
+        if (i > start && t.nl && parens == 0 && k != Kind.LBrace) {
+            return -1
+        }
+    }
+    return -1
+}
+
+priv fun lineStartOf(b: [uint8], offset: int): int {
+    var s = offset
+    if (s > len(b)) {
+        s = len(b)
+    }
+    while (s > 0 && b[s - 1] != 10) {
+        s -= 1
+    }
+    return s
+}
+
+priv fun loadedProject(root: string?): Project? {
+    if (root == null) {
+        return null
+    }
+    var err = new Problem()
+    return loadProject(root, err)
+}
+
+priv fun sourcePath(src: string, to: string): string? {
+    var base = realPath(src)
+    if (base == null) {
+        return null
+    }
+    var rel = stripPrefix(to, base)
+    if (rel == null) {
+        return null
+    }
+    var r = replace(rel, "\\", "/")
+    if (endsWith(r, ".bn")) {
+        r = substring(r, 0, len(r) - 3)
+    }
+    if (endsWith(r, "/mod")) {
+        r = substring(r, 0, len(r) - 4)
+    }
+    return r
+}
+
+/** How the file `from` imports the file `to`, like `ide::import_spec`. */
+pub fun importSpec(from: string, to: string): string {
+    var here = findRoot(from)
+    var project = loadedProject(here)
+    if (project != null) {
+        if (realPath(mainPath(project)) == to) {
+            return project.manifest.name
+        }
+        var rel = sourcePath(sourceRoot(project), to)
+        if (rel != null) {
+            return "@/${rel}"
+        }
+    }
+    var there = findRoot(to)
+    if (there != null && there != here) {
+        var p = loadedProject(there)
+        if (p != null) {
+            if (realPath(mainPath(p)) == to) {
+                return p.manifest.name
+            }
+            var rel = sourcePath(sourceRoot(p), to)
+            if (rel != null) {
+                return "${p.manifest.name}/${rel}"
+            }
+        }
+    }
+    return moduleSpec(from, to)
+}
+
+priv fun components(p: string): [string] {
+    [string] out = []
+    if (startsWith(p, "/")) {
+        out.push("/")
+    }
+    var first = true
+    for part in split(p, "/") {
+        if (part == "" || (part == "." && !first)) {
+            first = false
+            continue
+        }
+        first = false
+        out.push(part)
+    }
+    return out
+}
+
+/** The relative path from the folder of `from` to `to`, like `ide::module_spec`. */
+pub fun moduleSpec(from: string, to: string): string {
+    var base = pathParent(from) ?? "."
+    var b = components(base)
+    var t = components(to)
+    var common = 0
+    while (common < len(b) && common < len(t) && b[common] == t[common]) {
+        common += 1
+    }
+    [string] parts = []
+    for k in common..len(b) {
+        parts.push("..")
+    }
+    for k in common..len(t) {
+        parts.push(t[k])
+    }
+    return join(parts, "/")
+}
+
+/** Where the type behind optionals and arrays of `t` is declared, like `Analysis::type_decl`. */
+pub fun typeDecl(a: Analysis, t: int): SrcSpan? {
+    var cur = t
+    for k in 0..4 {
+        var kind = a.kind(cur)
+        if (kind is Ty.Optional) {
+            cur = kind.inner
+        } else if (kind is Ty.Array) {
+            cur = kind.elem
+        } else {
+            break
+        }
+    }
+    for n in a.typeNames {
+        if (n.ty == cur) {
+            return n.span
+        }
+    }
+    return null
+}
+
+/** The type of the smallest local or expression at an offset, like `Analysis::type_at`. */
+pub fun typeAt(a: Analysis, off: int): int? {
+    LocalInfo? best = null
+    for l in a.c.localInfos {
+        if (spanHas(l.decl, a.rootFile, off) && (best == null || l.decl.end - l.decl.start < best.decl.end - best.decl.start)) {
+            best = l
+        }
+    }
+    if (best != null) {
+        return best.ty
+    }
+    IndexType? bt = null
+    for e in a.c.exprTypes {
+        if (spanHas(e.span, a.rootFile, off) && (bt == null || e.span.end - e.span.start < bt.span.end - bt.span.start)) {
+            bt = e
+        }
+    }
+    if (bt != null) {
+        return bt.ty
+    }
+    return null
+}
+
+/** A file and the 0-based line to open it at. */
+pub def type Place {
+    string path
+    int line
+}
+
+priv fun libName(p: string): string {
+    return pathFileName(p) ?? "library"
+}
+
+/** The functions a bytecode library import brought in, as names and signatures. */
+pub fun libFuncs(a: Analysis, span: SrcSpan): [[string]] {
+    [string] names = []
+    [string] sigs = []
+    for f in a.funcs {
+        if (sameSpan(f.span, span)) {
+            names.push(f.name)
+            sigs.push(f.sig)
+        }
+    }
+    return [names, sigs]
+}
+
+pub fun targetLocation(a: Analysis, span: SrcSpan, target: Target): Place? {
+    if (target is Target.File) {
+        return Place { path: target.path, line: 0 }
+    }
+    if (target is Target.Std) {
+        var p = stdFile(target.name)
+        if (p == null) {
+            return null
+        }
+        return Place { path: p, line: 0 }
+    }
+    if (target is Target.Lib) {
+        var fs = libFuncs(a, span)
+        var stub = libraryStub(libName(target.path), fs[0], fs[1], "")
+        if (stub == null) {
+            return null
+        }
+        return Place { path: stub.path, line: 0 }
+    }
+    return null
+}
+
+pub fun importDefinition(a: Analysis, off: int): Json? {
+    var l = a.importAt(off)
+    if (l == null) {
+        return null
+    }
+    var place = targetLocation(a, l.span, l.target)
+    if (place == null) {
+        return null
+    }
+    return jo(["uri", "range"], [js(pathToUri(place.path)), lineRange(place.line, place.line)])
+}
+
+/** The open document at `path`, or the file on disk. */
+pub fun docText(s: Server, path: string): string? {
+    var c = resolved(path)
+    for u in s.openUris() {
+        if (realPath(uriToPath(u)) == c) {
+            return s.docs[u]
+        }
+    }
+    return readText(path)
+}
+
+priv fun moduleText(s: Server, target: Target): string? {
+    if (target is Target.Std) {
+        for m in stdModules() {
+            if (m.name == target.name) {
+                return m.src
+            }
+        }
+        return null
+    }
+    if (target is Target.File) {
+        return docText(s, target.path)
+    }
+    return null
+}
+
+pub fun importHover(s: Server, a: Analysis, off: int): Json? {
+    var l = a.importAt(off)
+    if (l == null) {
+        return null
+    }
+    var target = l.target
+    var spec = a.text(l.span)
+    var md = "```burn\nimport ${spec}\n```\n"
+    if (target is Target.Std) {
+        md += "Standard library module `std/${target.name}`\n"
+    } else if (target is Target.File) {
+        md += "`${target.path}`\n"
+    } else if (target is Target.Lib) {
+        md += "Bytecode library `${target.path}`\n"
+        [string] names = []
+        for f in a.funcs {
+            if (sameSpan(f.span, l.span)) {
+                names.push("`${f.name}`")
+            }
+        }
+        if (len(names) > 0) {
+            md += "\nExports ${join(names, ", ")}\n"
+        }
+    }
+    var text = moduleText(s, target)
+    if (text != null) {
+        [string] names = []
+        for e in exportsOf(text) {
+            names.push("`${e.name}`")
+        }
+        if (len(names) > 0) {
+            var shown = len(names)
+            var more = ""
+            if (shown > 40) {
+                shown = 40
+                more = ", ..."
+            }
+            md += "\nExports ${join(slice(names, 0, shown), ", ")}${more}\n"
+        }
+    }
+    return jo(["contents", "range"], [markdown(md), a.range(l.span)])
+}
+
+pub fun documentLinks(s: Server, uri: string): Json {
+    var a = s.analyses[uri]
+    if (a == null) {
+        return ja([])
+    }
+    var file = a.root()
+    [Json] out = []
+    for l in a.links {
+        if (l.span.file != a.rootFile) {
+            continue
+        }
+        var place = targetLocation(a, l.span, l.target)
+        if (place == null) {
+            continue
+        }
+        var st = l.span.start
+        var en = l.span.end
+        if (en - st >= 2 && file.bytes[st] == 34) {
+            st += 1
+            en -= 1
+        }
+        var tip = "Open ${place.path}"
+        var t = l.target
+        if (t is Target.Std) {
+            tip = "Open std/${t.name}"
+        }
+        out.push(jo(["range", "target", "tooltip"], [rangeOf(file, st, en), js(pathToUri(place.path)), js(tip)]))
+    }
+    return ja(out)
+}
+
+priv fun fold(out: [Json], s: int, e: int, kind: string?) {
+    if (e > s) {
+        var j = jo(["startLine", "endLine"], [jn(s), jn(e)])
+        if (kind != null) {
+            jput(j, "kind", js(kind))
+        }
+        out.push(j)
+    }
+}
+
+pub fun foldingRanges(s: Server, uri: string): Json {
+    var text = s.docs[uri]
+    if (text == null) {
+        return ja([])
+    }
+    var file = textFile(text)
+    var b = file.bytes
+    var tokens = lex(text).tokens
+    [Json] out = []
+    [int] stack = []
+    for t in tokens {
+        var k = t.kind
+        if (k == Kind.LBrace || k == Kind.LParen || k == Kind.LBracket) {
+            stack.push(file.lineOf(t.start))
+        } else if (k == Kind.RBrace || k == Kind.RParen || k == Kind.RBracket) {
+            if (len(stack) > 0) {
+                var st = pop(stack)
+                var e = file.lineOf(t.start)
+                if (e > st + 1) {
+                    fold(out, st, e - 1, null)
+                }
+            }
+        }
+    }
+    var gapStart = 0
+    [int] commentLines = []
+    for t in tokens {
+        var i = gapStart
+        var gapEnd = t.start
+        while (i < gapEnd) {
+            if (b[i] == 47 && i + 1 < gapEnd && b[i + 1] == 42) {
+                var end = gapEnd
+                var j = i + 2
+                while (j + 1 < gapEnd) {
+                    if (b[j] == 42 && b[j + 1] == 47) {
+                        end = j + 2
+                        break
+                    }
+                    j += 1
+                }
+                fold(out, file.lineOf(i), file.lineOf(end - 1), "comment")
+                i = end
+            } else if (b[i] == 47 && i + 1 < gapEnd && b[i + 1] == 47) {
+                commentLines.push(file.lineOf(i))
+                while (i < gapEnd && b[i] != 10) {
+                    i += 1
+                }
+            } else {
+                i += 1
+            }
+        }
+        gapStart = t.end
+    }
+    var runStart = -1
+    var runEnd = -1
+    for l in commentLines {
+        if (runStart >= 0 && l == runEnd + 1) {
+            runEnd = l
+        } else {
+            if (runStart >= 0) {
+                fold(out, runStart, runEnd, "comment")
+            }
+            runStart = l
+            runEnd = l
+        }
+    }
+    if (runStart >= 0) {
+        fold(out, runStart, runEnd, "comment")
+    }
+    var impStart = -1
+    var impEnd = -1
+    var depth = 0
+    for i in 0..len(tokens) {
+        var t = tokens[i]
+        if (t.kind == Kind.LBrace) {
+            depth += 1
+        } else if (t.kind == Kind.RBrace) {
+            depth -= 1
+        } else if (t.kind == Kind.Import && depth == 0) {
+            var l = file.lineOf(t.start)
+            var end = l
+            if (i + 1 < len(tokens) && tokens[i + 1].kind == Kind.LParen) {
+                for j in (i + 1)..len(tokens) {
+                    if (tokens[j].kind == Kind.RParen) {
+                        end = file.lineOf(tokens[j].start)
+                        break
+                    }
+                }
+            }
+            if (impStart < 0) {
+                impStart = l
+            }
+            impEnd = end
+        }
+    }
+    if (impStart >= 0) {
+        fold(out, impStart, impEnd, "imports")
+    }
+    return ja(out)
+}
+
+priv def type Sym {
+    int at
+    Json json
+}
+
+priv fun symbol(file: SourceFile, tokens: [Token], name: string, detail: string, kind: int, nameSpan: SrcSpan, children: [Json]): Sym {
+    var start = lineStartOf(file.bytes, nameSpan.start)
+    var end = bodyEnd(tokens, nameSpan.end)
+    if (end < 0 || end < nameSpan.end) {
+        end = nameSpan.end
+    }
+    var j = jo(["name", "kind", "range", "selectionRange"], [js(name), jn(kind), rangeOf(file, start, end), rangeOf(file, nameSpan.start, nameSpan.end)])
+    if (detail != "") {
+        jput(j, "detail", js(detail))
+    }
+    if (len(children) > 0) {
+        jput(j, "children", ja(children))
+    }
+    return Sym { at: nameSpan.start, json: j }
+}
+
+priv fun sortedSyms(xs: [Sym]): [Json] {
+    [Sym] out = []
+    for x in xs {
+        var at = len(out)
+        while (at > 0 && x.at < out[at - 1].at) {
+            at -= 1
+        }
+        insert(out, at, x)
+    }
+    [Json] js = []
+    for x in out {
+        js.push(x.json)
+    }
+    return js
+}
+
+pub fun documentSymbols(s: Server, uri: string): Json {
+    var a = s.analyses[uri]
+    if (a == null) {
+        return ja([])
+    }
+    var file = a.root()
+    var tokens = lex(file.src).tokens
+    [Sym] out = []
+    for t in a.typeNames {
+        if (t.module != a.rootModule || t.span.file != a.rootFile) {
+            continue
+        }
+        [Sym] children = []
+        var body = bodyEnd(tokens, t.span.end)
+        if (body < 0) {
+            body = t.span.end
+        }
+        var kind = 26
+        var k = a.kind(t.ty)
+        if (k is Ty.Record) {
+            var rec = a.c.types.records[k.index]
+            for f in rec.fields {
+                if (within(a, f.span, t.span, body)) {
+                    children.push(symbol(file, tokens, f.name, a.show(f.ty), 8, f.span, []))
+                }
+            }
+            var prefix = "${t.name}."
+            var ctor = "new ${t.name}"
+            for f in a.funcs {
+                if (!within(a, f.span, t.span, body)) {
+                    continue
+                }
+                if (startsWith(f.name, prefix)) {
+                    children.push(symbol(file, tokens, substring(f.name, len(prefix), len(f.name)), f.sig, 6, f.span, []))
+                } else if (f.name == ctor) {
+                    children.push(symbol(file, tokens, "constructor", f.sig, 9, f.span, []))
+                }
+            }
+            kind = 23
+            if (rec.isClass) {
+                kind = 5
+            }
+        } else if (k is Ty.Interface) {
+            var iface = a.c.types.ifaces[k.index]
+            if (len(iface.variants) > 0) {
+                for v in iface.variants {
+                    if (within(a, v.span, t.span, body)) {
+                        children.push(symbol(file, tokens, v.name, "", 22, v.span, []))
+                    }
+                }
+                kind = 10
+            } else {
+                for m in iface.methods {
+                    if (within(a, m.span, t.span, body)) {
+                        children.push(symbol(file, tokens, m.name, "", 6, m.span, []))
+                    }
+                }
+                kind = 11
+            }
+        } else if (k is Ty.Enum) {
+            for v in a.c.types.enums[k.index].variants {
+                if (within(a, v.span, t.span, body)) {
+                    children.push(symbol(file, tokens, v.name, "", 22, v.span, []))
+                }
+            }
+            kind = 10
+        }
+        out.push(symbol(file, tokens, t.name, "", kind, t.span, sortedSyms(children)))
+    }
+    for f in a.funcs {
+        if (f.module == a.rootModule && f.span.file == a.rootFile && !contains(f.name, ".") && !startsWith(f.name, "new ")) {
+            out.push(symbol(file, tokens, f.name, f.sig, 12, f.span, []))
+        }
+    }
+    return ja(sortedSyms(out))
+}
+
+priv fun within(a: Analysis, s: SrcSpan, name: SrcSpan, body: int): bool {
+    return s.file == a.rootFile && s.start > name.end && s.end <= body
+}
+
+/** The URI of the file a span is in: the request's document for the root file. */
+pub fun uriOf(a: Analysis, span: SrcSpan, rootUri: string): string? {
+    if (span.file == a.rootFile) {
+        return rootUri
+    }
+    var p = filePath(a, span)
+    if (p == null) {
+        return null
+    }
+    return pathToUri(p)
+}
+
+/** The file a span is in, with the standard library written out, like `Analysis::file_path`. */
+pub fun filePath(a: Analysis, span: SrcSpan): string? {
+    var f = a.loaded.files[span.file]
+    var p = f.path
+    if (p != null) {
+        return resolved(p)
+    }
+    var n = stdDisplay(f.name)
+    if (n != null) {
+        return stdFile(n)
+    }
+    return null
+}
+
+pub fun location(uri: string, range: Json): Json {
+    return jo(["uri", "range"], [js(uri), range])
+}
+
+pub fun typeDefinition(s: Server, uri: string, params: Json): Json {
+    var a = s.analyses[uri]
+    if (a == null) {
+        return Json.Null
+    }
+    var off = offsetIn(a, params)
+    if (off == null) {
+        return Json.Null
+    }
+    var t = typeAt(a, off)
+    if (t == null) {
+        return Json.Null
+    }
+    var d = typeDecl(a, t)
+    if (d == null) {
+        return Json.Null
+    }
+    var u = uriOf(a, d, uri)
+    if (u == null) {
+        return Json.Null
+    }
+    return location(u, a.range(d))
+}
+
+/** The `import` edit that adds `spec` after the last import of a document, like `Server::import_edit`. */
+pub fun importEdit(s: Server, uri: string, spec: string): Json? {
+    var text = s.docs[uri]
+    if (text == null) {
+        return null
+    }
+    var tokens = lex(text).tokens
+    var file = textFile(text)
+    var insertLine = -1
+    var depth = 0
+    for i in 0..len(tokens) {
+        var t = tokens[i]
+        if (t.kind == Kind.LBrace) {
+            depth += 1
+        } else if (t.kind == Kind.RBrace) {
+            depth -= 1
+        } else if (t.kind == Kind.Import && depth == 0) {
+            var end = t.start
+            if (i + 1 < len(tokens)) {
+                if (tokens[i + 1].kind == Kind.LParen) {
+                    for j in (i + 1)..len(tokens) {
+                        if (tokens[j].kind == Kind.RParen) {
+                            end = tokens[j].start
+                            break
+                        }
+                    }
+                } else {
+                    end = tokens[i + 1].start
+                }
+            }
+            insertLine = utf16Pos(file, end)[0] + 1
+        }
+    }
+    var line = 0
+    var newText = "import \"${spec}\"\n\n"
+    if (insertLine >= 0) {
+        line = insertLine
+        newText = "import \"${spec}\"\n"
+    }
+    return jo(["range", "newText"], [lineRange(line, line), js(newText)])
+}
+
+/** Whether the document already imports the standard library module or file. */
+pub fun imported(a: Analysis, stdName: string?, file: string?): bool {
+    for l in a.links {
+        var t = l.target
+        if (t is Target.Std) {
+            if (stdName != null && t.name == stdName) {
+                return true
+            }
+        } else if (t is Target.File) {
+            if (file != null && realPath(t.path) == realPath(file)) {
+                return true
+            }
+        }
+    }
+    return false
+}

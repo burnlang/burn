@@ -1,0 +1,129 @@
+import "../cli/host.bn"
+import "../project/paths.bn"
+import "../project/project.bn"
+import "../doc/text.bn"
+import "json.bn"
+import "state.bn"
+import "text.bn"
+
+/** The command that runs `ash sync` for the project of a document. */
+pub const RELOAD = "burn.server.reloadProject"
+
+priv fun ashPath(): string {
+    var dir = exeDir()
+    if (dir != null) {
+        var p = pathJoin(dir, "ash")
+        if (isFile(p)) {
+            return p
+        }
+    }
+    var home = pathJoin(pathJoin(burnHome(), "bin"), "ash")
+    if (isFile(home)) {
+        return home
+    }
+    return "ash"
+}
+
+priv fun show(kind: int, message: string) {
+    notify("window/showMessage", jo(["type", "message"], [jn(kind), js(message)]))
+}
+
+priv fun needsReload(message: string): bool {
+    return contains(message, "ash install") || contains(message, "not downloaded") || contains(message, "not installed yet")
+}
+
+priv fun projectDir(s: Server, hint: string?): string? {
+    if (hint != null) {
+        var r = findRoot(uriToPath(hint))
+        if (r != null) {
+            return r
+        }
+    }
+    for p in s.roots {
+        var r = findRoot(p)
+        if (r != null) {
+            return r
+        }
+    }
+    for u in s.openUris() {
+        var r = findRoot(uriToPath(u))
+        if (r != null) {
+            return r
+        }
+    }
+    return null
+}
+
+priv fun projectName(dir: string): string {
+    var err = new Problem()
+    var p = loadProject(dir, err)
+    if (p != null) {
+        return p.manifest.name
+    }
+    return dir
+}
+
+/** Runs `ash sync` for the project, like `Server::reload_project`; false when there is no project, so nothing changed. */
+pub fun reloadProject(s: Server, params: Json): bool {
+    string? hint = null
+    var args = jarr(jget(params, "arguments"))
+    if (len(args) > 0) {
+        hint = jstr(args[0])
+    }
+    var dir = projectDir(s, hint)
+    if (dir == null) {
+        show(1, "Burn: no burn.toml found, so there is no project to reload")
+        return false
+    }
+    var ash = ashPath()
+    var result = runIn(ash, ["sync"], dir)
+    var tab = indexOf(result, "\t")
+    var status = substring(result, 0, tab)
+    var text = substring(result, tab + 1, len(result))
+    if (status == "ok") {
+        show(3, "Burn: reloaded ${projectName(dir)}")
+    } else if (status == "failed") {
+        [string] lines = []
+        for l in textLines(text) {
+            if (trim(l) != "") {
+                lines.push(l)
+            }
+        }
+        var from = len(lines) - 4
+        if (from < 0) {
+            from = 0
+        }
+        show(1, "Burn: `ash sync` failed in ${dir}\n${join(slice(lines, from, len(lines)), "\n")}")
+    } else {
+        show(1, "Burn: cannot run ${ash} (${text}). Install ash with burnup, or run `ash sync` in ${dir}")
+    }
+    return true
+}
+
+/** A quick fix that reloads the project when a diagnostic says a package is missing. */
+pub fun reloadActions(uri: string, params: Json): [Json] {
+    for d in jarr(jat(params, ["context", "diagnostics"])) {
+        if (!needsReload(jstr(jget(d, "message")) ?? "")) {
+            continue
+        }
+        var title = "Reload project (ash sync)"
+        var command = jo(["title", "command", "arguments"], [js(title), js(RELOAD), ja([js(uri)])])
+        return [jo(["title", "kind", "isPreferred", "diagnostics", "command"], [js(title), js("quickfix"), jb(true), ja([d]), command])]
+    }
+    return []
+}
+
+/** Whether the editor can watch files for the server. */
+pub fun wantsWatchers(init: Json): bool {
+    return jbool(jat(init, ["capabilities", "workspace", "didChangeWatchedFiles", "dynamicRegistration"])) == true
+}
+
+/** Asks the editor to tell the server when manifests, lockfiles or sources change. */
+pub fun registerWatchers() {
+    [Json] watchers = []
+    for g in ["**/burn.toml", "**/burn.lock", "**/*.bn"] {
+        watchers.push(jo(["globPattern"], [js(g)]))
+    }
+    var reg = jo(["id", "method", "registerOptions"], [js("burn-watch"), js("workspace/didChangeWatchedFiles"), jo(["watchers"], [ja(watchers)])])
+    send(jo(["jsonrpc", "id", "method", "params"], [js("2.0"), js("burn-watch"), js("client/registerCapability"), jo(["registrations"], [ja([reg])])]))
+}

@@ -1,0 +1,436 @@
+import "std/math"
+
+/** A JSON value as the language server reads and writes it, like `Json` in `lsp/json.rs`. Objects keep their keys in order. */
+pub def enum Json {
+    Null,
+    Bool(b: bool),
+    Num(n: float),
+    Str(s: string),
+    Arr(items: [Json]),
+    Obj(keys: [string], vals: [Json])
+}
+
+/** A JSON string. */
+pub fun js(s: string): Json {
+    return Json.Str(s)
+}
+
+/** A JSON number. */
+pub fun jn(n: int): Json {
+    return Json.Num(toFloat(n))
+}
+
+/** A JSON boolean. */
+pub fun jb(b: bool): Json {
+    return Json.Bool(b)
+}
+
+/** A JSON array. */
+pub fun ja(items: [Json]): Json {
+    return Json.Arr(items)
+}
+
+/** A JSON object with `keys[i]` set to `vals[i]`. */
+pub fun jo(keys: [string], vals: [Json]): Json {
+    return Json.Obj(keys, vals)
+}
+
+/** The value under `key`, or null when `j` is not an object or has no such key. */
+pub fun jget(j: Json, key: string): Json {
+    if (j is Json.Obj) {
+        for i in 0..len(j.keys) {
+            if (j.keys[i] == key) {
+                return j.vals[i]
+            }
+        }
+    }
+    return Json.Null
+}
+
+/** The value at a path of keys. */
+pub fun jat(j: Json, path: [string]): Json {
+    var cur = j
+    for p in path {
+        cur = jget(cur, p)
+    }
+    return cur
+}
+
+/** The text of a JSON string. */
+pub fun jstr(j: Json): string? {
+    if (j is Json.Str) {
+        return j.s
+    }
+    return null
+}
+
+/** The value of a JSON number. */
+pub fun jnum(j: Json): float? {
+    if (j is Json.Num) {
+        return j.n
+    }
+    return null
+}
+
+/** A JSON number as a whole number, or `fallback`. */
+pub fun jint(j: Json, fallback: int): int {
+    if (j is Json.Num) {
+        return toInt(j.n)
+    }
+    return fallback
+}
+
+/** The value of a JSON boolean. */
+pub fun jbool(j: Json): bool? {
+    if (j is Json.Bool) {
+        return j.b
+    }
+    return null
+}
+
+/** The items of a JSON array, or none. */
+pub fun jarr(j: Json): [Json] {
+    if (j is Json.Arr) {
+        return j.items
+    }
+    return []
+}
+
+/** Whether `j` is null. */
+pub fun jnull(j: Json): bool {
+    return j is Json.Null
+}
+
+/** Adds a key to an object. */
+pub fun jput(j: Json, key: string, value: Json) {
+    if (j is Json.Obj) {
+        j.keys.push(key)
+        j.vals.push(value)
+    }
+}
+
+/** Replaces the value of a key of an object. */
+pub fun jset(j: Json, key: string, value: Json) {
+    if (j is Json.Obj) {
+        for i in 0..len(j.keys) {
+            if (j.keys[i] == key) {
+                j.vals[i] = value
+                return
+            }
+        }
+    }
+}
+
+priv fun hexDigit(n: int): string {
+    return substring("0123456789abcdef", n, n + 1)
+}
+
+priv fun quoted(s: string): string {
+    var out = "\""
+    for c in s {
+        if (c == "\"") {
+            out += "\\\""
+        } else if (c == "\\") {
+            out += "\\\\"
+        } else if (c == "\n") {
+            out += "\\n"
+        } else if (c == "\r") {
+            out += "\\r"
+        } else if (c == "\t") {
+            out += "\\t"
+        } else {
+            var code = charCode(c)
+            if (code < 32) {
+                out += "\\u00${hexDigit(code / 16)}${hexDigit(code % 16)}"
+            } else {
+                out += c
+            }
+        }
+    }
+    return out + "\""
+}
+
+priv fun number(n: float): string {
+    if (n == floor(n) && abs(n) < 1000000000000000.0) {
+        return toString(toInt(n))
+    }
+    return toString(n)
+}
+
+/** `j` as compact JSON text, like `Json::encode`. */
+pub fun encode(j: Json): string {
+    if (j is Json.Null) {
+        return "null"
+    }
+    if (j is Json.Bool) {
+        if (j.b) {
+            return "true"
+        }
+        return "false"
+    }
+    if (j is Json.Num) {
+        return number(j.n)
+    }
+    if (j is Json.Str) {
+        return quoted(j.s)
+    }
+    if (j is Json.Arr) {
+        var out = "["
+        for i in 0..len(j.items) {
+            if (i > 0) {
+                out += ","
+            }
+            out += encode(j.items[i])
+        }
+        return out + "]"
+    }
+    if (j is Json.Obj) {
+        var out = "{"
+        for i in 0..len(j.keys) {
+            if (i > 0) {
+                out += ","
+            }
+            out += quoted(j.keys[i])
+            out += ":"
+            out += encode(j.vals[i])
+        }
+        return out + "}"
+    }
+    return "null"
+}
+
+priv def struct JsonParser(b: [uint8]) {
+    int i = 0
+    bool bad = false
+
+    fun ws() {
+        while (i < len(b) && (b[i] == 32 || b[i] == 10 || b[i] == 13 || b[i] == 9 || b[i] == 12)) {
+            i += 1
+        }
+    }
+
+    fun fail(): Json {
+        bad = true
+        return Json.Null
+    }
+
+    fun word(w: string): bool {
+        var wb = bytes(w)
+        if (i + len(wb) > len(b)) {
+            return false
+        }
+        for k in 0..len(wb) {
+            if (b[i + k] != wb[k]) {
+                return false
+            }
+        }
+        return true
+    }
+
+    fun hex4(at: int): int {
+        if (at + 4 > len(b)) {
+            return -1
+        }
+        var v = 0
+        for k in 0..4 {
+            var c = b[at + k] as int
+            var d = -1
+            if (c >= 48 && c <= 57) {
+                d = c - 48
+            } else if (c >= 97 && c <= 102) {
+                d = c - 87
+            } else if (c >= 65 && c <= 70) {
+                d = c - 55
+            }
+            if (d < 0) {
+                return -1
+            }
+            v = v * 16 + d
+        }
+        return v
+    }
+
+    fun utf8(out: [uint8], cp: int) {
+        if (cp < 128) {
+            out.push(cp as uint8)
+        } else if (cp < 2048) {
+            out.push((192 | (cp >> 6)) as uint8)
+            out.push((128 | (cp & 63)) as uint8)
+        } else if (cp < 65536) {
+            out.push((224 | (cp >> 12)) as uint8)
+            out.push((128 | ((cp >> 6) & 63)) as uint8)
+            out.push((128 | (cp & 63)) as uint8)
+        } else {
+            out.push((240 | (cp >> 18)) as uint8)
+            out.push((128 | ((cp >> 12) & 63)) as uint8)
+            out.push((128 | ((cp >> 6) & 63)) as uint8)
+            out.push((128 | (cp & 63)) as uint8)
+        }
+    }
+
+    fun str(): Json {
+        i += 1
+        var start = i
+        while (i < len(b) && b[i] != 34 && b[i] != 92) {
+            i += 1
+        }
+        if (i < len(b) && b[i] == 34) {
+            var s = fromBytes(slice(b, start, i))
+            i += 1
+            return Json.Str(s)
+        }
+        [uint8] out = slice(b, start, i)
+        while (i < len(b)) {
+            var c = b[i]
+            i += 1
+            if (c == 34) {
+                return Json.Str(fromBytes(out))
+            }
+            if (c != 92) {
+                out.push(c)
+                continue
+            }
+            if (i >= len(b)) {
+                return fail()
+            }
+            var e = b[i]
+            i += 1
+            if (e == 110) {
+                out.push(10)
+            } else if (e == 116) {
+                out.push(9)
+            } else if (e == 114) {
+                out.push(13)
+            } else if (e == 98) {
+                out.push(8)
+            } else if (e == 102) {
+                out.push(12)
+            } else if (e == 117) {
+                var cp = hex4(i)
+                if (cp < 0) {
+                    return fail()
+                }
+                i += 4
+                if (cp >= 55296 && cp < 56320 && i + 1 < len(b) && b[i] == 92 && b[i + 1] == 117) {
+                    var lo = hex4(i + 2)
+                    if (lo < 0) {
+                        return fail()
+                    }
+                    i += 6
+                    cp = 65536 + ((cp - 55296) << 10) + ((lo - 56320) & 1023)
+                }
+                if ((cp >= 55296 && cp < 57344) || cp > 1114111) {
+                    cp = 65533
+                }
+                utf8(out, cp)
+            } else {
+                out.push(e)
+            }
+        }
+        return fail()
+    }
+
+    fun value(): Json {
+        ws()
+        if (bad || i >= len(b)) {
+            return fail()
+        }
+        var c = b[i]
+        if (c == 123) {
+            i += 1
+            [string] keys = []
+            [Json] vals = []
+            ws()
+            if (i < len(b) && b[i] == 125) {
+                i += 1
+                return Json.Obj(keys, vals)
+            }
+            while (true) {
+                ws()
+                var k = value()
+                if (bad || !(k is Json.Str)) {
+                    return fail()
+                }
+                ws()
+                if (i >= len(b) || b[i] != 58) {
+                    return fail()
+                }
+                i += 1
+                var v = value()
+                if (bad) {
+                    return Json.Null
+                }
+                keys.push(k.s)
+                vals.push(v)
+                ws()
+                if (i < len(b) && b[i] == 44) {
+                    i += 1
+                } else if (i < len(b) && b[i] == 125) {
+                    i += 1
+                    return Json.Obj(keys, vals)
+                } else {
+                    return fail()
+                }
+            }
+        }
+        if (c == 91) {
+            i += 1
+            [Json] items = []
+            ws()
+            if (i < len(b) && b[i] == 93) {
+                i += 1
+                return Json.Arr(items)
+            }
+            while (true) {
+                var v = value()
+                if (bad) {
+                    return Json.Null
+                }
+                items.push(v)
+                ws()
+                if (i < len(b) && b[i] == 44) {
+                    i += 1
+                } else if (i < len(b) && b[i] == 93) {
+                    i += 1
+                    return Json.Arr(items)
+                } else {
+                    return fail()
+                }
+            }
+        }
+        if (c == 34) {
+            return str()
+        }
+        if (c == 116 && word("true")) {
+            i += 4
+            return Json.Bool(true)
+        }
+        if (c == 102 && word("false")) {
+            i += 5
+            return Json.Bool(false)
+        }
+        if (c == 110 && word("null")) {
+            i += 4
+            return Json.Null
+        }
+        var st = i
+        while (i < len(b) && (b[i] == 45 || b[i] == 43 || b[i] == 46 || b[i] == 101 || b[i] == 69 || (b[i] >= 48 && b[i] <= 57))) {
+            i += 1
+        }
+        var text = fromBytes(slice(b, st, i))
+        if (text == "" || !isNumber(text)) {
+            return fail()
+        }
+        return Json.Num(toFloat(text))
+    }
+}
+
+/** Parses JSON text, or gives null when it is not valid, like `json::parse`. */
+pub fun parseJson(text: string): Json? {
+    var p = new JsonParser(bytes(text))
+    var v = p.value()
+    if (p.bad) {
+        return null
+    }
+    return v
+}

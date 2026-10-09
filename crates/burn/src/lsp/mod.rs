@@ -13,7 +13,7 @@ use crate::loader::Loader;
 use crate::source::{FileId, SourceMap, Span};
 use crate::types::{Ty, TyId, Types, T_ARR_ANY, T_ERROR};
 use json::Json;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -34,7 +34,7 @@ struct Analysis {
 
 #[derive(Default)]
 struct Server {
-    docs: HashMap<String, String>,
+    docs: BTreeMap<String, String>,
     analyses: HashMap<String, Analysis>,
     published: HashMap<String, Vec<String>>,
     fixes: HashMap<String, Vec<QuickFix>>,
@@ -452,9 +452,9 @@ impl Server {
             .count();
         let (analysis, diags) = Self::build(loaded, root, Vec::new());
         let sm = &analysis.sm;
-        let mut by_uri: HashMap<String, Vec<Json>> = HashMap::new();
+        let mut by_uri: Vec<(String, Vec<Json>)> = Vec::new();
         let mut fixes = Vec::new();
-        by_uri.insert(uri.to_string(), Vec::new());
+        by_uri.push((uri.to_string(), Vec::new()));
         for d in &diags {
             if (d.span.file as usize) >= sm.files.len() {
                 continue;
@@ -498,7 +498,10 @@ impl Server {
                     });
                 }
             }
-            by_uri.entry(target).or_default().push(dj);
+            match by_uri.iter_mut().find(|(u, _)| *u == target) {
+                Some((_, ds)) => ds.push(dj),
+                None => by_uri.push((target, vec![dj])),
+            }
         }
         let previous = self.published.remove(uri).unwrap_or_default();
         let mut now = Vec::new();

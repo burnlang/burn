@@ -421,6 +421,217 @@ fn bvm_exe() -> PathBuf {
     bvm
 }
 
+fn json_str(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn lsp_session(root: &Path, main: &Path, edits_at: &str, everything: bool) -> String {
+    let uri = format!("file://{}", main.display());
+    let text = std::fs::read_to_string(main).unwrap();
+    let mut msgs: Vec<String> = Vec::new();
+    let mut id = 0;
+    let mut req = |msgs: &mut Vec<String>, method: &str, params: String| {
+        id += 1;
+        msgs.push(format!(r#"{{"jsonrpc":"2.0","id":{},"method":"{}","params":{}}}"#, id, method, params));
+    };
+    let note = |msgs: &mut Vec<String>, method: &str, params: String| {
+        msgs.push(format!(r#"{{"jsonrpc":"2.0","method":"{}","params":{}}}"#, method, params));
+    };
+    let doc = format!(r#"{{"textDocument":{{"uri":"{}"}}}}"#, uri);
+    let at = |l: usize, c: usize| format!(r#"{{"textDocument":{{"uri":"{}"}},"position":{{"line":{},"character":{}}}}}"#, uri, l, c);
+    let whole = r#"{"start":{"line":0,"character":0},"end":{"line":100,"character":0}}"#;
+    req(
+        &mut msgs,
+        "initialize",
+        format!(r#"{{"rootUri":"file://{}","capabilities":{{}}}}"#, root.display()),
+    );
+    note(&mut msgs, "initialized", "{}".into());
+    note(
+        &mut msgs,
+        "textDocument/didOpen",
+        format!(
+            r#"{{"textDocument":{{"uri":"{}","languageId":"burn","version":1,"text":{}}}}}"#,
+            uri,
+            json_str(&text)
+        ),
+    );
+    for (l, line) in text.split('\n').enumerate() {
+        for c in (0..=line.len()).step_by(2) {
+            for m in [
+                "hover",
+                "definition",
+                "typeDefinition",
+                "implementation",
+                "documentHighlight",
+                "prepareRename",
+                "signatureHelp",
+            ] {
+                req(&mut msgs, &format!("textDocument/{}", m), at(l, c));
+            }
+            if everything {
+                let refs = at(l, c).replace("}}}", r#"}},"context":{"includeDeclaration":true}}"#);
+                req(&mut msgs, "textDocument/references", refs);
+                req(&mut msgs, "textDocument/completion", at(l, c));
+            }
+        }
+    }
+    for m in ["documentSymbol", "foldingRange", "documentLink", "formatting"] {
+        req(&mut msgs, &format!("textDocument/{}", m), doc.clone());
+    }
+    req(
+        &mut msgs,
+        "textDocument/inlayHint",
+        format!(r#"{{"textDocument":{{"uri":"{}"}},"range":{}}}"#, uri, whole),
+    );
+    req(
+        &mut msgs,
+        "textDocument/codeAction",
+        format!(
+            r#"{{"textDocument":{{"uri":"{}"}},"range":{},"context":{{"diagnostics":[{{"message":"cannot find `trim` in this scope"}}]}}}}"#,
+            uri, whole
+        ),
+    );
+    req(&mut msgs, "workspace/symbol", r#"{"query":"a"}"#.into());
+    for edit in [
+        "import \"",
+        "import \"@/",
+        "import \"std/",
+        "    var q = d.",
+        "    var q = Dog.",
+        "    var q = p.",
+        "    var q = Token.",
+        "    var q: ",
+        "    @",
+        "    var q = \"a\".",
+        "    twice(",
+        "    var q = new ",
+    ] {
+        let changed = text.replace(edits_at, edit);
+        let line = changed.split('\n').position(|x| x == edit).unwrap();
+        note(
+            &mut msgs,
+            "textDocument/didChange",
+            format!(
+                r#"{{"textDocument":{{"uri":"{}","version":2}},"contentChanges":[{{"text":{}}}]}}"#,
+                uri,
+                json_str(&changed)
+            ),
+        );
+        req(&mut msgs, "textDocument/completion", at(line, edit.len()));
+        req(&mut msgs, "textDocument/signatureHelp", at(line, edit.len()));
+    }
+    note(&mut msgs, "textDocument/didSave", doc.clone());
+    note(&mut msgs, "textDocument/didClose", doc);
+    req(&mut msgs, "shutdown", "null".into());
+    note(&mut msgs, "exit", "null".into());
+    let mut input = String::new();
+    for m in msgs {
+        input.push_str(&format!("Content-Length: {}\r\n\r\n{}", m.len(), m));
+    }
+    input
+}
+
+#[cfg(unix)]
+#[test]
+fn the_language_server_written_in_burn_matches_the_rust_one() {
+    use std::io::Write;
+    let root = root();
+    let dir = temp_dir("lsp-cli").canonicalize().unwrap();
+    std::fs::create_dir_all(dir.join("bin")).unwrap();
+    std::fs::create_dir_all(dir.join("share/burn")).unwrap();
+    let (out, code) = output(
+        burn()
+            .current_dir(&root)
+            .args(["build", "compiler/src/bin/burn.bn", "--target", "bvm", "-o"])
+            .arg(dir.join("share/burn/burn.bvm")),
+    );
+    assert_eq!(code, 0, "{}", out);
+    let cli = dir.join("bin/burn");
+    std::os::unix::fs::symlink(bvm_exe(), &cli).unwrap();
+    let home = dir.join("home");
+    let plain = dir.join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    std::fs::write(
+        plain.join("util.bn"),
+        "/** Adds two numbers. */\npub fun add(a: int, b: int): int {\n    return a + b\n}\n\npub def interface Shape {\n    fun area(): float\n}\n\npub def struct Square(side: float) :: Shape {\n    fun area(): float {\n        return side * side\n    }\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        plain.join("main.bn"),
+        "import \"util\"\nimport \"std/strings\"\n\ndef enum Token {\n    Word(text: string),\n    End\n}\n\ndef type Point {\n    int x\n    int y\n}\n\n/** Doubles a value. */\nfun twice(n: int): int {\n    return add(n, n)\n}\n\nfun main() {\n    var p = Point { x: 1, y: 2 }\n    var s = new Square(2.0)\n    var total = twice(p.x) + len(\"abc\")\n    for i in 0..3 {\n        total += i\n    }\n    var t = Token.Word(\"hi\")\n    print(s.area(), total, trim(\" x \"), t)\n    print(totl)\n}\n",
+    )
+    .unwrap();
+    let project = dir.join("shapes");
+    std::fs::create_dir_all(project.join("src/geo")).unwrap();
+    std::fs::write(project.join("burn.toml"), "[package]\nname = \"github.com/me/shapes\"\nversion = \"0.1.0\"\n").unwrap();
+    std::fs::write(
+        project.join("src/geo/mod.bn"),
+        "/** A point. */\npub def type Vec2 {\n    float x\n    float y\n}\n\n@Deprecated(\"use len2\")\npub fun length(v: Vec2): float {\n    return v.x + v.y\n}\n\npub fun len2(v: Vec2): float {\n    return v.x * v.x + v.y * v.y\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("src/main.bn"),
+        "import \"@/geo\"\n\ndef abstract struct Animal(name: string) {\n    abstract fun sound(): string\n    fun greet(): string {\n        return \"${name} says ${sound()}\"\n    }\n}\n\ndef struct Dog(name: string) : Animal(name) {\n    static var count: int = 0\n    fun sound(): string {\n        return \"woof\"\n    }\n}\n\nfun first<T>(xs: [T]): T {\n    return xs[0]\n}\n\nfun main() {\n    var v = Vec2 { x: 1.0, y: 2.0 }\n    var d = new Dog(\"rex\")\n    print(length(v), len2(v), d.greet(), Dog.count, first([1, 2]))\n    var m = {\"a\": 1}\n    for k, val in m {\n        print(k, val)\n    }\n    var unused = lenght(v)\n    if (true) {\n        print(\"open\"\n",
+    )
+    .unwrap();
+    let run = |cmd: &mut Command, cwd: &Path, input: &str| {
+        let mut child = cmd
+            .current_dir(cwd)
+            .env("BURN_HOME", &home)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let bytes = input.as_bytes().to_vec();
+        let writer = std::thread::spawn(move || {
+            let _ = stdin.write_all(&bytes);
+        });
+        let out = child.wait_with_output().unwrap();
+        writer.join().unwrap();
+        (String::from_utf8_lossy(&out.stdout).into_owned(), out.status.code())
+    };
+    for (cwd, main, anchor, everything) in [
+        (&plain, plain.join("main.bn"), "    print(totl)", true),
+        (&project, project.join("src/main.bn"), "    var unused = lenght(v)", false),
+    ] {
+        let input = lsp_session(cwd, &main, anchor, everything);
+        let (want, want_code) = run(burn().arg("lsp"), cwd, &input);
+        let (got, got_code) = run(Command::new(&cli).arg("lsp"), cwd, &input);
+        assert_eq!(want_code, got_code);
+        assert!(want.len() > 100000, "{}", want);
+        if want != got {
+            let a: Vec<&str> = want.split("Content-Length").collect();
+            let b: Vec<&str> = got.split("Content-Length").collect();
+            let k = a.iter().zip(b.iter()).position(|(x, y)| x != y).unwrap_or(a.len().min(b.len()));
+            panic!(
+                "message {} differs\n--- rust\n{}\n--- burn\n{}",
+                k,
+                a.get(k).unwrap_or(&""),
+                b.get(k).unwrap_or(&"")
+            );
+        }
+    }
+    let (want, _, code) = stdout_of(burn().arg("sources").env("BURN_HOME", dir.join("rust-home")));
+    assert_eq!(code, 0);
+    let (got, _, code) = stdout_of(Command::new(&cli).arg("sources").env("BURN_HOME", dir.join("burn-home")));
+    assert_eq!(code, 0);
+    assert_eq!(want.replace("rust-home", "home"), got.replace("burn-home", "home"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[cfg(unix)]
 #[test]
 fn the_command_line_written_in_burn_matches_the_rust_one() {

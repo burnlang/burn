@@ -1,0 +1,293 @@
+import "../check/check.bn"
+import "../check/types.bn"
+import "../doc/builtin_docs.bn"
+import "analysis.bn"
+import "ide.bn"
+import "json.bn"
+import "state.bn"
+import "text.bn"
+
+priv const STR_METHODS = ["length", "upper", "lower", "trim", "split", "contains", "indexOf", "replace", "startsWith", "endsWith", "repeat", "chars", "substring", "charAt", "charCode"]
+priv const ARR_METHODS = ["length", "push", "pop", "insert", "remove", "contains", "indexOf", "join", "reverse", "sort", "slice", "copy", "clear"]
+priv const MAP_METHODS = ["length", "keys", "values", "has", "get", "remove"]
+
+/** Completion items without repeated labels. */
+pub def struct Items() {
+    [Json] items = []
+    [string] seen = []
+
+    fun fresh(label: string): bool {
+        if (contains(seen, label)) {
+            return false
+        }
+        seen.push(label)
+        return true
+    }
+}
+
+priv fun callItem(j: Json, label: string) {
+    jput(j, "insertText", js("${label}($0)"))
+    jput(j, "insertTextFormat", jn(2))
+    jput(j, "command", jo(["title", "command"], [js(""), js("editor.action.triggerParameterHints")]))
+}
+
+priv fun addMember(out: Items, label: string, kind: int, detail: string, doc: string?, call: bool): bool {
+    if (!out.fresh(label)) {
+        return false
+    }
+    var rank = 1
+    if (kind == 5) {
+        rank = 0
+    }
+    var j = jo(["label", "kind", "detail", "sortText"], [js(label), jn(kind), js(detail), js("${rank}${label}")])
+    if (doc != null) {
+        jput(j, "documentation", markdown(doc))
+    }
+    if (call) {
+        callItem(j, label)
+    }
+    out.items.push(j)
+    return true
+}
+
+priv fun sigOf(a: Analysis, full: string): string? {
+    for f in a.funcs {
+        if (f.name == full) {
+            return f.sig
+        }
+    }
+    return null
+}
+
+priv fun sortedKeys(m: {string: int}): [string] {
+    var ks = keys(m)
+    sort(ks)
+    return ks
+}
+
+/** The first parameter of a signature, like `params.split([',', ')']).next()`. */
+pub fun firstParam(sig: string): string? {
+    var at = indexOf(sig, "(")
+    if (at < 0) {
+        return null
+    }
+    var rest = substring(sig, at + 1, len(sig))
+    var end = len(rest)
+    var c = indexOf(rest, ",")
+    if (c >= 0 && c < end) {
+        end = c
+    }
+    var p = indexOf(rest, ")")
+    if (p >= 0 && p < end) {
+        end = p
+    }
+    return substring(rest, 0, end)
+}
+
+priv fun receives(a: Analysis, t: int, shown: string, first: string): bool {
+    var f = trim(first)
+    var k = a.kind(t)
+    if (k is Ty.Str) {
+        return f == "string"
+    }
+    if (k is Ty.Array) {
+        return f == "[T]" || f == shown
+    }
+    if (k is Ty.Map) {
+        return startsWith(f, "{")
+    }
+    if (k is Ty.Bool) {
+        return f == "bool"
+    }
+    if (a.isNumeric(t)) {
+        return f == "float" || f == "int" || f == shown
+    }
+    return f == shown
+}
+
+/** The members after `value.` or `Type.`, like `Server::member_items`. */
+pub fun memberItems(s: Server, uri: string, a: Analysis, t: int, statics: bool): [Json] {
+    var out = new Items()
+    var k = a.kind(t)
+    if (k is Ty.Record) {
+        int? cur = k.index
+        while (cur != null) {
+            var rec = a.c.types.records[cur]
+            if (statics) {
+                for n in sortedKeys(rec.statics) {
+                    var full = "${rec.name}.${n}"
+                    addMember(out, n, 2, sigOf(a, full) ?? "static fun ${full}", null, true)
+                }
+            } else {
+                for f in rec.fields {
+                    addMember(out, f.name, 5, a.show(f.ty), null, false)
+                }
+                for n in sortedKeys(rec.methods) {
+                    var full = "${rec.name}.${n}"
+                    addMember(out, n, 2, sigOf(a, full) ?? "fun ${full}", null, true)
+                }
+            }
+            cur = rec.parent
+        }
+        if (statics) {
+            return out.items
+        }
+    } else if (k is Ty.Interface && statics && len(a.c.types.ifaces[k.index].variants) > 0) {
+        var en = a.c.types.ifaces[k.index]
+        for v in en.variants {
+            var rec = a.c.types.records[v.record]
+            [string] fs = []
+            for f in rec.fields {
+                fs.push("${f.name}: ${a.show(f.ty)}")
+            }
+            var detail = en.name
+            if (len(fs) > 0) {
+                detail = "${en.name}.${v.name}(${join(fs, ", ")})"
+            }
+            addMember(out, v.name, 20, detail, null, false)
+        }
+        return out.items
+    } else if (k is Ty.Interface) {
+        for m in a.c.types.ifaces[k.index].methods {
+            [string] ps = []
+            for p in m.params {
+                ps.push(a.show(p))
+            }
+            addMember(out, m.name, 2, "fun ${m.name}(${join(ps, ", ")}): ${a.show(m.ret)}", null, true)
+        }
+        return out.items
+    } else if (k is Ty.Enum && statics) {
+        var en = a.c.types.enums[k.index]
+        for v in en.variants {
+            addMember(out, v.name, 20, en.name, null, false)
+        }
+        return out.items
+    } else if (statics) {
+        return out.items
+    }
+    var shown = a.show(t)
+    for b in s.builtins {
+        var first = firstParam(b.sig)
+        if (first == null) {
+            continue
+        }
+        var ty = ""
+        var colon = indexOf(first, ":")
+        if (colon >= 0) {
+            ty = split(substring(first, colon + 1, len(first)), "=")[0]
+        }
+        var close = lastIndexOf(b.sig, ")")
+        var returns = close >= 0 && startsWith(trim(substring(b.sig, close + 1, len(b.sig))), ":")
+        if (!startsWith(b.name, "__") && trim(ty) != "" && receives(a, t, shown, ty) && (returns || !a.isNumeric(t))) {
+            addMember(out, b.name, 2, b.sig, builtinMarkdown(b), true)
+            var m = builtinModule(b)
+            if (m != null && len(out.items) > 0) {
+                var last = out.items[len(out.items) - 1]
+                if (!imported(a, m, null) && jstr(jget(last, "label")) == b.name) {
+                    var edit = importEdit(s, uri, "std/${m}")
+                    if (edit != null) {
+                        jput(last, "additionalTextEdits", ja([edit]))
+                        jput(last, "labelDetails", jo(["description"], [js("std/${m}")]))
+                    }
+                }
+            }
+        }
+    }
+    if (k is Ty.Str) {
+        for m in STR_METHODS {
+            addMember(out, m, 2, "string", null, true)
+        }
+    }
+    if (k is Ty.Array) {
+        for m in ARR_METHODS {
+            addMember(out, m, 2, shown, null, true)
+        }
+    }
+    if (k is Ty.Map) {
+        for m in MAP_METHODS {
+            addMember(out, m, 2, shown, null, true)
+        }
+    }
+    for f in a.funcs {
+        if (contains(f.name, ".") || startsWith(f.name, "new ")) {
+            continue
+        }
+        var first = firstParam(f.sig)
+        if (first == null) {
+            continue
+        }
+        var colon = indexOf(first, ":")
+        if (colon >= 0 && trim(substring(first, colon + 1, len(first))) == shown) {
+            addMember(out, f.name, 2, f.sig, null, true)
+        }
+    }
+    return out.items
+}
+
+/** A type found for a chain of names, and whether the chain names a type rather than a value. */
+pub def type Resolved {
+    int ty
+    bool statics
+}
+
+/** The type of `a.b.c` at an offset, like `Server::resolve_chain`. */
+pub fun resolveChain(a: Analysis, chain: [string], off: int): Resolved? {
+    if (len(chain) == 0) {
+        return null
+    }
+    var first = chain[0]
+    Resolved? cur = null
+    LocalInfo? best = null
+    for l in a.c.localInfos {
+        if (l.name == first && l.decl.file == a.rootFile && l.decl.start < off && off <= l.scope.end && (best == null || l.decl.start > best.decl.start)) {
+            best = l
+        }
+    }
+    if (best != null) {
+        cur = Resolved { ty: best.ty, statics: false }
+    }
+    if (cur == null) {
+        for g in a.globals {
+            if (cur == null && g.name == first && g.module == a.rootModule) {
+                cur = Resolved { ty: g.ty, statics: false }
+            }
+        }
+    }
+    if (cur == null) {
+        for t in a.typeNames {
+            if (cur == null && t.name == first) {
+                cur = Resolved { ty: t.ty, statics: true }
+            }
+        }
+    }
+    if (cur == null && first == "self") {
+        for e in a.c.exprTypes {
+            if (e.span.file == a.rootFile && e.span.start < off && a.text(e.span) == "self") {
+                cur = Resolved { ty: e.ty, statics: false }
+            }
+        }
+    }
+    if (cur == null) {
+        return null
+    }
+    var r = cur
+    for i in 1..len(chain) {
+        var seg = chain[i]
+        var k = a.kind(r.ty)
+        int? next = null
+        if (k is Ty.Record) {
+            for f in a.c.types.records[k.index].fields {
+                if (next == null && f.name == seg) {
+                    next = f.ty
+                }
+            }
+        } else if (k is Ty.Str && seg == "length") {
+            next = T_INT
+        }
+        if (next == null) {
+            return null
+        }
+        r = Resolved { ty: next, statics: false }
+    }
+    return r
+}
