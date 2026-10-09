@@ -1309,6 +1309,10 @@ pub fn err_shift(loc: u64, amount: u64) -> u64 {
     rt_error(&format!("cannot shift by {}", amount as i64), loc)
 }
 
+pub fn fail(message: u64, loc: u64) -> u64 {
+    rt_error(str_ref(message), loc)
+}
+
 pub fn err_divzero(loc: u64) -> u64 {
     rt_error("division by zero", loc)
 }

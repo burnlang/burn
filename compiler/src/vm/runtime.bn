@@ -138,5 +138,6 @@ pub fun runtimeSymbols(): {string: string} {
     out["ParseIntRadix"] = "parse_int_radix"
     out["IsIntRadix"] = "is_int_radix"
     out["IntToStrRadix"] = "int_to_str_radix"
+    out["Fail"] = "fail"
     return out
 }

@@ -217,4 +217,5 @@ runtime_fns! {
     ParseIntRadix => burn_parse_int_radix = crate::api::parse_int_radix [a, b, c];
     IsIntRadix => burn_is_int_radix = crate::api::is_int_radix [a, b, c];
     IntToStrRadix => burn_int_to_str_radix = crate::api::int_to_str_radix [a, b, c];
+    Fail => burn_fail = crate::api::fail [a, b];
 }

@@ -1,4 +1,5 @@
 import "runtime.bn"
+import "std/strings"
 
 priv fun matchesAt(text: [uint8], part: [uint8], at: int): bool {
     if (text[at] != part[0]) {
@@ -94,4 +95,60 @@ pub fun textReplace(text: string, from: string, to: string): string {
     }
     out += fromBytes(slice(b, start, n))
     return out
+}
+
+priv fun byteWidth(lead: uint8): int {
+    if (lead < 128) {
+        return 1
+    }
+    if (lead < 224) {
+        return 2
+    }
+    if (lead < 240) {
+        return 3
+    }
+    return 4
+}
+
+priv fun isContinuation(b: uint8): bool {
+    return b >= 128 && b < 192
+}
+
+priv fun whitespaceAt(b: [uint8], at: int, width: int): bool {
+    if (width == 1) {
+        var c = b[at]
+        return c == 32 || (c >= 9 && c <= 13)
+    }
+    return isWhitespace(fromBytes(slice(b, at, at + width)))
+}
+
+/** `trim(text)`: `text` without the whitespace at its start and end. */
+@Runtime("str_trim")
+pub fun textTrim(text: string): string {
+    var count = len(text)
+    if (count == 0 || (!isWhitespace(substring(text, 0, 1)) && !isWhitespace(substring(text, count - 1, count)))) {
+        return text
+    }
+    var b = bytes(text)
+    var n = len(b)
+    var start = 0
+    while (start < n) {
+        var w = byteWidth(b[start])
+        if (!whitespaceAt(b, start, w)) {
+            break
+        }
+        start += w
+    }
+    var end = n
+    while (end > start) {
+        var s = end - 1
+        while (s > start && isContinuation(b[s])) {
+            s -= 1
+        }
+        if (!whitespaceAt(b, s, end - s)) {
+            break
+        }
+        end = s
+    }
+    return fromBytes(slice(b, start, end))
 }

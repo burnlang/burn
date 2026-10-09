@@ -94,8 +94,11 @@ root:
 burn dump --bvm lib/runtime/runtime.bn > bvm/runtime.bvm
 ```
 
+A function written in Burn raises a runtime error with the built-in `__fail(message, loc)`, which is the core
+function `fail`; the error points at `loc`, the place in the program that called the runtime function.
+
 Written in Burn so far: `str_contains`, `str_replace`, `str_split`, `str_starts`, `str_ends`, `str_repeat`,
-`imin` and `imax`.
+`str_trim`, `is_int_str`, `parse_int`, `is_int_radix`, `parse_int_radix`, `int_to_str_radix`, `imin` and `imax`.
 
 ### Text and output
 
@@ -117,6 +120,8 @@ Written in Burn so far: `str_contains`, `str_replace`, `str_split`, `str_starts`
 | `char_class` | s, kind | 1 if every character is a letter (0), digit (1), letter or digit (2), whitespace (3) |
 | `parse_int`, `parse_float` | s, loc | the parsed number; a runtime error if `s` isn't one |
 | `is_int_str`, `is_float_str` | s | bool |
+| `is_int_radix`, `parse_int_radix` | s, radix, loc | bool / the int in base `radix` |
+| `int_to_str_radix` | n, radix, loc | `n` written in base `radix` |
 | `input` | prompt | a line from stdin |
 | `read_stdin` | | all of stdin |
 
@@ -156,5 +161,6 @@ Written in Burn so far: `str_contains`, `str_replace`, `str_split`, `str_starts`
 | `eq`, `cmp` | a, b, type id | structural equality / ordering |
 | `await` | future | the result of a `spawn` |
 | `panic`, `assert` | message, loc / cond, message, loc | runtime errors |
+| `fail` | message, loc | a runtime error with `message` at `loc` |
 | `exit_now` | code | waits for spawned threads, flushes output and exits |
 | `gc_collect` | | forces a collection |

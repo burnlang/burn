@@ -11,34 +11,108 @@ type #17 = uint32
 type #18 = uint64
 type #19 = float32
 type Runtime = record { name: string }
-type #21 = [#13]
+type #21 = int?
+type #22 = [#13]
 
+string "0123456789abcdefghijklmnopqrstuvwxyz"
+string "radix "
+string " is out of range, it must be between 2 and 36"
+string "cannot convert \""
+string "\" to int"
+string "\" to an int in base "
 string ""
+string "-"
+string "\r\n"
+string "\n"
+string " "
+string "0"
+string "9"
+string "a"
+string "z"
 
 loc "lib/runtime/math.bn:1:1"
+loc "std/strings.bn:1:1"
 loc "lib/runtime/strings.bn:1:1"
+loc "lib/runtime/numbers.bn:1:1"
 loc "lib/runtime/runtime.bn:1:1"
 loc "lib/runtime/math.bn:5:5"
 loc "lib/runtime/math.bn:14:5"
-loc "lib/runtime/strings.bn:4:9"
-loc "lib/runtime/strings.bn:4:21"
-loc "lib/runtime/strings.bn:8:18"
-loc "lib/runtime/strings.bn:8:13"
-loc "lib/runtime/strings.bn:8:29"
-loc "lib/runtime/strings.bn:3:6"
-loc "lib/runtime/strings.bn:17:5"
-loc "lib/runtime/strings.bn:23:5"
-loc "lib/runtime/strings.bn:33:38"
-loc "lib/runtime/strings.bn:30:5"
-loc "lib/runtime/strings.bn:38:5"
-loc "lib/runtime/strings.bn:59:12"
-loc "lib/runtime/strings.bn:62:13"
-loc "lib/runtime/strings.bn:65:13"
-loc "lib/runtime/strings.bn:48:5"
-loc "lib/runtime/strings.bn:85:12"
-loc "lib/runtime/strings.bn:89:13"
-loc "lib/runtime/strings.bn:92:13"
-loc "lib/runtime/strings.bn:74:5"
+loc "lib/runtime/numbers.bn:10:16"
+loc "lib/runtime/numbers.bn:13:16"
+loc "lib/runtime/numbers.bn:16:16"
+loc "lib/runtime/numbers.bn:8:6"
+loc "lib/runtime/numbers.bn:26:19"
+loc "lib/runtime/numbers.bn:26:33"
+loc "lib/runtime/numbers.bn:27:20"
+loc "lib/runtime/numbers.bn:35:25"
+loc "lib/runtime/numbers.bn:39:17"
+loc "lib/runtime/numbers.bn:42:13"
+loc "lib/runtime/numbers.bn:43:9"
+loc "lib/runtime/numbers.bn:51:12"
+loc "lib/runtime/numbers.bn:21:6"
+loc "lib/runtime/numbers.bn:54:6"
+loc "lib/runtime/numbers.bn:60:6"
+loc "lib/runtime/numbers.bn:72:5"
+loc "lib/runtime/numbers.bn:85:17"
+loc "lib/runtime/numbers.bn:78:5"
+loc "lib/runtime/numbers.bn:96:5"
+loc "lib/runtime/numbers.bn:103:5"
+loc "lib/runtime/numbers.bn:120:13"
+loc "lib/runtime/numbers.bn:124:21"
+loc "lib/runtime/numbers.bn:124:17"
+loc "lib/runtime/numbers.bn:125:36"
+loc "lib/runtime/numbers.bn:126:13"
+loc "lib/runtime/numbers.bn:116:5"
+loc "lib/runtime/strings.bn:5:9"
+loc "lib/runtime/strings.bn:5:21"
+loc "lib/runtime/strings.bn:9:18"
+loc "lib/runtime/strings.bn:9:13"
+loc "lib/runtime/strings.bn:9:29"
+loc "lib/runtime/strings.bn:4:6"
+loc "lib/runtime/strings.bn:18:5"
+loc "lib/runtime/strings.bn:24:5"
+loc "lib/runtime/strings.bn:34:38"
+loc "lib/runtime/strings.bn:31:5"
+loc "lib/runtime/strings.bn:39:5"
+loc "lib/runtime/strings.bn:60:12"
+loc "lib/runtime/strings.bn:63:13"
+loc "lib/runtime/strings.bn:66:13"
+loc "lib/runtime/strings.bn:49:5"
+loc "lib/runtime/strings.bn:86:12"
+loc "lib/runtime/strings.bn:90:13"
+loc "lib/runtime/strings.bn:93:13"
+loc "lib/runtime/strings.bn:75:5"
+loc "lib/runtime/strings.bn:100:6"
+loc "lib/runtime/strings.bn:113:6"
+loc "lib/runtime/strings.bn:119:17"
+loc "lib/runtime/strings.bn:122:48"
+loc "lib/runtime/strings.bn:117:6"
+loc "lib/runtime/strings.bn:129:94"
+loc "lib/runtime/strings.bn:136:27"
+loc "lib/runtime/strings.bn:140:9"
+loc "lib/runtime/strings.bn:144:17"
+loc "lib/runtime/strings.bn:145:44"
+loc "lib/runtime/strings.bn:146:13"
+loc "lib/runtime/strings.bn:148:33"
+loc "lib/runtime/strings.bn:127:5"
+loc "std/strings.bn:17:5"
+loc "std/strings.bn:41:5"
+loc "std/strings.bn:60:5"
+loc "std/strings.bn:74:5"
+loc "std/strings.bn:89:5"
+loc "std/strings.bn:112:12"
+loc "std/strings.bn:108:5"
+loc "std/strings.bn:127:5"
+loc "std/strings.bn:145:5"
+loc "std/strings.bn:143:5"
+loc "std/strings.bn:170:5"
+loc "std/strings.bn:166:5"
+loc "std/strings.bn:195:5"
+loc "std/strings.bn:191:5"
+
+global "/home/user/burn/lib/runtime/numbers.bn.MIN_INT"
+global "/home/user/burn/lib/runtime/numbers.bn.DIGITS"
+global "/home/user/burn/lib/runtime/numbers.bn.TWO_63"
 
 entry "<entry>"
 
@@ -50,7 +124,27 @@ func "<init lib/runtime/math.bn>"(): void
     retv
 end
 
+func "<init lib/runtime/numbers.bn>"(): void
+    locals 1
+    const -9223372036854775808
+    gstore "/home/user/burn/lib/runtime/numbers.bn.MIN_INT"
+    gload "/home/user/burn/lib/runtime/numbers.bn.DIGITS"
+    store 0
+    str "0123456789abcdefghijklmnopqrstuvwxyz"
+    gstore "/home/user/burn/lib/runtime/numbers.bn.DIGITS"
+    load 0
+    rt release
+    pop
+    const 9.223372036854776e18
+    gstore "/home/user/burn/lib/runtime/numbers.bn.TWO_63"
+    retv
+end
+
 func "<init lib/runtime/strings.bn>"(): void
+    retv
+end
+
+func "<init std/strings.bn>"(): void
     retv
 end
 
@@ -90,14 +184,749 @@ L0:
     ret
 end
 
-func matchesAt(_: #21, _: #21, _: int): bool
+func digitOf(_: #13): int
+    locals 4
+    load 0
+    const 48
+    ige
+    jzk L0
+    pop
+    load 0
+    const 57
+    ile
+L0:
+    jz L1
+    load 0
+    const 48
+    isub.ovf 7
+    const 2
+    lconst 7
+    rt num_fit
+    store 1
+    load 1
+    ret
+L1:
+    load 0
+    const 97
+    ige
+    jzk L2
+    pop
+    load 0
+    const 122
+    ile
+L2:
+    jz L3
+    load 0
+    const 87
+    isub.ovf 8
+    const 2
+    lconst 8
+    rt num_fit
+    store 2
+    load 2
+    ret
+L3:
+    load 0
+    const 65
+    ige
+    jzk L4
+    pop
+    load 0
+    const 90
+    ile
+L4:
+    jz L5
+    load 0
+    const 55
+    isub.ovf 9
+    const 2
+    lconst 9
+    rt num_fit
+    store 3
+    load 3
+    ret
+L5:
+    const -1
+    store 4
+    load 4
+    ret
+end
+
+func intIn(_: string, _: int): #21
+    locals 13
+    const 0
+    store 2
+    load 2
+    store 8
+    load 0
+    tconst #22
+    rt str_to_bytes
+    store 2
+    load 8
+    rt release
+    pop
+    load 2
+    len
+    store 3
+    const 0
+    store 4
+    const 0
+    store 5
+    load 3
+    const 0
+    igt
+    jzk L0
+    pop
+    load 2
+    const 0
+    index 11
+    const 43
+    ieq
+    jnzk L0
+    pop
+    load 2
+    const 0
+    index 12
+    const 45
+    ieq
+L0:
+    jz L1
+    load 2
+    const 0
+    index 13
+    const 45
+    ieq
+    store 5
+    const 1
+    store 4
+L1:
+    load 4
+    load 3
+    ige
+    jz L2
+    const 0
+    store 9
+    load 2
+    rt release
+    pop
+    load 9
+    ret
+L2:
+    const 0
+    store 6
+L3:
+    load 4
+    load 3
+    ilt
+    jz L7
+    load 2
+    load 4
+    index 14
+    call digitOf
+    store 7
+    load 7
+    const 0
+    ilt
+    jnzk L4
+    pop
+    load 7
+    load 1
+    ige
+L4:
+    jz L5
+    const 0
+    store 10
+    load 2
+    rt release
+    pop
+    load 10
+    ret
+L5:
+    load 6
+    gload "/home/user/burn/lib/runtime/numbers.bn.MIN_INT"
+    load 7
+    iadd.ovf 15
+    load 1
+    idiv 15
+    ilt
+    jz L6
+    const 0
+    store 11
+    load 2
+    rt release
+    pop
+    load 11
+    ret
+L6:
+    load 6
+    load 1
+    imul.ovf 16
+    load 7
+    isub.ovf 16
+    store 6
+    load 4
+    const 1
+    iadd.ovf 17
+    store 4
+    jmp L3
+L7:
+    load 5
+    jz L8
+    load 6
+    tconst int
+    rt box
+    store 12
+    load 2
+    rt release
+    pop
+    load 12
+    ret
+L8:
+    load 6
+    gload "/home/user/burn/lib/runtime/numbers.bn.MIN_INT"
+    ieq
+    jz L9
+    const 0
+    store 13
+    load 2
+    rt release
+    pop
+    load 13
+    ret
+L9:
+    load 6
+    ineg.ovf 18
+    tconst int
+    rt box
+    store 14
+    load 2
+    rt release
+    pop
+    load 14
+    ret
+end
+
+func checkRadix(_: int, _: int): void
+    locals 3
+    const 0
+    store 2
+    const 0
+    store 3
+    const 0
+    store 4
+    load 0
+    const 2
+    ilt
+    jnzk L0
+    pop
+    load 0
+    const 36
+    igt
+L0:
+    jz L1
+    str "radix "
+    load 0
+    tconst int
+    rt to_str
+    tee 2
+    rt str_concat
+    tee 3
+    str " is out of range, it must be between 2 and 36"
+    rt str_concat
+    tee 4
+    load 1
+    rt fail
+    pop
+    load 2
+    rt release
+    pop
+    const 0
+    store 2
+    load 3
+    rt release
+    pop
+    const 0
+    store 3
+    load 4
+    rt release
+    pop
+    const 0
+    store 4
+L1:
+    load 2
+    rt release
+    pop
+    load 3
+    rt release
+    pop
+    load 4
+    rt release
+    pop
+    retv
+end
+
+func truncate(_: float): int
+    locals 3
+    load 0
+    gload "/home/user/burn/lib/runtime/numbers.bn.TWO_63"
+    fge
+    jz L0
+    const 9223372036854775807
+    store 1
+    load 1
+    ret
+L0:
+    load 0
+    gload "/home/user/burn/lib/runtime/numbers.bn.TWO_63"
+    fneg
+    fle
+    jz L1
+    gload "/home/user/burn/lib/runtime/numbers.bn.MIN_INT"
+    store 2
+    load 2
+    ret
+L1:
+    load 0
+    f2i
+    store 3
+    load 3
+    ret
+end
+
+@Runtime name="is_int_str"
+func textIsInt(_: string): bool
+    locals 3
+    const 0
+    store 1
+    const 0
+    store 2
+    load 0
+    call textTrim
+    tee 1
+    const 10
+    call intIn
+    tee 2
+    const 0
+    ine
+    store 3
+    load 1
+    rt release
+    pop
+    const 0
+    store 1
+    load 2
+    rt release
+    pop
+    const 0
+    store 2
+    load 1
+    rt release
+    pop
+    load 2
+    rt release
+    pop
+    load 3
+    ret
+end
+
+@Runtime name="parse_int"
+func textToInt(_: string, _: int): int
+    locals 9
+    const 0
+    store 2
+    const 0
+    store 3
+    const 0
+    store 8
+    const 0
+    store 9
+    load 2
+    store 5
+    load 0
+    call textTrim
+    store 2
+    load 5
+    rt release
+    pop
+    load 3
+    store 5
+    load 2
+    const 10
+    call intIn
+    store 3
+    load 5
+    rt release
+    pop
+    load 3
+    const 0
+    ine
+    jz L0
+    load 3
+    unbox
+    store 6
+    load 2
+    rt release
+    pop
+    load 3
+    rt release
+    pop
+    load 6
+    ret
+L0:
+    load 2
+    rt is_float_str
+    jz L2
+    load 2
+    lconst 23
+    rt parse_float
+    store 4
+    load 4
+    load 4
+    feq
+    jzk L1
+    pop
+    load 4
+    load 4
+    fsub
+    const 0
+    feq
+L1:
+    jz L2
+    load 4
+    call truncate
+    store 7
+    load 2
+    rt release
+    pop
+    load 3
+    rt release
+    pop
+    load 7
+    ret
+L2:
+    str "cannot convert \""
+    load 2
+    rt str_concat
+    tee 8
+    str "\" to int"
+    rt str_concat
+    tee 9
+    load 1
+    rt fail
+    pop
+    load 8
+    rt release
+    pop
+    const 0
+    store 8
+    load 9
+    rt release
+    pop
+    const 0
+    store 9
+    const 0
+    store 10
+    load 2
+    rt release
+    pop
+    load 3
+    rt release
+    pop
+    load 8
+    rt release
+    pop
+    load 9
+    rt release
+    pop
+    load 10
+    ret
+end
+
+@Runtime name="is_int_radix"
+func textIsIntIn(_: string, _: int, _: int): bool
+    locals 3
+    const 0
+    store 3
+    const 0
+    store 4
+    load 1
+    load 2
+    call checkRadix
+    pop
+    load 0
+    call textTrim
+    tee 3
+    load 1
+    call intIn
+    tee 4
+    const 0
+    ine
+    store 5
+    load 3
+    rt release
+    pop
+    const 0
+    store 3
+    load 4
+    rt release
+    pop
+    const 0
+    store 4
+    load 3
+    rt release
+    pop
+    load 4
+    rt release
+    pop
+    load 5
+    ret
+end
+
+@Runtime name="parse_int_radix"
+func textToIntIn(_: string, _: int, _: int): int
+    locals 9
+    const 0
+    store 3
+    const 0
+    store 4
+    const 0
+    store 6
+    const 0
+    store 7
+    const 0
+    store 8
+    const 0
+    store 9
+    load 1
+    load 2
+    call checkRadix
+    pop
+    load 3
+    store 5
+    load 0
+    call textTrim
+    store 3
+    load 5
+    rt release
+    pop
+    load 4
+    store 5
+    load 3
+    load 1
+    call intIn
+    store 4
+    load 5
+    rt release
+    pop
+    load 4
+    const 0
+    ieq
+    jz L0
+    str "cannot convert \""
+    load 3
+    rt str_concat
+    tee 6
+    str "\" to an int in base "
+    rt str_concat
+    tee 7
+    load 1
+    tconst int
+    rt to_str
+    tee 8
+    rt str_concat
+    tee 9
+    load 2
+    rt fail
+    pop
+    load 6
+    rt release
+    pop
+    const 0
+    store 6
+    load 7
+    rt release
+    pop
+    const 0
+    store 7
+    load 8
+    rt release
+    pop
+    const 0
+    store 8
+    load 9
+    rt release
+    pop
+    const 0
+    store 9
+    const 0
+    store 10
+    load 3
+    rt release
+    pop
+    load 4
+    rt release
+    pop
+    load 6
+    rt release
+    pop
+    load 7
+    rt release
+    pop
+    load 8
+    rt release
+    pop
+    load 9
+    rt release
+    pop
+    load 10
+    ret
+L0:
+    load 4
+    unbox
+    store 11
+    load 3
+    rt release
+    pop
+    load 4
+    rt release
+    pop
+    load 6
+    rt release
+    pop
+    load 7
+    rt release
+    pop
+    load 8
+    rt release
+    pop
+    load 9
+    rt release
+    pop
+    load 11
+    ret
+end
+
+@Runtime name="int_to_str_radix"
+func intToText(_: int, _: int, _: int): string
+    locals 8
+    const 0
+    store 4
+    const 0
+    store 7
+    const 0
+    store 8
+    load 1
+    load 2
+    call checkRadix
+    pop
+    load 0
+    store 3
+    load 0
+    const 0
+    igt
+    jz L0
+    load 0
+    ineg.ovf 27
+    store 3
+L0:
+    load 4
+    store 6
+    str ""
+    store 4
+    load 6
+    rt release
+    pop
+L1:
+    const 0
+    load 3
+    load 1
+    irem 28
+    isub.ovf 29
+    store 5
+    load 4
+    store 6
+    gload "/home/user/burn/lib/runtime/numbers.bn.DIGITS"
+    rt retain
+    tee 7
+    load 5
+    load 5
+    const 1
+    iadd.ovf 30
+    rt str_sub
+    tee 8
+    load 4
+    rt str_concat
+    store 4
+    load 6
+    rt release
+    pop
+    load 7
+    rt release
+    pop
+    const 0
+    store 7
+    load 8
+    rt release
+    pop
+    const 0
+    store 8
+    load 3
+    load 1
+    idiv 31
+    store 3
+    load 3
+    const 0
+    ieq
+    jz L2
+    jmp L3
+L2:
+    jmp L1
+L3:
+    load 0
+    const 0
+    ilt
+    jz L4
+    str "-"
+    load 4
+    rt str_concat
+    store 9
+    load 4
+    rt release
+    pop
+    load 7
+    rt release
+    pop
+    load 8
+    rt release
+    pop
+    load 9
+    ret
+L4:
+    load 4
+    store 10
+    const 0
+    store 4
+    load 4
+    rt release
+    pop
+    load 7
+    rt release
+    pop
+    load 8
+    rt release
+    pop
+    load 10
+    ret
+end
+
+func matchesAt(_: #22, _: #22, _: int): bool
     locals 6
     load 0
     load 2
-    index 5
+    index 33
     load 1
     const 0
-    index 6
+    index 34
     ine
     jz L0
     const 0
@@ -120,11 +949,11 @@ L1:
     load 0
     load 2
     load 5
-    iadd.ovf 7
-    index 8
+    iadd.ovf 35
+    index 36
     load 1
     load 5
-    index 9
+    index 37
     ine
     jz L2
     const 0
@@ -211,7 +1040,7 @@ func textEndsWith(_: string, _: string): bool
     load 0
     load 2
     load 3
-    isub.ovf 13
+    isub.ovf 41
     load 2
     rt str_sub
     tee 4
@@ -311,7 +1140,7 @@ L0:
     load 2
     store 10
     load 0
-    tconst #21
+    tconst #22
     rt str_to_bytes
     store 2
     load 10
@@ -320,7 +1149,7 @@ L0:
     load 3
     store 10
     load 1
-    tconst #21
+    tconst #22
     rt str_to_bytes
     store 3
     load 10
@@ -346,7 +1175,7 @@ L0:
 L1:
     load 8
     load 5
-    iadd.ovf 16
+    iadd.ovf 44
     load 4
     ile
     jz L4
@@ -377,7 +1206,7 @@ L1:
     store 12
     load 8
     load 5
-    iadd.ovf 17
+    iadd.ovf 45
     store 8
     load 8
     store 7
@@ -385,7 +1214,7 @@ L1:
 L2:
     load 8
     const 1
-    iadd.ovf 18
+    iadd.ovf 46
     store 8
 L3:
     jmp L1
@@ -469,7 +1298,7 @@ L0:
     load 3
     store 11
     load 0
-    tconst #21
+    tconst #22
     rt str_to_bytes
     store 3
     load 11
@@ -478,7 +1307,7 @@ L0:
     load 4
     store 11
     load 1
-    tconst #21
+    tconst #22
     rt str_to_bytes
     store 4
     load 11
@@ -504,7 +1333,7 @@ L0:
 L1:
     load 9
     load 6
-    iadd.ovf 20
+    iadd.ovf 48
     load 5
     ile
     jz L4
@@ -539,7 +1368,7 @@ L1:
     store 7
     load 9
     load 6
-    iadd.ovf 21
+    iadd.ovf 49
     store 9
     load 9
     store 8
@@ -547,7 +1376,7 @@ L1:
 L2:
     load 9
     const 1
-    iadd.ovf 22
+    iadd.ovf 50
     store 9
 L3:
     jmp L1
@@ -595,10 +1424,817 @@ L4:
     ret
 end
 
+func byteWidth(_: #13): int
+    locals 4
+    load 0
+    const 128
+    ilt
+    jz L0
+    const 1
+    store 1
+    load 1
+    ret
+L0:
+    load 0
+    const 224
+    ilt
+    jz L1
+    const 2
+    store 2
+    load 2
+    ret
+L1:
+    load 0
+    const 240
+    ilt
+    jz L2
+    const 3
+    store 3
+    load 3
+    ret
+L2:
+    const 4
+    store 4
+    load 4
+    ret
+end
+
+func isContinuation(_: #13): bool
+    locals 1
+    load 0
+    const 128
+    ige
+    jzk L0
+    pop
+    load 0
+    const 192
+    ilt
+L0:
+    store 1
+    load 1
+    ret
+end
+
+func whitespaceAt(_: #22, _: int, _: int): bool
+    locals 5
+    const 0
+    store 5
+    const 0
+    store 6
+    load 2
+    const 1
+    ieq
+    jz L1
+    load 0
+    load 1
+    index 54
+    store 3
+    load 3
+    const 32
+    ieq
+    jnzk L0
+    pop
+    load 3
+    const 9
+    ige
+    jzk L0
+    pop
+    load 3
+    const 13
+    ile
+L0:
+    store 4
+    load 4
+    ret
+L1:
+    load 0
+    load 1
+    load 1
+    load 2
+    iadd.ovf 55
+    rt arr_slice
+    tee 5
+    rt str_from_bytes
+    tee 6
+    const 3
+    rt char_class
+    store 7
+    load 5
+    rt release
+    pop
+    const 0
+    store 5
+    load 6
+    rt release
+    pop
+    const 0
+    store 6
+    load 5
+    rt release
+    pop
+    load 6
+    rt release
+    pop
+    load 7
+    ret
+end
+
+@Runtime name="str_trim"
+func textTrim(_: string): string
+    locals 13
+    const 0
+    store 2
+    const 0
+    store 8
+    const 0
+    store 9
+    load 0
+    rt str_len
+    store 1
+    load 1
+    const 0
+    ieq
+    jnzk L0
+    pop
+    load 0
+    const 0
+    const 1
+    rt str_sub
+    tee 8
+    const 3
+    rt char_class
+    not
+    jzk L0
+    pop
+    load 0
+    load 1
+    const 1
+    isub.ovf 57
+    load 1
+    rt str_sub
+    tee 9
+    const 3
+    rt char_class
+    not
+L0:
+    store 10
+    load 8
+    rt release
+    pop
+    const 0
+    store 8
+    load 9
+    rt release
+    pop
+    const 0
+    store 9
+    load 10
+    jz L1
+    load 0
+    rt retain
+    store 11
+    load 2
+    rt release
+    pop
+    load 8
+    rt release
+    pop
+    load 9
+    rt release
+    pop
+    load 11
+    ret
+L1:
+    load 2
+    store 12
+    load 0
+    tconst #22
+    rt str_to_bytes
+    store 2
+    load 12
+    rt release
+    pop
+    load 2
+    len
+    store 3
+    const 0
+    store 4
+L2:
+    load 4
+    load 3
+    ilt
+    jz L4
+    load 2
+    load 4
+    index 58
+    call byteWidth
+    store 5
+    load 2
+    load 4
+    load 5
+    call whitespaceAt
+    not
+    jz L3
+    jmp L4
+L3:
+    load 4
+    load 5
+    iadd.ovf 59
+    store 4
+    jmp L2
+L4:
+    load 3
+    store 6
+L5:
+    load 6
+    load 4
+    igt
+    jz L10
+    load 6
+    const 1
+    isub.ovf 60
+    store 7
+L6:
+    load 7
+    load 4
+    igt
+    jzk L7
+    pop
+    load 2
+    load 7
+    index 61
+    call isContinuation
+L7:
+    jz L8
+    load 7
+    const 1
+    isub.ovf 62
+    store 7
+    jmp L6
+L8:
+    load 2
+    load 7
+    load 6
+    load 7
+    isub.ovf 63
+    call whitespaceAt
+    not
+    jz L9
+    jmp L10
+L9:
+    load 7
+    store 6
+    jmp L5
+L10:
+    load 2
+    load 4
+    load 6
+    rt arr_slice
+    tee 9
+    rt str_from_bytes
+    store 13
+    load 9
+    rt release
+    pop
+    const 0
+    store 9
+    load 2
+    rt release
+    pop
+    load 8
+    rt release
+    pop
+    load 9
+    rt release
+    pop
+    load 13
+    ret
+end
+
+func padLeft(_: string, _: int, _: string): string
+    locals 3
+    const 0
+    store 3
+    load 3
+    store 4
+    load 0
+    rt retain
+    store 3
+    load 4
+    rt release
+    pop
+L0:
+    load 3
+    rt str_len
+    load 1
+    ilt
+    jzk L1
+    pop
+    load 2
+    rt str_len
+    const 0
+    igt
+L1:
+    jz L2
+    load 3
+    store 4
+    load 2
+    load 3
+    rt str_concat
+    store 3
+    load 4
+    rt release
+    pop
+    jmp L0
+L2:
+    load 3
+    store 5
+    const 0
+    store 3
+    load 3
+    rt release
+    pop
+    load 5
+    ret
+end
+
+func padRight(_: string, _: int, _: string): string
+    locals 3
+    const 0
+    store 3
+    load 3
+    store 4
+    load 0
+    rt retain
+    store 3
+    load 4
+    rt release
+    pop
+L0:
+    load 3
+    rt str_len
+    load 1
+    ilt
+    jzk L1
+    pop
+    load 2
+    rt str_len
+    const 0
+    igt
+L1:
+    jz L2
+    load 3
+    load 2
+    rt str_append
+    store 3
+    jmp L0
+L2:
+    load 3
+    store 5
+    const 0
+    store 3
+    load 3
+    rt release
+    pop
+    load 5
+    ret
+end
+
+func isEmpty(_: string): bool
+    locals 1
+    load 0
+    rt str_len
+    const 0
+    ieq
+    store 1
+    load 1
+    ret
+end
+
+func isBlank(_: string): bool
+    locals 2
+    const 0
+    store 1
+    load 0
+    rt str_trim
+    tee 1
+    rt str_len
+    const 0
+    ieq
+    store 2
+    load 1
+    rt release
+    pop
+    const 0
+    store 1
+    load 1
+    rt release
+    pop
+    load 2
+    ret
+end
+
+func capitalize(_: string): string
+    locals 4
+    const 0
+    store 1
+    const 0
+    store 2
+    const 0
+    store 3
+    load 0
+    rt str_len
+    const 0
+    ieq
+    jz L0
+    load 0
+    rt retain
+    ret
+L0:
+    load 0
+    const 0
+    const 1
+    rt str_sub
+    tee 1
+    rt str_upper
+    tee 2
+    load 0
+    const 1
+    const 9223372036854775807
+    rt str_sub
+    tee 3
+    rt str_concat
+    store 4
+    load 1
+    rt release
+    pop
+    const 0
+    store 1
+    load 2
+    rt release
+    pop
+    const 0
+    store 2
+    load 3
+    rt release
+    pop
+    const 0
+    store 3
+    load 1
+    rt release
+    pop
+    load 2
+    rt release
+    pop
+    load 3
+    rt release
+    pop
+    load 4
+    ret
+end
+
+func countOf(_: string, _: string): int
+    locals 3
+    const 0
+    store 3
+    load 1
+    rt str_len
+    const 0
+    ieq
+    jz L0
+    const 0
+    store 2
+    load 2
+    ret
+L0:
+    load 0
+    load 1
+    rt str_split
+    tee 3
+    len
+    const 1
+    isub.ovf 70
+    store 4
+    load 3
+    rt release
+    pop
+    const 0
+    store 3
+    load 3
+    rt release
+    pop
+    load 4
+    ret
+end
+
+func lines(_: string): [string]
+    locals 2
+    const 0
+    store 1
+    load 0
+    str "\r\n"
+    str "\n"
+    rt str_replace
+    tee 1
+    str "\n"
+    rt str_split
+    store 2
+    load 1
+    rt release
+    pop
+    const 0
+    store 1
+    load 1
+    rt release
+    pop
+    load 2
+    ret
+end
+
+func words(_: string): [string]
+    locals 6
+    const 0
+    store 1
+    const 0
+    store 2
+    const 0
+    store 4
+    load 1
+    store 5
+    newarr [string] 0
+    store 1
+    load 5
+    rt release
+    pop
+    load 2
+    store 5
+    load 0
+    str " "
+    rt str_split
+    store 2
+    load 5
+    rt release
+    pop
+    const 0
+    store 3
+L0:
+    load 3
+    load 2
+    len
+    ilt
+    jz L2
+    load 4
+    store 5
+    load 2
+    load 3
+    index 73
+    rt retain
+    store 4
+    load 5
+    rt release
+    pop
+    load 4
+    rt str_len
+    const 0
+    igt
+    jz L1
+    load 1
+    load 4
+    rt arr_push
+    pop
+L1:
+    load 3
+    const 1
+    iadd
+    store 3
+    jmp L0
+L2:
+    load 1
+    store 6
+    const 0
+    store 1
+    load 1
+    rt release
+    pop
+    load 2
+    rt release
+    pop
+    load 4
+    rt release
+    pop
+    load 6
+    ret
+end
+
+func isDigits(_: string): bool
+    locals 7
+    const 0
+    store 1
+    const 0
+    store 3
+    load 0
+    rt str_len
+    const 0
+    ieq
+    jz L0
+    const 0
+    store 4
+    load 1
+    rt release
+    pop
+    load 3
+    rt release
+    pop
+    load 4
+    ret
+L0:
+    load 1
+    store 5
+    load 0
+    rt str_chars
+    store 1
+    load 5
+    rt release
+    pop
+    const 0
+    store 2
+L1:
+    load 2
+    load 1
+    len
+    ilt
+    jz L4
+    load 3
+    store 5
+    load 1
+    load 2
+    index 75
+    rt retain
+    store 3
+    load 5
+    rt release
+    pop
+    load 3
+    str "0"
+    rt str_cmp
+    const 0
+    ilt
+    jnzk L2
+    pop
+    load 3
+    str "9"
+    rt str_cmp
+    const 0
+    igt
+L2:
+    jz L3
+    const 0
+    store 6
+    load 1
+    rt release
+    pop
+    load 3
+    rt release
+    pop
+    load 6
+    ret
+L3:
+    load 2
+    const 1
+    iadd
+    store 2
+    jmp L1
+L4:
+    const 1
+    store 7
+    load 1
+    rt release
+    pop
+    load 3
+    rt release
+    pop
+    load 7
+    ret
+end
+
+func isAlpha(_: string): bool
+    locals 8
+    const 0
+    store 1
+    const 0
+    store 3
+    const 0
+    store 4
+    load 0
+    rt str_len
+    const 0
+    ieq
+    jz L0
+    const 0
+    store 5
+    load 1
+    rt release
+    pop
+    load 3
+    rt release
+    pop
+    load 4
+    rt release
+    pop
+    load 5
+    ret
+L0:
+    load 1
+    store 6
+    load 0
+    rt str_chars
+    store 1
+    load 6
+    rt release
+    pop
+    const 0
+    store 2
+L1:
+    load 2
+    load 1
+    len
+    ilt
+    jz L4
+    load 3
+    store 6
+    load 1
+    load 2
+    index 77
+    rt retain
+    store 3
+    load 6
+    rt release
+    pop
+    load 4
+    store 6
+    load 3
+    rt str_lower
+    store 4
+    load 6
+    rt release
+    pop
+    load 4
+    str "a"
+    rt str_cmp
+    const 0
+    ilt
+    jnzk L2
+    pop
+    load 4
+    str "z"
+    rt str_cmp
+    const 0
+    igt
+L2:
+    jz L3
+    const 0
+    store 7
+    load 1
+    rt release
+    pop
+    load 3
+    rt release
+    pop
+    load 4
+    rt release
+    pop
+    load 7
+    ret
+L3:
+    load 2
+    const 1
+    iadd
+    store 2
+    jmp L1
+L4:
+    const 1
+    store 8
+    load 1
+    rt release
+    pop
+    load 3
+    rt release
+    pop
+    load 4
+    rt release
+    pop
+    load 8
+    ret
+end
+
 func "<entry>"(): void
     call "<init lib/runtime/math.bn>"
     pop
+    call "<init std/strings.bn>"
+    pop
     call "<init lib/runtime/strings.bn>"
+    pop
+    call "<init lib/runtime/numbers.bn>"
     pop
     call "<init lib/runtime/runtime.bn>"
     pop
