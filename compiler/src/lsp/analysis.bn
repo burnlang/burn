@@ -1,0 +1,205 @@
+import "../check/body.bn"
+import "../check/check.bn"
+import "../check/types.bn"
+import "../cli/compile.bn"
+import "../diag/diag.bn"
+import "../dump/index.bn"
+import "../project/loader.bn"
+import "../syntax/ast.bn"
+import "json.bn"
+import "sources.bn"
+import "text.bn"
+
+/** What an import points at: a source file, a standard library module or a bytecode library. */
+pub def enum Target {
+    File(path: string),
+    Std(name: string),
+    Lib(path: string)
+}
+
+/** An import in the root file and what it points at. */
+pub def type Link {
+    SrcSpan span
+    Target target
+}
+
+/** A function, its signature, where its name is declared and its module. */
+pub def type FuncEntry {
+    string name
+    string sig
+    SrcSpan span
+    int module
+}
+
+/** A named type, where it is declared and the module that sees it. */
+pub def type TypeName {
+    string name
+    int ty
+    SrcSpan span
+    int module
+}
+
+pub def type GlobalEntry {
+    string name
+    int ty
+    int module
+}
+
+/** Whether a span holds a byte offset of the file `file`. */
+pub fun spanHas(s: SrcSpan, file: int, off: int): bool {
+    return s.file == file && s.start <= off && off <= s.end
+}
+
+/** The imports of the root module and what they point at, like `ide::import_links`. */
+pub fun importLinks(loaded: Loaded, root: int): [Link] {
+    var m = loaded.modules[root]
+    [Link] out = []
+    for imp in m.imports {
+        var f = loaded.files[loaded.modules[imp.target].file]
+        var span = SrcSpan { file: m.file, start: imp.start, end: imp.end }
+        var p = f.path
+        if (p != null) {
+            out.push(Link { span: span, target: Target.File(p) })
+        } else {
+            var n = stdDisplay(f.name)
+            if (n != null) {
+                out.push(Link { span: span, target: Target.Std(n) })
+            }
+        }
+    }
+    for l in m.libs {
+        out.push(Link { span: SrcSpan { file: m.file, start: l.start, end: l.end }, target: Target.Lib(loaded.libs[l.target].path) })
+    }
+    return out
+}
+
+/** What the language server knows about a document after checking it, like `Analysis` in `lsp/mod.rs`. */
+pub def struct Analysis(loaded: Loaded, c: Checker, rootModule: int, inserts: [int]) {
+    int rootFile = 0
+    bool noStd = false
+    [GlobalEntry] globals = []
+    [FuncEntry] funcs = []
+    [TypeName] typeNames = []
+    [Link] links = []
+
+    fun init() {
+        rootFile = loaded.modules[rootModule].file
+        noStd = loaded.noStd
+        for g in c.globals {
+            globals.push(GlobalEntry { name: g.name, ty: g.ty ?? T_ERROR, module: g.module })
+        }
+        for f in c.funcs {
+            if (!contains(f.name, "<")) {
+                funcs.push(FuncEntry { name: f.name, sig: funcSig(c, f), span: f.span, module: f.module })
+            }
+        }
+        for g in c.genericFns {
+            var d = g.decl
+            var head = c.spanIn(g.module, Span { start: d.span.start, end: d.body.span.start })
+            funcs.push(FuncEntry { name: d.name.name, sig: trim(c.srcText(head)), span: c.spanIn(g.module, d.name.span), module: g.module })
+        }
+        for mi in 0..len(c.mods) {
+            var m = c.mods[mi]
+            [TypeName] here = []
+            for n in keys(m.types) {
+                var e = m.types[n]
+                if (e != null) {
+                    here.push(TypeName { name: n, ty: e.sym, span: e.span, module: mi })
+                }
+            }
+            for n in keys(m.gtypes) {
+                var e = m.gtypes[n]
+                if (e != null) {
+                    here.push(TypeName { name: n, ty: T_ERROR, span: e.span, module: mi })
+                }
+            }
+            for t in sortedNames(here) {
+                typeNames.push(t)
+            }
+        }
+        links = importLinks(loaded, rootModule)
+    }
+
+    fun file(i: int): SourceFile {
+        var f = loaded.files[i]
+        f.index()
+        return f
+    }
+
+    fun root(): SourceFile {
+        return file(rootFile)
+    }
+
+    fun text(s: SrcSpan): string {
+        return c.srcText(s)
+    }
+
+    fun show(t: int): string {
+        return c.show(t)
+    }
+
+    fun kind(t: int): Ty {
+        return c.types.kindOf(t)
+    }
+
+    fun isNumeric(t: int): bool {
+        var k = kind(t)
+        return k is Ty.Int || k is Ty.Float || k is Ty.Num
+    }
+
+    fun range(s: SrcSpan): Json {
+        var f = file(s.file)
+        var end = s.end
+        if (end <= s.start) {
+            end = s.start + 1
+        }
+        if (end > len(f.bytes)) {
+            end = len(f.bytes)
+        }
+        return rangeOf(f, s.start, end)
+    }
+
+    fun editRange(s: SrcSpan): Json {
+        return rangeOf(file(s.file), s.start, s.end)
+    }
+
+    fun importAt(off: int): Link? {
+        for l in links {
+            if (spanHas(l.span, rootFile, off)) {
+                return l
+            }
+        }
+        return null
+    }
+}
+
+priv fun sortedNames(xs: [TypeName]): [TypeName] {
+    [TypeName] out = []
+    for x in xs {
+        var at = len(out)
+        while (at > 0 && x.name < out[at - 1].name) {
+            at -= 1
+        }
+        insert(out, at, x)
+    }
+    return out
+}
+
+/** Checks a loaded program for the language server and gives what it knows and every problem found. */
+pub def type Built {
+    Analysis analysis
+    [LoadDiag] diags
+}
+
+pub fun buildAnalysis(loaded: Loaded, root: int, inserts: [int]): Built {
+    readLibraries(loaded)
+    var r = checkIndexed(loaded)
+    [LoadDiag] diags = []
+    for d in loaded.diags {
+        diags.push(d)
+    }
+    for d in r.diags {
+        diags.push(d)
+    }
+    return Built { analysis: new Analysis(loaded, r.checker, root, inserts), diags: diags }
+}

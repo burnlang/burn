@@ -1,0 +1,145 @@
+import "../cli/host.bn"
+import "../doc/assets.bn"
+import "../doc/builtin_docs.bn"
+import "../doc/text.bn"
+import "../project/paths.bn"
+import "../project/project.bn"
+import "../project/stdlib.bn"
+import "std/strings"
+
+/** Where the language server writes the sources it shows for the standard library, built-ins and bytecode libraries. */
+pub fun sourcesDir(): string {
+    return pathJoin(pathJoin(pathJoin(burnHome(), "cache"), "sources"), toolchainVersion())
+}
+
+/** `p` with its symbolic links resolved, or as it is when it does not exist. */
+pub fun resolved(p: string): string {
+    return realPath(p) ?? p
+}
+
+/** Whether the path `p` is `base` or inside it. */
+pub fun underDir(p: string, base: string): bool {
+    if (p == base) {
+        return true
+    }
+    if (endsWith(base, "/")) {
+        return startsWith(p, base)
+    }
+    return startsWith(p, base + "/")
+}
+
+/** Whether `path` is one of the files the language server wrote, like `sources::is_cached`. */
+pub fun isCached(path: string): bool {
+    return underDir(resolved(path), resolved(sourcesDir()))
+}
+
+/** Whether `path` is a written file that is not a standard library module, so it has nothing to check. */
+pub fun isStub(path: string): bool {
+    var std = resolved(pathJoin(sourcesDir(), "std"))
+    return isCached(path) && !underDir(resolved(path), std)
+}
+
+/** Writes the source of the standard library module `name` and gives its path. */
+pub fun stdFile(name: string): string? {
+    for s in stdModules() {
+        if (s.name == name) {
+            var p = pathJoin(pathJoin(sourcesDir(), "std"), "${name}.bn")
+            if (writeReadOnly(p, s.src)) {
+                return p
+            }
+            return null
+        }
+    }
+    return null
+}
+
+/** The module name of a loaded standard library file (`std/strings.bn` is `strings`). */
+pub fun stdDisplay(name: string): string? {
+    if (startsWith(name, "std/") && endsWith(name, ".bn")) {
+        return substring(name, 4, len(name) - 3)
+    }
+    return null
+}
+
+/** Writes the declarations of the built-in functions and gives their path. */
+pub fun builtinsFile(): string? {
+    var p = pathJoin(sourcesDir(), "builtins.bn")
+    if (writeReadOnly(p, BUILTINS_SOURCE)) {
+        return p
+    }
+    return null
+}
+
+/** Where the built-in function `name` is declared: the file, its 0-based line and the column of its name. */
+pub def type BuiltinLocation {
+    string path
+    int line
+    int col
+}
+
+pub fun builtinLocation(all: [Builtin], name: string): BuiltinLocation? {
+    var b = findBuiltin(all, name)
+    if (b == null) {
+        return null
+    }
+    var needle = "fun ${b.name}("
+    var lines = textLines(BUILTINS_SOURCE)
+    for i in 0..len(lines) {
+        if (startsWith(lines[i], needle)) {
+            var p = builtinsFile()
+            if (p == null) {
+                return null
+            }
+            return BuiltinLocation { path: p, line: i, col: 4 }
+        }
+    }
+    return null
+}
+
+/** A written stub of a bytecode library, and the 0-based line of the function asked for. */
+pub def type LibraryStub {
+    string path
+    int line
+}
+
+/** Writes the functions a bytecode library exports with their signatures, like `sources::library_stub`. */
+pub fun libraryStub(lib: string, names: [string], sigs: [string], target: string): LibraryStub? {
+    var text = "// `${lib}` is a bytecode library. These are the functions it exports, with the types Burn sees.\n\n"
+    var line = 0
+    for i in 0..len(names) {
+        if (names[i] == target) {
+            line = i + 2
+        }
+        text += sigs[i]
+        text += "\n"
+    }
+    var file = ""
+    for c in lib {
+        if (isAlphanumeric(c) || c == "." || c == "-") {
+            file += c
+        } else {
+            file += "_"
+        }
+    }
+    var p = pathJoin(pathJoin(sourcesDir(), "libs"), "${file}.bn")
+    if (!writeReadOnly(p, text)) {
+        return null
+    }
+    return LibraryStub { path: p, line: line }
+}
+
+/** `burn sources`: writes the standard library and built-in sources the editor shows, and prints where. */
+pub fun cmdSources(): int {
+    var ok = builtinsFile() != null
+    for s in stdModules() {
+        if (stdFile(s.name) == null) {
+            ok = false
+        }
+    }
+    if (!ok) {
+        eprint("error: cannot write the sources to ${sourcesDir()}")
+        return 1
+    }
+    print(sourcesDir())
+    return 0
+}

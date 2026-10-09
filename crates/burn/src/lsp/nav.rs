@@ -1,7 +1,7 @@
 use super::json::Json;
 use super::{path_to_uri, range_json, sources, uri_to_path, word_at, Analysis, Server, KEYWORDS};
 use crate::source::Span;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 type Key = (PathBuf, u32, u32);
@@ -276,12 +276,13 @@ impl Server {
             return Err(format!("`{}` is not a valid name", new_name));
         }
         let (refs, old) = self.references_of(uri, params, true, true).ok_or("nothing to rename here")?;
-        let mut changes: HashMap<String, Vec<Json>> = HashMap::new();
+        let mut changes: Vec<(String, Vec<Json>)> = Vec::new();
         for (u, r, _, _) in refs {
-            changes
-                .entry(u)
-                .or_default()
-                .push(Json::obj(vec![("range", r), ("newText", Json::str(new_name.clone()))]));
+            let edit = Json::obj(vec![("range", r), ("newText", Json::str(new_name.clone()))]);
+            match changes.iter_mut().find(|(c, _)| *c == u) {
+                Some((_, es)) => es.push(edit),
+                None => changes.push((u, vec![edit])),
+            }
         }
         let _ = old;
         Ok(Json::obj(vec![(

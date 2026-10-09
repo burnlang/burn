@@ -1,0 +1,543 @@
+import "../check/types.bn"
+import "../project/project.bn"
+import "../project/stdlib.bn"
+import "../syntax/lexer.bn"
+import "analysis.bn"
+import "imports.bn"
+import "json.bn"
+import "state.bn"
+import "std/strings"
+import "text.bn"
+
+/** What kind of name the cursor is at, like `complete::Ctx`. */
+pub def enum Ctx {
+    General,
+    Type,
+    Annotation,
+    AnnotationArgs(name: string),
+    DefKind
+}
+
+/** A built-in type and its description. */
+pub def type Described {
+    string name
+    string doc
+}
+
+pub const BUILTIN_TYPES = [
+    Described { name: "int", doc: "64-bit signed integer" },
+    Described { name: "float", doc: "64-bit floating point number" },
+    Described { name: "string", doc: "UTF-8 text" },
+    Described { name: "bool", doc: "`true` or `false`" },
+    Described { name: "any", doc: "a value of any type, narrowed with `is` or `as`" },
+    Described { name: "void", doc: "no value, for functions that return nothing" },
+    Described { name: "int8", doc: "8-bit signed integer" },
+    Described { name: "int16", doc: "16-bit signed integer" },
+    Described { name: "int32", doc: "32-bit signed integer" },
+    Described { name: "int64", doc: "64-bit signed integer, the same as `int`" },
+    Described { name: "uint8", doc: "8-bit unsigned integer, also called `byte`" },
+    Described { name: "uint16", doc: "16-bit unsigned integer" },
+    Described { name: "uint32", doc: "32-bit unsigned integer" },
+    Described { name: "uint64", doc: "64-bit unsigned integer" },
+    Described { name: "float32", doc: "32-bit floating point number" },
+    Described { name: "byte", doc: "8-bit unsigned integer, the same as `uint8`" }
+]
+
+/** A field of an annotation and its type. */
+pub def type AnnField {
+    string name
+    string ty
+}
+
+priv def type BuiltinAnnotation {
+    string name
+    string doc
+    [AnnField] fields
+}
+
+priv fun af(name: string, ty: string): AnnField {
+    return AnnField { name: name, ty: ty }
+}
+
+priv fun builtinAnnotations(): [BuiltinAnnotation] {
+    return [
+        BuiltinAnnotation { name: "Getter", doc: "Generates `getName()`, or `isName()` for `bool` fields.", fields: [] },
+        BuiltinAnnotation { name: "Setter", doc: "Generates `setName(value)`.", fields: [] },
+        BuiltinAnnotation { name: "Deprecated", doc: "Every use produces a warning with the message.", fields: [af("message", "string")] },
+        BuiltinAnnotation { name: "Export", doc: "Lets bytecode libraries call this top-level function.", fields: [af("name", "string")] },
+        BuiltinAnnotation { name: "Native", doc: "Declares a function without a body that the host program provides.", fields: [af("name", "string")] },
+        BuiltinAnnotation { name: "Inject", doc: "A mixin that runs this function when `target` starts (`at: \"head\"`) or returns (`at: \"return\"`).", fields: [af("target", "string"), af("at", "string"), af("cancellable", "bool"), af("priority", "int")] },
+        BuiltinAnnotation { name: "Overwrite", doc: "A mixin that replaces the body of `target`.", fields: [af("target", "string"), af("priority", "int")] },
+        BuiltinAnnotation { name: "Redirect", doc: "A mixin that replaces every call to `call` inside `target` with a call to this function.", fields: [af("target", "string"), af("call", "string"), af("rt", "string"), af("host", "string"), af("priority", "int")] }
+    ]
+}
+
+priv const KEYWORD_DOCS = {
+    "fun": "declares a function",
+    "var": "declares a variable",
+    "const": "declares a constant",
+    "def": "starts a definition: `def struct`, `def interface`, `def enum`, `def type`, `def annotation`",
+    "if": "runs a block when a condition holds",
+    "else": "the branch taken when the `if` condition does not hold",
+    "while": "repeats a block while a condition holds",
+    "for": "loops over a range, array, map or string",
+    "in": "separates the loop variables from what `for` loops over",
+    "match": "chooses a branch by comparing a value with patterns",
+    "return": "leaves the function, optionally with a value",
+    "break": "leaves the innermost loop",
+    "continue": "skips to the next iteration of the innermost loop",
+    "import": "imports a module: `import \"std/date\"`",
+    "pub": "makes a declaration visible to importing modules",
+    "priv": "keeps a declaration private to its module or struct",
+    "async": "declares a function that runs as a task",
+    "await": "waits for a task and gives its result",
+    "is": "tests the type of a value and narrows it",
+    "as": "converts or casts a value to a type; `as?` gives null on failure",
+    "new": "creates an instance of a struct",
+    "destroy": "destroys a struct instance and runs its destructor",
+    "static": "a member that belongs to the struct, not to an instance",
+    "abstract": "a struct that cannot be created, only extended",
+    "self": "the current instance inside a method",
+    "true": "the boolean true",
+    "false": "the boolean false",
+    "null": "no value, for optional types",
+    "struct": "after `def`: a struct with fields and methods",
+    "interface": "after `def`: a set of methods that structs implement",
+    "enum": "after `def`: a type with a fixed set of values",
+    "type": "after `def`: a plain data type",
+    "annotation": "after `def`: an annotation used as `@Name(...)`"
+}
+
+/** What a keyword does, for completions. */
+pub fun keywordDoc(k: string): string {
+    return KEYWORD_DOCS[k] ?? "keyword"
+}
+
+priv def type Open {
+    int at
+    int c
+}
+
+priv fun openBracket(text: string): Open? {
+    var b = bytes(text)
+    [Open] stack = []
+    var i = 0
+    while (i < len(b)) {
+        var c = b[i] as int
+        if (c == 47 && i + 1 < len(b) && b[i + 1] == 47) {
+            while (i < len(b) && b[i] != 10) {
+                i += 1
+            }
+            continue
+        }
+        if (c == 34 || c == 39) {
+            i += 1
+            while (i < len(b) && b[i] != c) {
+                if (b[i] == 92) {
+                    i += 1
+                }
+                i += 1
+            }
+        } else if (c == 40 || c == 91 || c == 123 || c == 60) {
+            stack.push(Open { at: i, c: c })
+        } else if (c == 41 || c == 93 || c == 125) {
+            while (len(stack) > 0) {
+                var top = pop(stack)
+                if (top.c != 60) {
+                    break
+                }
+            }
+        } else if (c == 62) {
+            if (len(stack) > 0 && stack[len(stack) - 1].c == 60) {
+                pop(stack)
+            }
+        } else if (c == 10 || c == 59 || c == 61) {
+            while (len(stack) > 0 && stack[len(stack) - 1].c == 60) {
+                pop(stack)
+            }
+        }
+        i += 1
+    }
+    if (len(stack) == 0) {
+        return null
+    }
+    return stack[len(stack) - 1]
+}
+
+/** The text of `s` up to a byte offset. */
+priv fun upTo(s: string, at: int): string {
+    return fromBytes(slice(bytes(s), 0, at))
+}
+
+priv fun trimEnd(s: string): string {
+    var b = bytes(s)
+    var n = len(b)
+    while (n > 0 && (b[n - 1] == 32 || b[n - 1] == 9 || b[n - 1] == 10 || b[n - 1] == 13 || b[n - 1] == 11 || b[n - 1] == 12)) {
+        n -= 1
+    }
+    if (n == len(b)) {
+        return s
+    }
+    return fromBytes(slice(b, 0, n))
+}
+
+priv fun trimStartOf(s: string): string {
+    var i = 0
+    var n = len(s)
+    while (i < n && isWhitespace(substring(s, i, i + 1))) {
+        i += 1
+    }
+    return substring(s, i, n)
+}
+
+priv fun lastWord(text: string): string {
+    var t = trimEnd(text)
+    var n = len(t)
+    var start = n
+    while (start > 0 && identChar(substring(t, start - 1, start))) {
+        start -= 1
+    }
+    return substring(t, start, n)
+}
+
+priv fun lastLine(t: string): string {
+    var parts = split(t, "\n")
+    return parts[len(parts) - 1]
+}
+
+priv fun isDeclarationParen(before: string): bool {
+    var t = trimEnd(before)
+    var line = trimStartOf(lastLine(t))
+    var word = lastWord(t)
+    return word == "fun" || startsWith(line, "fun ") || contains(line, " fun ") || startsWith(line, "async fun ") || startsWith(line, "def ") || startsWith(line, "pub def ") || startsWith(line, "priv def ") || startsWith(line, "pub fun ") || startsWith(line, "priv fun ") || startsWith(line, "static fun ") || (startsWith(line, "@") && contains(line, " def "))
+}
+
+priv fun isLiteralBrace(before: string): bool {
+    var t = trimEnd(before)
+    if (t == "") {
+        return true
+    }
+    var last = substring(t, len(t) - 1, len(t))
+    return last == "=" || last == "(" || last == "," || last == ":" || last == "[" || lastWord(t) == "return"
+}
+
+priv fun typeContext(head: string): bool {
+    var t = trimEnd(head)
+    if (endsWith(t, "as?")) {
+        return true
+    }
+    var w = lastWord(t)
+    if ((w == "is" || w == "as") && len(bytes(t)) > 2) {
+        return true
+    }
+    if (endsWith(t, ":")) {
+        var rest = substring(t, 0, len(t) - 1)
+        if (endsWith(rest, ":")) {
+            rest = substring(rest, 0, len(rest) - 1)
+        }
+        if (endsWith(trimEnd(rest), ")")) {
+            return true
+        }
+        var o = openBracket(rest)
+        if (o == null) {
+            return true
+        }
+        if (o.c == 40) {
+            return isDeclarationParen(upTo(rest, o.at))
+        }
+        if (o.c == 123) {
+            return !isLiteralBrace(upTo(rest, o.at))
+        }
+        return o.c == 60
+    }
+    if (endsWith(t, "[") || endsWith(t, "?")) {
+        return typeContext(substring(t, 0, len(t) - 1))
+    }
+    if (endsWith(t, "<")) {
+        var rest = substring(t, 0, len(t) - 1)
+        if (trimEnd(rest) == "") {
+            return false
+        }
+        var lw = lastWord(rest)
+        return lw != "" && isUpper(substring(lw, 0, 1))
+    }
+    if (endsWith(t, ",")) {
+        var rest = substring(t, 0, len(t) - 1)
+        var o = openBracket(rest)
+        if (o != null && o.c == 60) {
+            return typeContext(upTo(rest, o.at + 1))
+        }
+    }
+    return false
+}
+
+priv fun isUpper(c: string): bool {
+    return upper(c) == c && lower(c) != c
+}
+
+/** What kind of name is typed at the end of `head`, like `complete::context`. */
+pub fun context(head: string): Ctx {
+    if (endsWith(head, "@")) {
+        return Ctx.Annotation
+    }
+    var o = openBracket(head)
+    if (o != null && o.c == 40) {
+        var before = upTo(head, o.at)
+        var name = lastWord(before)
+        var bb = bytes(before)
+        var nb = len(bytes(name))
+        if (name != "" && len(bb) > nb && bb[len(bb) - nb - 1] == 64) {
+            var t = trimEnd(head)
+            if (endsWith(t, "(") || endsWith(t, ",")) {
+                return Ctx.AnnotationArgs(name)
+            }
+        }
+    }
+    var line = trimStartOf(lastLine(head))
+    [string] ws = []
+    for w in split(line, " ") {
+        for x in split(w, "\t") {
+            if (x != "" && !startsWith(x, "@")) {
+                ws.push(x)
+            }
+        }
+    }
+    var k = 0
+    while (k < len(ws) && (ws[k] == "pub" || ws[k] == "priv")) {
+        k += 1
+    }
+    if (k < len(ws) && ws[k] == "def") {
+        var rest = true
+        for j in (k + 1)..len(ws) {
+            if (ws[j] != "abstract" && ws[j] != "static") {
+                rest = false
+            }
+        }
+        var lastChar = ""
+        if (head != "") {
+            lastChar = substring(head, len(head) - 1, len(head))
+        }
+        if (rest && lastChar != "" && isWhitespace(lastChar)) {
+            return Ctx.DefKind
+        }
+    }
+    if (typeContext(head)) {
+        return Ctx.Type
+    }
+    return Ctx.General
+}
+
+/** A completion item, like `complete::item`. */
+pub fun item(label: string, kind: int, detail: string, doc: string?, sortKey: string): Json {
+    var j = jo(["label", "kind", "detail", "sortText"], [js(label), jn(kind), js(detail), js("${sortKey}${label}")])
+    if (doc != null) {
+        jput(j, "documentation", markdown(doc))
+    }
+    return j
+}
+
+/** An annotation declared in source and its fields. */
+pub def type DeclaredAnnotation {
+    string name
+    [AnnField] fields
+}
+
+/** The annotations `text` declares, like `complete::declared_annotations`. */
+pub fun declaredAnnotations(text: string): [DeclaredAnnotation] {
+    var tokens = lex(text).tokens
+    var b = bytes(text)
+    [DeclaredAnnotation] out = []
+    for i in 0..len(tokens) {
+        if (tokens[i].kind != Kind.Def) {
+            continue
+        }
+        var isAnnotation = i + 1 < len(tokens) && tokens[i + 1].kind == Kind.Ident && tokens[i + 1].text == "annotation"
+        if (!(i + 2 < len(tokens) && tokens[i + 2].kind == Kind.Ident)) {
+            continue
+        }
+        var name = tokens[i + 2].text
+        if (!isAnnotation) {
+            continue
+        }
+        [AnnField] fields = []
+        if (i + 3 < len(tokens) && tokens[i + 3].kind == Kind.LBrace) {
+            var start = tokens[i + 3].end
+            var end = start
+            while (end < len(b) && b[end] != 125) {
+                end += 1
+            }
+            for line in textLinesOf(fromBytes(slice(b, start, end))) {
+                var decl = split(line, "=")[0]
+                decl = trim(split(decl, "//")[0])
+                var at = lastSpace(decl)
+                if (at >= 0) {
+                    fields.push(AnnField { name: trim(substring(decl, at + 1, len(decl))), ty: trim(substring(decl, 0, at)) })
+                }
+            }
+        }
+        out.push(DeclaredAnnotation { name: name, fields: fields })
+    }
+    return out
+}
+
+priv fun lastSpace(s: string): int {
+    var i = len(s) - 1
+    while (i >= 0) {
+        if (isWhitespace(substring(s, i, i + 1))) {
+            return i
+        }
+        i -= 1
+    }
+    return -1
+}
+
+priv fun textLinesOf(s: string): [string] {
+    if (s == "") {
+        return []
+    }
+    var parts = split(s, "\n")
+    if (endsWith(s, "\n")) {
+        parts = slice(parts, 0, len(parts) - 1)
+    }
+    [string] out = []
+    for p in parts {
+        if (endsWith(p, "\r")) {
+            out.push(substring(p, 0, len(p) - 1))
+        } else {
+            out.push(p)
+        }
+    }
+    return out
+}
+
+priv fun annotationSources(s: Server, uri: string, a: Analysis): [string] {
+    [string] texts = []
+    var own = s.docs[uri]
+    if (own != null) {
+        texts.push(own)
+    }
+    for l in a.links {
+        var t = l.target
+        if (t is Target.Std) {
+            for m in stdModules() {
+                if (m.name == t.name) {
+                    texts.push(m.src)
+                }
+            }
+        } else if (t is Target.File) {
+            var text = readText(t.path)
+            if (text != null) {
+                texts.push(text)
+            }
+        }
+    }
+    return texts
+}
+
+pub fun annotationItems(s: Server, uri: string, a: Analysis): [Json] {
+    [Json] out = []
+    for b in builtinAnnotations() {
+        [string] params = []
+        for f in b.fields {
+            params.push("${f.name}: ${f.ty}")
+        }
+        var detail = "@${b.name}"
+        if (len(params) > 0) {
+            detail = "@${b.name}(${join(params, ", ")})"
+        }
+        out.push(item(b.name, 7, detail, b.doc, "1"))
+    }
+    for text in annotationSources(s, uri, a) {
+        for d in declaredAnnotations(text) {
+            [string] params = []
+            for f in d.fields {
+                params.push("${f.ty} ${f.name}")
+            }
+            out.push(item(d.name, 7, "def annotation ${d.name} { ${join(params, ", ")} }", null, "0"))
+        }
+    }
+    return out
+}
+
+pub fun annotationArgItems(s: Server, uri: string, a: Analysis, name: string): [Json] {
+    [AnnField] fields = []
+    for b in builtinAnnotations() {
+        if (b.name == name) {
+            fields = b.fields
+        }
+    }
+    if (len(fields) == 0) {
+        var done = false
+        for text in annotationSources(s, uri, a) {
+            if (done) {
+                break
+            }
+            for d in declaredAnnotations(text) {
+                if (d.name == name) {
+                    fields = d.fields
+                    done = true
+                    break
+                }
+            }
+        }
+    }
+    [Json] out = []
+    for f in fields {
+        var j = item(f.name, 5, f.ty, null, "0")
+        jput(j, "insertText", js("${f.name}: "))
+        out.push(j)
+    }
+    return out
+}
+
+pub fun defKindItems(): [Json] {
+    [Json] out = []
+    for k in ["struct", "interface", "enum", "type", "annotation", "abstract", "static"] {
+        out.push(item(k, 14, keywordDoc(k), null, "0"))
+    }
+    return out
+}
+
+pub fun typeItems(s: Server, uri: string, a: Analysis): [Json] {
+    [Json] out = []
+    [string] seen = []
+    for t in a.typeNames {
+        if (contains(seen, t.name)) {
+            continue
+        }
+        seen.push(t.name)
+        var kind = 22
+        var detail = "type ${t.name}"
+        var k = a.kind(t.ty)
+        if (k is Ty.Interface && len(a.c.types.ifaces[k.index].variants) > 0) {
+            kind = 13
+            detail = "enum ${t.name}"
+        } else if (k is Ty.Interface) {
+            kind = 8
+            detail = "interface ${t.name}"
+        } else if (k is Ty.Enum) {
+            kind = 13
+            detail = "enum ${t.name}"
+        } else if (k is Ty.Record && a.c.types.records[k.index].isClass) {
+            kind = 7
+            detail = "struct ${t.name}"
+        } else if (t.ty == T_ERROR) {
+            kind = 25
+            detail = "type parameter"
+        }
+        out.push(item(t.name, kind, detail, null, "0"))
+    }
+    for d in BUILTIN_TYPES {
+        if (!contains(seen, d.name)) {
+            seen.push(d.name)
+            out.push(item(d.name, 22, "built-in type", d.doc, "1"))
+        }
+    }
+    for j in autoImportItems(s, uri, a, seen) {
+        var kind = jint(jget(j, "kind"), 0)
+        if (kind == 7 || kind == 8 || kind == 13 || kind == 22) {
+            out.push(j)
+        }
+    }
+    return out
+}

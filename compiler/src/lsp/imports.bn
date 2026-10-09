@@ -1,0 +1,102 @@
+import "../cli/host.bn"
+import "../project/project.bn"
+import "analysis.bn"
+import "ide.bn"
+import "json.bn"
+import "nav.bn"
+import "sources.bn"
+import "state.bn"
+import "text.bn"
+
+/** The imports that would bring `name` into a document, like `Server::import_candidates`. */
+pub fun importCandidates(s: Server, uri: string, a: Analysis, name: string, withProject: bool): [string] {
+    [string] out = []
+    for m in stdExports(s.builtins) {
+        if (a.noStd || imported(a, m.module, null)) {
+            continue
+        }
+        for e in m.exports {
+            if (e.name == name) {
+                out.push("std/${m.module}")
+                break
+            }
+        }
+    }
+    if (withProject) {
+        var current = uriToPath(uri)
+        var here = realPath(current)
+        for f in projectFiles(s, current) {
+            if ((here != null && here == f) || imported(a, null, f)) {
+                continue
+            }
+            var text = docText(s, f) ?? ""
+            for e in exportsOf(text) {
+                if (e.name == name) {
+                    out.push(importSpec(current, f))
+                    break
+                }
+            }
+        }
+    }
+    return out
+}
+
+/** Completions for the standard library names the document has not imported yet, with the import they add. */
+pub fun autoImportItems(s: Server, uri: string, a: Analysis, visible: [string]): [Json] {
+    [Json] out = []
+    if (a.noStd) {
+        return out
+    }
+    for m in stdExports(s.builtins) {
+        if (imported(a, m.module, null)) {
+            continue
+        }
+        var spec = "std/${m.module}"
+        var edit = importEdit(s, uri, spec)
+        if (edit == null) {
+            continue
+        }
+        for e in m.exports {
+            if (contains(visible, e.name)) {
+                continue
+            }
+            out.push(jo(["label", "kind", "detail", "labelDetails", "sortText", "additionalTextEdits"], [js(e.name), jn(e.kind), js("${e.detail}  (import \"${spec}\")"), jo(["description"], [js(spec)]), js("9${e.name}"), ja([edit])]))
+        }
+    }
+    return out
+}
+
+priv const MISSING = ["cannot find `", "unknown type `", "unknown struct `", "unknown interface `"]
+
+/** Quick fixes that import a name the checker cannot find, like `Server::import_actions`. */
+pub fun importActions(s: Server, uri: string, params: Json): [Json] {
+    var a = s.analyses[uri]
+    if (a == null) {
+        return []
+    }
+    [Json] out = []
+    for d in jarr(jat(params, ["context", "diagnostics"])) {
+        var msg = jstr(jget(d, "message")) ?? ""
+        string? name = null
+        for p in MISSING {
+            if (name == null && startsWith(msg, p)) {
+                var rest = substring(msg, len(p), len(msg))
+                name = split(rest, "`")[0]
+            }
+        }
+        if (name == null) {
+            continue
+        }
+        var specs = importCandidates(s, uri, a, name, true)
+        var single = len(specs) == 1
+        for spec in specs {
+            var edit = importEdit(s, uri, spec)
+            if (edit == null) {
+                continue
+            }
+            var changes = jo([uri], [ja([edit])])
+            out.push(jo(["title", "kind", "isPreferred", "diagnostics", "edit"], [js("Import `${name}` from \"${spec}\""), js("quickfix"), jb(single), ja([d]), jo(["changes"], [changes])]))
+        }
+    }
+    return out
+}

@@ -3,6 +3,8 @@ import "../dump/declarations.bn"
 import "../dump/index.bn"
 import "../dump/loading.bn"
 import "../dump/syntax.bn"
+import "../lsp/server.bn"
+import "../lsp/sources.bn"
 import "../project/loader.bn"
 import "../project/paths.bn"
 import "../project/project.bn"
@@ -77,10 +79,6 @@ priv fun burncUsage() {
 priv fun fail(message: string, code: int): int {
     eprint("error: ${message}")
     return code
-}
-
-priv fun notYet(command: string): int {
-    return fail("`burn ${command}` is not available in the command line written in Burn yet", 2)
 }
 
 priv fun isBvmFile(file: string): bool {
@@ -787,7 +785,7 @@ pub fun cliMain(argv: [string]): int {
         return burnc(args, opts)
     }
     if (tool == "burn-lsp") {
-        return notYet("lsp")
+        return runServer()
     }
     if (len(args) == 0) {
         usage()
@@ -827,8 +825,11 @@ pub fun cliMain(argv: [string]): int {
     if (first == "doc") {
         return cmdDoc(rest)
     }
-    if (first == "lsp" || first == "--lsp" || first == "sources") {
-        return notYet(first)
+    if (first == "lsp" || first == "--lsp") {
+        return runServer()
+    }
+    if (first == "sources") {
+        return cmdSources()
     }
     if (first == "check") {
         return cmdCheckArgs(rest, opts)

@@ -1,0 +1,392 @@
+import "../check/types.bn"
+import "../doc/builtin_docs.bn"
+import "analysis.bn"
+import "json.bn"
+import "members.bn"
+import "repair.bn"
+import "state.bn"
+import "text.bn"
+
+priv fun skipString(b: [uint8], from: int): int {
+    var quote = b[from]
+    var i = from + 1
+    while (i < len(b) && b[i] != quote) {
+        if (b[i] == 92) {
+            i += 2
+            continue
+        }
+        if (b[i] == 36 && i + 1 < len(b) && b[i + 1] == 123) {
+            var depth = 1
+            i += 2
+            while (i < len(b) && depth > 0) {
+                var c = b[i]
+                if (c == 123) {
+                    depth += 1
+                } else if (c == 125) {
+                    depth -= 1
+                } else if (c == 34 || c == 39) {
+                    i = skipString(b, i)
+                    continue
+                }
+                i += 1
+            }
+            continue
+        }
+        i += 1
+    }
+    return i + 1
+}
+
+priv def type Frame {
+    int paren
+    int commas
+}
+
+/** The innermost open call before the cursor: its `(` and the commas typed in it. */
+priv fun openCall(b: [uint8]): Frame? {
+    [Frame] stack = []
+    var i = 0
+    while (i < len(b)) {
+        var c = b[i]
+        if (c == 47 && i + 1 < len(b) && b[i + 1] == 47) {
+            while (i < len(b) && b[i] != 10) {
+                i += 1
+            }
+            continue
+        }
+        if (c == 47 && i + 1 < len(b) && b[i + 1] == 42) {
+            i += 2
+            while (i + 1 < len(b) && !(b[i] == 42 && b[i + 1] == 47)) {
+                i += 1
+            }
+            i += 2
+            continue
+        }
+        if (c == 34 || c == 39) {
+            i = skipString(b, i)
+            continue
+        }
+        if (c == 40) {
+            stack.push(Frame { paren: i, commas: 0 })
+        } else if (c == 91 || c == 123) {
+            stack.push(Frame { paren: -1, commas: 0 })
+        } else if (c == 41 || c == 93 || c == 125) {
+            if (len(stack) > 0) {
+                pop(stack)
+            }
+        } else if (c == 44) {
+            if (len(stack) > 0) {
+                stack[len(stack) - 1].commas += 1
+            }
+        }
+        i += 1
+    }
+    var k = len(stack) - 1
+    while (k >= 0) {
+        if (stack[k].paren >= 0) {
+            return stack[k]
+        }
+        k -= 1
+    }
+    return null
+}
+
+priv def type Callee {
+    [string] chain
+    bool isNew
+}
+
+priv fun trimEndBytes(b: [uint8], end: int): int {
+    var n = end
+    while (n > 0 && (b[n - 1] == 32 || b[n - 1] == 9 || b[n - 1] == 10 || b[n - 1] == 13 || b[n - 1] == 11 || b[n - 1] == 12)) {
+        n -= 1
+    }
+    return n
+}
+
+priv fun callee(b: [uint8], paren: int): Callee {
+    var end = trimEndBytes(b, paren)
+    var s = end
+    while (s > 0 && (wordByte(b[s - 1]) || b[s - 1] == 46)) {
+        s -= 1
+    }
+    [string] chain = []
+    for p in split(fromBytes(slice(b, s, end)), ".") {
+        if (p != "") {
+            chain.push(p)
+        }
+    }
+    var before = trimEndBytes(b, s)
+    var isNew = before >= 3 && fromBytes(slice(b, before - 3, before)) == "new"
+    return Callee { chain: chain, isNew: isNew }
+}
+
+priv def type ParamRange {
+    int start
+    int end
+}
+
+priv fun trimmedRange(b: [uint8], start: int, end: int): ParamRange {
+    var s = start
+    var e = end
+    while (s < e && (b[s] == 32 || b[s] == 9 || b[s] == 10 || b[s] == 13)) {
+        s += 1
+    }
+    while (e > s && (b[e - 1] == 32 || b[e - 1] == 9 || b[e - 1] == 10 || b[e - 1] == 13)) {
+        e -= 1
+    }
+    return ParamRange { start: s, end: e }
+}
+
+/** The byte ranges of the parameters of a signature, like `assist::split_params`. */
+priv fun splitParams(sig: string): [ParamRange]? {
+    var b = bytes(sig)
+    var open = -1
+    for i in 0..len(b) {
+        if (b[i] == 40) {
+            open = i
+            break
+        }
+    }
+    if (open < 0) {
+        return null
+    }
+    var depth = 0
+    var start = open + 1
+    [ParamRange] out = []
+    for i in open..len(b) {
+        var c = b[i]
+        if (c == 40 || c == 91 || c == 123 || c == 60) {
+            depth += 1
+        } else if (c == 41 || c == 93 || c == 125 || c == 62) {
+            depth -= 1
+            if (depth == 0) {
+                var r = trimmedRange(b, start, i)
+                if (r.end > r.start) {
+                    out.push(r)
+                }
+                return out
+            }
+        } else if (c == 44 && depth == 1) {
+            out.push(trimmedRange(b, start, i))
+            start = i + 1
+        }
+    }
+    return null
+}
+
+priv def type Signature {
+    string sig
+    string doc
+    int skip
+}
+
+priv fun signatureOf(s: Server, a: Analysis, chain: [string], isNew: bool, off: int): Signature? {
+    if (len(chain) == 0) {
+        return null
+    }
+    var name = chain[len(chain) - 1]
+    if (len(chain) == 1) {
+        FuncEntry? found = null
+        FuncEntry? first = null
+        for f in a.funcs {
+            if (f.name == name) {
+                if (first == null) {
+                    first = f
+                }
+                if (found == null && f.module == a.rootModule) {
+                    found = f
+                }
+            }
+        }
+        var pick = found ?? first
+        if (pick != null) {
+            return Signature { sig: pick.sig, doc: "", skip: 0 }
+        }
+        var ctor = "${name}.<init>"
+        var newName = "new ${name}"
+        for f in a.funcs {
+            if (f.name == ctor || f.name == newName || (isNew && f.name == name)) {
+                return Signature { sig: replaceFirst(f.sig, "<init>", name), doc: "", skip: 0 }
+            }
+        }
+        var b = findBuiltin(s.builtins, name)
+        if (b != null) {
+            return Signature { sig: b.sig, doc: builtinMarkdown(b), skip: 0 }
+        }
+        return null
+    }
+    var r = resolveChain(a, slice(chain, 0, len(chain) - 1), off)
+    if (r == null) {
+        return null
+    }
+    var k = a.kind(r.ty)
+    if (k is Ty.Record) {
+        int? cur = k.index
+        while (cur != null) {
+            var owner = a.c.types.records[cur]
+            var full = "${owner.name}.${name}"
+            for f in a.funcs {
+                if (f.name == full) {
+                    return Signature { sig: f.sig, doc: "", skip: 0 }
+                }
+            }
+            cur = owner.parent
+        }
+        return null
+    }
+    if (k is Ty.Interface) {
+        for m in a.c.types.ifaces[k.index].methods {
+            if (m.name == name) {
+                [string] ps = []
+                for p in m.params {
+                    ps.push(a.show(p))
+                }
+                return Signature { sig: "fun ${name}(${join(ps, ", ")}): ${a.show(m.ret)}", doc: "", skip: 0 }
+            }
+        }
+        return null
+    }
+    var b = findBuiltin(s.builtins, name)
+    if (b == null) {
+        return null
+    }
+    return Signature { sig: b.sig, doc: builtinMarkdown(b), skip: 1 }
+}
+
+priv fun replaceFirst(s: string, from: string, to: string): string {
+    var at = indexOf(s, from)
+    if (at < 0) {
+        return s
+    }
+    return substring(s, 0, at) + to + substring(s, at + len(from), len(s))
+}
+
+priv fun utf16Len(b: [uint8], end: int): int {
+    var n = 0
+    for i in 0..end {
+        var c = b[i] as int
+        if ((c & 192) != 128) {
+            n += 1
+            if (c >= 240) {
+                n += 1
+            }
+        }
+    }
+    return n
+}
+
+pub fun signatureHelp(s: Server, uri: string, params: Json): Json {
+    var text = s.docs[uri]
+    var a = s.analyses[uri]
+    if (text == null || a == null) {
+        return Json.Null
+    }
+    var line = jint(jat(params, ["position", "line"]), 0)
+    var ch = jint(jat(params, ["position", "character"]), 0)
+    var file = textFile(text)
+    var docOff = utf16Offset(file, line, ch)
+    if (docOff > len(file.bytes)) {
+        docOff = len(file.bytes)
+    }
+    var off = shiftOffset(a.inserts, docOff)
+    var call = openCall(slice(file.bytes, 0, docOff))
+    if (call == null) {
+        return Json.Null
+    }
+    var c = callee(file.bytes, call.paren)
+    if (len(c.chain) == 0) {
+        return Json.Null
+    }
+    var sig = signatureOf(s, a, c.chain, c.isNew, off)
+    if (sig == null) {
+        return Json.Null
+    }
+    var ranges = splitParams(sig.sig)
+    if (ranges == null) {
+        return Json.Null
+    }
+    var sb = bytes(sig.sig)
+    [Json] ps = []
+    for i in sig.skip..len(ranges) {
+        var r = ranges[i]
+        ps.push(jo(["label"], [ja([jn(utf16Len(sb, r.start)), jn(utf16Len(sb, r.end))])]))
+    }
+    var n = len(ps)
+    var active = call.commas
+    if (n == 0) {
+        active = 0
+    } else if (contains(sig.sig, "...") && active > n - 1) {
+        active = n - 1
+    }
+    var info = jo(["label", "parameters"], [js(sig.sig), ja(ps)])
+    if (sig.doc != "") {
+        jput(info, "documentation", markdown(sig.doc))
+    }
+    return jo(["signatures", "activeSignature", "activeParameter"], [ja([info]), jn(0), jn(active)])
+}
+
+priv fun isSpaceByte(c: int): bool {
+    return c == 32 || c == 9 || c == 10 || c == 13 || c == 11 || c == 12
+}
+
+pub fun inlayHints(s: Server, uri: string, params: Json): Json {
+    var a = s.analyses[uri]
+    if (a == null) {
+        return ja([])
+    }
+    var f = a.root()
+    var b = f.bytes
+    var from = jint(jat(params, ["range", "start", "line"]), 0)
+    var to = jint(jat(params, ["range", "end", "line"]), 0)
+    [Json] out = []
+    [int] seen = []
+    for l in a.c.localInfos {
+        if (l.decl.file != a.rootFile || l.ty == T_ERROR || startsWith(l.name, "_") || startsWith(l.name, "<")) {
+            continue
+        }
+        var start = l.decl.start
+        var end = l.decl.end
+        if (end > len(b) || f.text(start, end) != l.name || contains(seen, start)) {
+            continue
+        }
+        seen.push(start)
+        var j = end
+        while (j < len(b) && isSpaceByte(b[j])) {
+            j += 1
+        }
+        if (j < len(b) && b[j] == 58) {
+            continue
+        }
+        var e = start
+        while (e > 0 && isSpaceByte(b[e - 1])) {
+            e -= 1
+        }
+        var w = e
+        while (w > 0 && wordByte(b[w - 1])) {
+            w -= 1
+        }
+        var word = f.text(w, e)
+        var inferred = word == "var" || word == "const" || word == "for"
+        if (!inferred && e > 0 && b[e - 1] == 44) {
+            var ls = e
+            while (ls > 0 && b[ls - 1] != 10) {
+                ls -= 1
+            }
+            while (ls < e && isSpaceByte(b[ls])) {
+                ls += 1
+            }
+            inferred = startsWith(f.text(ls, e), "for")
+        }
+        if (!inferred) {
+            continue
+        }
+        var pos = utf16Pos(f, end)
+        if (pos[0] < from || pos[0] > to) {
+            continue
+        }
+        var p = jo(["line", "character"], [jn(pos[0]), jn(pos[1])])
+        out.push(jo(["position", "label", "kind", "paddingLeft"], [p, js(": ${a.show(l.ty)}"), jn(1), jb(false)]))
+    }
+    return ja(out)
+}
