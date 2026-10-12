@@ -1,0 +1,67 @@
+---
+title: std/fs
+description: Reading and writing files, and managing files and folders with Files.
+order: 18
+---
+
+# `std/fs`
+
+```burn
+import "std/fs"
+
+Files.makeDir("build/reports")
+writeFile("build/reports/summary.txt", "3 files\n")
+appendFile("build/reports/summary.txt", "done\n")
+for name in Files.list("build/reports") {
+    var path = Files.join(["build/reports", name])
+    print(name, len(readFile(path)), "characters")
+}
+Files.remove("build/reports")
+```
+
+## File contents
+
+| Function | Result |
+| --- | --- |
+| `readFile(path)` | the whole file as a string; stops with a runtime error when it cannot be read |
+| `writeFile(path, content)` | replaces the file with `content` (any value, formatted like `print`); `false` on failure |
+| `appendFile(path, content)` | adds `content` at the end, creating the file; `false` on failure |
+| `fileExists(path)` | whether something exists at `path` |
+
+Files are read and written as UTF-8 text. Check `fileExists` before reading a file that may be missing, or catch the
+problem where it is expected:
+
+```burn
+import "std/fs"
+
+fun loadSettings(path: string): string {
+    if (!fileExists(path)) {
+        return "{}"
+    }
+    return readFile(path)
+}
+
+print(loadSettings("settings.json"))
+```
+
+## `Files`
+
+| Function | Result |
+| --- | --- |
+| `Files.makeDir(path)` | creates the folder and any missing parents; `true` when it exists afterwards |
+| `Files.remove(path)` | removes a file, or a folder with everything in it; `true` when nothing is left |
+| `Files.rename(from, to)` | moves or renames a file or folder; `true` on success |
+| `Files.copy(from, to)` | copies a file; `true` on success |
+| `Files.list(path)` | the names in a folder, sorted, without the folder; `[]` if it cannot be read |
+| `Files.isDir(path)` | whether `path` is an existing folder |
+| `Files.isFile(path)` | whether `path` is an existing regular file |
+| `Files.join(parts)` | the parts joined with `/`, skipping empty parts and doubled slashes |
+
+None of the `Files` functions stops the program: each reports failure through its result. Paths are relative to the
+working directory, which [`Process.setCwd`](./process.mdx) changes. For splitting and normalizing paths (`dirName`,
+`baseName`, `stem`, `extension`, `normalize`, `joinPath`), see `std/path` in [collections and paths](./collections.mdx).
+
+## In other backends
+
+The functions behave the same on bvm, in native executables and in JavaScript (through Node's `fs` module). They are
+not available to programs built without the standard library ([no-std](../tooling/no-std.mdx)).

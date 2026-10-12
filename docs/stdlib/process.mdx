@@ -1,0 +1,71 @@
+---
+title: std/process
+description: Running programs, the working directory, arguments, environment and exit.
+order: 19
+---
+
+# `std/process`
+
+```burn
+import "std/process"
+
+fun main() {
+    if (len(args()) == 0) {
+        print("usage: count <folder>")
+        exit(2)
+    }
+    var r = Process.output("ls", [args()[0]])
+    if (r.code != 0) {
+        panic("cannot list ${args()[0]}: ${trim(r.err)}")
+    }
+    print(len(split(trim(r.out), "\n")), "entries")
+}
+```
+
+## Running programs
+
+| Function | Result |
+| --- | --- |
+| `Process.run(program, args)` | runs `program` in the terminal (it shares stdin, stdout and stderr) and waits; the exit code, or `-1` if it could not start |
+| `Process.output(program, args)` | runs `program` and collects what it prints: a `ProcessOutput` |
+| `Process.shell(command)` | runs a command line with `sh`, so pipes, `&&` and `$VARS` work; the exit code |
+| `Process.shellOutput(command)` | the same, collecting the output |
+
+`ProcessOutput` has three fields: `code` (the exit code, `-1` if the program could not be started), `out` and `err`
+(everything it wrote to standard output and standard error).
+
+Programs are found through `PATH`. Pass arguments as a list with `run` and `output`, which never go through a shell, so
+spaces and quotes in arguments need no escaping. Use the `shell` variants only for command lines you write yourself.
+
+```burn
+import "std/process"
+
+var status = Process.output("git", ["status", "--short"])
+if (status.code == 0 && trim(status.out) == "") {
+    print("clean")
+}
+Process.shell("ls src | wc -l")
+```
+
+## The working directory
+
+| Function | Result |
+| --- | --- |
+| `Process.cwd()` | the absolute path of the working directory |
+| `Process.setCwd(path)` | enters `path`; `true` when it exists. Relative paths and programs started afterwards use it |
+
+## Arguments, environment and exit
+
+These come with the module too:
+
+| Function | Result |
+| --- | --- |
+| `args()` | the program's command line arguments, without the program name |
+| `env(name)` | the value of an environment variable, `""` when it is not set |
+| `exit(code)` | ends the program with an exit code |
+| `panic(message)` | stops the program with a runtime error ([errors](../language/errors.mdx)) |
+
+```sh
+burn tool.bn one two     # args() is ["one", "two"]
+./tool one two           # the same for a native build
+```

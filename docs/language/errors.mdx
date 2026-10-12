@@ -1,0 +1,150 @@
+---
+title: Errors
+description: Compile errors, runtime errors, panic and assert, and how to report expected failures.
+order: 9
+---
+
+# Errors
+
+Burn sorts problems into three kinds:
+
+| Kind | When | What happens |
+| --- | --- | --- |
+| compile error | the program does not type-check | nothing runs; `burn` prints every error with a help line and exits with `1` |
+| runtime error | a checked operation fails while running | the program stops, prints where and why, and exits with `1` |
+| expected failure | something that can go wrong, such as a missing file | the function reports it in its result, and the program decides |
+
+## Compile errors
+
+Every error points at the code it is about and usually says how to fix it:
+
+```text
+error: `panic` is in the standard library module `std/process`
+ --> app.bn:2:5
+  |
+2 |     panic("config is missing")
+  |     ^^^^^
+help: import it with `import "std/process"`
+```
+
+Many of these help lines are exact fixes that [`burn fix`](../tooling/fixing-errors.mdx) applies for you, such as a
+missing import or a misspelt name. Warnings (an unused variable, a `match` that misses enum variants) do not stop the
+program.
+
+## Runtime errors
+
+Operations that could do something undefined are checked while the program runs. When a check fails, the program
+stops with the source location and a hint:
+
+```text
+runtime error: index 5 out of bounds (length 3)
+ --> app.bn:2:7
+  |
+2 | print(xs[5])
+  |       ^
+  = help: valid indexes go from 0 to 2; check the index against `len(...)` first
+```
+
+| Error | Caused by |
+| --- | --- |
+| `index 5 out of bounds (length 3)` | reading or writing an array or string outside `0..len` |
+| `key "x" not found in map` | `get(map, key)` without a fallback, for a key the map does not have |
+| `unexpected null value` | `!!` on a value that is `null` |
+| `integer overflow` | `+`, `-`, `*` or negation outside the range of `int`, or of a sized type such as `uint8` |
+| `division by zero` | `/` or `%` on integers with `0` |
+| `cannot shift by 64` | `<<` or `>>` by less than `0` or more than `63` |
+| `cannot convert 300 to uint8` | `as` to a sized number that cannot hold the value |
+| `pop from empty array` | `pop` on an empty array |
+| `stack overflow (recursion is too deep)` | a function that keeps calling itself |
+| `out of memory` | keeping more data alive than `BURN_MAX_HEAP_MB` allows ([memory](./memory.mdx)) |
+
+Float arithmetic never stops the program: it gives `Infinity` or `NaN` instead. Overflowing integer arithmetic on
+purpose is written `wrappingAdd`, `wrappingSub` and `wrappingMul`.
+
+The checks work the same on bvm, in native executables and in JavaScript, and say the same thing.
+
+## Stopping on purpose
+
+```burn
+import "std/fs"
+import "std/process"
+import "std/testing"
+
+fun loadConfig(path: string): string {
+    if (!fileExists(path)) {
+        panic("config is missing: " + path)
+    }
+    return readFile(path)
+}
+
+fun main() {
+    assert(len(args()) <= 2, "expected at most two arguments")
+    if (len(args()) == 0) {
+        print("usage: app <config>")
+        exit(2)
+    }
+    print(loadConfig(args()[0]))
+}
+```
+
+| Function | Effect |
+| --- | --- |
+| `panic(message)` | stops with `runtime error: <message>` and exit code `1` (`std/process`) |
+| `assert(condition, message)` | stops with `runtime error: assertion failed: <message>` when the condition is false (`std/testing`) |
+| `exit(code)` | ends the program normally with an exit code (`std/process`) |
+
+`panic` and `assert` are for bugs: states that cannot happen if the program is correct. `exit` is how a command line
+program reports a usage error or its result.
+
+## Expected failures
+
+Things that may go wrong in a correct program, such as a missing file, a failed request or invalid input, are
+reported through the result instead. The standard library never stops a program for these:
+
+| Pattern | Example |
+| --- | --- |
+| a nullable result | `parseUser(text): User?` returns `null` when the text is not a user |
+| a `bool` for success | `writeFile(path, text)` and `Files.makeDir(path)` return `false` when they fail |
+| a small result type | `Process.output(...)` gives `ProcessOutput { code, out, err }`; `HTTP.get(url)` gives `HTTPResponse { statusCode, body, headers }` |
+| an enum | `def enum Parsed { Ok(value: int), Bad(reason: string) }` |
+
+```burn
+def enum Parsed {
+    Ok(value: int),
+    Bad(reason: string)
+}
+
+fun parsePort(text: string): Parsed {
+    if (!isInt(text)) {
+        return Parsed.Bad("`${text}` is not a number")
+    }
+    var n = toInt(text)
+    if (n < 1 || n > 65535) {
+        return Parsed.Bad("${n} is not a port")
+    }
+    return Parsed.Ok(n)
+}
+
+fun main() {
+    for text in ["8080", "http", "99999"] {
+        var r = parsePort(text)
+        var line = match r {
+            Parsed.Ok(port) => "port ${port}"
+            Parsed.Bad(reason) => "error: ${reason}"
+        }
+        print(line)
+    }
+}
+```
+
+Smart casts, `?.`, `??` and `as?` make nullable results short to handle; see
+[type and null safety](./smart-casts.mdx).
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | the program finished |
+| `1` | a runtime error, `panic`, a failed `assert`, or compile errors |
+| `2` | wrong use of a `burn` command (unknown option, missing file) |
+| any | the code passed to `exit` |

@@ -1,0 +1,189 @@
+---
+title: Functions and closures
+description: Declaring functions, function types, lambdas and closures, method syntax, generic and higher-order functions.
+order: 3
+---
+
+# Functions and closures
+
+## Declaring functions
+
+```burn
+fun add(a: int, b: int): int {
+    return a + b
+}
+
+fun greet(string name) {
+    print("hi " + name)
+}
+
+fun average(xs: [float]) {
+    var total = 0.0
+    for x in xs {
+        total += x
+    }
+    return total / toFloat(len(xs))
+}
+```
+
+- Parameters are written `name: Type` or `Type name`; both mean the same.
+- The return type after `:` is optional. Without it, Burn infers it from the `return` statements: `average` returns
+  `float`, and `greet` returns nothing.
+- A function that returns `null` on some paths and a value on others gets a nullable type: returning `"named"` and
+  `null` gives `string?`.
+- Every argument is required, and arguments are matched by position.
+- Functions can call themselves, and can be declared after the code that calls them.
+
+A program starts at `main` when it has one; otherwise the top-level statements run from top to bottom.
+
+## Functions are values
+
+A function can be stored in a variable, passed to another function and returned from one. Its type is written
+`fun(ParamTypes): ReturnType`:
+
+```burn
+fun double(x: int): int {
+    return x * 2
+}
+
+fun applyTwice(f: fun(int): int, value: int): int {
+    return f(f(value))
+}
+
+var ops: [fun(int, int): int] = [fun(a: int, b: int): int { return a + b }, fun(a: int, b: int): int { return a * b }]
+print(applyTwice(double, 5), ops[1](6, 7))
+```
+
+| Type | Means |
+| --- | --- |
+| `fun()` | no parameters, no result |
+| `fun(int): int` | takes an `int`, returns an `int` |
+| `fun(string, int): bool` | two parameters |
+| `fun(): fun(): int` | returns a function |
+
+A **lambda** is a function without a name, written where a value is expected: `fun(x: int): int { return x * 3 }`.
+
+## Closures
+
+A lambda can use the variables around it. It keeps them alive after the function that made it returns, and it sees
+and makes changes to them, so a closure can keep state:
+
+```burn
+fun makeCounter(): fun(): int {
+    var count = 0
+    return fun(): int {
+        count += 1
+        return count
+    }
+}
+
+var a = makeCounter()
+var b = makeCounter()
+print(a(), a(), a(), b())
+```
+
+This prints `1 2 3 1`: each call of `makeCounter` creates its own `count`.
+
+- Variables are shared, not copied: when the outer code changes a variable after creating a lambda, the lambda sees
+  the new value.
+- Each iteration of a `for` loop has its own loop variable, so lambdas created in a loop each keep their own value.
+- Inside a struct method, a lambda can use the struct's fields and methods.
+
+```burn
+fun adder(n: int): fun(int): int {
+    return fun(x: int): int {
+        return x + n
+    }
+}
+
+[fun(): int] later = []
+for i in 0..3 {
+    later.push(fun(): int {
+        return i * 10
+    })
+}
+print(adder(5)(10), later[0](), later[2]())
+```
+
+## Method syntax
+
+Any function can be called as a method of its first argument:
+
+```burn
+fun isEven(n: int): bool {
+    return n % 2 == 0
+}
+
+fun shout(s: string): string {
+    return upper(s) + "!"
+}
+
+print(10.isEven(), "burn".shout(), "a,b".split(",").join("+"))
+```
+
+`x.f(y)` is the same as `f(x, y)`. It works for your own functions, the built-ins (`"burn".upper()`) and functions from
+imported modules (`text.lines()` with `std/strings`). Methods declared in a `def struct` take precedence over a free
+function of the same name.
+
+## Generic functions
+
+A function can take type parameters in angle brackets. Burn infers them from the arguments:
+
+```burn
+fun firstOr<T>(items: [T], fallback: T): T {
+    if (len(items) == 0) {
+        return fallback
+    }
+    return items[0]
+}
+
+fun mapAll<T, U>(items: [T], f: fun(T): U): [U] {
+    [U] out = []
+    for x in items {
+        out.push(f(x))
+    }
+    return out
+}
+
+print(firstOr([3, 4], 0), firstOr([], "none"), mapAll([1, 2, 3], fun(x: int): string { return "#${x}" }))
+```
+
+See [generics](./types.mdx#generics) for generic types and constraints.
+
+## Higher-order helpers
+
+`std/list` has the usual functions that take functions, all usable as methods:
+
+```burn
+import "std/list"
+
+var scores = [12, 7, 30, 18]
+var passed = scores.filter(fun(s: int): bool { return s >= 10 })
+var labels = passed.map(fun(s: int): string { return "${s} pts" })
+print(labels, scores.reduce(0, fun(sum: int, s: int): int { return sum + s }))
+print(scores.sortBy(fun(s: int): int { return -s }), scores.any(fun(s: int): bool { return s > 25 }))
+```
+
+See [lists and collections](../stdlib/collections.mdx) for `find`, `groupBy`, `partition`, `zipWith` and the others.
+
+## Async functions
+
+`async fun` runs in the background when it is called and returns a future; `await` waits for its result. See
+[async](./async.mdx).
+
+```burn
+async fun fetchSize(name: string): int {
+    return len(name) * 100
+}
+
+fun main() {
+    var a = fetchSize("index")
+    var b = fetchSize("about")
+    print(await a + await b)
+}
+```
+
+## Recursion and the stack
+
+Deep recursion is fine up to the size of the stack; beyond it, the program stops with
+`runtime error: stack overflow (recursion is too deep)` instead of crashing. Rewrite very deep recursion as a loop.
