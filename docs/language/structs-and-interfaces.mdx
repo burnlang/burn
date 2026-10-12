@@ -1,7 +1,7 @@
 ---
 title: Structs and interfaces
 description: Constructors, fields, methods, static members, interfaces, inheritance, static structs and destroying objects.
-order: 7
+order: 12
 ---
 
 # Structs and interfaces
@@ -133,6 +133,13 @@ A struct lists the interfaces it implements after `::`, separated by commas:
 same signature. Interface calls are dispatched through a table indexed by the struct, so they are as cheap as a
 normal indirect call.
 
+- An interface only declares methods: it has no fields and no method bodies, and it cannot extend another interface
+  or take type parameters.
+- Only structs implement interfaces. To give records, enums or built-in types shared operations, write functions and
+  use [method syntax](./extending.mdx#functions-as-methods).
+- `s is Rect` checks which struct an interface value holds and narrows it; `s as Rect` casts and fails at runtime
+  when it holds another struct.
+
 ## Extending structs
 
 A struct can extend one other struct and implement any number of interfaces. Which operator you use depends on
@@ -231,6 +238,33 @@ print(d.describe(), d.breed)
   exists, the compiler turns the call into a direct call.
 - Printing an object prints its real struct, with the parent's fields first:
   `Dog { name: "Rex", legs: 4, tag: "animal:Rex", breed: "lab" }`.
+- A child can use the parent's `priv` fields and methods; code outside the struct family cannot.
+- Static members belong to the struct that declares them and are shared with its children: `Puppy.count` and
+  `Dog.count` are the same variable.
+
+### Calling the parent's method
+
+There is no `super`. An override calls the parent's version by naming the parent and passing `self`:
+
+```burn
+def struct Greeter(name: string) {
+    fun greet(): string {
+        return "hello ${name}"
+    }
+}
+
+def struct LoudGreeter(name: string) : Greeter(name) {
+    fun greet(): string {
+        return upper(Greeter.greet(self)) + "!"
+    }
+}
+
+Greeter g = new LoudGreeter("ada")
+print(g.greet())
+```
+
+`Greeter.greet(self)` runs `Greeter`'s method directly, without looking at the object's real struct, so it does not
+call the override again.
 
 ## Static structs
 
@@ -289,6 +323,13 @@ print(bolt.status())
   it after the `if` is an error ("`fetch` is not available here").
 - Assigning another object to the variable forgets the function.
 - The name must not clash with a field or method of the struct.
+
+## Equality and printing
+
+`==` compares two objects field by field, like records: two `new Point(1, 2)` are equal. It does not check whether
+two variables hold the same object. `print` and string templates show an object as its struct name and fields,
+`Point { x: 1, y: 2 }`; a `toString` method does not change that, so call it explicitly when you want your own
+format.
 
 ## Destroying objects
 

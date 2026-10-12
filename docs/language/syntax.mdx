@@ -1,6 +1,6 @@
 ---
 title: Syntax tour
-description: Variables, functions, control flow and expressions.
+description: A quick tour of variables, functions, control flow and expressions, with links to the full pages.
 order: 3
 ---
 
@@ -228,52 +228,12 @@ fun size(n: int): string {
 }
 ```
 
-| Pattern | Matches |
-| --- | --- |
-| `3`, `"stop"`, `true`, `Color.Red` | an equal value |
-| `Red` | an enum variant, when matching an enum |
-| `Shape.Rect(w, h)`, `Expr.Neg(Expr.Num(0))` | a variant with data; binds its fields (`_` skips one) |
-| `1..10`, `1..=9` | a number (or string) in the range |
-| `null` | null |
-| `is string`, `is Circle c` | a value of that type; `c` is the value as a `Circle` |
-| `a, b, c` | any of the patterns |
-| `else` | everything else |
+Patterns can be values, ranges, `null`, types (`is string s`), enum variants with their data
+(`Shape.Rect(w, h)`), several patterns at once and `else`, and arms can have `if` guards. See [match](./match.mdx).
 
-An arm can add a condition with `if`, and inside an arm the matched variable is narrowed like after `is`:
+## More
 
-```burn
-fun describe(v: any): string {
-    return match v {
-        null => "nothing"
-        is int n if n > 100 => "a big int"
-        is int => "the int ${v + 1}"
-        is string s => "a string of ${len(s)}"
-        else => "something else"
-    }
-}
-```
-
-Without a value after `match`, each arm is a condition, like a chain of `if`/`else if`:
-
-```burn
-var grade = match {
-    score >= 90 => "A"
-    score >= 80 => "B"
-    else => "C"
-}
-```
-
-When a `match` produces a value it must handle every case: either with `else`, or by listing every variant of an
-enum (or `true` and `false`). Used as a statement it can leave cases out, and its arms can be blocks:
-
-```burn
-match command {
-    "go", "start" => start()
-    "stop" => {
-        save()
-        stop()
-    }
-}
-```
-
-The compiler warns when a statement `match` on an enum misses variants and when a case is handled twice.
+- [Variables, constants and scope](./variables.mdx)
+- [Operators and expressions](./operators.mdx)
+- [Control flow](./control-flow.mdx)
+- [Functions and closures](./functions.mdx)

@@ -1,0 +1,103 @@
+---
+title: Strings and text
+description: String literals, escapes, templates, characters and Unicode, comparing and converting text.
+order: 8
+---
+
+# Strings and text
+
+## Literals
+
+Strings are written in double or single quotes; both mean the same:
+
+```burn
+var a = "Burn"
+var b = 'it\'s "quoted"'
+print(a, b, "x" == 'x')
+```
+
+A literal stays on one line; use `\n` for line breaks, or join lines with `+`.
+
+| Escape | Character |
+| --- | --- |
+| `\n`, `\t`, `\r` | line feed, tab, carriage return |
+| `\0` | the character with code 0 |
+| `\\`, `\"`, `\'` | a backslash, a double quote, a single quote |
+| `\$` | a dollar sign (so `\${` is not a template) |
+| `\u{1F525}` | the Unicode character with that hexadecimal code |
+
+Any other escape is an error ("unknown escape sequence").
+
+## Templates
+
+`${...}` inside a string evaluates any expression and inserts it as text:
+
+```burn
+var items = ["tea", "milk"]
+var prices = {"tea": 2.5}
+print("${len(items)} items: ${items}, tea costs ${prices["tea"] ?? 0.0}")
+print("nested: ${"inner ${1 + 1}"}")
+```
+
+prints `2 items: ["tea", "milk"], tea costs 2.5` and `nested: inner 2`.
+
+- Values are formatted the same way `print` formats them.
+- A `$` that is not followed by `{` is an ordinary character: `"$5"` is `$5`.
+- Templates work in single-quoted strings too.
+
+## Characters and length
+
+A string is a sequence of Unicode characters (code points), stored as UTF-8. Everything that counts or indexes
+counts characters, not bytes:
+
+```burn
+var s = "a😀b"
+print(len(s), s[1], substring(s, 1, 2), charCode(s[1]), bytes(s).length)
+```
+
+prints `3 😀 😀 128512 6`.
+
+- `s[i]` is the character at position `i`, as a one-character string. There is no separate character type.
+- An index outside the string is a runtime error, like for arrays.
+- `for ch in s` and `for i, ch in s` go over the characters.
+- `charCode(ch)` gives a character's code point, `fromCharCode(code)` makes a one-character string, and
+  `bytes(s)` / `fromBytes(bytes)` convert to and from UTF-8 as `[uint8]`.
+
+## Strings do not change
+
+A string value never changes; every function returns a new string. `s[0] = "x"` is an error ("strings are
+immutable; build a new string instead").
+
+```burn
+var word = "burn"
+var loud = upper(word)
+var parts = split("a,b,c", ",")
+print(word, loud, parts, replace("1-2-3", "-", "+"))
+```
+
+Building a string piece by piece with `+=` is still fast: when a variable is the only owner of its string, Burn
+appends in place instead of copying, so a loop of `s += piece` takes time in proportion to the final length.
+
+## Comparing
+
+`==` compares the characters. `<`, `>`, `<=` and `>=` compare character by character by code point, so all
+uppercase ASCII letters come before lowercase ones (`"Z" < "a"`), and a string comes before any longer string that
+starts with it (`"ab" < "abc"`). For a case-insensitive comparison, compare `lower(a)` with `lower(b)`.
+
+## Converting
+
+| From | To | How |
+| --- | --- | --- |
+| any value | `string` | `toString(x)`, `"${x}"`, `x as string`, or `"" + x` |
+| `string` | `int` | `toInt(s)`, `toInt(s, 16)` for another base; stops with an error if `s` is not a number, so test with `isInt(s)` first |
+| `string` | `float` | `toFloat(s)`; test with `isNumber(s)` |
+| `int` | `string` in another base | `toString(255, 16)` is `"ff"` |
+
+Floats print with a `.0` when they are whole (`1.0`), with the shortest digits that read back as the same number
+(`33.333333333333336`), and in exponent form when very large or small (`1e100`, `1e-7`).
+
+## More
+
+The built-in string functions (`trim`, `split`, `replace`, `indexOf`, `startsWith`, ...) are listed in
+[built-in functions](../stdlib/builtins.mdx#strings); [`std/strings`](../stdlib/strings.mdx) adds padding, line and
+word splitting, and character tests.
