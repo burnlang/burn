@@ -260,9 +260,6 @@ fun subjectOf(c: Checker, x: Expr, pre: [HStmt]): Subject {
     if (rk is HKind.Local && key == rk.slot) {
         return Subject { value: raw, key: key, tmp: rk.slot }
     }
-    if (rk is HKind.Global) {
-        return Subject { value: raw, key: key, tmp: null }
-    }
     var t = raw.ty
     var s = c.newLocal(t)
     pre.push(HStmt.Eval(setLocal(s, raw, t)))
