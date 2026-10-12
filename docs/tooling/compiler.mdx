@@ -17,6 +17,8 @@ The compiler is written in Burn ([`compiler/`](https://github.com/burnlang/burn/
 bvm, like every Burn program. `burn` itself is bvm running the command line written in Burn, which contains the
 compiler, so `burn run app.bn` checks, compiles and runs the program without leaving bvm.
 
+This page is a summary; [how Burn works](../internals/overview.mdx) goes through every stage in detail.
+
 ## Front end
 
 The lexer and a recursive descent parser build an AST. Newlines end statements, which is how `String name = x`
