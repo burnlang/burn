@@ -74,6 +74,15 @@ pub fun funcType(c: Checker, fid: int): int {
 pub fun newCtx(c: Checker, fid: int, module: int, dry: bool): FnCtx {
     var info = c.funcs[fid]
     {string: LocalSym} top = {}
+    var unsafeDepth = 0
+    var decl = info.decl
+    if (decl != null && decl.isUnsafe) {
+        unsafeDepth = 1
+    }
+    var lambda = has(c.closures, fid)
+    if (lambda && len(c.fx) > 0 && c.ctx().unsafeDepth > 0) {
+        unsafeDepth = 1
+    }
     return FnCtx {
         func: fid,
         module: module,
@@ -86,10 +95,12 @@ pub fun newCtx(c: Checker, fid: int, module: int, dry: bool): FnCtx {
         selfTy: info.selfTy,
         isInit: false,
         dry: dry,
-        lambda: has(c.closures, fid),
+        lambda: lambda,
         cellNames: {},
         cells: {},
-        captures: []
+        captures: [],
+        unsafeDepth: unsafeDepth,
+        unsafeUses: 0
     }
 }
 

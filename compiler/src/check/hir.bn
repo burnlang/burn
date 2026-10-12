@@ -140,7 +140,36 @@ pub def enum HStmt {
     Loop(cond: HExpr?, body: [HStmt], step: [HStmt]),
     Return(value: HExpr?),
     Break,
-    Continue
+    Continue,
+    Asm(code: [AsmCode], pre: [HStmt], post: [HStmt], fallback: [HStmt], hasFallback: bool)
+}
+
+/** A piece of inline assembly: code as written, or the local slot that a `{name}` operand stands for. */
+pub def enum AsmPiece {
+    Text(text: string),
+    Slot(slot: int)
+}
+
+/**
+ * The code of one section of an `asm` block. `target` is `x86_64`, `arm64`, `bvm` or `js`.
+ * The operands are copied to their slots by the `pre` statements of `HStmt.Asm` and back by its `post` statements.
+ * `loc` is the source location that checked `bvm` instructions report errors at.
+ */
+pub def type AsmCode {
+    string target
+    [AsmPiece] pieces
+    SrcSpan span
+    int loc
+}
+
+/** The section of an `asm` statement written for `target`, if it has one. */
+pub fun asmFor(code: [AsmCode], target: string): AsmCode? {
+    for c in code {
+        if (c.target == target) {
+            return c
+        }
+    }
+    return null
 }
 
 /** `u32::MAX`, the location Rust uses when an operation cannot fail. */

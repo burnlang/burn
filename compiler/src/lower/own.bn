@@ -125,6 +125,9 @@ fun readsStmt(types: Types, s: HStmt, p: Probe): bool {
         var c = s.cond
         return (c != null && reads(types, c, p)) || readsStmts(types, s.body, p) || readsStmts(types, s.step, p)
     }
+    if (s is HStmt.Asm) {
+        return readsStmts(types, s.pre, p) || readsStmts(types, s.post, p) || readsStmts(types, s.fallback, p)
+    }
     return false
 }
 
@@ -478,6 +481,10 @@ fun stmt(p: Pass, s: HStmt, out: [HStmt]): void {
         popScope(p, out)
         extend(out, releaseAll(p))
         out.push(HStmt.Return(local(tr, t)))
+        return
+    }
+    if (s is HStmt.Asm) {
+        out.push(HStmt.Asm(s.code, block(p, s.pre), block(p, s.post), block(p, s.fallback), s.hasFallback))
         return
     }
     out.push(s)
@@ -847,6 +854,16 @@ fun collectSetsStmt(s: HStmt, out: [bool]): void {
             collectSetsStmt(x, out)
         }
         for x in s.step {
+            collectSetsStmt(x, out)
+        }
+    } else if (s is HStmt.Asm) {
+        for x in s.pre {
+            collectSetsStmt(x, out)
+        }
+        for x in s.post {
+            collectSetsStmt(x, out)
+        }
+        for x in s.fallback {
             collectSetsStmt(x, out)
         }
     }

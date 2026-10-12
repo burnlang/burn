@@ -182,6 +182,15 @@ pub def type FnCtx {
     {string: bool} cellNames
     {int: int} cells
     [Capture] captures
+    int unsafeDepth
+    int unsafeUses
+}
+
+/** An `asm` block of the program: the targets it has code for, whether it has an `else` section, and where it is. */
+pub def type AsmUse {
+    [string] targets
+    bool hasFallback
+    SrcSpan span
 }
 
 /** A function added to one object (`x.name() { ... }`), or an object that was destroyed. */
@@ -544,6 +553,7 @@ pub def struct Checker(loaded: Loaded) {
     {int: InstanceSite} instSites = {}
     [StdUse] stdUses = []
     {string: bool} gated = {}
+    [AsmUse] asmUses = []
 
     fun fileOf(mi: int): int {
         return loaded.modules[mi].file
@@ -953,6 +963,19 @@ pub def struct Checker(loaded: Loaded) {
         var d = errorDiag(span, msg)
         addFix(d.diag, "did you mean `${replacement}`?", span.start, span.end, replacement, true)
         emit(d)
+    }
+
+    /** Reports `msg` unless the code is in an `unsafe` block or an `unsafe fun`, and counts it as a use of `unsafe`. */
+    fun requireUnsafe(span: SrcSpan, msg: string) {
+        if (len(fx) == 0) {
+            return
+        }
+        for i in 0..len(fx) {
+            fx[i].unsafeUses += 1
+        }
+        if (ctx().unsafeDepth == 0) {
+            errorNote(span, msg, "wrap it in `unsafe { ... }`, or mark the function `unsafe fun`")
+        }
     }
 
     fun warn(span: SrcSpan, msg: string) {

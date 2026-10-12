@@ -244,7 +244,31 @@ fun stmtLines(out: [string], depth: int, s: HStmt): void {
         out.push("${p}break\n")
     } else if (s is HStmt.Continue) {
         out.push("${p}continue\n")
+    } else if (s is HStmt.Asm) {
+        out.push("${p}asm\n")
+        stmtsLines(out, depth + 1, s.pre)
+        for c in s.code {
+            out.push("${p}section ${c.target}\n")
+            for piece in c.pieces {
+                if (piece is AsmPiece.Slot) {
+                    out.push("${pad(depth + 1)}slot ${piece.slot}\n")
+                } else if (piece is AsmPiece.Text) {
+                    out.push("${pad(depth + 1)}text ${asmText(piece.text)}\n")
+                }
+            }
+        }
+        out.push("${p}after\n")
+        stmtsLines(out, depth + 1, s.post)
+        if (s.hasFallback) {
+            out.push("${p}else\n")
+            stmtsLines(out, depth + 1, s.fallback)
+        }
+        out.push("${p}end\n")
     }
+}
+
+fun asmText(s: string): string {
+    return "\"" + replace(replace(replace(s, "\\", "\\\\"), "\"", "\\\""), "\n", "\\n") + "\""
 }
 
 fun hspan(s: SrcSpan): string {

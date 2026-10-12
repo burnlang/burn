@@ -107,6 +107,7 @@ pub def type FunDecl {
     bool bodyless
     bool isAbstract
     [Ident] tparams
+    bool isUnsafe
 }
 
 pub def type FunSig {
@@ -210,7 +211,51 @@ pub def enum StmtKind {
     Continue,
     Nested(block: Block),
     Extend(target: Ident, decl: FunDecl),
-    Destroy(target: Ident, args: [Expr])
+    Destroy(target: Ident, args: [Expr]),
+    Unsafe(block: Block),
+    Asm(sections: [AsmSection], fallback: Block?)
+}
+
+/** One section of an `asm` block: the target it is written for, and its code as written, between the braces at `span`. */
+pub def type AsmSection {
+    Ident target
+    string code
+    Span span
+}
+
+/** A `{name}` operand in the code of an `asm` section; `offset` is the byte index of its name in the code. */
+pub def type AsmOperand {
+    string name
+    int offset
+}
+
+fun isOperandChar(c: int, first: bool): bool {
+    var letter = (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95
+    return letter || (!first && c >= 48 && c <= 57)
+}
+
+/** The `{name}` operands of asm code, in order. Braces around anything other than a single name are left alone. */
+pub fun asmOperands(code: string): [AsmOperand] {
+    [AsmOperand] out = []
+    var b = code.bytes()
+    var n = len(b)
+    var i = 0
+    while (i < n) {
+        var c = b[i] as int
+        if (c == 123) {
+            var j = i + 1
+            while (j < n && isOperandChar(b[j] as int, j == i + 1)) {
+                j += 1
+            }
+            if (j > i + 1 && j < n && b[j] == 125) {
+                out.push(AsmOperand { name: fromBytes(slice(b, i + 1, j)), offset: i + 1 })
+                i = j + 1
+                continue
+            }
+        }
+        i += 1
+    }
+    return out
 }
 
 pub def type Expr {

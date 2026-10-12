@@ -128,7 +128,7 @@ def struct Writer() {
     }
 
     fun fun_(label: string, f: FunDecl): void {
-        open(label, "Fun ${id(f.name)} ${sp(f.span)} async=${f.isAsync} static=${f.isStatic} abstract=${f.isAbstract} bodyless=${f.bodyless}")
+        open(label, "Fun ${id(f.name)} ${sp(f.span)} async=${f.isAsync} static=${f.isStatic} abstract=${f.isAbstract} bodyless=${f.bodyless}${unsafeFlag(f.isUnsafe)}")
         annotations(f.annotations)
         tparams(f.tparams)
         params(f.params)
@@ -390,6 +390,21 @@ def struct Writer() {
                 exprs("arg", args)
                 close()
             }
+            StmtKind.Unsafe(b) => {
+                open(label, "Unsafe ${s}")
+                block("", b)
+                close()
+            }
+            StmtKind.Asm(sections, fallback) => {
+                open(label, "Asm ${s}")
+                for sec in sections {
+                    line("section", "${id(sec.target)} ${quoted(sec.code)} ${sp(sec.span)}")
+                }
+                if (fallback != null) {
+                    block("else", fallback)
+                }
+                close()
+            }
         }
     }
 
@@ -598,6 +613,13 @@ pub fun dumpAst(src: string): string {
     return w.out
 }
 
+fun unsafeFlag(b: bool): string {
+    if (b) {
+        return " unsafe=true"
+    }
+    return ""
+}
+
 fun flag(b: bool): int {
     if (b) {
         return 1
@@ -622,7 +644,7 @@ fun tokenLines(tokens: [Token], depth: int): string {
             Kind.Int => "${head} ${t.value}\n"
             Kind.BigInt => "${head} ${t.text} ${base(t.value)}\n"
             Kind.Float => "${head} ${t.number}\n"
-            Kind.Str => "${head} ${quoted(t.text)}\n"
+            Kind.Str, Kind.AsmText => "${head} ${quoted(t.text)}\n"
             else => "${head}\n"
         }
         for p in t.parts {

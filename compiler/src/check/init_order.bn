@@ -38,6 +38,10 @@ fun walkStmts(stmts: [HStmt], u: Uses, slots: [IfaceSlot], taken: {int: bool}): 
             }
             walkStmts(s.body, u, slots, taken)
             walkStmts(s.step, u, slots, taken)
+        } else if (s is HStmt.Asm) {
+            walkStmts(s.pre, u, slots, taken)
+            walkStmts(s.post, u, slots, taken)
+            walkStmts(s.fallback, u, slots, taken)
         }
     }
 }

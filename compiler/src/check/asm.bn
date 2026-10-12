@@ -1,0 +1,357 @@
+import "../syntax/ast.bn"
+import "check.bn"
+import "expr.bn"
+import "hir.bn"
+import "stmt.bn"
+import "types.bn"
+
+/** The targets an `asm` block can have code for. */
+pub const ASM_TARGETS = ["x86_64", "arm64", "bvm", "js"]
+
+priv const BVM_BINARY = ["iadd", "isub", "imul", "and", "or", "xor", "shl", "shr", "ushr", "fadd", "fsub", "fmul", "fdiv", "ieq", "ine", "ilt", "ile", "igt", "ige", "ueq", "une", "ult", "ule", "ugt", "uge", "feq", "fne", "flt", "fle", "fgt", "fge", "idiv", "irem", "iadd.ovf", "isub.ovf", "imul.ovf"]
+priv const BVM_UNARY = ["fneg", "not", "i2f", "f2i", "ineg.ovf"]
+priv const BVM_SLOT = ["load", "store", "tee"]
+priv const BVM_JUMP = ["jmp", "jz", "jnz"]
+
+/** A line of a `bvm` section: a label (`name:`), or an instruction and its argument. `at` and `end` are byte offsets in the code. */
+pub def type BvmLine {
+    string label
+    string op
+    string arg
+    int at
+    int end
+}
+
+/** A mistake in a `bvm` section, at bytes `at` to `end` of its code. */
+pub def type BvmIssue {
+    string message
+    int at
+    int end
+}
+
+pub def type BvmCode {
+    [BvmLine] lines
+    [BvmIssue] issues
+}
+
+priv fun isBlank(b: int): bool {
+    return b == 32 || b == 9 || b == 13
+}
+
+priv fun isDecimal(s: string): bool {
+    var b = s.bytes()
+    var i = 0
+    if (len(b) > 0 && b[0] == 45) {
+        i = 1
+    }
+    if (i >= len(b) || len(b) - i > 18) {
+        return false
+    }
+    while (i < len(b)) {
+        if (b[i] < 48 || b[i] > 57) {
+            return false
+        }
+        i += 1
+    }
+    return true
+}
+
+priv fun values(n: int): string {
+    if (n == 1) {
+        return "1 value"
+    }
+    return "${n} values"
+}
+
+priv fun isOperandArg(s: string): bool {
+    var b = s.bytes()
+    return len(b) > 2 && b[0] == 123 && b[len(b) - 1] == 125
+}
+
+/** How many values an instruction takes from the stack and how many it leaves. */
+pub fun bvmEffect(op: string): [int] {
+    if (op == "const" || op == "load") {
+        return [0, 1]
+    }
+    if (op == "store" || op == "pop" || op == "jz" || op == "jnz") {
+        return [1, 0]
+    }
+    if (op == "tee" || contains(BVM_UNARY, op)) {
+        return [1, 1]
+    }
+    if (op == "jmp") {
+        return [0, 0]
+    }
+    return [2, 1]
+}
+
+/** Whether `op` is an instruction that a `bvm` section can use. */
+pub fun isBvmOp(op: string): bool {
+    return op == "const" || op == "pop" || contains(BVM_BINARY, op) || contains(BVM_UNARY, op) || contains(BVM_SLOT, op) || contains(BVM_JUMP, op)
+}
+
+/** Reads the code of a `bvm` section into lines, and finds unknown instructions, bad arguments, missing labels and an unbalanced stack. */
+pub fun parseBvm(code: string): BvmCode {
+    [BvmLine] lines = []
+    [BvmIssue] issues = []
+    var b = code.bytes()
+    var n = len(b)
+    var start = 0
+    while (start <= n) {
+        var stop = start
+        while (stop < n && b[stop] != 10) {
+            stop += 1
+        }
+        var end = stop
+        for i in start..stop {
+            if (b[i] == 59) {
+                end = i
+                break
+            }
+        }
+        var s = start
+        while (s < end && isBlank(b[s] as int)) {
+            s += 1
+        }
+        var e = end
+        while (e > s && isBlank(b[e - 1] as int)) {
+            e -= 1
+        }
+        if (e > s) {
+            var w = s
+            while (w < e && !isBlank(b[w] as int)) {
+                w += 1
+            }
+            var word = fromBytes(slice(b, s, w))
+            var a = w
+            while (a < e && isBlank(b[a] as int)) {
+                a += 1
+            }
+            var arg = fromBytes(slice(b, a, e))
+            if (endsWith(word, ":") && arg == "") {
+                lines.push(BvmLine { label: substring(word, 0, len(word) - 1), op: "", arg: "", at: s, end: e })
+            } else {
+                lines.push(BvmLine { label: "", op: word, arg: arg, at: s, end: e })
+            }
+        }
+        start = stop + 1
+    }
+    {string: int} labels = {}
+    for l in lines {
+        if (l.label == "") {
+            continue
+        }
+        if (has(labels, l.label)) {
+            issues.push(BvmIssue { message: "the label `${l.label}` is defined twice", at: l.at, end: l.end })
+        }
+        labels[l.label] = -1
+    }
+    var depth = 0
+    var known = true
+    for l in lines {
+        if (l.label != "") {
+            var want = labels[l.label] ?? -1
+            if (!known) {
+                depth = want
+                if (depth < 0) {
+                    depth = 0
+                }
+                known = true
+            } else if (want >= 0 && want != depth) {
+                issues.push(BvmIssue { message: "the stack holds ${values(depth)} here, but ${values(want)} where code jumps to `${l.label}`", at: l.at, end: l.end })
+            }
+            labels[l.label] = depth
+            continue
+        }
+        var op = l.op
+        if (!isBvmOp(op)) {
+            issues.push(BvmIssue { message: "`${op}` is not an instruction that a `bvm` section can use", at: l.at, end: l.end })
+            continue
+        }
+        var needsArg = op == "const" || contains(BVM_SLOT, op) || contains(BVM_JUMP, op)
+        if (needsArg && l.arg == "") {
+            issues.push(BvmIssue { message: "`${op}` needs an argument", at: l.at, end: l.end })
+            continue
+        }
+        if (!needsArg && l.arg != "") {
+            issues.push(BvmIssue { message: "`${op}` takes no argument", at: l.at, end: l.end })
+            continue
+        }
+        if (op == "const" && !isDecimal(l.arg)) {
+            issues.push(BvmIssue { message: "`const` needs a whole number, such as `42` or `-1`", at: l.at, end: l.end })
+            continue
+        }
+        if (contains(BVM_SLOT, op) && !isOperandArg(l.arg) && !isDecimal(l.arg)) {
+            issues.push(BvmIssue { message: "`${op}` needs an operand, such as `{x}`", at: l.at, end: l.end })
+            continue
+        }
+        if (contains(BVM_JUMP, op) && !has(labels, l.arg)) {
+            issues.push(BvmIssue { message: "there is no label `${l.arg}` in this section", at: l.at, end: l.end })
+            continue
+        }
+        if (!known) {
+            continue
+        }
+        var fx = bvmEffect(op)
+        if (depth < fx[0]) {
+            issues.push(BvmIssue { message: "`${op}` needs ${values(fx[0])} on the stack, but there are only ${depth}", at: l.at, end: l.end })
+            depth = fx[0]
+        }
+        depth = depth - fx[0] + fx[1]
+        if (contains(BVM_JUMP, op)) {
+            var want = labels[l.arg] ?? -1
+            if (want >= 0 && want != depth) {
+                issues.push(BvmIssue { message: "the stack holds ${values(depth)} here, but ${values(want)} at `${l.arg}`", at: l.at, end: l.end })
+            }
+            labels[l.arg] = depth
+            if (op == "jmp") {
+                known = false
+            }
+        }
+    }
+    if (known && depth != 0) {
+        issues.push(BvmIssue { message: "a `bvm` section must leave the stack as it found it, but this one leaves ${values(depth)} more on it", at: 0, end: 0 })
+    }
+    return BvmCode { lines: lines, issues: issues }
+}
+
+priv fun operandIsConst(c: Checker, name: string): bool {
+    var l = c.lookupLocal(name)
+    if (l != null) {
+        return l.isConst
+    }
+    var entry = c.lookupValueEntry(c.curModule(), name)
+    if (entry != null) {
+        var sym = entry.sym
+        if (sym is ValSym.Global) {
+            return c.globals[sym.id].isConst
+        }
+    }
+    return false
+}
+
+priv fun operandSlot(c: Checker, name: string, span: Span, slots: {string: int}, pre: [HStmt], post: [HStmt]): int {
+    var have = slots[name]
+    if (have != null) {
+        return have
+    }
+    var ident = Expr { kind: ExprKind.Ident(name), span: span }
+    var h = exprOf(c, ident, null)
+    var t = h.ty
+    var slot = c.newLocal(t)
+    slots[name] = slot
+    if (t == T_ERROR) {
+        return slot
+    }
+    if (t != T_INT && t != T_U64 && t != T_FLOAT) {
+        c.error(c.sp(span), "`${name}` has type ${c.show(t)}, but an asm operand must be an `int`, `uint64` or `float`")
+        return slot
+    }
+    pre.push(HStmt.Eval(setLocal(slot, h, t)))
+    if (operandIsConst(c, name)) {
+        return slot
+    }
+    var tmp = "{asm}${slot}"
+    var scopes = c.ctx().scopes
+    var scope = scopes[len(scopes) - 1]
+    scope[tmp] = LocalSym { slot: slot, isConst: false, span: c.sp(span) }
+    var value = Expr { kind: ExprKind.Ident(tmp), span: span }
+    var back = exprOf(c, Expr { kind: ExprKind.Assign(ident, null, value), span: span }, null)
+    remove(scope, tmp)
+    post.push(HStmt.Eval(back))
+    return slot
+}
+
+priv fun checkBvm(c: Checker, code: string, base: int, whole: Span) {
+    var parsed = parseBvm(code)
+    for issue in parsed.issues {
+        var span = Span { start: base + issue.at, end: base + issue.end }
+        if (issue.end == 0) {
+            span = whole
+        }
+        c.error(c.sp(span), issue.message)
+    }
+    for l in parsed.lines {
+        if (contains(BVM_SLOT, l.op) && isDecimal(l.arg)) {
+            c.errorNote(c.sp(Span { start: base + l.at, end: base + l.end }), "`${l.op}` cannot use a local slot by number", "name a variable instead, such as `${l.op} {x}`")
+        }
+    }
+}
+
+/** Checks an `asm` statement: its operands become locals that are copied in before the code and back after it. */
+pub fun asmStmt(c: Checker, sections: [AsmSection], fallback: Block?, span: SrcSpan): [HStmt] {
+    var head = SrcSpan { file: span.file, start: span.start, end: span.start + 3 }
+    c.requireUnsafe(head, "inline assembly needs an `unsafe` block")
+    {string: int} slots = {}
+    [HStmt] pre = []
+    [HStmt] post = []
+    [AsmCode] code = []
+    [string] targets = []
+    for sec in sections {
+        var name = sec.target.name
+        var tspan = c.sp(sec.target.span)
+        var target = name
+        if (name == "aarch64") {
+            target = "arm64"
+        }
+        if (!contains(ASM_TARGETS, target)) {
+            c.errorNote(tspan, "`${name}` is not an asm target", "the targets are `x86_64`, `arm64`, `bvm` and `js`, and an `else` section holds Burn code for all others")
+            continue
+        }
+        if (contains(targets, target)) {
+            c.error(tspan, "this `asm` block already has a `${target}` section")
+            continue
+        }
+        targets.push(target)
+        var bytes = sec.code.bytes()
+        var base = sec.span.start + 1
+        [AsmPiece] pieces = []
+        var at = 0
+        for op in asmOperands(sec.code) {
+            if (op.offset - 1 > at) {
+                pieces.push(AsmPiece.Text(fromBytes(slice(bytes, at, op.offset - 1))))
+            }
+            var ospan = Span { start: base + op.offset, end: base + op.offset + len(op.name) }
+            pieces.push(AsmPiece.Slot(operandSlot(c, op.name, ospan, slots, pre, post)))
+            at = op.offset + len(op.name) + 1
+        }
+        if (at < len(bytes)) {
+            pieces.push(AsmPiece.Text(fromBytes(slice(bytes, at, len(bytes)))))
+        }
+        if (target == "bvm") {
+            checkBvm(c, sec.code, base, sec.span)
+        }
+        code.push(AsmCode { target: target, pieces: pieces, span: c.sp(sec.span), loc: c.loc(c.sp(sec.span)) })
+    }
+    [HStmt] fb = []
+    if (fallback != null) {
+        fb = blockStmts(c, fallback.stmts)
+    } else {
+        if (len(sections) == 0) {
+            c.error(head, "this `asm` block has no code")
+        }
+        var msg = c.strLit("this `asm` block has no code for this target and no `else` section")
+        fb = [HStmt.Eval(rt("Panic", [msg, c.locExpr(head)], T_VOID))]
+    }
+    if (!c.isDry()) {
+        c.asmUses.push(AsmUse { targets: targets, hasFallback: fallback != null, span: head })
+    }
+    return [HStmt.Asm(code, pre, post, fb, fallback != null)]
+}
+
+/** Why the program cannot be built for `target` because of an `asm` block, or null. */
+pub fun asmProblem(c: Checker, target: string): string? {
+    for u in c.asmUses {
+        if (u.hasFallback || contains(u.targets, target)) {
+            continue
+        }
+        var where = "<unknown>"
+        if (u.span.file < len(c.loaded.files)) {
+            var f = c.loaded.files[u.span.file]
+            var lc = f.lineCol(u.span.start)
+            where = "${f.name}:${lc[0]}:${lc[1]}"
+        }
+        return "the `asm` block at ${where} has no `${target}` section and no `else` section, so it cannot be built for ${target}"
+    }
+    return null
+}

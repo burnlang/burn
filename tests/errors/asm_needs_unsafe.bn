@@ -1,0 +1,10 @@
+fun f(): int {
+    var x = 1
+    asm {
+        bvm {
+            load {x}
+            pop
+        }
+    }
+    return x
+}

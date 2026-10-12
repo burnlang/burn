@@ -1,5 +1,6 @@
 import "../diag/diag.bn"
 import "../syntax/ast.bn"
+import "asm.bn"
 import "check.bn"
 import "closures.bn"
 import "expr.bn"
@@ -133,6 +134,18 @@ fun collectStmt(s: Stmt, out: {string: bool}): void {
         }
     } else if (k is StmtKind.Nested) {
         collectAssigned(k.block.stmts, out)
+    } else if (k is StmtKind.Unsafe) {
+        collectAssigned(k.block.stmts, out)
+    } else if (k is StmtKind.Asm) {
+        for sec in k.sections {
+            for op in asmOperands(sec.code) {
+                out[op.name] = true
+            }
+        }
+        var fb = k.fallback
+        if (fb != null) {
+            collectAssigned(fb.stmts, out)
+        }
     }
 }
 
@@ -568,7 +581,28 @@ pub fun stmtOf(c: Checker, s: Stmt): [HStmt] {
     if (k is StmtKind.Destroy) {
         return destroyStmt(c, k.target, k.args, span)
     }
+    if (k is StmtKind.Unsafe) {
+        return unsafeStmt(c, k.block, span)
+    }
+    if (k is StmtKind.Asm) {
+        return asmStmt(c, k.sections, k.fallback, span)
+    }
     return []
+}
+
+fun unsafeStmt(c: Checker, b: Block, span: SrcSpan): [HStmt] {
+    if (len(c.fx) == 0) {
+        return blockStmts(c, b.stmts)
+    }
+    var x = c.ctx()
+    var uses = x.unsafeUses
+    x.unsafeDepth += 1
+    var out = blockStmts(c, b.stmts)
+    x.unsafeDepth -= 1
+    if (x.unsafeUses == uses) {
+        c.warn(SrcSpan { file: span.file, start: span.start, end: span.start + 6 }, "this `unsafe` block has nothing in it that needs `unsafe`")
+    }
+    return out
 }
 
 fun returnStmt(c: Checker, v: Expr?, span: SrcSpan): [HStmt] {

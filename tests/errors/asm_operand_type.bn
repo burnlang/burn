@@ -1,0 +1,10 @@
+fun f() {
+    var s = "hi"
+    unsafe {
+        asm {
+            js {
+                console.log({s});
+            }
+        }
+    }
+}

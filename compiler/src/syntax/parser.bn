@@ -196,7 +196,8 @@ fun fun_(name: Ident, params: [Param], ret: TypeExpr?, body: Block, span: Span):
         annotations: [],
         bodyless: false,
         isAbstract: false,
-        tparams: []
+        tparams: [],
+        isUnsafe: false
     }
 }
 
@@ -469,7 +470,7 @@ def struct Parser(toks: [Token]) {
                 return null
             }
             kind = ItemKind.Import(list)
-        } else if ((t.kind == Kind.Fun || t.kind == Kind.Async) && !isLambdaStart()) {
+        } else if (((t.kind == Kind.Fun || t.kind == Kind.Async) && !isLambdaStart()) || atUnsafeFun()) {
             var f = funDecl(false)
             if (f == null) {
                 return null
@@ -477,7 +478,7 @@ def struct Parser(toks: [Token]) {
             kind = ItemKind.Fun(f)
         } else if (t.kind == Kind.Def) {
             advance()
-            if (at(Kind.Fun) || at(Kind.Async)) {
+            if (at(Kind.Fun) || at(Kind.Async) || atUnsafeFun()) {
                 var f = funDecl(false)
                 if (f == null) {
                     return null
@@ -666,6 +667,11 @@ def struct Parser(toks: [Token]) {
             advance()
             isStatic = true
         }
+        var isUnsafe = false
+        if (atUnsafeFun()) {
+            advance()
+            isUnsafe = true
+        }
         var isAsync = eat(Kind.Async)
         if (expect(Kind.Fun, "`fun`") == null) {
             return null
@@ -704,8 +710,14 @@ def struct Parser(toks: [Token]) {
             annotations: [],
             bodyless: bodyless,
             isAbstract: false,
-            tparams: tparams
+            tparams: tparams,
+            isUnsafe: isUnsafe
         }
+    }
+
+    fun atUnsafeFun(): bool {
+        var n = peekAt(1)
+        return atIdent("unsafe") && (n.kind == Kind.Fun || n.kind == Kind.Async) && !n.nl
     }
 
     fun typeParams(): [Ident]? {
@@ -1086,7 +1098,7 @@ def struct Parser(toks: [Token]) {
                 methods.push(Method { vis: vis, decl: f })
                 continue
             }
-            var isMethod = at(Kind.Fun) || at(Kind.Async) || (atIdent("static") && (next == Kind.Fun || next == Kind.Async))
+            var isMethod = at(Kind.Fun) || at(Kind.Async) || atUnsafeFun() || (atIdent("static") && (next == Kind.Fun || next == Kind.Async || (next == Kind.Ident && peekAt(1).text == "unsafe")))
             if (isMethod) {
                 var f = funDecl(true)
                 if (f == null) {
@@ -1493,6 +1505,18 @@ def struct Parser(toks: [Token]) {
                 return null
             }
             kind = StmtKind.Nested(b)
+        } else if (t.kind == Kind.Ident && t.text == "unsafe" && peekAt(1).kind == Kind.LBrace && !peekAt(1).nl) {
+            advance()
+            var b = block()
+            if (b == null) {
+                return null
+            }
+            kind = StmtKind.Unsafe(b)
+        } else if (t.kind == Kind.Ident && t.text == "asm" && t.value == 1) {
+            kind = asmStmt()
+            if (kind == null) {
+                return null
+            }
         } else if (t.kind == Kind.Ident && t.text == "destroy" && peekAt(1).kind == Kind.Ident && !peekAt(1).nl && peekAt(2).kind == Kind.LParen) {
             advance()
             var target = ident("object name")
@@ -1543,6 +1567,48 @@ def struct Parser(toks: [Token]) {
             return null
         }
         return Stmt { kind: kind, span: join(start, prevSpan()) }
+    }
+
+    fun asmStmt(): StmtKind? {
+        advance()
+        var open = expect(Kind.LBrace, "`{`")
+        if (open == null) {
+            return null
+        }
+        [AsmSection] sections = []
+        Block? fallback = null
+        while (!at(Kind.RBrace) && !at(Kind.Eof)) {
+            if (at(Kind.Else)) {
+                var elseSpan = spanOf(advance())
+                if (fallback != null) {
+                    err(elseSpan, "this `asm` block already has an `else` section")
+                }
+                var b = block()
+                if (b == null) {
+                    return null
+                }
+                fallback = b
+                continue
+            }
+            var target = ident("asm target such as `x86_64`, `arm64`, `bvm` or `js`")
+            if (target == null) {
+                return null
+            }
+            var code = peek()
+            if (code.kind != Kind.AsmText) {
+                err(spanOf(code), "expected the code of the `${target.name}` section in braces")
+                return null
+            }
+            advance()
+            if (fallback != null) {
+                err(target.span, "the `else` section must come last in an `asm` block")
+            }
+            sections.push(AsmSection { target: target, code: code.text, span: spanOf(code) })
+        }
+        if (expect(Kind.RBrace, "`}` to close the `asm` block") == null) {
+            return null
+        }
+        return StmtKind.Asm(sections, fallback)
     }
 
     fun isExtension(): bool {

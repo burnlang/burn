@@ -360,6 +360,21 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
             e("jmp ${loops[len(loops) - 1].end}")
         } else if (s is HStmt.Continue) {
             e("jmp ${loops[len(loops) - 1].cont}")
+        } else if (s is HStmt.Asm) {
+            var code = asmFor(s.code, "x86_64")
+            if (code != null) {
+                stmts(s.pre)
+                [string] ops = []
+                for slot in asmSlots(code) {
+                    ops.push(local(slot))
+                }
+                for line in asmLines(code, ops) {
+                    e(line)
+                }
+                stmts(s.post)
+            } else {
+                stmts(s.fallback)
+            }
         }
     }
 

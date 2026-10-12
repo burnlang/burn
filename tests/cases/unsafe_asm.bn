@@ -1,0 +1,199 @@
+/** Adds two numbers with inline assembly for every target. */
+fun add(a: int, b: int): int {
+    var r = 0
+    unsafe {
+        asm {
+            x86_64 {
+                mov rax, {a}
+                add rax, {b}
+                mov {r}, rax
+            }
+            arm64 {
+                ldr x9, {a}
+                ldr x10, {b}
+                add x9, x9, x10
+                str x9, {r}
+            }
+            bvm {
+                load {a}
+                load {b}
+                iadd
+                store {r}
+            }
+            js {
+                {r} = {a} + {b};
+            }
+        }
+    }
+    return r
+}
+
+/** Counts the bits that are set, with loops and labels in the assembly and Burn code for JavaScript. */
+fun popcount(x: int): int {
+    var n = 0
+    unsafe {
+        asm {
+            x86_64 {
+                mov rax, {x}
+                xor ecx, ecx
+            1:
+                test rax, rax
+                jz 2f
+                lea rdx, [rax - 1]
+                and rax, rdx
+                inc rcx
+                jmp 1b
+            2:
+                mov {n}, rcx
+            }
+            arm64 {
+                ldr x9, {x}
+                mov x10, #0
+            1:
+                cbz x9, 2f
+                sub x11, x9, #1
+                and x9, x9, x11
+                add x10, x10, #1
+                b 1b
+            2:
+                str x10, {n}
+            }
+            bvm {
+            top:
+                load {x}
+                const 0
+                ieq
+                jnz done
+                load {x}
+                load {x}
+                const 1
+                isub
+                and
+                store {x}
+                load {n}
+                const 1
+                iadd
+                store {n}
+                jmp top
+            done:
+            }
+            else {
+                var v = x
+                while (v != 0) {
+                    v = v & (v - 1)
+                    n += 1
+                }
+            }
+        }
+    }
+    return n
+}
+
+/** Doubles a float in place. */
+fun twice(f: float): float {
+    var v = f
+    unsafe {
+        asm {
+            x86_64 {
+                movsd xmm0, {v}
+                addsd xmm0, xmm0
+                movsd {v}, xmm0
+            }
+            arm64 {
+                ldr d0, {v}
+                fadd d0, d0, d0
+                str d0, {v}
+            }
+            bvm {
+                load {v}
+                load {v}
+                fadd
+                store {v}
+            }
+            js {
+                {v} = {v} * 2;
+            }
+        }
+    }
+    return v
+}
+
+unsafe fun triple(v: int): int {
+    var r = v
+    asm {
+        x86_64 {
+            mov rax, {r}
+            imul rax, rax, 3
+            mov {r}, rax
+        }
+        arm64 {
+            ldr x9, {r}
+            mov x10, #3
+            mul x9, x9, x10
+            str x9, {r}
+        }
+        else {
+            r = r * 3
+        }
+    }
+    return r
+}
+
+/** A variable that a lambda captures is still updated by the assembly. */
+fun captured(): int {
+    var count = 10
+    var read = fun(): int {
+        return count
+    }
+    unsafe {
+        asm {
+            x86_64 {
+                add {count}, 5
+            }
+            arm64 {
+                ldr x9, {count}
+                add x9, x9, #5
+                str x9, {count}
+            }
+            bvm {
+                load {count}
+                const 5
+                iadd
+                store {count}
+            }
+            js {
+                {count} += 5;
+            }
+        }
+    }
+    return read()
+}
+
+var total = 1
+
+fun bumpTotal() {
+    unsafe {
+        asm {
+            bvm {
+                load {total}
+                const 41
+                iadd
+                store {total}
+            }
+            else {
+                total += 41
+            }
+        }
+    }
+}
+
+print(add(2, 40))
+print(add(-7, 3))
+print(popcount(255), popcount(0), popcount(1 << 40 | 5))
+print(twice(1.25))
+unsafe {
+    print(triple(14))
+}
+print(captured())
+bumpTotal()
+print(total)
