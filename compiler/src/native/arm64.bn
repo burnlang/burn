@@ -1,0 +1,1139 @@
+import "../check/check.bn"
+import "../check/hir.bn"
+import "../check/types.bn"
+import "../vm/bits.bn"
+import "../vm/runtime.bn"
+import "shared.bn"
+
+/**
+ * The entry point of every native program on 64-bit ARM, and the trampoline the runtime calls Burn functions
+ * through. `main` saves the registers it uses, starts the runtime and calls the program's entry. The trampoline
+ * gets the arguments of a call in reverse order, as the runtime keeps them, and copies them into the argument area
+ * every compiled function reads them from.
+ */
+priv const ENTRY = ".text\n.globl {P}main\n.p2align 2\n{P}main:\n    stp x29, x30, [sp, #-32]!\n    mov x29, sp\n    stp x19, x20, [sp, #16]\n    mov x19, x0\n    mov x20, x1\n{ADR:x0:burn_meta}{ADR:x1:burn_meta_len}    ldr x1, [x1]\n{ADR:x2:{P}burn_globals}{ADR:x3:burn_nglobals}    ldr x3, [x3]\n    mov x4, x29\n{ADR:x5:{P}burn_call_trampoline}    bl {P}burn_rt_init\n    mov x0, x19\n    mov x1, x20\n    bl {P}burn_rt_set_args\n{PRE_ENTRY}    bl {ENTRY}\n    mov x0, #0\n    bl {P}burn_rt_exit\n    ldp x19, x20, [sp, #16]\n    ldp x29, x30, [sp], #32\n    ret\n\n.globl {P}burn_call_trampoline\n.p2align 2\n{P}burn_call_trampoline:\n    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n    mov x16, x0\n    lsl x9, x2, #3\n    add x9, x9, #15\n    and x9, x9, #-16\n    sub sp, sp, x9\n    mov x10, #0\n.Ltramp_loop:\n    cmp x10, x2\n    b.ge .Ltramp_done\n    ldr x11, [x1, x10, lsl #3]\n    str x11, [sp, x10, lsl #3]\n    add x10, x10, #1\n    b .Ltramp_loop\n.Ltramp_done:\n    blr x16\n    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n"
+
+/** The registers runtime functions take their arguments in. */
+priv const ARG_REGS = ["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"]
+
+priv fun cond(k: Cmp): string {
+    return match k {
+        Cmp.Eq => "eq"
+        Cmp.Ne => "ne"
+        Cmp.Lt => "lt"
+        Cmp.Le => "le"
+        Cmp.Gt => "gt"
+        Cmp.Ge => "ge"
+    }
+}
+
+priv fun ucond(k: Cmp): string {
+    return match k {
+        Cmp.Eq => "eq"
+        Cmp.Ne => "ne"
+        Cmp.Lt => "lo"
+        Cmp.Le => "ls"
+        Cmp.Gt => "hi"
+        Cmp.Ge => "hs"
+    }
+}
+
+/** The condition that is true when a float comparison holds, and false when either side is NaN. */
+priv fun fcond(k: Cmp): string {
+    return match k {
+        Cmp.Eq => "eq"
+        Cmp.Ne => "ne"
+        Cmp.Lt => "mi"
+        Cmp.Le => "ls"
+        Cmp.Gt => "gt"
+        Cmp.Ge => "ge"
+    }
+}
+
+priv fun inverse(k: Cmp): Cmp {
+    return match k {
+        Cmp.Eq => Cmp.Ne
+        Cmp.Ne => Cmp.Eq
+        Cmp.Lt => Cmp.Ge
+        Cmp.Le => Cmp.Gt
+        Cmp.Gt => Cmp.Le
+        Cmp.Ge => Cmp.Lt
+    }
+}
+
+/** The size of a stack area holding `n` 8-byte values, rounded up to the 16 bytes the stack pointer keeps. */
+priv fun area(n: int): int {
+    return (n * 8 + 15) / 16 * 16
+}
+
+priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
+    string out = ""
+    string cold = ""
+    int label = 0
+    int fid = 0
+    int frame = 0
+    [LoopLabels] loops = []
+    {string: string} symbols = runtimeSymbols()
+
+    fun sym(name: string): string {
+        return t.prefix + name
+    }
+
+    fun rtSym(name: string): string {
+        return "burn_" + (symbols[name] ?? name)
+    }
+
+    fun l(): string {
+        label += 1
+        return ".L${label}"
+    }
+
+    fun e(s: string) {
+        out += "    "
+        out += s
+        out += "\n"
+    }
+
+    fun lbl(name: string) {
+        out += name
+        out += ":\n"
+    }
+
+    /** The lines that put the address of `target` into `reg`. */
+    fun adrText(reg: string, target: string): string {
+        if (t.macos) {
+            return "    adrp ${reg}, ${target}@PAGE\n    add ${reg}, ${reg}, ${target}@PAGEOFF\n"
+        }
+        return "    adrp ${reg}, ${target}\n    add ${reg}, ${reg}, :lo12:${target}\n"
+    }
+
+    fun adr(reg: string, target: string) {
+        out += adrText(reg, target)
+    }
+
+    /** The lines that put the 64-bit value `v` into `reg`. */
+    fun immText(reg: string, v: int): string {
+        if (v >= -65536 && v < 65536) {
+            return "    mov ${reg}, #${v}\n"
+        }
+        var s = ""
+        var first = true
+        for k in 0..4 {
+            var chunk = (v >> (16 * k)) & 65535
+            if (chunk == 0) {
+                continue
+            }
+            if (first) {
+                s += "    movz ${reg}, #${chunk}, lsl #${16 * k}\n"
+                first = false
+            } else {
+                s += "    movk ${reg}, #${chunk}, lsl #${16 * k}\n"
+            }
+        }
+        return s
+    }
+
+    fun imm(reg: string, v: int) {
+        out += immText(reg, v)
+    }
+
+    /** `op reg, [base, #off]` for a load or store of 8 bytes, through x17 when the offset is too large. */
+    fun mem(op: string, reg: string, base: string, off: int) {
+        if (off >= 0 && off <= 32760 && off % 8 == 0) {
+            e("${op} ${reg}, [${base}, #${off}]")
+        } else {
+            imm("x17", off)
+            e("${op} ${reg}, [${base}, x17]")
+        }
+    }
+
+    fun addImm(dst: string, src: string, v: int) {
+        if (v >= 0 && v < 4096) {
+            e("add ${dst}, ${src}, #${v}")
+        } else {
+            imm("x17", v)
+            e("add ${dst}, ${src}, x17")
+        }
+    }
+
+    fun subSp(v: int) {
+        if (v == 0) {
+            return
+        }
+        if (v < 4096) {
+            e("sub sp, sp, #${v}")
+        } else {
+            imm("x17", v)
+            e("sub sp, sp, x17")
+        }
+    }
+
+    fun addSp(v: int) {
+        if (v == 0) {
+            return
+        }
+        if (v < 4096) {
+            e("add sp, sp, #${v}")
+        } else {
+            imm("x17", v)
+            e("add sp, sp, x17")
+        }
+    }
+
+    fun pushReg(reg: string) {
+        e("str ${reg}, [sp, #-16]!")
+    }
+
+    fun popReg(reg: string) {
+        e("ldr ${reg}, [sp], #16")
+    }
+
+    fun call(name: string) {
+        e("bl ${sym(name)}")
+    }
+
+    fun loadLocal(reg: string, slot: int) {
+        mem("ldr", reg, "x29", 8 * slot)
+    }
+
+    fun storeLocal(reg: string, slot: int) {
+        mem("str", reg, "x29", 8 * slot)
+    }
+
+    fun loadGlobal(reg: string, g: int) {
+        adr("x16", sym("burn_globals"))
+        mem("ldr", reg, "x16", 8 * g)
+    }
+
+    fun storeGlobal(reg: string, g: int) {
+        adr("x16", sym("burn_globals"))
+        mem("str", reg, "x16", 8 * g)
+    }
+
+    fun byteLines(b: [int]) {
+        var i = 0
+        while (i < len(b)) {
+            var end = i + 32
+            if (end > len(b)) {
+                end = len(b)
+            }
+            [string] parts = []
+            for k in i..end {
+                parts.push(toString(b[k]))
+            }
+            out += "    .byte ${join(parts, ",")}\n"
+            i = end
+        }
+    }
+
+    fun textBytes(s: string) {
+        [int] b = []
+        for x in bytes(s) {
+            b.push(x as int)
+        }
+        b.push(0)
+        byteLines(b)
+    }
+
+    fun preEntry(exps: [Export]): string {
+        if (len(p.libs) == 0) {
+            return ""
+        }
+        var s = ""
+        s += adrText("x0", "burn_exports")
+        s += immText("x1", len(exps))
+        s += "    bl ${sym("burn_bvm_register_exports")}\n"
+        s += adrText("x0", "burn_mixins")
+        s += "    bl ${sym("burn_bvm_register_mixins")}\n"
+        for i in 0..len(p.libs) {
+            s += adrText("x0", "burn_lib_${i}")
+            s += adrText("x1", "burn_lib_${i}_len")
+            s += "    ldr x1, [x1]\n"
+            s += "    bl ${sym("burn_bvm_init_lib")}\n"
+        }
+        return s
+    }
+
+    /** The entry template with its `{ADR:reg:symbol}` lines filled in. */
+    fun entryText(exps: [Export]): string {
+        var text = replace(replace(ENTRY, "{P}", t.prefix), "{PRE_ENTRY}", preEntry(exps))
+        text = replace(text, "{ENTRY}", "bf_${p.entry}")
+        var res = ""
+        var rest = text
+        var at = indexOf(rest, "{ADR:")
+        while (at >= 0) {
+            res += substring(rest, 0, at)
+            var close = indexOf(rest, "}")
+            var inner = substring(rest, at + 5, close)
+            var colon = indexOf(inner, ":")
+            res += adrText(substring(inner, 0, colon), substring(inner, colon + 1, len(inner)))
+            rest = substring(rest, close + 1, len(rest))
+            at = indexOf(rest, "{ADR:")
+        }
+        return res + rest
+    }
+
+    fun emitAll(meta: [int]) {
+        var exps = exportsOf(p)
+        out += entryText(exps)
+        for i in 0..len(p.funcs) {
+            fid = i
+            func(p.funcs[i])
+        }
+        if (t.macos) {
+            out += ".section __TEXT,__const\n"
+        } else {
+            out += ".section .rodata\n"
+        }
+        out += ".p2align 4\n"
+        out += "burn_meta_len:\n    .quad ${len(meta)}\n"
+        out += "burn_nglobals:\n    .quad ${p.globals}\n"
+        out += "burn_meta:\n"
+        byteLines(meta)
+        for i in 0..len(p.libs) {
+            out += ".p2align 4\n"
+            out += "burn_lib_${i}_len:\n    .quad ${len(p.libs[i])}\n"
+            out += "burn_lib_${i}:\n"
+            byteLines(p.libs[i])
+        }
+        for i in 0..len(p.funcs) {
+            var ext = p.funcs[i].external
+            if (ext is External.Lib) {
+                out += "burn_libfn_${i}:\n"
+                textBytes(ext.name)
+            }
+        }
+        if (len(p.libs) > 0) {
+            for k in 0..len(exps) {
+                out += "burn_export_name_${k}:\n"
+                textBytes(exps[k].name)
+            }
+            out += "burn_mixins:\n"
+            textBytes(mixinModule(p.funcs))
+        }
+        var strs = p.checker.strings
+        for i in 0..len(strs) {
+            var s = strs[i]
+            var n = len(bytes(s))
+            var flags = 1
+            if (isAscii(s)) {
+                flags = 3
+            }
+            out += ".p2align 4\n"
+            out += "bs_${i}:\n"
+            out += "    .byte 1, 0, ${flags}, 0\n"
+            out += "    .long 6\n"
+            out += "    .long ${24 + n + 1}, 0\n"
+            out += "    .quad ${n}\n"
+            textBytes(s)
+        }
+        if (t.macos) {
+            out += ".section __DATA,__const\n"
+        } else {
+            out += ".section .data.rel.ro\n"
+        }
+        if (len(p.libs) > 0) {
+            out += ".p2align 3\nburn_exports:\n"
+            for k in 0..len(exps) {
+                out += "    .quad burn_export_name_${k}, bf_${exps[k].func}, ${exps[k].argc}\n"
+            }
+            if (len(exps) == 0) {
+                out += "    .quad 0\n"
+            }
+        }
+        var ntypes = p.checker.types.count()
+        var slots = p.checker.slots
+        for i in 0..len(slots) {
+            [string] table = []
+            for k in 0..ntypes {
+                table.push("0")
+            }
+            for im in slots[i].impls {
+                table[im.ty] = "bf_${im.func}"
+            }
+            out += ".p2align 3\n"
+            out += "bi_${i}:\n"
+            var at = 0
+            while (at < len(table)) {
+                var end = at + 8
+                if (end > len(table)) {
+                    end = len(table)
+                }
+                out += "    .quad ${join(slice(table, at, end), ", ")}\n"
+                at = end
+            }
+        }
+        if (t.macos) {
+            out += ".section __DATA,__bss\n"
+        } else {
+            out += ".bss\n"
+        }
+        out += ".p2align 4\n"
+        out += "${sym("burn_globals")}:\n"
+        var g = p.globals
+        if (g < 1) {
+            g = 1
+        }
+        out += "    .zero ${8 * g}\n"
+        if (!t.macos) {
+            out += ".section .note.GNU-stack,\"\",@progbits\n"
+        }
+    }
+
+    fun epilogue() {
+        if (frame == 0) {
+            e("mov sp, x29")
+        } else {
+            addImm("sp", "x29", frame)
+        }
+        e("ldp x29, x30, [sp], #16")
+        e("ret")
+    }
+
+    fun func(f: HFunc) {
+        out += ".text\n.p2align 2\n"
+        out += "bf_${fid}:\n"
+        var ext = f.external
+        if (ext is External.Lib) {
+            e("stp x29, x30, [sp, #-16]!")
+            e("mov x29, sp")
+            adr("x0", "burn_lib_${ext.lib}")
+            adr("x1", "burn_lib_${ext.lib}_len")
+            e("ldr x1, [x1]")
+            adr("x2", "burn_libfn_${fid}")
+            imm("x3", f.params)
+            e("add x4, x29, #16")
+            call("burn_bvm_call")
+            e("ldp x29, x30, [sp], #16")
+            e("ret")
+            return
+        }
+        var n = len(f.locals)
+        if (f.params > n) {
+            n = f.params
+        }
+        frame = area(n)
+        e("stp x29, x30, [sp, #-16]!")
+        subSp(frame)
+        e("mov x29, sp")
+        var np = f.params
+        for i in 0..np {
+            mem("ldr", "x9", "x29", frame + 16 + 8 * (np - 1 - i))
+            storeLocal("x9", i)
+        }
+        stmts(f.body)
+        e("mov x0, #0")
+        epilogue()
+        out += cold
+        cold = ""
+    }
+
+    fun stmts(ss: [HStmt]): void {
+        for s in ss {
+            stmt(s)
+        }
+    }
+
+    fun stmt(s: HStmt): void {
+        if (s is HStmt.Eval) {
+            expr(s.value)
+        } else if (s is HStmt.If) {
+            var elseL = l()
+            jumpFalse(s.cond, elseL)
+            stmts(s.then)
+            if (len(s.els) == 0) {
+                lbl(elseL)
+            } else {
+                var end = l()
+                e("b ${end}")
+                lbl(elseL)
+                stmts(s.els)
+                lbl(end)
+            }
+        } else if (s is HStmt.Loop) {
+            var top = l()
+            var cont = l()
+            var end = l()
+            lbl(top)
+            var c = s.cond
+            if (c != null) {
+                jumpFalse(c, end)
+            }
+            loops.push(LoopLabels { cont: cont, end: end })
+            stmts(s.body)
+            pop(loops)
+            lbl(cont)
+            stmts(s.step)
+            e("b ${top}")
+            lbl(end)
+        } else if (s is HStmt.Return) {
+            var v = s.value
+            if (v != null) {
+                expr(v)
+            } else {
+                e("mov x0, #0")
+            }
+            epilogue()
+        } else if (s is HStmt.Break) {
+            e("b ${loops[len(loops) - 1].end}")
+        } else if (s is HStmt.Continue) {
+            e("b ${loops[len(loops) - 1].cont}")
+        }
+    }
+
+    fun jumpFalse(c: HExpr, target: string): void {
+        var k = c.kind
+        if (k is HKind.Bool && k.value) {
+            return
+        }
+        if (k is HKind.Bool) {
+            e("b ${target}")
+            return
+        }
+        if (k is HKind.Binary) {
+            var op = k.op
+            if (op is HBinOp.ICmp) {
+                operands(k.left, k.right)
+                e("cmp x0, x1")
+                e("b.${cond(inverse(op.cmp))} ${target}")
+                return
+            }
+        }
+        if (k is HKind.Unary && k.op is HUnOp.Not) {
+            jumpTrue(k.value, target)
+            return
+        }
+        if (k is HKind.And) {
+            jumpFalse(k.left, target)
+            jumpFalse(k.right, target)
+            return
+        }
+        if (k is HKind.Or) {
+            var t2 = l()
+            jumpTrue(k.left, t2)
+            jumpFalse(k.right, target)
+            lbl(t2)
+            return
+        }
+        expr(c)
+        e("cbz x0, ${target}")
+    }
+
+    fun jumpTrue(c: HExpr, target: string): void {
+        var k = c.kind
+        if (k is HKind.Bool && !k.value) {
+            return
+        }
+        if (k is HKind.Bool) {
+            e("b ${target}")
+            return
+        }
+        if (k is HKind.Binary) {
+            var op = k.op
+            if (op is HBinOp.ICmp) {
+                operands(k.left, k.right)
+                e("cmp x0, x1")
+                e("b.${cond(op.cmp)} ${target}")
+                return
+            }
+        }
+        if (k is HKind.Unary && k.op is HUnOp.Not) {
+            jumpFalse(k.value, target)
+            return
+        }
+        if (k is HKind.Or) {
+            jumpTrue(k.left, target)
+            jumpTrue(k.right, target)
+            return
+        }
+        if (k is HKind.And) {
+            var f = l()
+            jumpFalse(k.left, f)
+            jumpTrue(k.right, target)
+            lbl(f)
+            return
+        }
+        expr(c)
+        e("cbnz x0, ${target}")
+    }
+
+    fun simpleLoad(x: HExpr, reg: string): bool {
+        var k = x.kind
+        if (k is HKind.Int) {
+            imm(reg, k.value)
+        } else if (k is HKind.TypeId) {
+            imm(reg, k.id)
+        } else if (k is HKind.LocId) {
+            imm(reg, k.id)
+        } else if (k is HKind.Float) {
+            imm(reg, floatToBits(k.value))
+        } else if (k is HKind.Bool) {
+            if (k.value) {
+                e("mov ${reg}, #1")
+            } else {
+                e("mov ${reg}, #0")
+            }
+        } else if (k is HKind.Null) {
+            e("mov ${reg}, #0")
+        } else if (k is HKind.Str) {
+            adr(reg, "bs_${k.id}")
+        } else if (k is HKind.FuncRef) {
+            adr(reg, "bf_${k.func}")
+        } else if (k is HKind.Local) {
+            loadLocal(reg, k.slot)
+        } else if (k is HKind.Global) {
+            loadGlobal(reg, k.id)
+        } else {
+            return false
+        }
+        return true
+    }
+
+    fun operands(a: HExpr, b: HExpr): void {
+        if (isSimple(b)) {
+            expr(a)
+            simpleLoad(b, "x1")
+        } else if (isConst(a)) {
+            expr(b)
+            e("mov x1, x0")
+            simpleLoad(a, "x0")
+        } else {
+            expr(a)
+            pushReg("x0")
+            expr(b)
+            e("mov x1, x0")
+            popReg("x0")
+        }
+    }
+
+    fun rtCall(name: string, args: [HExpr]): void {
+        var n = len(args)
+        [bool] late = []
+        for a in args {
+            late.push(lateOk(a, args))
+        }
+        for i in 0..n {
+            if (!late[i]) {
+                expr(args[i])
+                pushReg("x0")
+            }
+        }
+        var i = n - 1
+        while (i >= 0) {
+            if (late[i]) {
+                simpleLoad(args[i], ARG_REGS[i])
+            } else {
+                popReg(ARG_REGS[i])
+            }
+            i -= 1
+        }
+        call(rtSym(name))
+    }
+
+    /** Reserves the argument area of a call and stores `args` in it, the last one at the lowest address. */
+    fun argArea(args: [HExpr]): int {
+        var n = len(args)
+        var size = area(n)
+        subSp(size)
+        for i in 0..n {
+            expr(args[i])
+            mem("str", "x0", "sp", 8 * (n - 1 - i))
+        }
+        return size
+    }
+
+    fun coldTrap(name: string, setup: string, f: string) {
+        cold += "${name}:\n${setup}    bl ${sym(rtSym(f))}\n    brk #1\n"
+    }
+
+    fun overflow(loc: int) {
+        if (loc == NONE) {
+            return
+        }
+        var ov = l()
+        e("b.vs ${ov}")
+        coldTrap(ov, immText("x0", loc), "ErrOverflow")
+    }
+
+    fun div(isMod: bool, loc: int): void {
+        var dz = l()
+        var normal = l()
+        var done = l()
+        e("cbz x1, ${dz}")
+        e("cmn x1, #1")
+        e("b.ne ${normal}")
+        if (isMod) {
+            e("mov x0, #0")
+        } else if (loc == NONE) {
+            e("neg x0, x0")
+        } else {
+            e("negs x0, x0")
+            overflow(loc)
+        }
+        e("b ${done}")
+        lbl(normal)
+        e("sdiv x9, x0, x1")
+        if (isMod) {
+            e("msub x0, x9, x1, x0")
+        } else {
+            e("mov x0, x9")
+        }
+        lbl(done)
+        coldTrap(dz, immText("x0", loc), "ErrDivZero")
+    }
+
+    fun shift(op: HBinOp, loc: int): void {
+        if (loc != NONE) {
+            var bad = l()
+            e("cmp x1, #63")
+            e("b.hi ${bad}")
+            coldTrap(bad, immText("x0", loc), "ErrShift")
+        }
+        if (op is HBinOp.Shl) {
+            e("lsl x0, x0, x1")
+        } else if (op is HBinOp.Shr) {
+            e("asr x0, x0, x1")
+        } else {
+            e("lsr x0, x0, x1")
+        }
+    }
+
+    fun checked(plain: string, flagged: string, loc: int) {
+        if (loc == NONE) {
+            e(plain)
+        } else {
+            e(flagged)
+            overflow(loc)
+        }
+    }
+
+    fun mulChecked(loc: int) {
+        if (loc == NONE) {
+            e("mul x0, x0, x1")
+            return
+        }
+        var ov = l()
+        e("mul x9, x0, x1")
+        e("smulh x10, x0, x1")
+        e("cmp x10, x9, asr #63")
+        e("mov x0, x9")
+        e("b.ne ${ov}")
+        coldTrap(ov, immText("x0", loc), "ErrOverflow")
+    }
+
+    fun binary(op: HBinOp, a: HExpr, b: HExpr): void {
+        operands(a, b)
+        if (op is HBinOp.IAdd) {
+            checked("add x0, x0, x1", "adds x0, x0, x1", op.loc)
+        } else if (op is HBinOp.ISub) {
+            checked("sub x0, x0, x1", "subs x0, x0, x1", op.loc)
+        } else if (op is HBinOp.IMul) {
+            mulChecked(op.loc)
+        } else if (op is HBinOp.BitAnd) {
+            e("and x0, x0, x1")
+        } else if (op is HBinOp.BitOr) {
+            e("orr x0, x0, x1")
+        } else if (op is HBinOp.BitXor) {
+            e("eor x0, x0, x1")
+        } else if (op is HBinOp.Shl) {
+            shift(op, op.loc)
+        } else if (op is HBinOp.Shr) {
+            shift(op, op.loc)
+        } else if (op is HBinOp.UShr) {
+            shift(op, op.loc)
+        } else if (op is HBinOp.IDiv) {
+            div(false, op.loc)
+        } else if (op is HBinOp.IMod) {
+            div(true, op.loc)
+        } else if (op is HBinOp.FAdd || op is HBinOp.FSub || op is HBinOp.FMul || op is HBinOp.FDiv) {
+            e("fmov d0, x0")
+            e("fmov d1, x1")
+            var ins = "fdiv"
+            if (op is HBinOp.FAdd) {
+                ins = "fadd"
+            } else if (op is HBinOp.FSub) {
+                ins = "fsub"
+            } else if (op is HBinOp.FMul) {
+                ins = "fmul"
+            }
+            e("${ins} d0, d0, d1")
+            e("fmov x0, d0")
+        } else if (op is HBinOp.ICmp) {
+            e("cmp x0, x1")
+            e("cset x0, ${cond(op.cmp)}")
+        } else if (op is HBinOp.UCmp) {
+            e("cmp x0, x1")
+            e("cset x0, ${ucond(op.cmp)}")
+        } else if (op is HBinOp.WAdd) {
+            e("add x0, x0, x1")
+        } else if (op is HBinOp.WSub) {
+            e("sub x0, x0, x1")
+        } else if (op is HBinOp.WMul) {
+            e("mul x0, x0, x1")
+        } else if (op is HBinOp.FCmp) {
+            e("fmov d0, x0")
+            e("fmov d1, x1")
+            e("fcmp d0, d1")
+            e("cset x0, ${fcond(op.cmp)}")
+        }
+    }
+
+    fun expr(x: HExpr): void {
+        if (simpleLoad(x, "x0")) {
+            return
+        }
+        var k = x.kind
+        if (k is HKind.SetLocal) {
+            expr(k.value)
+            storeLocal("x0", k.slot)
+        } else if (k is HKind.SetGlobal) {
+            expr(k.value)
+            storeGlobal("x0", k.id)
+        } else if (k is HKind.Unary) {
+            expr(k.value)
+            var op = k.op
+            if (op is HUnOp.INeg) {
+                checked("neg x0, x0", "negs x0, x0", op.loc)
+            } else if (op is HUnOp.FNeg) {
+                e("eor x0, x0, #0x8000000000000000")
+            } else if (op is HUnOp.BitNot) {
+                e("mvn x0, x0")
+            } else {
+                e("cmp x0, #0")
+                e("cset x0, eq")
+            }
+        } else if (k is HKind.Binary) {
+            binary(k.op, k.left, k.right)
+        } else if (k is HKind.And) {
+            var end = l()
+            expr(k.left)
+            e("cbz x0, ${end}")
+            expr(k.right)
+            lbl(end)
+        } else if (k is HKind.Or) {
+            var end = l()
+            expr(k.left)
+            e("cbnz x0, ${end}")
+            expr(k.right)
+            lbl(end)
+        } else if (k is HKind.Conv) {
+            expr(k.value)
+            if (k.conv == Conv.IntToFloat) {
+                e("scvtf d0, x0")
+                e("fmov x0, d0")
+            } else {
+                e("fmov d0, x0")
+                e("fcvtzs x0, d0")
+            }
+        } else if (k is HKind.Call) {
+            var size = argArea(k.args)
+            e("bl bf_${k.func}")
+            addSp(size)
+        } else if (k is HKind.CallIndirect) {
+            var size = argArea(k.args)
+            expr(k.callee)
+            e("mov x16, x0")
+            e("blr x16")
+            addSp(size)
+        } else if (k is HKind.CallIface) {
+            var n = len(k.args)
+            var size = argArea(k.args)
+            mem("ldr", "x0", "sp", 8 * (n - 1))
+            e("ldr w9, [x0, #4]")
+            adr("x10", "bi_${k.slot}")
+            e("ldr x16, [x10, x9, lsl #3]")
+            e("blr x16")
+            addSp(size)
+        } else if (k is HKind.Rt) {
+            if (!inlineNum(k.name, k.args)) {
+                rtCall(k.name, k.args)
+            }
+        } else if (k is HKind.Spawn) {
+            var size = argArea(k.args)
+            adr("x0", "bf_${k.func}")
+            imm("x1", len(k.args))
+            e("mov x2, sp")
+            imm("x3", x.ty)
+            call(rtSym("Spawn"))
+            addSp(size)
+        } else if (k is HKind.NewStruct) {
+            newObject(k.args, k.ty, "StructNew", -1, false)
+        } else if (k is HKind.GetField) {
+            expr(k.obj)
+            mem("ldr", "x0", "x0", 16 + 8 * k.index)
+        } else if (k is HKind.SetField) {
+            var at = 16 + 8 * k.index
+            if (isSimple(k.value)) {
+                expr(k.obj)
+                simpleLoad(k.value, "x1")
+                mem("str", "x1", "x0", at)
+                e("mov x0, x1")
+            } else {
+                expr(k.obj)
+                pushReg("x0")
+                expr(k.value)
+                popReg("x1")
+                mem("str", "x0", "x1", at)
+            }
+        } else if (k is HKind.NewArray) {
+            newObject(k.items, k.ty, "ArrNew", packedElemOf(p.checker, k.ty), true)
+        } else if (k is HKind.Index) {
+            index(k.obj, k.index, k.loc)
+        } else if (k is HKind.SetIndex) {
+            setIndex(k.obj, k.index, k.value, k.loc)
+        } else if (k is HKind.ArrLen) {
+            expr(k.value)
+            e("ldr x0, [x0, #16]")
+        } else if (k is HKind.BoxVal) {
+            expr(k.value)
+            e("ldr x0, [x0, #16]")
+        } else if (k is HKind.Seq) {
+            stmts(k.stmts)
+            expr(k.value)
+        } else if (k is HKind.Retain) {
+            retain(k.value)
+        } else if (k is HKind.Release) {
+            release(k.value)
+        }
+    }
+
+    /** A struct or array: the values go into a stack area first, then into the new object's fields or elements. */
+    fun newObject(items: [HExpr], ty: int, rt: string, elem: int, isArray: bool): void {
+        var n = len(items)
+        var size = area(n)
+        subSp(size)
+        for i in 0..n {
+            expr(items[i])
+            mem("str", "x0", "sp", 8 * i)
+        }
+        imm("x0", ty)
+        imm("x1", n)
+        call(rtSym(rt))
+        if (n > 0 && isArray) {
+            e("ldr x2, [x0, #32]")
+        }
+        for i in 0..n {
+            mem("ldr", "x9", "sp", 8 * i)
+            if (!isArray) {
+                mem("str", "x9", "x0", 16 + 8 * i)
+            } else if (elem < 0) {
+                mem("str", "x9", "x2", 8 * i)
+            } else if (elem == F32) {
+                e("fmov d0, x9")
+                e("fcvt s0, d0")
+                addImm("x10", "x2", 4 * i)
+                e("str s0, [x10]")
+            } else {
+                var w = NUM_WIDTH[elem]
+                addImm("x10", "x2", w * i)
+                if (w == 1) {
+                    e("strb w9, [x10]")
+                } else if (w == 2) {
+                    e("strh w9, [x10]")
+                } else {
+                    e("str w9, [x10]")
+                }
+            }
+        }
+        addSp(size)
+    }
+
+    fun indexCold(name: string, arr: string, loc: int) {
+        cold += "${name}:\n    ldr x2, [${arr}, #16]\n${immText("x0", loc)}    bl ${sym(rtSym("ErrIndex"))}\n    brk #1\n"
+    }
+
+    fun index(obj: HExpr, idx: HExpr, loc: int): void {
+        operands(obj, idx)
+        var bad = l()
+        e("ldr x9, [x0, #16]")
+        e("cmp x1, x9")
+        e("b.hs ${bad}")
+        e("ldr x2, [x0, #32]")
+        var elem = packedElemOf(p.checker, obj.ty)
+        if (elem < 0) {
+            e("ldr x0, [x2, x1, lsl #3]")
+        } else if (elem == I8) {
+            e("ldrsb x0, [x2, x1]")
+        } else if (elem == U8) {
+            e("ldrb w0, [x2, x1]")
+        } else if (elem == I16) {
+            e("ldrsh x0, [x2, x1, lsl #1]")
+        } else if (elem == U16) {
+            e("ldrh w0, [x2, x1, lsl #1]")
+        } else if (elem == I32) {
+            e("ldrsw x0, [x2, x1, lsl #2]")
+        } else if (elem == U32) {
+            e("ldr w0, [x2, x1, lsl #2]")
+        } else {
+            e("ldr s0, [x2, x1, lsl #2]")
+            e("fcvt d0, s0")
+            e("fmov x0, d0")
+        }
+        indexCold(bad, "x0", loc)
+    }
+
+    fun setIndex(obj: HExpr, idx: HExpr, value: HExpr, loc: int): void {
+        expr(obj)
+        pushReg("x0")
+        expr(idx)
+        pushReg("x0")
+        expr(value)
+        popReg("x1")
+        popReg("x3")
+        var bad = l()
+        e("ldr x9, [x3, #16]")
+        e("cmp x1, x9")
+        e("b.hs ${bad}")
+        e("ldr x8, [x3, #32]")
+        var elem = packedElemOf(p.checker, obj.ty)
+        if (elem < 0) {
+            e("str x0, [x8, x1, lsl #3]")
+        } else if (elem == I8 || elem == U8) {
+            e("strb w0, [x8, x1]")
+        } else if (elem == I16 || elem == U16) {
+            e("strh w0, [x8, x1, lsl #1]")
+        } else if (elem == I32 || elem == U32) {
+            e("str w0, [x8, x1, lsl #2]")
+        } else {
+            e("fmov d0, x0")
+            e("fcvt s0, d0")
+            e("str s0, [x8, x1, lsl #2]")
+        }
+        indexCold(bad, "x3", loc)
+    }
+
+    /** A cold path that calls a runtime function on the object in x0 and keeps x0. */
+    fun coldKeep(name: string, f: string, back: string) {
+        cold += "${name}:\n    str x0, [sp, #-16]!\n    bl ${sym(rtSym(f))}\n    ldr x0, [sp], #16\n    b ${back}\n"
+    }
+
+    fun rcFlags(done: string, slow: string) {
+        e("cbz x0, ${done}")
+        e("ldrb w9, [x0, #2]")
+        e("tbnz w9, #0, ${done}")
+        adr("x10", sym("burn_rc_mt"))
+        e("ldrb w10, [x10]")
+        e("cbnz w10, ${slow}")
+    }
+
+    fun retain(value: HExpr): void {
+        expr(value)
+        var done = l()
+        var slow = l()
+        rcFlags(done, slow)
+        e("ldr w9, [x0, #12]")
+        e("add w9, w9, #1")
+        e("str w9, [x0, #12]")
+        lbl(done)
+        coldKeep(slow, "Retain", done)
+    }
+
+    fun release(value: HExpr): void {
+        expr(value)
+        var done = l()
+        var mt = l()
+        var zero = l()
+        var root = l()
+        rcFlags(done, mt)
+        e("ldr w9, [x0, #12]")
+        e("subs w9, w9, #1")
+        e("str w9, [x0, #12]")
+        e("b.eq ${zero}")
+        e("ldrb w9, [x0, #2]")
+        e("tbnz w9, #2, ${root}")
+        lbl(done)
+        coldKeep(mt, "Release", done)
+        coldKeep(zero, "ReleaseZero", done)
+        coldKeep(root, "PossibleRoot", done)
+    }
+
+    fun inlineNum(f: string, args: [HExpr]): bool {
+        if (f == "NumWrap") {
+            var n = numCodeArg(args[1])
+            if (n < 0) {
+                return false
+            }
+            expr(args[0])
+            if (n == I8) {
+                e("sxtb x0, w0")
+            } else if (n == U8) {
+                e("and x0, x0, #0xff")
+            } else if (n == I16) {
+                e("sxth x0, w0")
+            } else if (n == U16) {
+                e("and x0, x0, #0xffff")
+            } else if (n == I32) {
+                e("sxtw x0, w0")
+            } else if (n == U32) {
+                e("mov w0, w0")
+            }
+            return true
+        }
+        if (f == "NumFit") {
+            var n = numCodeArg(args[1])
+            if (n < 0 || n == U64 || n == F32) {
+                return false
+            }
+            expr(args[0])
+            var bad = l()
+            if (n == U8 || n == U16) {
+                var max = 255
+                if (n == U16) {
+                    max = 65535
+                }
+                imm("x9", max)
+                e("cmp x0, x9")
+                e("b.hi ${bad}")
+            } else {
+                if (n == I8) {
+                    e("sxtb x9, w0")
+                } else if (n == I16) {
+                    e("sxth x9, w0")
+                } else if (n == I32) {
+                    e("sxtw x9, w0")
+                } else {
+                    e("mov w9, w0")
+                }
+                e("cmp x9, x0")
+                e("b.ne ${bad}")
+            }
+            coldTrap(bad, immText("x1", n + 1) + immText("x2", locArgOf(args[2])), "NumFit")
+            return true
+        }
+        if (f == "F32Round") {
+            expr(args[0])
+            e("fmov d0, x0")
+            e("fcvt s0, d0")
+            e("fcvt d0, s0")
+            e("fmov x0, d0")
+            return true
+        }
+        if (f == "UAdd" || f == "USub" || f == "UMul") {
+            operands(args[0], args[1])
+            var bad = l()
+            if (f == "UAdd") {
+                e("adds x9, x0, x1")
+                e("b.cs ${bad}")
+                e("mov x0, x9")
+            } else if (f == "USub") {
+                e("subs x9, x0, x1")
+                e("b.lo ${bad}")
+                e("mov x0, x9")
+            } else {
+                e("umulh x9, x0, x1")
+                e("cbnz x9, ${bad}")
+                e("mul x0, x0, x1")
+            }
+            coldTrap(bad, immText("x2", locArgOf(args[2])), f)
+            return true
+        }
+        return false
+    }
+}
+
+/** The 64-bit ARM assembly of a program for Linux or macOS; `meta` holds its encoded types and locations. */
+pub fun generateArm64(p: NativeProgram, meta: [int], t: AsmTarget): string {
+    var g = new ArmGen(p, t)
+    g.emitAll(meta)
+    return g.out
+}

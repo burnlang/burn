@@ -66,7 +66,7 @@ fun main() {
   longer used, cycles included, with no pauses and nothing to write by hand
 - `async fun` / `await` running on real threads
 - Tiny executables without the standard library: `std = false` in burn.toml or `--no-std`
-- Four ways to ship sharing one type checker and runtime: native x86-64, bvm bytecode, `.bar` archives, JavaScript
+- Four ways to ship sharing one type checker and runtime: native x86-64 and arm64 (Apple silicon), bvm bytecode, `.bar` archives, JavaScript
 - Modules with `pub` and `priv`
 - Standard library for dates, times, HTTP, JSON, math, strings, processes and files
 - Projects and packages: `burn init github.com/you/app`, `burn.toml`, `burn.lock` and ash, the package manager
@@ -88,7 +88,7 @@ curl -fsSL https://raw.githubusercontent.com/burnlang/burnup/master/install.sh |
 and adds it to your `PATH`. It installs and switches versions (`burnup install 26.1`, `burnup default master`), and
 a project can pin its version with `burn = "26.1"` in `burn.toml`. It builds from source when no
 prebuilt release is available, which needs Rust 1.85 or newer for bvm (`--install-rust` sets that up for you). Native
-executables need a C toolchain (`cc`) and currently target x86-64 Linux and macOS.
+executables need a C toolchain (`cc`) and are built for Linux and macOS on x86-64 and arm64, Apple silicon Macs included.
 See [docs/tooling/installation.mdx](docs/tooling/installation.mdx) for all options, updating and uninstalling.
 
 ## The toolchain
@@ -334,7 +334,7 @@ examples are in [`examples/bvm/`](examples/bvm/).
   - `src/syntax/`, `src/diag/`, `src/project/`: lexer, parser, error messages, `burn.toml` and the module loader
   - `src/check/`: type checker with smart casts, lowers to the typed IR in `hir.bn`
   - `src/lower/`, `src/vm/`: ownership, then bvm code generation
-  - `src/native/`, `src/js/`: the x86-64 and JavaScript backends
+  - `src/native/`, `src/js/`: the x86-64, arm64 and JavaScript backends
   - `src/cli/`, `src/lsp/`, `src/doc/`: the command line, the language server and `burn doc`
   - `src/main.bn` is the compiler on its own, and `src/bin/burn.bn` the command line that toolchains ship
 - `bvm/`: the Burn Virtual Machine, written in Rust: instruction set, assembler, bytecode format, verifier, linker,

@@ -1,0 +1,283 @@
+import "../check/check.bn"
+import "../check/hir.bn"
+import "../check/types.bn"
+import "../vm/asm.bn"
+import "../vm/bits.bn"
+
+/** The annotations that change the bytecode of a library. */
+pub const MIXINS = ["Inject", "Overwrite", "Redirect"]
+
+/** `u32::MAX`, the location of an operation that cannot fail. */
+pub const NONE = 4294967295
+
+/** How the assembler and linker of a platform name things. */
+pub def type AsmTarget {
+    string prefix
+    bool macos
+    string arch
+}
+
+/** The target of the machine the compiler runs on, from its platform such as `linux-x86_64`. */
+pub fun asmTarget(platform: string): AsmTarget {
+    var arch = "x86_64"
+    if (endsWith(platform, "aarch64") || endsWith(platform, "arm64")) {
+        arch = "aarch64"
+    }
+    if (startsWith(platform, "macos")) {
+        return AsmTarget { prefix: "_", macos: true, arch: arch }
+    }
+    return AsmTarget { prefix: "", macos: false, arch: arch }
+}
+
+/** What the code generator needs of a checked program, after the ownership pass. */
+pub def type NativeProgram {
+    Checker checker
+    [HFunc] funcs
+    int globals
+    int entry
+    [[int]] libs
+}
+
+pub fun quote(s: string): string {
+    return "\"${escape(s)}\""
+}
+
+pub fun isMixin(a: HirAnnotation): bool {
+    return contains(MIXINS, a.name)
+}
+
+/** The bvm module that applies the mixins of a native program to its libraries, like `mixin_module` in `x86.rs`. */
+pub fun mixinModule(funcs: [HFunc]): string {
+    var s = ""
+    for i in 0..len(funcs) {
+        var f = funcs[i]
+        [HirAnnotation] anns = []
+        for a in f.annotations {
+            if (isMixin(a)) {
+                anns.push(a)
+            }
+        }
+        if (len(anns) == 0) {
+            continue
+        }
+        var hook = "__mixin_hook_${i}"
+        s += "import ${quote(hook)} ${f.params}\n"
+        for a in anns {
+            s += "@${a.name}"
+            for x in a.args {
+                var v = x.value
+                if (v is Const.Int) {
+                    s += " ${x.key}=${v.value}"
+                } else if (v is Const.Float) {
+                    s += " ${x.key}=${debugFloat(v.value)}"
+                } else if (v is Const.Bool) {
+                    s += " ${x.key}=${v.value}"
+                } else if (v is Const.Str) {
+                    s += " ${x.key}=${quote(v.text)}"
+                }
+            }
+            s += "\n"
+        }
+        s += "func ${quote("__mixin_${i}")}(${f.params})\n"
+        for k in 0..f.params {
+            s += "    load ${k}\n"
+        }
+        s += "    host ${quote(hook)}\n"
+        s += "    ret\nend\n"
+    }
+    return s
+}
+
+pub fun isConst(e: HExpr): bool {
+    var k = e.kind
+    return k is HKind.Int || k is HKind.TypeId || k is HKind.LocId || k is HKind.Float || k is HKind.Bool || k is HKind.Str || k is HKind.Null || k is HKind.FuncRef
+}
+
+pub fun isSimple(e: HExpr): bool {
+    var k = e.kind
+    return isConst(e) || k is HKind.Local || k is HKind.Global
+}
+
+/** Whether `e` or anything in it writes local `slot`, or a global when `slot` is -1, like `writes_local` and `writes_global`. */
+pub fun writes(e: HExpr, slot: int): bool {
+    var k = e.kind
+    if (slot < 0) {
+        if (k is HKind.SetGlobal || k is HKind.Call || k is HKind.CallIndirect || k is HKind.CallIface || k is HKind.Seq) {
+            return true
+        }
+    } else if (k is HKind.SetLocal && k.slot == slot) {
+        return true
+    }
+    return match k {
+        HKind.SetLocal(s, value) => writes(value, slot)
+        HKind.SetGlobal(id, value) => writes(value, slot)
+        HKind.Unary(op, value) => writes(value, slot)
+        HKind.Conv(conv, value) => writes(value, slot)
+        HKind.GetField(obj, index) => writes(obj, slot)
+        HKind.ArrLen(value) => writes(value, slot)
+        HKind.BoxVal(value) => writes(value, slot)
+        HKind.Retain(value) => writes(value, slot)
+        HKind.Release(value) => writes(value, slot)
+        HKind.Binary(op, left, right) => writes(left, slot) || writes(right, slot)
+        HKind.And(left, right) => writes(left, slot) || writes(right, slot)
+        HKind.Or(left, right) => writes(left, slot) || writes(right, slot)
+        HKind.Index(obj, index, loc) => writes(obj, slot) || writes(index, slot)
+        HKind.SetField(obj, index, value) => writes(obj, slot) || writes(value, slot)
+        HKind.SetIndex(obj, index, value, loc) => writes(obj, slot) || writes(index, slot) || writes(value, slot)
+        HKind.Call(func, args) => writesAny(args, slot)
+        HKind.CallIface(s, args) => writesAny(args, slot)
+        HKind.Rt(name, args) => writesAny(args, slot)
+        HKind.Spawn(func, args) => writesAny(args, slot)
+        HKind.NewStruct(ty, args) => writesAny(args, slot)
+        HKind.NewArray(ty, items) => writesAny(items, slot)
+        HKind.CallIndirect(callee, args) => writes(callee, slot) || writesAny(args, slot)
+        HKind.Seq(stmts, value) => stmtsWrite(stmts, slot) || writes(value, slot)
+        else => false
+    }
+}
+
+pub fun writesAny(xs: [HExpr], slot: int): bool {
+    for x in xs {
+        if (writes(x, slot)) {
+            return true
+        }
+    }
+    return false
+}
+
+pub fun stmtsWrite(ss: [HStmt], slot: int): bool {
+    for s in ss {
+        if (stmtWrites(s, slot)) {
+            return true
+        }
+    }
+    return false
+}
+
+pub fun stmtWrites(s: HStmt, slot: int): bool {
+    if (s is HStmt.Eval) {
+        return writes(s.value, slot)
+    }
+    if (s is HStmt.Return) {
+        var v = s.value
+        return v != null && writes(v, slot)
+    }
+    if (s is HStmt.If) {
+        return writes(s.cond, slot) || stmtsWrite(s.then, slot) || stmtsWrite(s.els, slot)
+    }
+    if (s is HStmt.Loop) {
+        var c = s.cond
+        return (c != null && writes(c, slot)) || stmtsWrite(s.body, slot) || stmtsWrite(s.step, slot)
+    }
+    return false
+}
+
+pub fun lateOk(arg: HExpr, all: [HExpr]): bool {
+    var k = arg.kind
+    if (k is HKind.Local) {
+        return !writesAny(all, k.slot)
+    }
+    if (k is HKind.Global) {
+        return !writesAny(all, -1)
+    }
+    return isConst(arg)
+}
+
+pub fun isAscii(s: string): bool {
+    for b in bytes(s) {
+        if (b >= 128) {
+            return false
+        }
+    }
+    return true
+}
+
+/** The width in bytes of the packed numeric types by their code in the checker, from int8 to float32. */
+pub const NUM_WIDTH = [1, 1, 2, 2, 4, 4, 8, 4]
+
+pub const I8 = 0
+
+pub const U8 = 1
+
+pub const I16 = 2
+
+pub const U16 = 3
+
+pub const I32 = 4
+
+pub const U32 = 5
+
+pub const U64 = 6
+
+pub const F32 = 7
+
+pub def type Export {
+    string name
+    int func
+    int argc
+}
+
+pub def type LoopLabels {
+    string cont
+    string end
+}
+
+/** The functions a native program exports to its bytecode libraries: `@Export` functions and mixin hooks, like `emit_all` in `x86.rs`. */
+pub fun exportsOf(p: NativeProgram): [Export] {
+    [Export] v = []
+    if (len(p.libs) == 0) {
+        return v
+    }
+    for i in 0..len(p.funcs) {
+        var f = p.funcs[i]
+        if (f.external != null) {
+            continue
+        }
+        for a in f.annotations {
+            if (a.name == "Export") {
+                v.push(Export { name: strArg(a, "name") ?? f.name, func: i, argc: f.params })
+                break
+            }
+        }
+        for a in f.annotations {
+            if (isMixin(a)) {
+                v.push(Export { name: "__mixin_hook_${i}", func: i, argc: f.params })
+                break
+            }
+        }
+    }
+    return v
+}
+
+/** The code of the packed numeric element type of array type `arr` (int8 is 0), or -1, like `packed_elem`. */
+pub fun packedElemOf(c: Checker, arr: int): int {
+    var k = c.types.kindOf(arr)
+    if (k is Ty.Array) {
+        var el = c.types.kindOf(k.elem)
+        if (el is Ty.Num && el.code != U64) {
+            return el.code
+        }
+    }
+    return -1
+}
+
+/** The checker code of a numeric type given as an `Int` argument, or -1, like `Num::from_code`. */
+pub fun numCodeArg(x: HExpr): int {
+    var k = x.kind
+    if (k is HKind.Int) {
+        var c = k.value & 255
+        if (c >= 1 && c <= 8) {
+            return c - 1
+        }
+    }
+    return -1
+}
+
+/** The source location given as a `LocId` argument, or `NONE`. */
+pub fun locArgOf(x: HExpr): int {
+    var k = x.kind
+    if (k is HKind.LocId) {
+        return k.id
+    }
+    return NONE
+}

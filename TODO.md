@@ -3,7 +3,7 @@
 ## Done
 
 - Fix Date: the date library is now written in Burn and fully working
-- Fix compilation to executable: `burn build` produces real native x86-64 executables
+- Fix compilation to executable: `burn build` produces real native x86-64 and arm64 executables (Linux and macOS, Apple silicon included)
 - Add interfaces: `def interface`, checked conformance, dynamic dispatch and smart casts
 - Add better documentation using MDX: see `docs/`
 - Add compiling to JS: `burn build --target js` covers the whole language and standard library
@@ -29,7 +29,7 @@
 
 ## Next
 
-- Native backends for Windows (PE/COFF) and ARM64, or a JIT in bvm
+- Native backends for Windows (PE/COFF), or a JIT in bvm
 - Generic methods, generic interfaces, and generic structs that extend other structs
 - Windows installer
 - bvm: a JIT or threaded-code dispatch and a debugger

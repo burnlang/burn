@@ -18,8 +18,8 @@ bin/burn is bvm, the Burn virtual machine. Started as burn, burni, burnc or burn
 it runs share/burn/burn.bvm, the command line written in Burn. compiler.bvm is the
 compiler written in Burn, built by itself (scripts/bootstrap.sh) starting from a
 released Burn (stage0), and it builds burn.bvm. lib holds the runtime that native
-executables link against (scripts/native-runtime.sh); it needs rustc, and only
-x86_64 Linux and macOS build native executables.
+executables link against (scripts/native-runtime.sh); it needs rustc, and native
+executables are built on x86_64 and arm64 (Apple silicon) macOS and Linux.
 
 This is what release archives contain. To install Burn, use burnup:
   curl -fsSL https://raw.githubusercontent.com/burnlang/burnup/master/install.sh | sh
@@ -120,7 +120,7 @@ rm -f "$cli" "$cli.bvm"
 
 rm -rf "$SHARE/lib"
 case "$(uname -s)-$(uname -m)" in
-    Linux-x86_64 | Darwin-x86_64)
+    Linux-x86_64 | Darwin-x86_64 | Linux-aarch64 | Darwin-arm64)
         say "==> Building the runtime for native executables"
         sh "$ROOT/scripts/native-runtime.sh" "$SHARE/lib"
         ;;

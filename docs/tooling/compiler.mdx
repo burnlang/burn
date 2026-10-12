@@ -8,7 +8,7 @@ order: 25
 
 ```text
 source ──▶ lexer ──▶ parser ──▶ type checker ──▶ typed IR ─┬─▶ ownership ─┬─▶ bvm module ──▶ bvm, .bvmc, .bar
-                                    │                      │              └─▶ x86-64 asm ──▶ cc + runtime (burn build)
+                                    │                      │              └─▶ x86-64 / arm64 asm ──▶ cc + runtime (burn build)
                                     ▼                      └─▶ JavaScript                                (--target js)
                           diagnostics, hover, completion
 ```
@@ -58,9 +58,12 @@ compiling a typical program takes a few milliseconds, so running a file feels li
 
 ## Native code
 
-`burn build` turns the IR into x86-64 assembly (Intel syntax, `compiler/src/native/x86.bn`): locals live in the
-stack frame, expressions evaluate into `rax`, comparisons in conditions become compare-and-jump, array access and
-field access are inlined, and interface calls go through per-method dispatch tables. The program entry point and the
+`burn build` turns the IR into assembly for the processor: x86-64 (Intel syntax, `compiler/src/native/x86.bn`) or
+64-bit ARM (`compiler/src/native/arm64.bn`), for Linux (ELF) and macOS (Mach-O). Locals live in the stack frame,
+expressions evaluate into `rax` or `x0`, comparisons in conditions become compare-and-jump, array access and field
+access are inlined, and interface calls go through per-method dispatch tables. Both generators share the data layout,
+the order of arguments on the stack and the code that decides what a native program exports
+(`compiler/src/native/shared.bn`), so the same runtime serves both. The program entry point and the
 trampoline that starts async tasks are hand-written assembly. The assembly is linked by `cc` with a static build of
 the runtime (bvm and its runtime core, compiled by `scripts/native-runtime.sh` into `share/burn/lib`), so the result
 is a standalone executable. A program that imports bytecode libraries embeds them, and bvm runs them inside the

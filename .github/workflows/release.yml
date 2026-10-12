@@ -43,7 +43,6 @@ jobs:
           dist/burn/bin/burn --version
           dist/burn/bin/burn examples/fib.bn
       - name: Native smoke test
-        if: runner.arch == 'X64'
         run: |
           dist/burn/bin/burn build examples/fib.bn -o fib-native
           ./fib-native

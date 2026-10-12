@@ -95,7 +95,10 @@ fn vm_matches_expected_output() {
 }
 
 fn native_supported() -> bool {
-    cfg!(all(target_arch = "x86_64", any(target_os = "linux", target_os = "macos")))
+    cfg!(all(
+        any(target_arch = "x86_64", target_arch = "aarch64"),
+        any(target_os = "linux", target_os = "macos")
+    ))
 }
 
 #[test]
@@ -130,6 +133,69 @@ fn native_matches_vm() {
                     out
                 ));
             }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+fn has_command(program: &str, arg: &str) -> bool {
+    Command::new(program).arg(arg).output().map(|o| o.status.success()).unwrap_or(false)
+}
+
+const QEMU_DIFFERS: [&str; 1] = ["process_fs"];
+
+#[test]
+fn arm64_executables_match_vm() {
+    if !cfg!(all(target_arch = "x86_64", target_os = "linux"))
+        || !has_command("qemu-aarch64", "--version")
+        || !has_command("aarch64-linux-gnu-gcc", "--version")
+    {
+        return;
+    }
+    let root = root();
+    let tmp = temp_dir("arm64");
+    let runtime = tmp.join("runtime");
+    let (out, code) = output(
+        Command::new("sh")
+            .arg(root.join("scripts/native-runtime.sh"))
+            .arg(&runtime)
+            .env("TARGET", "aarch64-unknown-linux-gnu"),
+    );
+    if code != 0 && out.contains("aarch64-unknown-linux-gnu") && out.contains("target may not be installed") {
+        return;
+    }
+    assert_eq!(code, 0, "{}", out);
+    let cross = |cmd: &mut Command| {
+        cmd.env("BURN_PLATFORM", "linux-aarch64")
+            .env("BURN_RUNTIME_DIR", &runtime)
+            .env("BURN_CC", "aarch64-linux-gnu-gcc");
+    };
+    let mut failures = Vec::new();
+    for (file, expected) in cases() {
+        let name = file.file_stem().unwrap().to_string_lossy().into_owned();
+        if QEMU_DIFFERS.contains(&name.as_str()) {
+            continue;
+        }
+        let rel = file.strip_prefix(&root).unwrap();
+        let exe = tmp.join(&name);
+        let mut build = burn();
+        build.current_dir(&root).arg("build").arg(rel).arg("-o").arg(&exe);
+        cross(&mut build);
+        let (build_out, code) = output(&mut build);
+        if code != 0 {
+            failures.push(format!("{}: build failed\n{}", rel.display(), build_out));
+            continue;
+        }
+        let (out, _) = output(
+            Command::new("qemu-aarch64")
+                .args(["-L", "/usr/aarch64-linux-gnu"])
+                .arg(&exe)
+                .current_dir(&root)
+                .env("BURN_GC_THRESHOLD", "16384"),
+        );
+        if out != expected {
+            failures.push(format!("{}:\n--- expected\n{}\n--- got\n{}", rel.display(), expected, out));
         }
     }
     let _ = std::fs::remove_dir_all(&tmp);
