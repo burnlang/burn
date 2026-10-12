@@ -99,3 +99,31 @@ for i in 0..10 {
     }
 }
 print(total)
+
+def enum Token {
+    Num(value: int),
+    Word(text: string),
+    End
+}
+
+var token = Token.Word("go")
+match token {
+    Token.Num(n) => print("number", n)
+    Token.Word(w) if len(w) < 3 => print("short word", w)
+    Token.Word(w) => print("word", w)
+    Token.End => print("end")
+}
+
+any held = 41
+print(match held {
+    is int n if n > 40 => "big ${n + 1}"
+    is int n => "small ${n}"
+    is string s => s.upper()
+    else => "other"
+})
+held = "text"
+print(match held {
+    is int n => "int ${n}"
+    is string s => s.upper()
+    else => "other"
+})
