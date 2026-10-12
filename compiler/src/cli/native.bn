@@ -15,16 +15,32 @@ pub def type NativeOptions {
     bool strip
 }
 
-/** The folder with the runtime that native executables link against, `share/burn/lib` in a toolchain. */
+/** The platforms native executables can be built for. */
+pub const NATIVE_PLATFORMS = ["linux-x86_64", "macos-x86_64", "linux-aarch64", "macos-aarch64"]
+
+/** The platform native executables are built for: `BURN_PLATFORM` when it is set, to cross-compile, or this one. */
+pub fun targetPlatform(): string {
+    var p = env("BURN_PLATFORM")
+    if (p != "") {
+        return p
+    }
+    return platform()
+}
+
+/** The folder with the runtime that native executables link against: `BURN_RUNTIME_DIR`, or `share/burn/lib` in a toolchain. */
 priv fun runtimeDir(): string {
+    var d = env("BURN_RUNTIME_DIR")
+    if (d != "") {
+        return d
+    }
     return pathJoin(shareDir() ?? ".", "lib")
 }
 
 /** Why this toolchain cannot build native executables, or null, like `supported` in `native/mod.rs`. */
 pub fun nativeUnsupported(): string? {
-    var p = platform()
-    if (p != "linux-x86_64" && p != "macos-x86_64") {
-        return "native compilation currently supports x86_64 Linux and macOS; use `burn run` or `--target js` on this platform"
+    var p = targetPlatform()
+    if (!contains(NATIVE_PLATFORMS, p)) {
+        return "native compilation supports ${join(NATIVE_PLATFORMS, ", ")}, not ${p}; use `burn run`, `--target bvm` or `--target js` on this platform"
     }
     if (!Files.isFile(pathJoin(runtimeDir(), "libburn_runtime.a"))) {
         return "this toolchain has no native runtime library (${pathJoin(runtimeDir(), "libburn_runtime.a")})"
@@ -62,7 +78,7 @@ priv fun link(asm: string, output: string, strip: bool, runtime: string, libs: s
             args.push(trim(l))
         }
     }
-    if (startsWith(platform(), "macos")) {
+    if (startsWith(targetPlatform(), "macos")) {
         args.push("-Wl,-dead_strip")
     } else {
         args.push("-Wl,--gc-sections")
@@ -113,7 +129,7 @@ pub fun buildNative(c: Compiled, opts: NativeOptions): string? {
     if (problem != null) {
         return problem
     }
-    var asm = nativeAssembly(c.checker, c.program, libs, platform())
+    var asm = nativeAssembly(c.checker, c.program, libs, targetPlatform())
     var written = writeAsm(opts, asm)
     if (written != null) {
         return written
@@ -140,7 +156,7 @@ pub fun nativeAssemblyOf(c: Compiled): string {
     for path in libraryPaths(c) {
         libs.push(fileBytes(path) ?? [])
     }
-    return nativeAssembly(c.checker, c.program, libs, platform())
+    return nativeAssembly(c.checker, c.program, libs, targetPlatform())
 }
 
 /** Builds a native executable that runs the bvm module or archive `file`, like `build_bundle`. Returns null or the error. */
@@ -157,7 +173,7 @@ pub fun buildLauncher(file: string, opts: NativeOptions): string? {
     if (b == null) {
         return "cannot read ${file}"
     }
-    var asm = launcherAssembly(b, platform())
+    var asm = launcherAssembly(b, targetPlatform())
     var written = writeAsm(opts, asm)
     if (written != null) {
         return written

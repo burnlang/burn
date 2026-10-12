@@ -53,7 +53,7 @@ burnc --check a.bn b.bn               # type-check only
 | Option | Description |
 | --- | --- |
 | `-o`, `--output <path>` | output file; defaults to the source name without `.bn` (`.bvmc`, `.bar` or `.js` for the other targets) |
-| `--target native` | x86-64 machine code linked into an executable (default) |
+| `--target native` | machine code for this computer (x86-64 or arm64) linked into an executable (default) |
 | `--target bvm` | a `.bvmc` bytecode module, with imported bytecode libraries linked in |
 | `--target bar` | a runnable [archive](../bvm/archives.mdx) with the program and its bytecode libraries |
 | `--target js` | a JavaScript file for Node.js; it cannot use bytecode libraries, `@Native` functions or mixins |
@@ -62,8 +62,10 @@ burnc --check a.bn b.bn               # type-check only
 | `--no-std` | build [without the standard library](./no-std.mdx) |
 | `--check <files...>` | report errors and warnings without producing output |
 
-Native executables need x86-64 Linux or macOS and a C toolchain (`cc`, or the program named by `BURN_CC`), which is
-used to assemble and link them with the runtime in `share/burn/lib`. Run bytecode with `burn app.bvmc` or
+Native executables are built for Linux and macOS on x86-64 and on arm64, including Macs with Apple silicon (M1 and
+later). They need a C toolchain (`cc`, or the program named by `BURN_CC`; on macOS the Xcode command line tools),
+which assembles and links them with the runtime in `share/burn/lib`. See
+[cross-compiling](./cross-compiling.mdx) to build for another platform. Run bytecode with `burn app.bvmc` or
 `bvm app.bvmc`; an archive also runs on its own (`./app.bar`) when `bvm` is on `PATH`, and a JavaScript build with
 `node app.js`. See [how the compiler works](./compiler.mdx).
 

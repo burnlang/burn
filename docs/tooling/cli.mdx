@@ -38,7 +38,7 @@ This page lists every subcommand of `burn`. The shorter toolchain commands map o
 | `burn lsp` | language server over stdio ([details](./editors.mdx)) |
 | `burn sources` | write the sources of the standard library and the built-ins for reading and print the folder |
 | `burn dump --bytecode <file.bn>` | print the bvm assembly of a program, linked with its bytecode libraries |
-| `burn dump --asm <file.bn>`, `burn dump --js <file.bn>` | print the x86-64 assembly or the JavaScript of a program |
+| `burn dump --asm <file.bn>`, `burn dump --js <file.bn>` | print the assembly (x86-64 or arm64, for `BURN_PLATFORM`) or the JavaScript of a program |
 | `burn dump --tokens <files...>` | print the tokens and lexer errors of each file, one token per line with byte offsets |
 | `burn dump --ast <files...>` | print the syntax tree and parse errors of each file, one node per line with byte spans |
 | `burn dump --diagnostics <files...>` | print the lexer and parser errors of each file as `burn check` shows them, without colours |
@@ -59,6 +59,8 @@ The older flags still work: `-r`, `-e`, `-exe <file>` and `-d`.
 | Variable | Effect |
 | --- | --- |
 | `BURN_CC` / `CC` | linker driver used by `burn build` (default `cc`) |
+| `BURN_PLATFORM` | build native executables for another platform: `linux-x86_64`, `macos-x86_64`, `linux-aarch64` or `macos-aarch64` ([cross-compiling](./cross-compiling.mdx)) |
+| `BURN_RUNTIME_DIR` | the folder with the runtime native executables link against (default `share/burn/lib`) |
 | `NO_COLOR` | disable colored diagnostics |
 | `BURN_CLI_BVM` | the command line module bvm runs when it is started as `burn`, `burni`, `burnc` or `burn-lsp` (default `share/burn/burn.bvm` next to its `bin/`) |
 | `BURN_HOME` | where packages are found (default `~/.burn`, packages in `packages/`) |

@@ -18,7 +18,9 @@ Usage:
 
 Environment:
   RUSTC    the Rust compiler (default: rustc)
-  TARGET   the Rust target triple (default: the host)
+  TARGET   the Rust target triple (default: the host), such as aarch64-apple-darwin
+           or aarch64-unknown-linux-gnu to build the runtime for another platform
+  STRIP    the strip program (default: strip; it is skipped when it cannot read the libraries)
 EOF2
 }
 
@@ -42,8 +44,8 @@ fi
 
 strip_lib() {
     case "$(uname -s)" in
-        Darwin) strip -S "$1" 2>/dev/null || true ;;
-        *) strip --strip-debug "$1" 2>/dev/null || true ;;
+        Darwin) "${STRIP:-strip}" -S "$1" 2>/dev/null || true ;;
+        *) "${STRIP:-strip}" --strip-debug "$1" 2>/dev/null || true ;;
     esac
 }
 

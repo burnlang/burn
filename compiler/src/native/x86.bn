@@ -4,93 +4,15 @@ import "../check/types.bn"
 import "../vm/asm.bn"
 import "../vm/bits.bn"
 import "../vm/runtime.bn"
+import "shared.bn"
 
 /** The entry point of every native program, from `entry_x86_64.s` of the Rust compiler. */
 priv const ENTRY = ".intel_syntax noprefix\n.text\n.globl {P}main\n{P}main:\n    push rbp\n    mov rbp, rsp\n    push rbx\n    push r12\n    push r13\n    push r14\n    push r15\n    sub rsp, 8\n    mov r13, rdi\n    mov r14, rsi\n    lea rdi, [rip + burn_meta]\n    mov rsi, qword ptr [rip + burn_meta_len]\n    lea rdx, [rip + {P}burn_globals]\n    mov rcx, qword ptr [rip + burn_nglobals]\n    mov r8, rbp\n    lea r9, [rip + {P}burn_call_trampoline]\n    mov r12, rsp\n    and rsp, -16\n    call {P}burn_rt_init{PLT}\n    mov rsp, r12\n    mov rdi, r13\n    mov rsi, r14\n    mov r12, rsp\n    and rsp, -16\n    call {P}burn_rt_set_args{PLT}\n    mov rsp, r12\n{PRE_ENTRY}    call burn_entry\n    xor edi, edi\n    mov r12, rsp\n    and rsp, -16\n    call {P}burn_rt_exit{PLT}\n    mov rsp, r12\n    add rsp, 8\n    pop r15\n    pop r14\n    pop r13\n    pop r12\n    pop rbx\n    pop rbp\n    ret\n\n.globl {P}burn_call_trampoline\n{P}burn_call_trampoline:\n    push rbp\n    mov rbp, rsp\n    push rbx\n    push r12\n    push r13\n    push r14\n    push r15\n    sub rsp, 8\n    mov rax, rdi\n    mov r12, rdx\n.Ltramp_loop:\n    test r12, r12\n    jz .Ltramp_done\n    dec r12\n    push qword ptr [rsi + r12*8]\n    jmp .Ltramp_loop\n.Ltramp_done:\n    call rax\n    lea rsp, [rbp - 40]\n    pop r15\n    pop r14\n    pop r13\n    pop r12\n    pop rbx\n    pop rbp\n    ret\n"
 
-/** The annotations that change the bytecode of a library. */
-pub const MIXINS = ["Inject", "Overwrite", "Redirect"]
-
 priv const ARG_REGS = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
-
-/** `u32::MAX`, the location of an operation that cannot fail. */
-priv const NONE = 4294967295
 
 priv const I32_MIN = -2147483648
 priv const I32_MAX = 2147483647
-
-/** How the assembler and linker of a platform name things. */
-pub def type AsmTarget {
-    string prefix
-    bool macos
-}
-
-/** The target of the machine the compiler runs on, from its platform such as `linux-x86_64`. */
-pub fun asmTarget(platform: string): AsmTarget {
-    if (startsWith(platform, "macos")) {
-        return AsmTarget { prefix: "_", macos: true }
-    }
-    return AsmTarget { prefix: "", macos: false }
-}
-
-/** What the code generator needs of a checked program, after the ownership pass. */
-pub def type NativeProgram {
-    Checker checker
-    [HFunc] funcs
-    int globals
-    int entry
-    [[int]] libs
-}
-
-priv fun quote(s: string): string {
-    return "\"${escape(s)}\""
-}
-
-priv fun isMixin(a: HirAnnotation): bool {
-    return contains(MIXINS, a.name)
-}
-
-/** The bvm module that applies the mixins of a native program to its libraries, like `mixin_module` in `x86.rs`. */
-pub fun mixinModule(funcs: [HFunc]): string {
-    var s = ""
-    for i in 0..len(funcs) {
-        var f = funcs[i]
-        [HirAnnotation] anns = []
-        for a in f.annotations {
-            if (isMixin(a)) {
-                anns.push(a)
-            }
-        }
-        if (len(anns) == 0) {
-            continue
-        }
-        var hook = "__mixin_hook_${i}"
-        s += "import ${quote(hook)} ${f.params}\n"
-        for a in anns {
-            s += "@${a.name}"
-            for x in a.args {
-                var v = x.value
-                if (v is Const.Int) {
-                    s += " ${x.key}=${v.value}"
-                } else if (v is Const.Float) {
-                    s += " ${x.key}=${debugFloat(v.value)}"
-                } else if (v is Const.Bool) {
-                    s += " ${x.key}=${v.value}"
-                } else if (v is Const.Str) {
-                    s += " ${x.key}=${quote(v.text)}"
-                }
-            }
-            s += "\n"
-        }
-        s += "func ${quote("__mixin_${i}")}(${f.params})\n"
-        for k in 0..f.params {
-            s += "    load ${k}\n"
-        }
-        s += "    host ${quote(hook)}\n"
-        s += "    ret\nend\n"
-    }
-    return s
-}
 
 priv fun cc(k: Cmp): string {
     return match k {
@@ -125,135 +47,8 @@ priv fun inv(k: Cmp): Cmp {
     }
 }
 
-priv fun isConst(e: HExpr): bool {
-    var k = e.kind
-    return k is HKind.Int || k is HKind.TypeId || k is HKind.LocId || k is HKind.Float || k is HKind.Bool || k is HKind.Str || k is HKind.Null || k is HKind.FuncRef
-}
-
-priv fun isSimple(e: HExpr): bool {
-    var k = e.kind
-    return isConst(e) || k is HKind.Local || k is HKind.Global
-}
-
-/** Whether `e` or anything in it writes local `slot`, or a global when `slot` is -1, like `writes_local` and `writes_global`. */
-priv fun writes(e: HExpr, slot: int): bool {
-    var k = e.kind
-    if (slot < 0) {
-        if (k is HKind.SetGlobal || k is HKind.Call || k is HKind.CallIndirect || k is HKind.CallIface || k is HKind.Seq) {
-            return true
-        }
-    } else if (k is HKind.SetLocal && k.slot == slot) {
-        return true
-    }
-    return match k {
-        HKind.SetLocal(s, value) => writes(value, slot)
-        HKind.SetGlobal(id, value) => writes(value, slot)
-        HKind.Unary(op, value) => writes(value, slot)
-        HKind.Conv(conv, value) => writes(value, slot)
-        HKind.GetField(obj, index) => writes(obj, slot)
-        HKind.ArrLen(value) => writes(value, slot)
-        HKind.BoxVal(value) => writes(value, slot)
-        HKind.Retain(value) => writes(value, slot)
-        HKind.Release(value) => writes(value, slot)
-        HKind.Binary(op, left, right) => writes(left, slot) || writes(right, slot)
-        HKind.And(left, right) => writes(left, slot) || writes(right, slot)
-        HKind.Or(left, right) => writes(left, slot) || writes(right, slot)
-        HKind.Index(obj, index, loc) => writes(obj, slot) || writes(index, slot)
-        HKind.SetField(obj, index, value) => writes(obj, slot) || writes(value, slot)
-        HKind.SetIndex(obj, index, value, loc) => writes(obj, slot) || writes(index, slot) || writes(value, slot)
-        HKind.Call(func, args) => writesAny(args, slot)
-        HKind.CallIface(s, args) => writesAny(args, slot)
-        HKind.Rt(name, args) => writesAny(args, slot)
-        HKind.Spawn(func, args) => writesAny(args, slot)
-        HKind.NewStruct(ty, args) => writesAny(args, slot)
-        HKind.NewArray(ty, items) => writesAny(items, slot)
-        HKind.CallIndirect(callee, args) => writes(callee, slot) || writesAny(args, slot)
-        HKind.Seq(stmts, value) => stmtsWrite(stmts, slot) || writes(value, slot)
-        else => false
-    }
-}
-
-priv fun writesAny(xs: [HExpr], slot: int): bool {
-    for x in xs {
-        if (writes(x, slot)) {
-            return true
-        }
-    }
-    return false
-}
-
-priv fun stmtsWrite(ss: [HStmt], slot: int): bool {
-    for s in ss {
-        if (stmtWrites(s, slot)) {
-            return true
-        }
-    }
-    return false
-}
-
-priv fun stmtWrites(s: HStmt, slot: int): bool {
-    if (s is HStmt.Eval) {
-        return writes(s.value, slot)
-    }
-    if (s is HStmt.Return) {
-        var v = s.value
-        return v != null && writes(v, slot)
-    }
-    if (s is HStmt.If) {
-        return writes(s.cond, slot) || stmtsWrite(s.then, slot) || stmtsWrite(s.els, slot)
-    }
-    if (s is HStmt.Loop) {
-        var c = s.cond
-        return (c != null && writes(c, slot)) || stmtsWrite(s.body, slot) || stmtsWrite(s.step, slot)
-    }
-    return false
-}
-
-priv fun lateOk(arg: HExpr, all: [HExpr]): bool {
-    var k = arg.kind
-    if (k is HKind.Local) {
-        return !writesAny(all, k.slot)
-    }
-    if (k is HKind.Global) {
-        return !writesAny(all, -1)
-    }
-    return isConst(arg)
-}
-
 priv fun local(slot: int): string {
     return "qword ptr [rbp - ${8 * (slot + 1)}]"
-}
-
-priv fun isAscii(s: string): bool {
-    for b in bytes(s) {
-        if (b >= 128) {
-            return false
-        }
-    }
-    return true
-}
-
-/** The width in bytes of the packed numeric types by their code in the checker, from int8 to float32. */
-priv const NUM_WIDTH = [1, 1, 2, 2, 4, 4, 8, 4]
-
-priv const I8 = 0
-priv const U8 = 1
-priv const I16 = 2
-priv const U16 = 3
-priv const I32 = 4
-priv const U32 = 5
-priv const U64 = 6
-priv const F32 = 7
-
-priv def type Export {
-    string name
-    int func
-    int argc
-}
-
-priv def type LoopLabels {
-    string cont
-    string end
 }
 
 priv def struct Gen(p: NativeProgram, t: AsmTarget) {
@@ -336,29 +131,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
     }
 
     fun exports(): [Export] {
-        [Export] v = []
-        if (len(p.libs) == 0) {
-            return v
-        }
-        for i in 0..len(p.funcs) {
-            var f = p.funcs[i]
-            if (f.external != null) {
-                continue
-            }
-            for a in f.annotations {
-                if (a.name == "Export") {
-                    v.push(Export { name: strArg(a, "name") ?? f.name, func: i, argc: f.params })
-                    break
-                }
-            }
-            for a in f.annotations {
-                if (isMixin(a)) {
-                    v.push(Export { name: "__mixin_hook_${i}", func: i, argc: f.params })
-                    break
-                }
-            }
-        }
-        return v
+        return exportsOf(p)
     }
 
     fun preEntry(exps: [Export]): string {
@@ -1186,40 +959,20 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
         cold += "${root}:\n    mov rdi, rax\n${coldCall(rtSym("PossibleRoot"))}    jmp ${done}\n"
     }
 
-    /** The code of the packed numeric element type of array type `arr` (int8 is 0), or -1, like `packed_elem`. */
     fun packedElem(arr: int): int {
-        var k = p.checker.types.kindOf(arr)
-        if (k is Ty.Array) {
-            var el = p.checker.types.kindOf(k.elem)
-            if (el is Ty.Num && el.code != U64) {
-                return el.code
-            }
-        }
-        return -1
+        return packedElemOf(p.checker, arr)
     }
 
     fun rtCold(name: string, setup: string, f: string) {
         cold += "${name}:\n${setup}    and rsp, -16\n    ${callTarget(rtSym(f))}\n    ud2\n"
     }
 
-    /** The checker code of a numeric type given as an `Int` argument, or -1, like `Num::from_code`. */
     fun codeArg(x: HExpr): int {
-        var k = x.kind
-        if (k is HKind.Int) {
-            var c = k.value & 255
-            if (c >= 1 && c <= 8) {
-                return c - 1
-            }
-        }
-        return -1
+        return numCodeArg(x)
     }
 
     fun locArg(x: HExpr): int {
-        var k = x.kind
-        if (k is HKind.LocId) {
-            return k.id
-        }
-        return NONE
+        return locArgOf(x)
     }
 
     fun inlineNum(f: string, args: [HExpr]): bool {

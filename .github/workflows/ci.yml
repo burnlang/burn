@@ -14,6 +14,11 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: ./.github/actions/stage0
+      - name: Tools to cross-compile and run arm64 executables
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q qemu-user gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+          rustup target add aarch64-unknown-linux-gnu
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - name: Clippy for the no-std runtime
@@ -33,6 +38,22 @@ jobs:
           "$RUNNER_TEMP/burn/bin/bvm" pack examples/bvm/mixins/app.bvm examples/bvm/mixins/greetlib.bvm examples/bvm/mixins/mods.bvm -o "$RUNNER_TEMP/mixins.bar"
           PATH="$RUNNER_TEMP/burn/bin:$PATH" "$RUNNER_TEMP/mixins.bar"
           cd "$RUNNER_TEMP" && PATH="$RUNNER_TEMP/burn/bin:$PATH" burn init github.com/ci/hello --no-git && cd hello && PATH="$RUNNER_TEMP/burn/bin:$PATH" burn build && ./build/hello
+
+  apple-silicon:
+    name: Native executables on Apple silicon
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/stage0
+      - run: cargo test --release -p bvm --test burn
+      - name: Toolchain smoke test
+        run: |
+          sh scripts/package.sh --prefix "$RUNNER_TEMP/burn"
+          "$RUNNER_TEMP/burn/bin/burnc" examples/fib.bn -o "$RUNNER_TEMP/fib"
+          file "$RUNNER_TEMP/fib"
+          "$RUNNER_TEMP/fib"
+          "$RUNNER_TEMP/burn/bin/burn" run --native examples/fib.bn
 
   stage0:
     name: The Burn compiler builds with stage0

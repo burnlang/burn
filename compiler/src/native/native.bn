@@ -2,7 +2,9 @@ import "../check/body.bn"
 import "../check/check.bn"
 import "../check/hir.bn"
 import "../lower/own.bn"
+import "arm64.bn"
 import "meta.bn"
+import "shared.bn"
 import "x86.bn"
 
 /** Why the program cannot be compiled to native code, or null, like `validate` in `native/mod.rs`. `libFuncs` names the functions of its bytecode libraries. */
@@ -37,13 +39,20 @@ pub fun nativeAssembly(c: Checker, p: HProgram, libs: [[int]], platform: string)
     var meta = encodeMeta(c)
     var funcs = lowerOwnership(c.types, p.funcs)
     var np = NativeProgram { checker: c, funcs: funcs, globals: len(p.globals), entry: p.entry, libs: libs }
-    return generateX86(np, meta, asmTarget(platform))
+    var t = asmTarget(platform)
+    if (t.arch == "aarch64") {
+        return generateArm64(np, meta, t)
+    }
+    return generateX86(np, meta, t)
 }
 
 /** The assembly of an executable that runs the bvm module or archive `bundle`, like `launcher_assembly` in `native/mod.rs`. */
 pub fun launcherAssembly(bundle: [int], platform: string): string {
     var t = asmTarget(platform)
     var p = t.prefix
+    if (t.arch == "aarch64") {
+        return launcherArm64(bundle, t)
+    }
     var plt = "@PLT"
     if (t.macos) {
         plt = ""
@@ -81,4 +90,53 @@ pub fun launcherAssembly(bundle: [int], platform: string): string {
         s += ".section .note.GNU-stack,\"\",@progbits\n"
     }
     return s
+}
+
+priv fun bundleData(bundle: [int], macos: bool): string {
+    var s = ""
+    if (macos) {
+        s += ".section __TEXT,__const\n"
+    } else {
+        s += ".section .rodata\n"
+    }
+    s += ".p2align 4\n"
+    s += "burn_bundle_len:\n    .quad ${len(bundle)}\n"
+    s += "burn_bundle:\n"
+    var i = 0
+    while (i < len(bundle)) {
+        var end = i + 32
+        if (end > len(bundle)) {
+            end = len(bundle)
+        }
+        [string] parts = []
+        for k in i..end {
+            parts.push(toString(bundle[k]))
+        }
+        s += "    .byte ${join(parts, ",")}\n"
+        i = end
+    }
+    if (!macos) {
+        s += ".section .note.GNU-stack,\"\",@progbits\n"
+    }
+    return s
+}
+
+priv fun launcherArm64(bundle: [int], t: AsmTarget): string {
+    var p = t.prefix
+    var page = ""
+    var off = ":lo12:"
+    var offEnd = ""
+    if (t.macos) {
+        page = "@PAGE"
+        off = ""
+        offEnd = "@PAGEOFF"
+    }
+    var s = ".text\n.globl ${p}main\n.p2align 2\n${p}main:\n"
+    s += "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n"
+    s += "    mov x2, x0\n    mov x3, x1\n"
+    s += "    adrp x0, burn_bundle${page}\n    add x0, x0, ${off}burn_bundle${offEnd}\n"
+    s += "    adrp x1, burn_bundle_len${page}\n    add x1, x1, ${off}burn_bundle_len${offEnd}\n    ldr x1, [x1]\n"
+    s += "    bl ${p}burn_bvm_main\n"
+    s += "    ldp x29, x30, [sp], #16\n    ret\n"
+    return s + bundleData(bundle, t.macos)
 }

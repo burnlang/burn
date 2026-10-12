@@ -1,0 +1,92 @@
+---
+title: Native platforms and cross-compiling
+description: Which computers native executables run on, how they are built, and how to build them for another platform.
+order: 23
+---
+
+# Native platforms and cross-compiling
+
+`burn build` and `burnc` turn a program into a standalone executable for the computer they run on. Burn generates the
+machine code itself, then hands it to a C toolchain to assemble and link it with the Burn runtime.
+
+## Platforms
+
+| Platform | Processor | Examples |
+| --- | --- | --- |
+| `linux-x86_64` | x86-64 | most Linux PCs and servers |
+| `linux-aarch64` | 64-bit ARM | Raspberry Pi 4 and 5 with a 64-bit OS, ARM servers such as AWS Graviton |
+| `macos-x86_64` | x86-64 | Macs with an Intel processor |
+| `macos-aarch64` | 64-bit ARM | Macs with Apple silicon: M1, M2, M3, M4 and later |
+
+On any other system (Windows, 32-bit ARM, RISC-V), use `burn run`, bytecode (`--target bvm`), archives
+(`--target bar`) or JavaScript (`--target js`), which run everywhere bvm or Node.js runs.
+
+```sh
+burn version                 # Burn 26.1.0-experimental-4
+burnc app.bn                 # ./app for this computer
+file app                     # Mach-O 64-bit executable arm64, on an Apple silicon Mac
+burn dump --asm app.bn       # the assembly it was built from
+```
+
+## What a native build needs
+
+- **A C toolchain.** `cc` assembles the generated `.s` file and links the executable. On macOS, install the Xcode
+  command line tools (`xcode-select --install`); on Linux, `gcc` or `clang` (`apt install build-essential`). Set
+  `BURN_CC` (or `CC`) to use another one.
+- **The runtime.** Every toolchain ships it in `share/burn/lib`: `libburn_runtime.a` (bvm and the runtime core, so
+  executables can also run embedded bytecode libraries), `libburn_core.a` (the runtime without the standard library,
+  for [`--no-std`](./no-std.mdx)) and `native-libs.txt` (the system libraries the runtime needs).
+
+Nothing else is needed at run time: the executable only uses the C library of the system it runs on.
+
+## How the code differs between processors
+
+Both code generators start from the same checked and ownership-lowered program, use the same object layout and
+share the parts that do not depend on the processor (`compiler/src/native/shared.bn`):
+
+| | x86-64 (`x86.bn`) | arm64 (`arm64.bn`) |
+| --- | --- | --- |
+| results | `rax`, second operand in `rcx` | `x0`, second operand in `x1` |
+| locals | below the frame pointer `rbp` | above the frame base `x29` |
+| temporaries | `push`/`pop`, 8 bytes | 16-byte slots, so `sp` stays aligned as ARM requires |
+| arguments | pushed on the stack | stored into an aligned area under the callee's frame |
+| overflow checks | `jo` after `add`/`sub`/`imul` | `b.vs` after `adds`/`subs`, `smulh` for products |
+| addresses | `lea reg, [rip + symbol]` | `adrp` and `add` (`@PAGE`/`@PAGEOFF` on macOS) |
+
+Arguments are laid out in the same order on both, so the runtime calls compiled functions (from `sort`, `async`
+tasks or bytecode libraries) through the same trampoline interface.
+
+## Cross-compiling
+
+To build for another platform, generate code for it with `BURN_PLATFORM`, point `BURN_RUNTIME_DIR` at a runtime
+built for it, and `BURN_CC` at a linker for it. For example, from an x86-64 Linux computer to a Raspberry Pi:
+
+```sh
+sudo apt install gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+rustup target add aarch64-unknown-linux-gnu
+
+TARGET=aarch64-unknown-linux-gnu sh scripts/native-runtime.sh ~/burn-runtime-arm64
+
+BURN_PLATFORM=linux-aarch64 \
+BURN_RUNTIME_DIR=~/burn-runtime-arm64 \
+BURN_CC=aarch64-linux-gnu-gcc \
+burnc app.bn -o app-arm64
+```
+
+`scripts/native-runtime.sh` is in the Burn repository; it compiles bvm's runtime with `rustc` for the Rust target
+you name (`aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu` or
+`x86_64-unknown-linux-gnu`). `BURN_PLATFORM` alone is enough to look at the generated code:
+
+```sh
+BURN_PLATFORM=macos-aarch64 burn dump --asm app.bn
+```
+
+Building macOS executables on Linux also needs the macOS SDK and a Mach-O linker, so it is easier to build them on a
+Mac. To try an arm64 Linux executable on an x86-64 computer, run it with `qemu-aarch64 -L /usr/aarch64-linux-gnu`.
+
+## How it is tested
+
+The test suite (`cargo test`) builds every program in `tests/cases` natively and compares its output with bvm, also
+with a small cycle-collection threshold, without the standard library, and with bytecode libraries and mixins. CI
+runs it on Linux x86-64 and on a Mac with Apple silicon. On Linux, the suite also cross-compiles every test program to
+arm64 and runs it under qemu.
