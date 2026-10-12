@@ -712,6 +712,10 @@ pub fun identExpr(c: Checker, name: string, span: SrcSpan): HExpr {
         if (c.funcs[sym.id].isAsync) {
             c.error(span, "async functions cannot be used as values yet; call them directly")
         }
+        var decl = c.funcs[sym.id].decl
+        if (decl != null && decl.isUnsafe) {
+            c.requireUnsafe(span, "`${name}` is an unsafe function, so using it as a value needs an `unsafe` block")
+        }
         return funcValue(c, sym.id)
     }
     if (c.valueAmbiguous(m, name)) {

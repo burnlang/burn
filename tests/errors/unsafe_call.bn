@@ -1,0 +1,5 @@
+unsafe fun danger(): int {
+    return 1
+}
+
+print(danger())

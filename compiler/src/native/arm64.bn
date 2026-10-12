@@ -476,6 +476,21 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
             epilogue()
         } else if (s is HStmt.Break) {
             e("b ${loops[len(loops) - 1].end}")
+        } else if (s is HStmt.Asm) {
+            var code = asmFor(s.code, "arm64")
+            if (code != null) {
+                stmts(s.pre)
+                [string] ops = []
+                for slot in asmSlots(code) {
+                    ops.push("[x29, #${8 * slot}]")
+                }
+                for line in asmLines(code, ops) {
+                    e(line)
+                }
+                stmts(s.post)
+            } else {
+                stmts(s.fallback)
+            }
         } else if (s is HStmt.Continue) {
             e("b ${loops[len(loops) - 1].cont}")
         }

@@ -402,6 +402,71 @@ priv fun trimEnd(text: string): string {
     return join(slice(cs, 0, end), "")
 }
 
+priv var ASM_TARGETS = ["x86_64", "arm64", "aarch64", "bvm", "js"]
+
+priv fun braceBalance(line: string): int {
+    var n = 0
+    for c in chars(line) {
+        if (c == "{") {
+            n += 1
+        } else if (c == "}") {
+            n -= 1
+        }
+    }
+    return n
+}
+
+priv fun asmSectionHead(line: string): string? {
+    var open = indexOf(line, "{")
+    if (open < 0) {
+        return null
+    }
+    var name = trim(substring(line, 0, open))
+    if (!contains(ASM_TARGETS, name)) {
+        return null
+    }
+    return name
+}
+
+priv fun leadingSpace(line: string): int {
+    var n = 0
+    for c in chars(line) {
+        if (c != " " && c != "\t") {
+            break
+        }
+        n += 1
+    }
+    return n
+}
+
+priv fun reindented(lines: [string], depth: int): [string] {
+    var anchor = -1
+    for line in lines {
+        var t = trim(line)
+        if (t != "" && !endsWith(t, ":")) {
+            anchor = leadingSpace(line)
+            break
+        }
+    }
+    if (anchor < 0) {
+        anchor = 4 * depth
+    }
+    [string] out = []
+    for line in lines {
+        var t = trim(line)
+        if (t == "") {
+            out.push("\n")
+        } else {
+            var n = leadingSpace(line) - anchor + 4 * depth
+            if (n < 0) {
+                n = 0
+            }
+            out.push(repeat(" ", n) + trimEnd(t) + "\n")
+        }
+    }
+    return out
+}
+
 priv fun indentFor(seg: [Tok], levels: [int]): int {
     var before = len(levels)
     var touched = 0
@@ -467,8 +532,51 @@ pub fun format(src: string): string {
     var inBlockComment = false
     var started = false
     var lastWasClose = false
+    var asmLevel = -1
+    var rawDepth = 0
+    [string] rawLines = []
     for raw in sourceLines(src) {
         var line = trim(raw)
+        if (rawDepth > 0) {
+            rawDepth += braceBalance(line)
+            if (rawDepth > 0) {
+                rawLines.push(raw)
+                continue
+            }
+            rawDepth = 0
+            if (line != "}") {
+                rawLines.push(raw)
+                for l in reindented(rawLines, len(levels)) {
+                    out.push(l)
+                }
+                rawLines = []
+                indentFor(lexLine("}"), levels)
+                lastWasClose = true
+                continue
+            }
+            for l in reindented(rawLines, len(levels)) {
+                out.push(l)
+            }
+            rawLines = []
+        }
+        if (asmLevel >= 0 && len(levels) == asmLevel + 1 && asmSectionHead(line) != null) {
+            out.push(repeat("    ", len(levels)) + line + "\n")
+            var balance = braceBalance(line)
+            if (balance > 0) {
+                indentFor(lexLine("{"), levels)
+                rawDepth = balance
+            }
+            lastWasClose = false
+            blank = 0
+            started = true
+            continue
+        }
+        if (asmLevel >= 0 && len(levels) <= asmLevel) {
+            asmLevel = -1
+        }
+        if (line == "asm {" && asmLevel < 0) {
+            asmLevel = len(levels)
+        }
         if (inBlockComment) {
             if (startsWith(line, "*")) {
                 out.push(repeat("    ", len(levels)) + " " + line + "\n")
@@ -510,6 +618,9 @@ pub fun format(src: string): string {
             out.push(repeat("    ", indentFor(seg, levels)) + renderLine(seg) + "\n")
         }
         started = true
+    }
+    for l in rawLines {
+        out.push(trimEnd(l) + "\n")
     }
     return join(out, "")
 }

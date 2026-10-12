@@ -155,6 +155,9 @@ pub fun stmtsWrite(ss: [HStmt], slot: int): bool {
 }
 
 pub fun stmtWrites(s: HStmt, slot: int): bool {
+    if (s is HStmt.Asm) {
+        return true
+    }
     if (s is HStmt.Eval) {
         return writes(s.value, slot)
     }
@@ -170,6 +173,39 @@ pub fun stmtWrites(s: HStmt, slot: int): bool {
         return (c != null && writes(c, slot)) || stmtsWrite(s.body, slot) || stmtsWrite(s.step, slot)
     }
     return false
+}
+
+/** The lines of asm code that are not blank, without their indentation, with each operand written by `operands`. */
+pub fun asmLines(code: AsmCode, operands: [string]): [string] {
+    var text = ""
+    var i = 0
+    for piece in code.pieces {
+        if (piece is AsmPiece.Text) {
+            text += piece.text
+        } else if (piece is AsmPiece.Slot) {
+            text += operands[i]
+            i += 1
+        }
+    }
+    [string] out = []
+    for line in split(text, "\n") {
+        var t = trim(line)
+        if (t != "") {
+            out.push(t)
+        }
+    }
+    return out
+}
+
+/** The local slots of the operands of asm code, in order. */
+pub fun asmSlots(code: AsmCode): [int] {
+    [int] out = []
+    for piece in code.pieces {
+        if (piece is AsmPiece.Slot) {
+            out.push(piece.slot)
+        }
+    }
+    return out
 }
 
 pub fun lateOk(arg: HExpr, all: [HExpr]): bool {

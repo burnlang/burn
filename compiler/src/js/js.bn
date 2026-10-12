@@ -1,3 +1,4 @@
+import "../check/asm.bn"
 import "../check/check.bn"
 import "../check/body.bn"
 import "../check/hir.bn"
@@ -122,7 +123,7 @@ pub fun jsProblem(c: Checker, p: HProgram): string? {
             }
         }
     }
-    return null
+    return asmProblem(c, "js")
 }
 
 priv def type Labels {
@@ -247,6 +248,28 @@ priv def struct Gen(c: Checker, p: HProgram) {
             line("break ${loops[len(loops) - 1].brk};")
         } else if (s is HStmt.Continue) {
             line("break ${loops[len(loops) - 1].cont};")
+        } else if (s is HStmt.Asm) {
+            var code = asmFor(s.code, "js")
+            if (code != null) {
+                stmts(s.pre)
+                var text = ""
+                for piece in code.pieces {
+                    if (piece is AsmPiece.Text) {
+                        text += piece.text
+                    } else if (piece is AsmPiece.Slot) {
+                        text += "l${piece.slot}"
+                    }
+                }
+                for l in split(text, "\n") {
+                    var t = trim(l)
+                    if (t != "") {
+                        line(t)
+                    }
+                }
+                stmts(s.post)
+            } else {
+                stmts(s.fallback)
+            }
         }
     }
 

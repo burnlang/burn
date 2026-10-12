@@ -785,6 +785,8 @@ fun devirtStmts(ss: [HStmt], d: Devirt): [HStmt] {
                 cond = devirtExpr(sc, d)
             }
             out.push(HStmt.Loop(cond, devirtStmts(s.body, d), devirtStmts(s.step, d)))
+        } else if (s is HStmt.Asm) {
+            out.push(HStmt.Asm(s.code, devirtStmts(s.pre, d), devirtStmts(s.post, d), devirtStmts(s.fallback, d), s.hasFallback))
         } else if (s is HStmt.Return) {
             var v = s.value
             if (v != null) {

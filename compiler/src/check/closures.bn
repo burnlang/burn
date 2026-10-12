@@ -78,6 +78,21 @@ fun walkStmt(s: Stmt, depth: int, n: Names): void {
             n.inLambda[k.target.name] = true
         }
         walkAll(k.args, depth, n)
+    } else if (k is StmtKind.Unsafe) {
+        walkBlock(k.block.stmts, depth, n)
+    } else if (k is StmtKind.Asm) {
+        for sec in k.sections {
+            for op in asmOperands(sec.code) {
+                n.assigned[op.name] = true
+                if (depth > 0) {
+                    n.inLambda[op.name] = true
+                }
+            }
+        }
+        var fb = k.fallback
+        if (fb != null) {
+            walkBlock(fb.stmts, depth, n)
+        }
     }
 }
 
@@ -217,6 +232,8 @@ fun rewriteStmts(ss: [HStmt], cells: {int: int}): [HStmt] {
                 c = rewrite(cond, cells)
             }
             out.push(HStmt.Loop(c, rewriteStmts(s.body, cells), rewriteStmts(s.step, cells)))
+        } else if (s is HStmt.Asm) {
+            out.push(HStmt.Asm(s.code, rewriteStmts(s.pre, cells), rewriteStmts(s.post, cells), rewriteStmts(s.fallback, cells), s.hasFallback))
         } else {
             out.push(s)
         }

@@ -1,0 +1,1 @@
+5:7 `danger` is an unsafe function, so calling it needs an `unsafe` block

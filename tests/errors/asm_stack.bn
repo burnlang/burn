@@ -1,0 +1,12 @@
+fun f() {
+    var x = 1
+    unsafe {
+        asm {
+            bvm {
+                load {x}
+                iadd
+                store {x}
+            }
+        }
+    }
+}

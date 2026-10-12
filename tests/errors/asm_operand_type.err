@@ -1,0 +1,1 @@
+6:30 `s` has type string, but an asm operand must be an `int`, `uint64` or `float`

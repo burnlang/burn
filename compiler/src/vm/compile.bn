@@ -1,3 +1,4 @@
+import "../check/asm.bn"
 import "../check/check.bn"
 import "../check/hir.bn"
 import "../check/types.bn"
@@ -119,6 +120,102 @@ fun stmt(b: Builder, s: HStmt): void {
         jump(b, Op.Jmp(0), b.loops[len(b.loops) - 1].brk)
     } else if (s is HStmt.Continue) {
         jump(b, Op.Jmp(0), b.loops[len(b.loops) - 1].cont)
+    } else if (s is HStmt.Asm) {
+        var code = asmFor(s.code, "bvm")
+        if (code != null) {
+            stmts(b, s.pre)
+            asmCode(b, code)
+            stmts(b, s.post)
+        } else {
+            stmts(b, s.fallback)
+        }
+    }
+}
+
+fun cmpOf(suffix: string): Cmp {
+    return match suffix {
+        "eq" => Cmp.Eq
+        "ne" => Cmp.Ne
+        "lt" => Cmp.Lt
+        "le" => Cmp.Le
+        "gt" => Cmp.Gt
+        else => Cmp.Ge
+    }
+}
+
+fun asmOp(op: string, arg: string, loc: int): Op {
+    return match op {
+        "const" => Op.Const(toInt(arg))
+        "load" => Op.Load(toInt(arg))
+        "store" => Op.Store(toInt(arg))
+        "tee" => Op.Tee(toInt(arg))
+        "pop" => Op.Pop
+        "iadd" => Op.IAdd
+        "isub" => Op.ISub
+        "imul" => Op.IMul
+        "idiv" => Op.IDiv(loc)
+        "irem" => Op.IRem(loc)
+        "iadd.ovf" => Op.IAddOv(loc)
+        "isub.ovf" => Op.ISubOv(loc)
+        "imul.ovf" => Op.IMulOv(loc)
+        "ineg.ovf" => Op.INegOv(loc)
+        "and" => Op.And
+        "or" => Op.Or
+        "xor" => Op.Xor
+        "shl" => Op.Shl
+        "shr" => Op.Shr
+        "ushr" => Op.UShr
+        "fadd" => Op.FAdd
+        "fsub" => Op.FSub
+        "fmul" => Op.FMul
+        "fdiv" => Op.FDiv
+        "fneg" => Op.FNeg
+        "not" => Op.Not
+        "i2f" => Op.I2F
+        "f2i" => Op.F2I
+        else => cmpOp(op)
+    }
+}
+
+fun cmpOp(op: string): Op {
+    var c = cmpOf(substring(op, 1))
+    if (startsWith(op, "u")) {
+        return Op.UCmp(c)
+    }
+    if (startsWith(op, "f")) {
+        return Op.FCmp(c)
+    }
+    return Op.ICmp(c)
+}
+
+fun asmCode(b: Builder, code: AsmCode) {
+    var text = ""
+    for piece in code.pieces {
+        if (piece is AsmPiece.Text) {
+            text += piece.text
+        } else if (piece is AsmPiece.Slot) {
+            text += "${piece.slot}"
+        }
+    }
+    var parsed = parseBvm(text)
+    {string: int} labels = {}
+    for l in parsed.lines {
+        if (l.label != "") {
+            labels[l.label] = label(b)
+        }
+    }
+    for l in parsed.lines {
+        if (l.label != "") {
+            bind(b, labels[l.label] ?? 0)
+        } else if (l.op == "jmp") {
+            jump(b, Op.Jmp(0), labels[l.arg] ?? 0)
+        } else if (l.op == "jz") {
+            jump(b, Op.Jz(0), labels[l.arg] ?? 0)
+        } else if (l.op == "jnz") {
+            jump(b, Op.Jnz(0), labels[l.arg] ?? 0)
+        } else {
+            emit(b, asmOp(l.op, l.arg, code.loc))
+        }
     }
 }
 

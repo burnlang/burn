@@ -91,6 +91,10 @@ pub fun directCall(c: Checker, fid: int, recv: HExpr?, args: [Expr], span: SrcSp
     warnDeprecatedFunc(c, fid, nameSpan)
     var ret = funcRet(c, fid)
     var info = c.funcs[fid]
+    var decl = info.decl
+    if (decl != null && decl.isUnsafe) {
+        c.requireUnsafe(nameSpan, "`${info.name}` is an unsafe function, so calling it needs an `unsafe` block")
+    }
     [int] params = []
     for p in info.params {
         params.push(p.ty)
@@ -635,6 +639,10 @@ pub fun fieldExpr(c: Checker, obj: Expr, name: Ident, span: SrcSpan): HExpr {
             }
             var fid = rec.statics[name.name]
             if (fid != null) {
+                var decl = c.funcs[fid].decl
+                if (decl != null && decl.isUnsafe) {
+                    c.requireUnsafe(nspan, "`${name.name}` is an unsafe function, so using it as a value needs an `unsafe` block")
+                }
                 return funcValue(c, fid)
             }
             [string] cands = []
