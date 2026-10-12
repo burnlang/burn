@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 300" width="1000" height="300" role="img" aria-label="What burn app.bn does">
+  <title>What burn app.bn does</title>
+  <defs><marker id="a8D4A1F" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8D4A1F"/></marker><marker id="a8D4A1Fs" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8D4A1F"/></marker></defs>
+  <rect x="1" y="1" width="998" height="298" rx="16" fill="#FFFBF5" stroke="#F2DCC4" stroke-width="2"/>
+  <text x="30" y="42" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="18" text-anchor="start" fill="#2B1A10" font-weight="bold" xml:space="preserve" style="white-space:pre">burn app.bn: one process, a few milliseconds</text>
+  <rect x="20" y="62" width="960" height="200" rx="14" fill="#FFFFFF" stroke="#F2DCC4" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="40" y="86" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="12" text-anchor="start" fill="#7A5A44" font-weight="normal" xml:space="preserve" style="white-space:pre">the bvm process</text>
+  <rect x="36" y="120" width="146" height="70" rx="8" fill="#E1F3DC" stroke="#3E8E3E" stroke-width="1.5"/>
+  <text x="109.0" y="149.0" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#2B1A10" font-weight="bold" xml:space="preserve" style="white-space:pre">bvm starts</text>
+  <text x="109.0" y="167.0" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="11" text-anchor="middle" fill="#7A5A44" font-weight="normal" xml:space="preserve" style="white-space:pre">as `burn`</text>
+  <circle cx="50" cy="120" r="12" fill="#FF7F11" stroke="#FF7F11" stroke-width="1.5"/>
+  <text x="50" y="125" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#FFFFFF" font-weight="bold" xml:space="preserve" style="white-space:pre">1</text>
+  <polyline points="182,155 193,155" fill="none" stroke="#8D4A1F" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#a8D4A1F)"/>
+  <rect x="194" y="120" width="146" height="70" rx="8" fill="#FFFFFF" stroke="#8D4A1F" stroke-width="1.5"/>
+  <text x="267.0" y="149.0" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#2B1A10" font-weight="bold" xml:space="preserve" style="white-space:pre">loads burn.bvm</text>
+  <text x="267.0" y="167.0" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="11" text-anchor="middle" fill="#7A5A44" font-weight="normal" xml:space="preserve" style="white-space:pre">the command line</text>
+  <circle cx="208" cy="120" r="12" fill="#FF7F11" stroke="#FF7F11" stroke-width="1.5"/>
+  <text x="208" y="125" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#FFFFFF" font-weight="bold" xml:space="preserve" style="white-space:pre">2</text>
+  <polyline points="340,155 351,155" fill="none" stroke="#8D4A1F" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#a8D4A1F)"/>
+  <rect x="352" y="120" width="146" height="70" rx="8" fill="#FFE8D1" stroke="#FF7F11" stroke-width="1.5"/>
+  <text x="425.0" y="149.0" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#2B1A10" font-weight="bold" xml:space="preserve" style="white-space:pre">compiles app.bn</text>
+  <text x="425.0" y="167.0" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="11" text-anchor="middle" fill="#7A5A44" font-weight="normal" xml:space="preserve" style="white-space:pre">check, IR, ownership</text>
+  <circle cx="366" cy="120" r="12" fill="#FF7F11" stroke="#FF7F11" stroke-width="1.5"/>
+  <text x="366" y="125" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#FFFFFF" font-weight="bold" xml:space="preserve" style="white-space:pre">3</text>
+  <polyline points="498,155 509,155" fill="none" stroke="#8D4A1F" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#a8D4A1F)"/>
+  <rect x="510" y="120" width="146" height="70" rx="8" fill="#FFFFFF" stroke="#8D4A1F" stroke-width="1.5"/>
+  <text x="583.0" y="149.0" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#2B1A10" font-weight="bold" xml:space="preserve" style="white-space:pre">links</text>
+  <text x="583.0" y="167.0" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="11" text-anchor="middle" fill="#7A5A44" font-weight="normal" xml:space="preserve" style="white-space:pre">+ runtime.bvm, libraries</text>
+  <circle cx="524" cy="120" r="12" fill="#FF7F11" stroke="#FF7F11" stroke-width="1.5"/>
+  <text x="524" y="125" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#FFFFFF" font-weight="bold" xml:space="preserve" style="white-space:pre">4</text>
+  <polyline points="656,155 667,155" fill="none" stroke="#8D4A1F" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#a8D4A1F)"/>
+  <rect x="668" y="120" width="146" height="70" rx="8" fill="#FFFFFF" stroke="#8D4A1F" stroke-width="1.5"/>
+  <text x="741.0" y="149.0" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#2B1A10" font-weight="bold" xml:space="preserve" style="white-space:pre">verifies</text>
+  <text x="741.0" y="167.0" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="11" text-anchor="middle" fill="#7A5A44" font-weight="normal" xml:space="preserve" style="white-space:pre">jumps, stack, calls</text>
+  <circle cx="682" cy="120" r="12" fill="#FF7F11" stroke="#FF7F11" stroke-width="1.5"/>
+  <text x="682" y="125" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#FFFFFF" font-weight="bold" xml:space="preserve" style="white-space:pre">5</text>
+  <polyline points="814,155 825,155" fill="none" stroke="#8D4A1F" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#a8D4A1F)"/>
+  <rect x="826" y="120" width="146" height="70" rx="8" fill="#E1F3DC" stroke="#3E8E3E" stroke-width="1.5"/>
+  <text x="899.0" y="149.0" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#2B1A10" font-weight="bold" xml:space="preserve" style="white-space:pre">runs it</text>
+  <text x="899.0" y="167.0" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="11" text-anchor="middle" fill="#7A5A44" font-weight="normal" xml:space="preserve" style="white-space:pre">optimizing hot code</text>
+  <circle cx="840" cy="120" r="12" fill="#FF7F11" stroke="#FF7F11" stroke-width="1.5"/>
+  <text x="840" y="125" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#FFFFFF" font-weight="bold" xml:space="preserve" style="white-space:pre">6</text>
+  <text x="500" y="228" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="12" text-anchor="middle" fill="#7A5A44" font-weight="normal" xml:space="preserve" style="white-space:pre">steps 2 and 3 are Burn code running on bvm; step 3 hands the module to bvm through a host function, which does 4 to 6</text>
+  <text x="30" y="288" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="13" text-anchor="start" fill="#7A5A44" font-weight="normal" xml:space="preserve" style="white-space:pre">No second process, no files written: the compiler and the program share one bvm.</text>
+</svg>

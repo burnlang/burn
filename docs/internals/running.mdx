@@ -50,6 +50,8 @@ dead code and unused temporaries are removed, peephole rules simplify sequences,
 over the result. A loop that is already running switches to the new code at its next iteration. See
 [optimizing while running](../bvm/optimizing.mdx) for the details and how to watch it with `BVM_STATS=1`.
 
+![Functions are prepared on first call and rebuilt when hot](../images/tiering.svg)
+
 ## Runtime errors
 
 Every instruction that can fail (an index, a division, an overflow check, a cast, a `!!`, a map lookup) carries a
@@ -78,6 +80,8 @@ share the program's code, including code that has already been optimized. `await
 result. While tasks run, reference counting switches to atomic operations
 ([memory management](./memory.mdx#async-tasks-and-threads)). A runtime error in a task stops the whole program like
 one in the main thread. When the main program ends, bvm waits for the tasks that are still running, then exits.
+
+![Tasks on their own threads, joined by await](../images/async-tasks.svg)
 
 ## Output
 

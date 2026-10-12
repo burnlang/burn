@@ -78,6 +78,8 @@ each other's functions; Burn then picks an order that runs each module after as 
 `burn dump --modules app.bn` shows it. Globals that one module reads from another during initialization should
 therefore not depend on a cycle.
 
+![Imported modules run before the modules that import them](../images/modules-init.svg)
+
 ## The standard library
 
 | Module | Contents |

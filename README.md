@@ -319,9 +319,11 @@ both on bvm and in the native executable. See [the bvm documentation](docs/bvm/o
 
 ## Documentation
 
-The full documentation is written in MDX in [`docs/`](docs/index.mdx): a syntax tour, types, smart casts,
-structs and interfaces, modules, async, the standard library, the command line, how the compiler works and
-the Burn Virtual Machine.
+The full documentation is written in MDX in [`docs/`](docs/index.mdx): the whole language, the standard library,
+the command line and tools, [how Burn works in the background](docs/internals/overview.mdx) and the Burn Virtual
+Machine.
+
+<p align="center"><img src="docs/images/pipeline.svg" alt="The pipeline from source to bvm, native code and JavaScript" width="820"></p>
 
 ## Examples
 

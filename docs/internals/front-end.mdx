@@ -89,6 +89,8 @@ While checking a function, the checker carries a list of facts: "the variable in
 "slot 5 is not null". Conditions produce two sets of facts, one for when they are true and one for when they are
 false:
 
+![Facts from a condition flow into the branches and only common facts survive the join](../images/smart-casts.svg)
+
 - `x is T`, `x != null` and `x == null` produce facts about `x`;
 - `a && b` combines the true-facts of both sides, and checks `b` with the facts of `a` already applied;
 - `!c` swaps the two sets;

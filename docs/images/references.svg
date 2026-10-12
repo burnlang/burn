@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 330" width="1000" height="330" role="img" aria-label="Values and references">
+  <title>Values and references</title>
+  <defs><marker id="aFF7F11" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FF7F11"/></marker><marker id="aFF7F11s" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FF7F11"/></marker></defs>
+  <rect x="1" y="1" width="998" height="328" rx="16" fill="#FFFBF5" stroke="#F2DCC4" stroke-width="2"/>
+  <text x="30" y="42" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="18" text-anchor="start" fill="#2B1A10" font-weight="bold" xml:space="preserve" style="white-space:pre">Copied values and shared references</text>
+  <rect x="30" y="64" width="400" height="220" rx="12" fill="#FFFFFF" stroke="#F2DCC4" stroke-width="1.5"/>
+  <text x="230" y="92" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &#x27;Liberation Mono&#x27;, monospace" font-size="13" text-anchor="middle" fill="#2B1A10" font-weight="normal" xml:space="preserve" style="white-space:pre">var x = 3;  var y = x;  y += 1</text>
+  <text x="110" y="132" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &#x27;Liberation Mono&#x27;, monospace" font-size="13" text-anchor="middle" fill="#2B1A10" font-weight="bold" xml:space="preserve" style="white-space:pre">x</text>
+  <rect x="80" y="140" width="60" height="32" rx="8" fill="#FFFFFF" stroke="#8D4A1F" stroke-width="1.5"/>
+  <text x="110.0" y="159.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &#x27;Liberation Mono&#x27;, monospace" font-size="14" text-anchor="middle" fill="#2B1A10" font-weight="normal" xml:space="preserve" style="white-space:pre">3</text>
+  <text x="300" y="132" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &#x27;Liberation Mono&#x27;, monospace" font-size="13" text-anchor="middle" fill="#2B1A10" font-weight="bold" xml:space="preserve" style="white-space:pre">y</text>
+  <rect x="270" y="140" width="60" height="32" rx="8" fill="#FFFFFF" stroke="#8D4A1F" stroke-width="1.5"/>
+  <text x="300.0" y="159.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &#x27;Liberation Mono&#x27;, monospace" font-size="14" text-anchor="middle" fill="#2B1A10" font-weight="normal" xml:space="preserve" style="white-space:pre">4</text>
+  <text x="230" y="214" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="12" text-anchor="middle" fill="#7A5A44" font-weight="normal" xml:space="preserve" style="white-space:pre">numbers, bools, plain enums and strings:</text>
+  <text x="230" y="232" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="12" text-anchor="middle" fill="#7A5A44" font-weight="normal" xml:space="preserve" style="white-space:pre">each variable has its own value</text>
+  <rect x="460" y="64" width="510" height="220" rx="12" fill="#FFFFFF" stroke="#F2DCC4" stroke-width="1.5"/>
+  <text x="715" y="92" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &#x27;Liberation Mono&#x27;, monospace" font-size="13" text-anchor="middle" fill="#2B1A10" font-weight="normal" xml:space="preserve" style="white-space:pre">var a = [1, 2];  var b = a;  b.push(3)</text>
+  <text x="560" y="132" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &#x27;Liberation Mono&#x27;, monospace" font-size="13" text-anchor="middle" fill="#2B1A10" font-weight="bold" xml:space="preserve" style="white-space:pre">a</text>
+  <rect x="530" y="140" width="60" height="32" rx="8" fill="#FFE8D1" stroke="#FF7F11" stroke-width="1.5"/>
+  <text x="560.0" y="159.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &#x27;Liberation Mono&#x27;, monospace" font-size="14" text-anchor="middle" fill="#2B1A10" font-weight="normal" xml:space="preserve" style="white-space:pre">●</text>
+  <text x="870" y="132" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &#x27;Liberation Mono&#x27;, monospace" font-size="13" text-anchor="middle" fill="#2B1A10" font-weight="bold" xml:space="preserve" style="white-space:pre">b</text>
+  <rect x="840" y="140" width="60" height="32" rx="8" fill="#FFE8D1" stroke="#FF7F11" stroke-width="1.5"/>
+  <text x="870.0" y="159.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &#x27;Liberation Mono&#x27;, monospace" font-size="14" text-anchor="middle" fill="#2B1A10" font-weight="normal" xml:space="preserve" style="white-space:pre">●</text>
+  <rect x="650" y="180" width="130" height="36" rx="8" fill="#FFF3A0" stroke="#C9A227" stroke-width="1.5"/>
+  <text x="715.0" y="201.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &#x27;Liberation Mono&#x27;, monospace" font-size="13" text-anchor="middle" fill="#2B1A10" font-weight="normal" xml:space="preserve" style="white-space:pre">[1, 2, 3]</text>
+  <polyline points="560,172 560,198 648,198" fill="none" stroke="#FF7F11" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#aFF7F11)"/>
+  <polyline points="870,172 870,198 782,198" fill="none" stroke="#FF7F11" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#aFF7F11)"/>
+  <text x="715" y="246" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="12" text-anchor="middle" fill="#7A5A44" font-weight="normal" xml:space="preserve" style="white-space:pre">arrays, maps, records, structs, enums with data, functions:</text>
+  <text x="715" y="264" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="12" text-anchor="middle" fill="#7A5A44" font-weight="normal" xml:space="preserve" style="white-space:pre">both names see the same object</text>
+  <text x="30" y="312" font-family="ui-sans-serif, system-ui, -apple-system, &#x27;Segoe UI&#x27;, Helvetica, Arial, sans-serif" font-size="12" text-anchor="start" fill="#7A5A44" font-weight="normal" xml:space="preserve" style="white-space:pre">== compares contents either way. To get an independent copy of an array, use slice(a, 0, len(a)).</text>
+</svg>

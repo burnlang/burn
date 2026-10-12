@@ -29,6 +29,8 @@ Every object (strings, arrays, maps, structs, records, lambdas and `any` values)
 Variables, fields, array elements, map entries and running lambdas own the objects in them. When the last owner
 lets go, the object is freed, and so are the objects only it owned.
 
+![Reference counts going up and down until the object is freed](../images/refcount.svg)
+
 The compiler keeps the bookkeeping cheap:
 
 - Passing a value to a function costs nothing: the caller keeps owning it, and the function borrows it.
@@ -59,6 +61,8 @@ b = new Node("other")
 ```
 
 After the last two lines the two old nodes only point at each other, and they are freed.
+
+![Trial deletion: candidate, subtract internal references, collect](../images/cycles.svg)
 
 ## `destroy`
 

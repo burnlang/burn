@@ -86,6 +86,8 @@ fun first(text: string?): string {
 Early `return`, `break`, `continue`, `exit` and `panic` all count, so a guard at the top of a function narrows
 the rest of it. `x!!` asserts that a value is not null and fails at runtime if it is.
 
+![Facts from a condition flow into the branches and only common facts survive the join](../images/smart-casts.svg)
+
 ## Safe calls with `?.`
 
 `a?.b` reads a field or calls a method only when `a` is not null, and is `null` otherwise. Chains stop at the

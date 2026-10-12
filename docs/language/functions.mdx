@@ -84,6 +84,8 @@ print(a(), a(), a(), b())
 
 This prints `1 2 3 1`: each call of `makeCounter` creates its own `count`.
 
+![A closure object and the cell it shares with makeCounter](../images/closure.svg)
+
 - Variables are shared, not copied: when the outer code changes a variable after creating a lambda, the lambda sees
   the new value.
 - Each iteration of a `for` loop has its own loop variable, so lambdas created in a loop each keep their own value.
