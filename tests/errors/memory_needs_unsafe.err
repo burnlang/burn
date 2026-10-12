@@ -1,0 +1,1 @@
+3:16 `Memory.alloc` is an unsafe function, so calling it needs an `unsafe` block

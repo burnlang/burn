@@ -1,0 +1,3 @@
+import "std/memory"
+
+var p = Memory.alloc(8)
