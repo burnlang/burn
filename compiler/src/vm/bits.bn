@@ -1,6 +1,7 @@
 const MIN_INT = -9223372036854775807 - 1
 const MANTISSA = 4503599627370495
 const TWO_52 = 4503599627370496.0
+const CANONICAL_NAN = 9221120237041090560
 
 fun scale(x: float, by: int): float {
     var out = x
@@ -24,11 +25,41 @@ fun isInfinite(f: float): bool {
     return !isNan(f) && (f - f) != 0.0
 }
 
-/** The IEEE 754 bits of a float as an int, like `f64::to_bits` in Rust. */
+/**
+ * The IEEE 754 bits of a float as an int, like `f64::to_bits` in Rust. Every NaN gives the same bits, the quiet NaN
+ * Rust writes, so the compiler's output does not depend on where a NaN came from.
+ *
+ * On bvm and in native code the bits are read straight from the float with inline assembly; `portableToBits` works
+ * them out with arithmetic everywhere else.
+ */
 pub fun floatToBits(f: float): int {
     if (isNan(f)) {
-        return 9221120237041090560
+        return CANONICAL_NAN
     }
+    var bits = 0
+    unsafe {
+        asm {
+            bvm {
+                load {f}
+                store {bits}
+            }
+            x86_64 {
+                mov rax, {f}
+                mov {bits}, rax
+            }
+            arm64 {
+                ldr x9, {f}
+                str x9, {bits}
+            }
+            else {
+                bits = portableToBits(f)
+            }
+        }
+    }
+    return bits
+}
+
+fun portableToBits(f: float): int {
     var negative = f < 0.0 || (f == 0.0 && 1.0 / f < 0.0)
     var sign = 0
     if (negative) {
@@ -62,8 +93,32 @@ pub fun floatToBits(f: float): int {
     return sign | ((e + 1023) << 52) | m
 }
 
-/** The float with the given IEEE 754 bits, like `f64::from_bits` in Rust. */
+/** The float with the given IEEE 754 bits, like `f64::from_bits` in Rust, read with inline assembly where it can be. */
 pub fun floatFromBits(bits: int): float {
+    var f = 0.0
+    unsafe {
+        asm {
+            bvm {
+                load {bits}
+                store {f}
+            }
+            x86_64 {
+                mov rax, {bits}
+                mov {f}, rax
+            }
+            arm64 {
+                ldr x9, {bits}
+                str x9, {f}
+            }
+            else {
+                f = portableFromBits(bits)
+            }
+        }
+    }
+    return f
+}
+
+fun portableFromBits(bits: int): float {
     var negative = bits < 0
     var e = (bits >> 52) & 2047
     var m = bits & MANTISSA
