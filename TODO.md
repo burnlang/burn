@@ -5,7 +5,7 @@
 - Fix Date: the date library is now written in Burn and fully working
 - Fix compilation to executable: `burn build` produces real native x86-64 and arm64 executables (Linux and macOS, Apple silicon included)
 - Add interfaces: `def interface`, checked conformance, dynamic dispatch and smart casts
-- Add better documentation using MDX: see `docs/`
+- Add better documentation using MDX: see [burnlang/docs](https://github.com/burnlang/docs) and the website at https://burnlang.github.io/docs/
 - Add compiling to JS: `burn build --target js` covers the whole language and standard library
 - Errors show up on line 1 even though the error is on another line: every diagnostic now has an exact line and column
 - Finish the VSCode Burn LSP: `burn lsp` plus the extension in [vscode-burn](https://github.com/burnlang/vscode-burn)

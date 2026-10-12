@@ -3,7 +3,6 @@
 *.rs text eol=lf
 *.s text eol=lf
 *.bn text eol=lf
-*.mdx text eol=lf
 *.md text eol=lf
 *.js text eol=lf
 *.json text eol=lf
