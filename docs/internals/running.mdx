@@ -1,0 +1,94 @@
+---
+title: Running on bvm
+description: How bvm links, verifies and interprets a Burn program, optimizes it while it runs, reports runtime errors and runs async tasks.
+order: 49
+---
+
+# Running on bvm
+
+`burn app.bn`, `burn run` and `burni` run programs on bvm, the Burn virtual machine. bvm is a general-purpose stack
+machine written in Rust ([bvm overview](../bvm/overview.mdx)); this page follows a Burn program through it.
+
+## Linking the runtime library
+
+The compiler's module contains only the program. Many runtime functions, such as `split`, `trim`, `contains`,
+`parseJSON` or `toInt`, are written in Burn in `lib/runtime/` and compiled to bvm assembly, `bvm/runtime.bvm`, which
+is built into the bvm executable. When a module is marked as a Burn program (`@RefCounted` in its assembly), bvm links
+it with that library, so the program's `rt split` instructions call the Burn implementations. The rest of the runtime
+(memory, strings, arrays, maps, formatting, files, processes, HTTP, time, tasks) is Rust code in `bvm/runtime/src`,
+called directly by the `rt` instruction.
+
+Bytecode libraries imported by the program (`.bvmc`) are linked in the same step: functions are matched by name,
+dispatch tables with the same name are merged, and [mixins](../bvm/mixins.mdx) are applied to their targets.
+
+## Verifying
+
+Before anything runs, the verifier checks every function: jumps stay inside the function, every path reaches each
+instruction with the same stack height, the stack never underflows or grows past 65,536 slots, locals and globals
+exist, types and dispatch tables refer to real types, and direct calls pass the number of arguments the callee
+takes (calls through function values are checked when they happen). A
+module that fails is rejected with a message naming the function and instruction, so the interpreter can skip these
+checks while running.
+
+## The interpreter
+
+Each call gets a frame with its locals; values are 64-bit words on an operand stack. The interpreter is a loop over
+the function's instructions, with the stack pointer and instruction pointer kept in registers. Instructions are small
+and typed (`iadd`, `fadd`, `getfield`, `index`, `call`, `dispatch`, `rt`), so most do one thing without looking at
+types.
+
+Functions are prepared lazily. The first call of a function resolves its jumps and fuses common sequences into
+superinstructions, such as "add a constant to a local" (`i += 1`), "compare two locals and jump", or "load a local
+and read one of its fields". A function that
+never runs is never prepared, which is why a large program or library starts as fast as a small one.
+
+## Optimizing while running
+
+bvm counts calls and loop iterations per function. When a function gets hot (1000 calls or about 16,000 loop
+iterations) it is rebuilt: small functions such as getters are inlined into their callers, constants are folded,
+dead code and unused temporaries are removed, peephole rules simplify sequences, and superinstructions are fused again
+over the result. A loop that is already running switches to the new code at its next iteration. See
+[optimizing while running](../bvm/optimizing.mdx) for the details and how to watch it with `BVM_STATS=1`.
+
+## Runtime errors
+
+Every instruction that can fail (an index, a division, an overflow check, a cast, a `!!`, a map lookup) carries a
+location id. The module has a table of locations, written by the compiler as `file:line:column`. When an operation
+fails, the runtime looks up the location, reads that line from the source file, and prints:
+
+```text
+runtime error: index 5 out of bounds (length 1)
+ --> app.bn:2:7
+  |
+2 | print(a[5])
+  |       ^
+  = help: valid indexes go from 0 to 0; check the index against `len(...)` first
+```
+
+Then it flushes the program's output and exits with code `1`. When the source file is no longer there (for example
+a `.bvmc` copied elsewhere), the location line is printed without the snippet.
+
+Deep recursion is caught too: bvm keeps its frames in its own memory and stops a program that goes deeper than a
+million calls with `runtime error: stack overflow (recursion is too deep)`.
+
+## Async tasks
+
+`spawn` starts an async call on a new operating system thread with a 64 MB stack and returns a future; the threads
+share the program's code, including code that has already been optimized. `await` blocks until the task has stored its
+result. While tasks run, reference counting switches to atomic operations
+([memory management](./memory.mdx#async-tasks-and-threads)). A runtime error in a task stops the whole program like
+one in the main thread. When the main program ends, bvm waits for the tasks that are still running, then exits.
+
+## Output
+
+`print` writes to a buffer instead of making a system call per line. On a terminal the buffer is written out at every
+line break, so output appears as it is printed; when the output goes to a file or a pipe, it is written in blocks of
+64 KB. The buffer is also flushed before `eprint`, before reading input, sleeping or running another process, before
+a runtime error is printed and at exit, so output always appears in order and complete.
+
+## Host functions
+
+A program that bvm runs inside another program can call functions the host provides, declared in Burn with
+`@Native("name")` ([native interop](../bvm/native-interop.mdx)). The Burn command line itself is such a program: it
+calls host functions to compile, link and run the code it produced, without starting a new process
+([the toolchain](./toolchain.mdx)).
