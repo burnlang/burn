@@ -1,0 +1,37 @@
+import "std/memory"
+
+/** Sums `n` 32-bit numbers stored one after another at `p`. */
+unsafe fun sum32(p: int, n: int): int {
+    var total = 0
+    for i in 0..n {
+        total += Memory.load32(p + 4 * i)
+    }
+    return total
+}
+
+unsafe {
+    var p = Memory.alloc(64)
+    print(p != 0, Memory.load64(p), Memory.load8(p + 63))
+    Memory.store64(p, 1234567890123)
+    print(Memory.load64(p))
+    Memory.store64(p, -2)
+    print(Memory.load64(p), Memory.load8(p), Memory.load16(p), Memory.load32(p))
+    Memory.store8(p + 8, 300)
+    Memory.store16(p + 9, 65537)
+    print(Memory.load8(p + 8), Memory.load16(p + 9), Memory.load8(p + 11))
+    Memory.store32(p + 16, 1)
+    Memory.store32(p + 20, 2)
+    Memory.store32(p + 24, 3)
+    print(sum32(p + 16, 3))
+    Memory.storeFloat(p + 32, 2.5)
+    print(Memory.loadFloat(p + 32))
+    Memory.fill(p + 40, 7, 8)
+    print(Memory.load8(p + 40), Memory.load8(p + 47), Memory.load8(p + 48))
+    Memory.copy(p + 48, p + 16, 12)
+    print(sum32(p + 48, 3))
+    var q = Memory.resize(p, 4096)
+    print(Memory.load64(q), Memory.load32(q + 52), Memory.load8(q + 4000))
+    Memory.free(q)
+    Memory.free(0)
+    print(Memory.alloc(-1))
+}

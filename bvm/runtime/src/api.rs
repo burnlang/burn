@@ -1434,3 +1434,100 @@ pub fn fmax(a: u64, c: u64) -> u64 {
 
 #[cfg(burn_core)]
 pub use crate::bare::*;
+
+const MEM_HEADER: usize = 16;
+
+fn mem_layout(size: usize) -> Option<core::alloc::Layout> {
+    core::alloc::Layout::from_size_align(size.checked_add(MEM_HEADER)?, MEM_HEADER).ok()
+}
+
+unsafe fn mem_alloc(size: u64) -> u64 {
+    let Some(layout) = usize::try_from(size as i64).ok().and_then(mem_layout) else {
+        return 0;
+    };
+    let p = alloc::alloc::alloc_zeroed(layout);
+    if p.is_null() {
+        return 0;
+    }
+    (p as *mut u64).write(size);
+    p.add(MEM_HEADER) as u64
+}
+
+unsafe fn mem_free(addr: u64) -> u64 {
+    if addr == 0 {
+        return 0;
+    }
+    let p = (addr as *mut u8).sub(MEM_HEADER);
+    let size = (p as *const u64).read() as usize;
+    if let Some(layout) = mem_layout(size) {
+        alloc::alloc::dealloc(p, layout);
+    }
+    0
+}
+
+unsafe fn mem_realloc(addr: u64, size: u64) -> u64 {
+    if addr == 0 {
+        return mem_alloc(size);
+    }
+    let Some(new) = usize::try_from(size as i64).ok().and_then(mem_layout) else {
+        return 0;
+    };
+    let p = (addr as *mut u8).sub(MEM_HEADER);
+    let old = (p as *const u64).read() as usize;
+    let Some(layout) = mem_layout(old) else {
+        return 0;
+    };
+    let q = alloc::alloc::realloc(p, layout, new.size());
+    if q.is_null() {
+        return 0;
+    }
+    if new.size() > layout.size() {
+        core::ptr::write_bytes(q.add(layout.size()), 0, new.size() - layout.size());
+    }
+    (q as *mut u64).write(size);
+    q.add(MEM_HEADER) as u64
+}
+
+/// Raw memory for `std/memory`: `op` picks the operation, and addresses are plain integers.
+pub fn mem(op: u64, a: u64, b: u64, c: u64) -> u64 {
+    unsafe {
+        match op {
+            0 => mem_alloc(a),
+            1 => mem_free(a),
+            2 => mem_realloc(a, b),
+            3 => (a as *const u8).read_unaligned() as u64,
+            4 => (a as *const u16).read_unaligned() as u64,
+            5 => (a as *const u32).read_unaligned() as u64,
+            6 | 11 => (a as *const u64).read_unaligned(),
+            7 => {
+                (a as *mut u8).write_unaligned(b as u8);
+                0
+            }
+            8 => {
+                (a as *mut u16).write_unaligned(b as u16);
+                0
+            }
+            9 => {
+                (a as *mut u32).write_unaligned(b as u32);
+                0
+            }
+            10 | 12 => {
+                (a as *mut u64).write_unaligned(b);
+                0
+            }
+            13 => {
+                if c as i64 > 0 {
+                    core::ptr::copy(b as *const u8, a as *mut u8, c as usize);
+                }
+                0
+            }
+            14 => {
+                if c as i64 > 0 {
+                    core::ptr::write_bytes(a as *mut u8, b as u8, c as usize);
+                }
+                0
+            }
+            _ => 0,
+        }
+    }
+}

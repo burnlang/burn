@@ -218,4 +218,5 @@ runtime_fns! {
     IsIntRadix => burn_is_int_radix = crate::api::is_int_radix [a, b, c];
     IntToStrRadix => burn_int_to_str_radix = crate::api::int_to_str_radix [a, b, c];
     Fail => burn_fail = crate::api::fail [a, b];
+    Mem => burn_mem = crate::api::mem [a, b, c, d];
 }

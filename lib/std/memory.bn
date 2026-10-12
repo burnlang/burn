@@ -1,0 +1,183 @@
+/**
+ * Raw memory: blocks of bytes outside Burn's own values, addressed by plain `int`s.
+ *
+ * Every function is unsafe, so it can only be called in an `unsafe` block or an
+ * `unsafe fun`. Nothing checks an address: reading or writing outside a block,
+ * after `free`, or through an address that never came from `alloc` breaks the
+ * program. Blocks are not reference counted; each one lives until `free`.
+ *
+ * Loads and stores read and write little-endian numbers of 8, 16, 32 or 64 bits.
+ * The smaller loads give the value without a sign (`load8` gives 0 to 255).
+ * Addresses do not need to be aligned.
+ *
+ * @since 26.1
+ * @example
+ *     import "std/memory"
+ *
+ *     unsafe {
+ *         var p = Memory.alloc(16)
+ *         Memory.store64(p, 42)
+ *         Memory.store8(p + 8, 255)
+ *         print(Memory.load64(p), Memory.load8(p + 8))  // 42 255
+ *         Memory.free(p)
+ *     }
+ */
+pub def static struct Memory {
+    /**
+     * Reserves a block of `size` bytes, all zero, and gives its address.
+     *
+     * The address is aligned to 16 bytes. A size of 0 gives a block that holds
+     * nothing but can still be resized and freed.
+     *
+     * @param size how many bytes, not negative
+     * @return the address of the block, or `0` if it cannot be made
+     */
+    unsafe fun alloc(size: int): int {
+        return __mem(0, size, 0, 0)
+    }
+
+    /**
+     * Gives a block back. Freeing `0` does nothing.
+     *
+     * @param address an address that `alloc` or `resize` gave and that was not freed yet
+     */
+    unsafe fun free(address: int) {
+        __mem(1, address, 0, 0)
+    }
+
+    /**
+     * Makes a block larger or smaller, keeping its bytes. New bytes are zero.
+     *
+     * The block may move: use the returned address from now on, not the old one.
+     * Resizing `0` is the same as `alloc`.
+     *
+     * @param address the block, from `alloc` or `resize`
+     * @param size the new size in bytes, not negative
+     * @return the address of the block, or `0` if it cannot be resized (the old block stays valid)
+     */
+    unsafe fun resize(address: int, size: int): int {
+        return __mem(2, address, size, 0)
+    }
+
+    /**
+     * Reads one byte.
+     *
+     * @param address where to read
+     * @return the byte, from 0 to 255
+     */
+    unsafe fun load8(address: int): int {
+        return __mem(3, address, 0, 0)
+    }
+
+    /**
+     * Reads a 16-bit number.
+     *
+     * @param address where to read
+     * @return the number, from 0 to 65535
+     */
+    unsafe fun load16(address: int): int {
+        return __mem(4, address, 0, 0)
+    }
+
+    /**
+     * Reads a 32-bit number.
+     *
+     * @param address where to read
+     * @return the number, from 0 to 4294967295
+     */
+    unsafe fun load32(address: int): int {
+        return __mem(5, address, 0, 0)
+    }
+
+    /**
+     * Reads a 64-bit number.
+     *
+     * @param address where to read
+     * @return the number as an `int`
+     */
+    unsafe fun load64(address: int): int {
+        return __mem(6, address, 0, 0)
+    }
+
+    /**
+     * Reads a 64-bit float.
+     *
+     * @param address where to read
+     * @return the float stored there
+     */
+    unsafe fun loadFloat(address: int): float {
+        return __memLoadFloat(address)
+    }
+
+    /**
+     * Writes one byte: the lowest 8 bits of `value`.
+     *
+     * @param address where to write
+     * @param value the value, of which only the lowest 8 bits are kept
+     */
+    unsafe fun store8(address: int, value: int) {
+        __mem(7, address, value, 0)
+    }
+
+    /**
+     * Writes the lowest 16 bits of `value`.
+     *
+     * @param address where to write
+     * @param value the value, of which only the lowest 16 bits are kept
+     */
+    unsafe fun store16(address: int, value: int) {
+        __mem(8, address, value, 0)
+    }
+
+    /**
+     * Writes the lowest 32 bits of `value`.
+     *
+     * @param address where to write
+     * @param value the value, of which only the lowest 32 bits are kept
+     */
+    unsafe fun store32(address: int, value: int) {
+        __mem(9, address, value, 0)
+    }
+
+    /**
+     * Writes a 64-bit number.
+     *
+     * @param address where to write
+     * @param value the value
+     */
+    unsafe fun store64(address: int, value: int) {
+        __mem(10, address, value, 0)
+    }
+
+    /**
+     * Writes a 64-bit float.
+     *
+     * @param address where to write
+     * @param value the float
+     */
+    unsafe fun storeFloat(address: int, value: float) {
+        __memStoreFloat(address, value)
+    }
+
+    /**
+     * Copies `size` bytes from one place to another. The two may overlap.
+     *
+     * @param to where to write
+     * @param from where to read
+     * @param size how many bytes; nothing happens when it is 0 or less
+     */
+    unsafe fun copy(to: int, from: int, size: int) {
+        __mem(13, to, from, size)
+    }
+
+    /**
+     * Sets `size` bytes to the same byte.
+     *
+     * @param address where to start
+     * @param byte the byte, of which only the lowest 8 bits are kept
+     * @param size how many bytes; nothing happens when it is 0 or less
+     */
+    unsafe fun fill(address: int, byte: int, size: int) {
+        __mem(14, address, byte, size)
+    }
+}
