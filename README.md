@@ -89,7 +89,7 @@ and adds it to your `PATH`. It installs and switches versions (`burnup install 2
 a project can pin its version with `burn = "26.1"` in `burn.toml`. It builds from source when no
 prebuilt release is available, which needs Rust 1.85 or newer for bvm (`--install-rust` sets that up for you). Native
 executables need a C toolchain (`cc`) and are built for Linux and macOS on x86-64 and arm64, Apple silicon Macs included.
-See [docs/tooling/installation.mdx](docs/tooling/installation.mdx) for all options, updating and uninstalling.
+See [installation](https://burnlang.github.io/docs/tooling/installation) for all options, updating and uninstalling.
 
 ## The toolchain
 
@@ -121,7 +121,7 @@ burn init github.com/you/app    # start a project with burn.toml
 ash install github.com/you/lib  # add a package
 ```
 
-See [the toolchain](docs/tooling/toolchain.mdx) and the [command line reference](docs/tooling/cli.mdx).
+See [the toolchain](https://burnlang.github.io/docs/tooling/toolchain) and the [command line reference](https://burnlang.github.io/docs/tooling/cli).
 
 ## Language at a glance
 
@@ -314,16 +314,16 @@ burnc app.bn --target bar -o app.bar        # one archive: ./app.bar runs anywhe
 ```
 
 The library calls `hostName()` back in the program, and the program's mixin rewrites the library's `describe`,
-both on bvm and in the native executable. See [the bvm documentation](docs/bvm/overview.mdx),
-[archives](docs/bvm/archives.mdx), [mixins](docs/bvm/mixins.mdx) and [native interop](docs/bvm/native-interop.mdx).
+both on bvm and in the native executable. See [the bvm documentation](https://burnlang.github.io/docs/bvm/overview),
+[archives](https://burnlang.github.io/docs/bvm/archives), [mixins](https://burnlang.github.io/docs/bvm/mixins) and [native interop](https://burnlang.github.io/docs/bvm/native-interop).
 
 ## Documentation
 
-The full documentation is written in MDX in [`docs/`](docs/index.mdx): the whole language, the standard library,
-the command line and tools, [how Burn works in the background](docs/internals/overview.mdx) and the Burn Virtual
-Machine.
+The documentation is at **[burnlang.github.io/docs](https://burnlang.github.io/docs/)**: the whole language, the
+standard library, the command line and tools, [how Burn works in the background](https://burnlang.github.io/docs/internals/overview)
+and the Burn Virtual Machine. Its sources and the website live in [burnlang/docs](https://github.com/burnlang/docs).
 
-<p align="center"><img src="docs/images/pipeline.svg" alt="The pipeline from source to bvm, native code and JavaScript" width="820"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/burnlang/docs/master/content/images/pipeline.svg" alt="The pipeline from source to bvm, native code and JavaScript" width="820"></p>
 
 ## Examples
 
@@ -349,12 +349,12 @@ examples are in [`examples/bvm/`](examples/bvm/).
 - `install.sh`: forwards to [burnup](https://github.com/burnlang/burnup), the installer
 - `assets/`: the logo
 - `lib/std/`: the standard library, written in Burn
-- `docs/`: documentation
 - `tests/`: end-to-end tests, which `cargo test` runs with a toolchain bootstrapped from stage0 (`bvm/tests/burn.rs`)
 
 Editor support lives in its own repositories: [vscode-burn](https://github.com/burnlang/vscode-burn),
 [intellij-burn](https://github.com/burnlang/intellij-burn), [zed-burn](https://github.com/burnlang/zed-burn) and
-[tree-sitter-burn](https://github.com/burnlang/tree-sitter-burn). See [editor support](docs/tooling/editors.mdx).
+[tree-sitter-burn](https://github.com/burnlang/tree-sitter-burn). See [editor support](https://burnlang.github.io/docs/tooling/editors).
+The documentation is in [burnlang/docs](https://github.com/burnlang/docs).
 
 ## Development
 
@@ -385,6 +385,5 @@ This project is licensed under the GNU General Public License v3.0 - see the [LI
 
 ## Plans for Burn
 
-1. Native backends for Windows and ARM64
+1. Native backends for Windows
 2. Shipping the self-hosted compiler (it already builds itself, see [compiler/README.md](compiler/README.md))
-3. A documentation website built from `docs/`

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The documentation moved to its own repository, [burnlang/docs](https://github.com/burnlang/docs), together with a website built with SvelteKit (https://burnlang.github.io/docs/). `docs/` is gone from this repository, and the README links to the website.
 - Fixed: a `match` on a top-level variable rejected patterns that bind names (`is string s`, `Token.Word(w)`) with "a binding needs a subject stored in a variable"; they now work like in functions.
 - Native executables for 64-bit ARM: Macs with Apple silicon (M1 and later) and Linux on arm64 build and run native executables, with the same features as on x86-64 (`--no-std`, bytecode libraries and their mixins, executables that run `.bvmc` and `.bar` files). The arm64 code generator is `compiler/src/native/arm64.bn`; `burn dump --asm` prints its assembly on those machines.
 - Cross-compiling: `BURN_PLATFORM` (`linux-x86_64`, `macos-x86_64`, `linux-aarch64`, `macos-aarch64`) builds native executables for another platform, with `BURN_RUNTIME_DIR` pointing at a runtime built for it (`TARGET=<rust triple> scripts/native-runtime.sh <dir>`) and `BURN_CC` at a linker for it.
