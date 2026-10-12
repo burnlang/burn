@@ -1,0 +1,89 @@
+---
+title: JavaScript
+description: Compiling Burn to JavaScript for Node.js, what carries over and what differs.
+order: 33
+---
+
+# JavaScript
+
+`--target js` compiles a program to one JavaScript file that runs with [Node.js](https://nodejs.org) 18 or newer.
+The file contains the program and a small runtime written in JavaScript, and needs nothing else installed.
+
+```sh
+burnc app.bn --target js            # writes app.js
+node app.js one two                 # arguments reach args()
+burnc app.bn --target js -o dist/app.js
+burn dump --js app.bn               # print the JavaScript instead of writing it
+```
+
+The file starts with `#!/usr/bin/env node`, so after `chmod +x app.js` it also runs as `./app.js`. In a project, set
+`target = "js"` in `burn.toml` (or create one with `burn init <name> --target js`) and `burn build` writes
+`build/<name>.js`.
+
+## What carries over
+
+The JavaScript build uses the same type checker as the other backends and keeps their behaviour:
+
+- every runtime check: index bounds, integer overflow, division by zero, null values, `as` conversions to sized
+  numbers, with the same messages and source locations as bvm;
+- strings, arrays, maps, records, structs, interfaces, enums with data, `match`, closures and generics;
+- the standard library: printing and input, files (`readFile`, `writeFile`, `std/fs`), processes (`std/process`,
+  through Node's `child_process`), HTTP (`std/http`, through `curl`), JSON, dates and times, math and random numbers;
+- `destroy` and the "this object was destroyed" checks.
+
+Memory is managed by the JavaScript engine instead of reference counting, so `gc()` does nothing and
+`BURN_MAX_HEAP_MB` does not apply.
+
+## What differs
+
+| | bvm and native | JavaScript |
+| --- | --- | --- |
+| `int` | exact 64-bit integers | JavaScript numbers: exact up to `2^53`; larger values are rounded, though overflow past 64 bits is still caught |
+| `uint64` | exact | exact for bit operations and wrapping, rounded when printed above `2^53` |
+| `async fun` | runs in its own thread | runs to the end when it is called; `await` returns its result |
+| `sleep(ms)` | sleeps | blocks the thread with `Atomics.wait` |
+| speed | bvm optimizes while running; native code is fastest | Node's JIT; between bvm and native for most programs |
+
+```burn
+var big = 9007199254740993
+print(big)   // 9007199254740993 on bvm, 9007199254740992 in JavaScript
+```
+
+## What the JavaScript backend cannot do
+
+These features need bvm, so the compiler rejects them for `--target js` with an explanation:
+
+- importing bytecode libraries (`import "geometry.bvmc"`);
+- `@Native` functions, which a host program provides;
+- mixins (`@Inject`, `@Overwrite`, `@Redirect`), which rewrite bvm bytecode.
+
+## How the code looks
+
+Each Burn function becomes a JavaScript function, locals become parameters and `let` variables, records become
+arrays tagged with their type, and checked operations call small helpers from the runtime. This function:
+
+```burn
+fun pick(xs: [int], i: int): int {
+    if (i + 1 > len(xs)) {
+        return 0
+    }
+    return xs[i]
+}
+```
+
+becomes:
+
+```js
+function f1(l0, l1) {
+  if (($ov(l1 + 1, 1) > l0.length)) {
+    return 0;
+  }
+  return $idx(l0, l1, 2);
+}
+```
+
+`$ov` checks for integer overflow and `$idx` checks the index; the last argument of each is the source location
+their error message points at.
+
+The runtime is `lib/js/prelude.js` in the Burn repository; the compiler embeds it (`compiler/src/js/js.bn`). See
+[how the compiler works](./compiler.mdx).

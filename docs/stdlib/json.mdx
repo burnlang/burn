@@ -1,0 +1,58 @@
+---
+title: std/json
+description: Parsing and writing JSON, and reading parsed values safely.
+order: 19
+---
+
+# `std/json`
+
+```burn
+import "std/json"
+
+var text = "{\"name\": \"Ada\", \"langs\": [\"burn\", \"rust\"], \"age\": 36}"
+var data = parseJSON(text)
+print(JSON.get(data, "name"), JSON.at(JSON.get(data, "langs"), 0))
+{string: any} reply = {"ok": true, "items": [1, 2, 3]}
+print(toJSON(reply))
+```
+
+## Functions
+
+| Function | Result |
+| --- | --- |
+| `parseJSON(text)`, `JSON.parse(text)` | the parsed value as `any`; stops with `invalid JSON` when the text is not JSON |
+| `toJSON(value)`, `JSON.stringify(value)` | compact JSON text for any value |
+| `JSON.get(value, key)` | the value under `key` of an object, `null` when the key is missing |
+| `JSON.at(value, index)` | the element at `index` of an array; stops when the index is out of bounds |
+| `JSON.isObject(value)` | whether `value` is an object, a `{string: any}` map |
+| `JSON.isArray(value)` | whether `value` is an array, an `[any]` list |
+
+## How JSON maps to Burn
+
+| JSON | Burn |
+| --- | --- |
+| object | `{string: any}` |
+| array | `[any]` |
+| number | `int` when it has no fraction or exponent, otherwise `float` |
+| string, `true`/`false`, `null` | `string`, `bool`, `null` |
+
+Parsed values are `any`, so check their type before using them as something specific. Smart casts make that short:
+
+```burn
+import "std/json"
+
+var data = parseJSON("{\"port\": 8080, \"hosts\": [\"a\", \"b\"]}")
+var port = JSON.get(data, "port")
+if (port is int) {
+    print("port", port + 1)
+}
+var hosts = JSON.get(data, "hosts")
+if (hosts is [any]) {
+    for h in hosts {
+        print(h)
+    }
+}
+```
+
+`toJSON` writes records, structs, arrays, maps, numbers, strings, booleans and `null`; records and structs become
+objects with their field names, and map keys become strings: `toJSON({1: "a"})` is `{"1":"a"}`.

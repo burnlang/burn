@@ -1,0 +1,52 @@
+---
+title: std/math
+description: Constants, the Math helpers and the math functions that come with them.
+order: 16
+---
+
+# `std/math`
+
+```burn
+import "std/math"
+
+var angle = Math.toRadians(30.0)
+print(sin(angle), Math.clamp(1.7, 0.0, 1.0), Math.gcd(84, 36), PI)
+```
+
+Importing `std/math` gives the constants and the `Math` helpers below, and the math functions
+`sqrt`, `pow`, `abs`, `min`, `max`, `floor`, `ceil`, `round`, `exp`, `log`, `log10`, `sin`, `cos`, `tan`, `asin`,
+`acos`, `atan` and `atan2` ([built-in functions](./builtins.mdx#numbers)).
+
+## Constants
+
+| Name | Value |
+| --- | --- |
+| `PI` | `3.141592653589793`, a circle's circumference divided by its diameter |
+| `TAU` | `6.283185307179586`, `2 * PI` |
+| `E` | `2.718281828459045`, the base of the natural logarithm |
+
+## `Math`
+
+| Function | Result | Example |
+| --- | --- | --- |
+| `Math.clamp(x, low, high)` | `x` limited to `low..high` (`low` if `low > high`) | `Math.clamp(12.5, 0.0, 10.0)` is `10.0` |
+| `Math.lerp(a, b, t)` | `a + (b - a) * t`; `t` outside `0..1` extrapolates | `Math.lerp(10.0, 20.0, 0.25)` is `12.5` |
+| `Math.toRadians(degrees)` | the angle in radians | `Math.toRadians(180.0)` is `PI` |
+| `Math.toDegrees(radians)` | the angle in degrees | `Math.toDegrees(PI / 2.0)` is `90.0` |
+| `Math.sign(x)` | `1`, `-1` or `0` | `Math.sign(-2.5)` is `-1` |
+| `Math.hypot(a, b)` | `sqrt(a * a + b * b)` | `Math.hypot(3.0, 4.0)` is `5.0` |
+| `Math.gcd(a, b)` | the greatest common divisor, never negative, `0` for `0, 0` | `Math.gcd(12, 18)` is `6` |
+| `Math.lcm(a, b)` | the least common multiple, never negative, `0` if either is `0` | `Math.lcm(4, 6)` is `12` |
+| `Math.factorial(n)` | `n!`, `1` below 2; overflows above 20 | `Math.factorial(5)` is `120` |
+| `Math.isPrime(n)` | whether `n` is prime, by trial division | `Math.isPrime(97)` is `true` |
+| `Math.sum(values)` | the sum of `[float]`, `0.0` when empty | `Math.sum([1.5, 2.5, 3.0])` is `7.0` |
+| `Math.average(values)` | the mean of `[float]`, `0.0` when empty | `Math.average([1.0, 2.0, 6.0])` is `3.0` |
+
+## Notes
+
+- `int` arithmetic is checked: a result outside the 64-bit range stops the program with an integer overflow error.
+  `wrappingAdd`, `wrappingSub` and `wrappingMul` wrap around instead.
+- `float` arithmetic follows IEEE 754: dividing by `0.0` gives `Infinity`, and `0.0 / 0.0` gives `NaN`.
+- `floor`, `ceil` and `round` return an `int`; use `toFloat` to go back.
+- Random numbers come with `std/random`: `random()`, `randomInt(min, max)`, `seed(n)` and helpers for arrays
+  ([collections](./collections.mdx)).

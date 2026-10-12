@@ -1,7 +1,7 @@
 ---
 title: Built-in functions
 description: The functions that are always available, and the ones that live in standard library modules.
-order: 10
+order: 13
 ---
 
 # Built-in functions
@@ -66,14 +66,14 @@ is missing, and `burn fix` or the editor's quick fix adds it. They are still fas
 
 | Module | Functions |
 | --- | --- |
-| `std/math` | `sqrt`, `pow`, `abs`, `floor`, `ceil`, `round`, `min`, `max`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `log`, `log10`, `exp` |
-| `std/random` | `random`, `randomInt`, `seed` |
-| `std/time` | `now`, `nowMs`, `millis`, `clock`, `sleep` |
-| `std/json` | `parseJSON`, `toJSON` |
-| `std/fs` | `readFile`, `writeFile`, `appendFile`, `fileExists` |
-| `std/process` | `env`, `args`, `exit`, `panic` |
-| `std/testing` | `assert` |
-| `std/strings` | `isLetter`, `isDigit`, `isAlphanumeric`, `isWhitespace` |
+| [`std/math`](./math.mdx) | `sqrt`, `pow`, `abs`, `floor`, `ceil`, `round`, `min`, `max`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `log`, `log10`, `exp` |
+| [`std/random`](./collections.mdx) | `random`, `randomInt`, `seed` |
+| [`std/time`](./time.mdx) | `now`, `nowMs`, `millis`, `clock`, `sleep` |
+| [`std/json`](./json.mdx) | `parseJSON`, `toJSON` |
+| [`std/fs`](./fs.mdx) | `readFile`, `writeFile`, `appendFile`, `fileExists` |
+| [`std/process`](./process.mdx) | `env`, `args`, `exit`, `panic` |
+| [`std/testing`](./collections.mdx) | `assert` |
+| [`std/strings`](./strings.mdx) | `isLetter`, `isDigit`, `isAlphanumeric`, `isWhitespace` |
 
 ```burn
 import "std/math"
