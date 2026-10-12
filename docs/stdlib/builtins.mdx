@@ -59,6 +59,15 @@ characters.
 `x.wrappingAdd(y)`, `x.wrappingSub(y)` and `x.wrappingMul(y)` wrap around at the edges of the integer type instead of
 failing on overflow.
 
+## Other names and helpers
+
+- `println` is the same as `print`.
+- `length(x)` and `size(x)` are the same as `len(x)`; `x.length` reads it as a property.
+- `toUpper`, `toUpperCase` and `toLower`, `toLowerCase` are the same as `upper` and `lower`.
+- `gc()` runs the [cycle collector](../internals/memory.mdx#cycles) at once. Programs never need it, since cycles are
+  collected automatically; it is there for measurements.
+- `annotationsOf(value)` returns the annotations declared on the value's type ([annotations](../language/annotations.mdx)).
+
 ## In the standard library
 
 These functions are part of the standard library. Import their module to use them; the compiler says which import
