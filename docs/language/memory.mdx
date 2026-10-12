@@ -1,7 +1,7 @@
 ---
 title: Memory
 description: How Burn frees memory automatically, without a garbage collector and without manual memory management.
-order: 11
+order: 19
 ---
 
 # Memory
@@ -11,6 +11,8 @@ value and frees it as soon as nothing uses it anymore. There is no garbage colle
 for unused memory, so memory use stays low and there are no pauses.
 
 ```burn
+import "std/list"
+
 fun total(): int {
     var items = range(0, 1000)
     return items.length

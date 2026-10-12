@@ -1,7 +1,7 @@
 ---
 title: Types and definitions
 description: Built-in types, arrays, maps, and everything you can define with def.
-order: 4
+order: 5
 ---
 
 # Types and definitions
@@ -144,41 +144,16 @@ print(point.x + point.y)
 ```burn
 def enum Color { Red, Green, Blue }
 
-var c = Color.Green
-print(c, c == Color.Green, c as int)
-```
-
-Variants can carry data. Give a variant its fields in parentheses, build it like a function call, and take it apart
-with `match`:
-
-```burn
 def enum Shape {
     Circle(radius: float),
-    Rect(w: float, h: float),
-    Dot
+    Rect(w: float, h: float)
 }
 
-fun area(s: Shape): float {
-    return match s {
-        Shape.Circle(r) => 3.14159 * r * r
-        Shape.Rect(w, h) => w * h
-        Shape.Dot => 0.0
-    }
-}
-
-print(area(Shape.Rect(2.0, 3.0)), Shape.Circle(1.0))
+print(Color.Green, Shape.Rect(2.0, 3.0))
 ```
 
-- A `match` that produces a value must handle every variant (or have an `else` arm); a statement `match` warns about
-  the ones it misses.
-- In a pattern, each field is a name to bind, `_` to skip it, a value it must equal (`Token.Int(0)`), or another
-  variant pattern (`Expr.Neg(Expr.Num(n))`). A name that is already a variable or constant is a value to compare
-  against; any other name (including one that is also a function) binds a new name. Guards work as usual:
-  `Shape.Rect(w, h) if w == h => "square"`.
-- `Shape.Circle` is also a type: `if (s is Shape.Circle) { print(s.radius) }` narrows `s` so its fields can be read.
-- Values print the way they are built (`Shape.Circle(1.0)`), and `==` compares them field by field.
-- An enum whose variants carry data is a reference type like a struct, so it can be recursive:
-  `def enum Expr { Num(value: int), Add(left: Expr, right: Expr) }`.
+A plain enum is a list of names; variants can also carry data, which [`match`](./match.mdx) takes apart. See
+[enums](./enums.mdx).
 
 ### `def struct` and `def interface`
 
@@ -223,67 +198,38 @@ fallback with `ages["bob"] ?? 0`, check it with `!= null`, or assert with `ages[
 
 ## Generics
 
-Functions and types can take type parameters in `<...>`. Burn works out the types from the arguments, so calls look
-like normal calls:
+Functions, records and structs can take type parameters: `fun first<T>(items: [T]): T?`, `def type Pair<A, B>`,
+`def struct Stack<T>()`. See [generics](./generics.mdx).
+
+## Values and references
+
+Numbers, `bool`, plain enums and strings behave as values: assigning one to another variable or passing it to a
+function gives an independent copy, and nothing done through one name changes the other. (Strings are never changed
+in place where another name could see it, so sharing them is safe.)
+
+Arrays, maps, records, struct objects, enum values with data and functions are references: assigning or passing one
+shares the same object, and a change through one name is visible through every other.
 
 ```burn
-fun first<T>(items: [T]): T? {
-    if len(items) == 0 {
-        return null
-    }
-    return items[0]
+def type Point {
+    x: int
+    y: int
 }
 
-fun mapList<T, U>(items: [T], f: fun(T): U): [U] {
-    [U] out = []
-    for x in items {
-        out.push(f(x))
-    }
-    return out
-}
+var a = [1, 2]
+var b = a
+b.push(3)
 
-print(first([3, 4]), first(["a"]))
-print(mapList([1, 2, 3], fun(x: int): string {
-    return "#${x}"
-}))
+var p = Point { x: 1, y: 2 }
+var q = p
+q.x = 10
+
+print(a, p.x)
 ```
 
-`def type` and `def struct` take type parameters after the name:
+prints `[1, 2, 3] 10`. To get an independent copy, build a new value: `slice(a, 0, len(a))` copies an array, and
+`Point { x: p.x, y: p.y }` a record.
 
-```burn
-def type Pair<A, B> {
-    first: A
-    second: B
-}
-
-def struct Stack<T>() {
-    [T] items = []
-
-    fun push(item: T) {
-        items.push(item)
-    }
-
-    fun pop(): T? {
-        if len(items) == 0 {
-            return null
-        }
-        return items.pop()
-    }
-}
-
-var p = Pair { first: 1, second: "one" }
-Pair<string, bool> q = Pair { first: "yes", second: true }
-var s = new Stack<int>()
-s.push(1)
-```
-
-Write the type arguments when Burn cannot work them out, for example `new Stack<int>()` for an empty stack.
-
-The compiler makes a separate version of the function or type for each set of types it is used with, so generic
-code runs as fast as code written for one type, and there is no boxing. A type parameter can be used in any way the
-types it is used with allow: `largest<T>` can compare with `>` and works for `int`, `float` and `string`. Using it
-with a type that has no `>` is a compile error that points at the comparison and names the version, for example
-`largest<bool>`.
-
-Generic structs can implement interfaces. They cannot extend other structs or have static members yet, and
-methods cannot have their own type parameters yet.
+Being references does not change what `==` means: it compares contents, not identity (see
+[equality](./operators.mdx#equality)). The compiler frees a referenced object when its last reference goes away;
+see [memory](./memory.mdx).

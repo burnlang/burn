@@ -6,6 +6,7 @@
 - Cross-compiling: `BURN_PLATFORM` (`linux-x86_64`, `macos-x86_64`, `linux-aarch64`, `macos-aarch64`) builds native executables for another platform, with `BURN_RUNTIME_DIR` pointing at a runtime built for it (`TARGET=<rust triple> scripts/native-runtime.sh <dir>`) and `BURN_CC` at a linker for it.
 - CI runs the whole test suite on macOS with Apple silicon, and the Linux suite cross-compiles every test program to arm64 and runs it under qemu.
 - Docs: new pages for functions and closures, errors, testing, JavaScript, the REPL and `eval`, and for `std/math`, `std/strings`, `std/fs`, `std/process` and `std/json` (they replace the "more modules" page); every page has its own place in the order.
+- Docs: a complete language reference, with new pages for variables, constants and scope; operators (with the full precedence table and how equality works); control flow; strings and text; `match`; enums; generics; and every way to extend types and objects (method syntax, interfaces, inheritance, functions on one object, generated members, mixins). The types page explains which values are copied and which are shared, and the structs page covers calling a parent's method, interface rules, and equality and printing of objects.
 
 ## 26.1.0-experimental-4
 

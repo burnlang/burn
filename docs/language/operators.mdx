@@ -1,0 +1,150 @@
+---
+title: Operators and expressions
+description: Every operator, how tightly each binds, and how arithmetic, comparison and equality behave.
+order: 6
+---
+
+# Operators and expressions
+
+## All operators
+
+From the tightest binding to the loosest:
+
+| Operators | Meaning | Groups |
+| --- | --- | --- |
+| `f(x)` `a[i]` `a.b` `a?.b` `a!!` | call, index, field or method, safe call, not-null assertion | left to right |
+| `-a` `!a` `~a` `await a` | negate, not, bitwise not, wait for a future | |
+| `a as T` `a as? T` | convert or cast; safe cast | left to right |
+| `*` `/` `%` | multiply, divide, remainder | left to right |
+| `+` `-` | add or join, subtract | left to right |
+| `<<` `>>` `>>>` | shifts | left to right |
+| `&` | bitwise and | left to right |
+| `^` | bitwise exclusive or | left to right |
+| `\|` | bitwise or | left to right |
+| `<` `>` `<=` `>=` `is` `!is` | compare, type test | left to right |
+| `??` | fallback for `null` | right to left |
+| `==` `!=` | equality | left to right |
+| `&&` | and | left to right |
+| `\|\|` | or | left to right |
+| `=` `+=` `-=` ... | assignment | right to left |
+
+So `x & 1 == 0` is `(x & 1) == 0`, `-n as float` is `(-n) as float`, `await a + await b` adds two results, and
+`count ?? 0 == 0` is `(count ?? 0) == 0`. Parentheses make any other order explicit.
+
+There is no `++`/`--`, no `**` (use `pow`), no `? :` (use `if`/`else` or a [`match`](./match.mdx) without a value,
+which works as an expression), and `in` only appears in `for` loops.
+
+## Arithmetic
+
+```burn
+print(7 / 2, 7 / 2.0, -7 / 2, -7 % 3, 7.5 % 2.0, 2 + 3 * 4)
+```
+
+prints `3 3.5 -3 -1 1.5 14`.
+
+- `int` with `int` gives an `int`; dividing truncates toward zero, and `%` has the sign of the left side.
+- When an `int` meets a `float`, the `int` is converted, and the result is a `float`.
+- [Sized numbers](./types.mdx#sized-numbers) widen to the larger type when that loses nothing (`uint8 + int` is an
+  `int`); other mixes need `as`.
+- Integer math is checked. A result outside the type's range stops the program with
+  `runtime error: integer overflow`, and so does dividing by zero (`runtime error: division by zero`). When both sides
+  are constants, the compiler reports it before the program runs. `wrappingAdd`, `wrappingSub` and `wrappingMul` wrap
+  around instead.
+- `float` math follows IEEE 754: `1.0 / 0.0` is `Infinity`, `-1.0 / 0.0` is `-Infinity`, `0.0 / 0.0` is `NaN`, and
+  `0.1 + 0.2` is `0.30000000000000004`.
+
+## Joining strings and arrays
+
+`+` joins strings. When one side is a string, the other side is turned into text first:
+
+```burn
+var n = 3
+print("n = " + n, 1 + 2 + "x", "x" + 1 + 2, [1, 2] + [3])
+```
+
+prints `n = 3 3x x12 [1, 2, 3]`: the operators group left to right, so `1 + 2` is added before the string joins in.
+`+` on two arrays makes a new array with the elements of both. String templates (`"n = ${n}"`) are usually easier
+to read.
+
+## Comparison
+
+`<`, `>`, `<=` and `>=` compare numbers (an `int` with a `float` as well) and strings. Strings compare character by
+character by Unicode code point, so `"Z" < "a"` and `"ab" < "abc"` are true. Comparing other types, or an `int`
+with a `string`, is a compile error.
+
+## Equality
+
+`==` and `!=` compare values, deeply:
+
+```burn
+def struct Point(x: int, y: int) {}
+def type Pair { a: int, b: string }
+
+print(new Point(1, 2) == new Point(1, 2), [[1, 2]] == [[1, 2]], {"k": [1]} == {"k": [1]})
+print(Pair { a: 1, b: "x" } == Pair { a: 1, b: "y" }, 1 == 1.0)
+```
+
+prints `true true true` and `false true`.
+
+- Numbers, strings, bools and enums compare by value.
+- Arrays, maps, records, struct objects and enum values with data are equal when they have the same type and their
+  elements, entries or fields are equal, compared the same way.
+- Comparing values that can never be equal, like an `int` and a `string`, is a compile error.
+- `x == null` and `x != null` test a nullable value and [narrow](./smart-casts.mdx) it.
+
+`==` never asks whether two variables point at the same object. Two arrays with the same elements are equal even
+when changing one would not change the other (see [values and references](./types.mdx#values-and-references)).
+
+## Logic
+
+`&&`, `||` and `!` work on `bool`. `&&` and `||` stop early: the right side runs only when it decides the result.
+
+```burn
+fun loud(): bool {
+    print("ran")
+    return true
+}
+
+print(false && loud(), true || loud())
+```
+
+prints `false true` without ever printing `ran`. A check on the left narrows the right side, so
+`text != null && text.length > 0` needs no cast.
+
+## Types and null
+
+| Expression | Result |
+| --- | --- |
+| `a is T` | whether `a` holds a `T`; narrows `a` after the check |
+| `a !is T` | the opposite |
+| `a as T` | `a` converted to `T`: between numbers, to `string`, or a cast of an `any`, nullable, interface or parent-struct value; a failed cast stops the program |
+| `a as? T` | `a` as a `T`, or `null` |
+| `a!!` | `a` without `null`; stops with `runtime error: unexpected null value` when it is `null` |
+| `a?.b`, `a?.f()` | the field or call, or `null` when `a` is `null` |
+| `a ?? b` | `a` unless it is `null`, otherwise `b`; `b` only runs when needed |
+
+See [type and null safety](./smart-casts.mdx) for the details.
+
+## Bits
+
+`&`, `|`, `^`, `~`, `<<`, `>>` and `>>>` work on every integer type. See [bit operations](./syntax.mdx#bit-operations).
+
+## Ranges
+
+`a..b` counts from `a` up to `b - 1`, and `a..=b` up to `b`. Ranges appear in `for` loops and `match` patterns:
+
+```burn
+for i in 0..3 {
+    print(i)
+}
+```
+
+`b` is computed once, before the loop starts. A range whose end is not above its start is empty: `for i in 5..0`
+runs zero times. Ranges are not values; `var r = 0..3` is an error. `range(0, 3)` from `std/list` makes the
+array `[0, 1, 2]`.
+
+## Method calls
+
+`a.f(b)` calls a method of `a` when its type has one, and otherwise the function `f(a, b)`, so every function works
+as a method of its first argument. See [method syntax](./functions.mdx#method-syntax) and
+[extending types](./extending.mdx).
