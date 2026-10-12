@@ -3,7 +3,6 @@ set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PREFIX="$ROOT/dist/burn"
-STAGE0="${BURN_STAGE0:-burn}"
 BUILD=1
 QUIET=0
 
@@ -16,8 +15,9 @@ Builds the Burn toolchain and lays it out in a directory:
 
 bin/burn is bvm, the Burn virtual machine. Started as burn, burni, burnc or burn-lsp,
 it runs share/burn/burn.bvm, the command line written in Burn. compiler.bvm is the
-compiler written in Burn, built by itself (scripts/bootstrap.sh) starting from a
-released Burn (stage0), and it builds burn.bvm. lib holds the runtime that native
+compiler written in Burn, built by itself (scripts/bootstrap.sh) starting from the
+boot compiler in compiler/boot, and it builds burn.bvm. Only Rust is needed: cargo builds
+bvm, and bvm runs the compiler written in Burn. lib holds the runtime that native
 executables link against (scripts/native-runtime.sh); it needs rustc, and native
 executables are built on x86_64 and arm64 (Apple silicon) macOS and Linux.
 
@@ -25,11 +25,10 @@ This is what release archives contain. To install Burn, use burnup:
   curl -fsSL https://raw.githubusercontent.com/burnlang/burnup/master/install.sh | sh
 
 Usage:
-  scripts/package.sh [--prefix <dir>] [--stage0 <burn>] [--no-build] [-q]
+  scripts/package.sh [--prefix <dir>] [--no-build] [-q]
 
 Options:
   --prefix <dir>    where to put the toolchain (default: dist/burn)
-  --stage0 <burn>   the released burn that starts the bootstrap (default: \$BURN_STAGE0 or burn on PATH)
   --no-build        use the bvm already in target/release
   -q, --quiet       only print errors
 EOF2
@@ -45,11 +44,6 @@ while [ $# -gt 0 ]; do
         --prefix=*)
             PREFIX="${1#--prefix=}"
             shift
-            ;;
-        --stage0)
-            [ $# -ge 2 ] || { echo "error: --stage0 needs a burn executable" >&2; exit 2; }
-            STAGE0="$2"
-            shift 2
             ;;
         --no-build)
             BUILD=0
@@ -92,12 +86,12 @@ if [ "$BUILD" -eq 1 ]; then
     fi
 fi
 
-say "==> Building the compiler written in Burn with itself, starting from $STAGE0"
+say "==> Building the compiler written in Burn with itself, starting from compiler/boot"
 boot="$(mktemp -d)"
 if [ "$QUIET" -eq 1 ]; then
-    sh "$ROOT/scripts/bootstrap.sh" --burn "$STAGE0" --out "$boot" >/dev/null
+    sh "$ROOT/scripts/bootstrap.sh" --bvm "$ROOT/target/release/bvm" --out "$boot" >/dev/null
 else
-    sh "$ROOT/scripts/bootstrap.sh" --burn "$STAGE0" --out "$boot"
+    sh "$ROOT/scripts/bootstrap.sh" --bvm "$ROOT/target/release/bvm" --out "$boot"
 fi
 
 mkdir -p "$BIN" "$SHARE"

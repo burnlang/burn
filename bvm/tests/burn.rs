@@ -19,25 +19,24 @@ fn toolchain() -> &'static Path {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("bin")).unwrap();
         std::fs::create_dir_all(dir.join("share/burn")).unwrap();
-        let stage0 = std::env::var_os("BURN_STAGE0").unwrap_or_else(|| "burn".into());
-        let cli = dir.join("cli.bvm");
-        let built = Command::new(&stage0)
-            .current_dir(root())
-            .args(["compiler/src/main.bn", "build", "compiler/src/bin/burn.bn", "-o"])
-            .arg(&cli)
-            .output()
-            .unwrap_or_else(|e| {
-                panic!(
-                    "cannot run the bootstrap compiler {:?} ({}); install a Burn toolchain or set BURN_STAGE0 to its burn",
-                    stage0, e
-                )
-            });
-        assert!(
-            built.status.success(),
-            "{}{}",
-            String::from_utf8_lossy(&built.stdout),
-            String::from_utf8_lossy(&built.stderr)
+        let compiler = dir.join("compiler.bvm");
+        let (out, code) = output(
+            Command::new(bvm_exe())
+                .current_dir(root())
+                .arg(root().join("compiler/boot/compiler.bvmc"))
+                .args(["build", "compiler/src/main.bn", "-o"])
+                .arg(&compiler),
         );
+        assert_eq!(code, 0, "the boot compiler cannot build compiler/src:\n{}", out);
+        let cli = dir.join("cli.bvm");
+        let (out, code) = output(
+            Command::new(bvm_exe())
+                .current_dir(root())
+                .arg(&compiler)
+                .args(["build", "compiler/src/bin/burn.bn", "-o"])
+                .arg(&cli),
+        );
+        assert_eq!(code, 0, "the compiler cannot build the command line:\n{}", out);
         let (out, code) = output(Command::new(bvm_exe()).arg("asm").arg(&cli).arg("-o").arg(dir.join("share/burn/burn.bvm")));
         assert_eq!(code, 0, "{}", out);
         for tool in ["burn", "burni", "burnc", "burn-lsp"] {

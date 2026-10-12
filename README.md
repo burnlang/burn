@@ -345,11 +345,12 @@ examples are in [`examples/bvm/`](examples/bvm/).
 - `lib/runtime/`: the runtime functions written in Burn, compiled to `bvm/runtime.bvm`, which bvm links into Burn programs
 - `lib/tools/`: tools written in Burn that programs can also import, such as the formatter (`import "tools/fmt"`), which `burnfmt` is built from
 - `scripts/package.sh`: builds the toolchain into the layout burnup installs and releases ship
-- `scripts/bootstrap.sh`: builds the compiler written in Burn with itself and checks that the result is stable
+- `scripts/bootstrap.sh`: builds the compiler written in Burn with itself, starting from the boot compiler, and checks that the result is stable
+- `compiler/boot/compiler.bvmc`: the boot compiler, a compiled copy of the compiler that bvm runs to build `compiler/src` the first time
 - `install.sh`: forwards to [burnup](https://github.com/burnlang/burnup), the installer
 - `assets/`: the logo
 - `lib/std/`: the standard library, written in Burn
-- `tests/`: end-to-end tests, which `cargo test` runs with a toolchain bootstrapped from stage0 (`bvm/tests/burn.rs`)
+- `tests/`: end-to-end tests, which `cargo test` runs with a toolchain built from the boot compiler (`bvm/tests/burn.rs`)
 
 Editor support lives in its own repositories: [vscode-burn](https://github.com/burnlang/vscode-burn),
 [intellij-burn](https://github.com/burnlang/intellij-burn), [zed-burn](https://github.com/burnlang/zed-burn) and
@@ -360,12 +361,14 @@ The documentation is in [burnlang/docs](https://github.com/burnlang/docs).
 
 ```sh
 sh scripts/package.sh --prefix ~/.burn   # build and install the toolchain from this checkout
-cargo test            # builds bvm, bootstraps the toolchain with stage0 and runs every test
+cargo test            # builds bvm, builds the toolchain from the boot compiler and runs every test
 cargo clippy --all-targets
 ```
 
-Building needs a released Burn to start from (stage0, named in `compiler/STAGE0`): `burn` on `PATH`, or the one in
-`BURN_STAGE0`. It compiles the compiler written in Burn once; from then on the compiler builds itself.
+Building only needs Rust. Cargo builds bvm, and bvm runs the boot compiler in `compiler/boot/compiler.bvmc`, a
+compiled copy of the compiler written in Burn, which builds `compiler/src`; from then on the compiler builds itself.
+`sh scripts/bootstrap.sh --update` replaces the boot compiler with the one built from `compiler/src`, so the compiler's
+own sources can use new language features.
 ```
 
 ## Contributing

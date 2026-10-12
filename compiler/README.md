@@ -28,7 +28,7 @@ This directory holds the Burn compiler and its tools, written in Burn. They were
 | `src/bin/genstd.bn` | writes `src/project/stdlib.bn` from `lib/std` | |
 | `src/bin/genrt.bn` | writes `src/vm/runtime.bn`, the symbol of each runtime function, from `bvm/runtime/src/lib.rs` | |
 
-The sources import each other with relative paths (`"../syntax/ast.bn"`) because stage0 does not know `@/` imports yet.
+The sources import each other with relative paths (`"../syntax/ast.bn"`) because they were first built by a stage0 that did not know `@/` imports.
 
 ## How each part was checked
 
@@ -79,7 +79,7 @@ The inputs include the error-recovery fixtures in `tests/lexer` and `tests/parse
    - It renders every lexer and parser error the same way `burn check` does without colours. Checker errors are compared by `burn dump --checked`.
 4. **Loader and projects** (done).
    - `src/project/toml.bn` ports the TOML reader, `src/project/project.bn` the manifest, lock file, workspaces and package resolution, and `src/project/loader.bn` the module loader with `@/` imports, `mod.bn` folders, packages and the standard library.
-   - Burn has no way yet to resolve symbolic links or read file times, and stage0 must still build these sources. Until a later stage0 adds them:
+   - Burn has no way yet to resolve symbolic links or read file times, and the boot compiler must still build these sources. Until the language adds them:
      - `src/project/paths.bn` makes paths absolute and removes `.` and `..` without following symbolic links;
      - importing a package's bytecode (`import "<package>.bvmc"`) uses the file in its `build/` folder if there is one, and building it needs the checker and code generation.
 5. **Checker** (done). `src/check/` ports `check/` file by file:
@@ -90,7 +90,7 @@ The inputs include the error-recovery fixtures in `tests/lexer` and `tests/parse
      The suite compares `burn dump --checked` on every Burn file in the repository. The fixtures in `tests/check/bodies` cover closures, generic functions, return types, initialization order, sized numbers, `match`, the nullable operators and structs.
 6. **Ownership** (done). `src/lower/own.bn` ports `own.rs`: which locals own their values, retains for borrowed values that are kept, releases at the end of statements, scopes and functions, temporaries for nested calls, and in-place appends for `s += ...` on locals, globals and fields. `burn dump --owned` prints the program after the pass, and the suite compares it on every Burn file in the repository.
 7. **bvm code generation** (done). `src/vm/compile.bn` ports `vm/compile.rs`, and `src/vm/asm.bn` writes the module as bvm assembly (`.bvm`), like `disassemble` in the bvm crate. Burn has no binary file output yet and stage0 cannot get one, so the Burn compiler writes the text form, which `burn <file.bvm>` assembles and runs. `burn dump --bvm` prints it, and the suite compares it on every Burn file in the repository. `src/vm/bits.bn` converts floats to and from their bits for constants, and `src/vm/runtime.bn` (written by `src/bin/genrt.bn`) names the runtime functions.
-8. **Bootstrap** (done, see *Stage0* below). `scripts/bootstrap.sh` runs the compiler in `compiler/src` on itself (stage 1), lets stage 1 build the compiler again (stage 2) and checks that both modules are identical. The CI job `bootstrap` runs it with stage0 on every push, then lets stage 2 compile and run `examples/fib.bn`.
+8. **Bootstrap** (done, see *The boot compiler* below). `scripts/bootstrap.sh` lets the boot compiler build the compiler in `compiler/src` (stage 1), lets the result build it again until two stages are identical, and checks that. The CI job `bootstrap` runs it on every push, then lets the result compile and run `examples/fib.bn`. Until `26.1.0-experimental-4` a released Burn (stage0) started the bootstrap; the boot compiler in the repository replaced it.
    - `scripts/package.sh` bootstraps the compiler and installs stage 2 as `share/burn/compiler.bvm`.
 9. **The command line** (done). `src/bin/burn.bn` is `burn` written in Burn. bvm runs it when it is started as `burn`, `burni` or `burnc` (a link to `bvm` with that name), from `share/burn/burn.bvm` next to its `bin/` or from the module in `BURN_CLI_BVM`. It reaches bvm through host functions (`@Native("burn.runModule")` and the others in `src/cli/host.bn`), which bvm provides only in that mode. That keeps the compiler in `src/main.bn` free of them, so stage0 can still build it and run it.
    - Ported: running files and projects (`run`, `--bin`, `--example`, `-p`), `check`, `build` (to `.bvmc` and `.bar`), `eval`, `test`, `fmt` (with `lib/tools/fmt.bn`), `fix`, `init`, `burni`, `burnc`, `--no-std`, `dump` and the error output with colours. The suite runs the Rust `burn` and the one written in Burn on the test programs and projects and compares stdout, stderr and the exit code.
@@ -104,15 +104,24 @@ The inputs include the error-recovery fixtures in `tests/lexer` and `tests/parse
    - Native executables (`src/native/`) port `native/`: `x86.bn` turns the program after the ownership pass into x86-64 assembly, `meta.bn` encodes the types and source locations the runtime reads, and `native.bn` checks what native code cannot do (`@Native` functions, mixins on native functions) and writes the launcher that runs a `.bvmc` or `.bar` as an executable. `src/cli/native.bn` links the assembly with `cc` and the runtime in `share/burn/lib`, which `scripts/native-runtime.sh` builds from `bvm/` (`libburn_runtime.a`, and `libburn_core.a` for `--no-std`), the way the Rust compiler's `build.rs` did. bvm gives the command line the platform, the bytes of library files and the functions they define (`burn.platform`, `burn.fileBytes`, `burn.libraryFunctions`, `burn.bundle`). `burn dump --asm` prints the assembly; it was compared byte for byte with the Rust `burn dump --asm` on every Burn file in the repository, and the suite runs every test program as a native executable.
    - arm64 (`src/native/arm64.bn`) is new in Burn: the same program, with the same data layout and argument order, as 64-bit ARM assembly for Linux and macOS (Apple silicon). `shared.bn` holds what both generators use. Arguments go into a 16-byte aligned area the callee reads above its frame, temporaries are pushed in 16-byte slots, and the entry point and trampoline are written for the AAPCS64 calling convention, so the runtime calls compiled functions the same way on both processors. `BURN_PLATFORM` picks the platform to generate for. The suite cross-compiles every test program to Linux arm64 and runs it under qemu (when `qemu-aarch64` and `aarch64-linux-gnu-gcc` are installed), and CI runs the whole suite on macOS with Apple silicon.
    - `scripts/package.sh` builds it with `compiler.bvm` and installs it as `share/burn/burn.bvm`. The runtime core (`bvm/runtime`) stays in Rust; the rest of the runtime is written in Burn in `lib/runtime`.
-10. **Retiring the Rust compiler** (done in `26.1.0-experimental-3`). `crates/burn` is removed. `cargo test` builds bvm, bootstraps the toolchain from stage0 and runs the end-to-end tests in `bvm/tests/burn.rs` against it; toolchains ship bvm as `bin/burn`.
+10. **Retiring the Rust compiler** (done in `26.1.0-experimental-3`). `crates/burn` is removed. `cargo test` builds bvm, builds the toolchain from the boot compiler and runs the end-to-end tests in `bvm/tests/burn.rs` against it; toolchains ship bvm as `bin/burn`.
 
-## Stage0
+## The boot compiler
 
-`compiler/STAGE0` names the Burn release that builds the compiler for the first time, currently `v26.1.0-experimental-2`, the last release of the compiler written in Rust. Releases from `v26.1.0-experimental-3` on are Burn toolchains (bvm and the compiler written in Burn), and any of them can be stage0. The tests (`BURN_STAGE0` or `burn` on `PATH`) and `scripts/package.sh` (`--stage0`) need one.
+The compiler is written in Burn, so something has to run it the first time. That is `compiler/boot/compiler.bvmc`: the
+compiler from an earlier commit, compiled to bvm bytecode and kept in the repository, like `zig1.wasm` in Zig. Only
+Rust is needed to start: cargo builds bvm, and bvm runs the boot compiler. No released Burn is downloaded.
 
-- **The action:** `.github/actions/stage0` downloads that release for the runner's platform, checks it against the release's `SHA256SUMS`, and puts its `burn` on `PATH`. It runs on Linux x86-64 and macOS (Intel and Apple silicon).
-- **The guard:** the CI job `stage0` builds the Burn compiler in `compiler/` with that release on every push. So the sources here may only use language features that stage0 already understands. To use a newer feature in the compiler, cut a new release first, then move `compiler/STAGE0` to it.
-- **The bootstrap:** the CI job `bootstrap` runs `scripts/bootstrap.sh` with stage0. Stage0 runs the compiler in `compiler/src`, which builds itself (`stage1.bvm`); stage0's bvm runs `stage1.bvm`, which builds the compiler again (`stage2.bvm`); the two must be identical. Because stage 1 is already the compiler written in Burn, this is the same check as comparing stage 2 with stage 3. Releases ship `stage2.bvm` as `share/burn/compiler.bvm`.
+- **The bootstrap:** `scripts/bootstrap.sh` lets the boot compiler build `compiler/src` (`stage1.bvm`), lets stage 1
+  build it again (`stage2.bvm`), and, when the two differ because the code generator changed since the boot compiler
+  was made, lets stage 2 build it a third time (`stage3.bvm`). The last two stages must be identical. Releases ship
+  `stage2.bvm` as `share/burn/compiler.bvm`. The CI job `bootstrap` runs it on every push, and so do
+  `scripts/package.sh` and the tests (`bvm/tests/burn.rs`), which build the command line with stage 1.
+- **The rule:** `compiler/src` may only use language features that the boot compiler understands. To use a new one
+  in the compiler, add it to the language first, then run `sh scripts/bootstrap.sh --update`, which replaces the boot
+  compiler with the one just built, and commit it together with the first use.
+- **Keeping it small:** the boot compiler is about 1.9 MB of bytecode (300 KB compressed in git). Update it only when
+  the compiler's own sources need something new, or when bvm changes its bytecode format.
 
 To cut a release by hand, run the **Release** workflow from the Actions tab with the tag to create. The tag must be `v` followed by the workspace version.
 
