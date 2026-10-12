@@ -133,6 +133,8 @@ A struct lists the interfaces it implements after `::`, separated by commas:
 same signature. Interface calls are dispatched through a table indexed by the struct, so they are as cheap as a
 normal indirect call.
 
+![An interface call reads the type id and calls the function from the method's table](../images/dispatch.svg)
+
 - An interface only declares methods: it has no fields and no method bodies, and it cannot extend another interface
   or take type parameters.
 - Only structs implement interfaces. To give records, enums or built-in types shared operations, write functions and

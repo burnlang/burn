@@ -6,12 +6,7 @@ order: 44
 
 # How the compiler works
 
-```text
-source ──▶ lexer ──▶ parser ──▶ type checker ──▶ typed IR ─┬─▶ ownership ─┬─▶ bvm module ──▶ bvm, .bvmc, .bar
-                                    │                      │              └─▶ x86-64 / arm64 asm ──▶ cc + runtime (burn build)
-                                    ▼                      └─▶ JavaScript                                (--target js)
-                          diagnostics, hover, completion
-```
+![The pipeline from source to bvm, native code and JavaScript](../images/pipeline.svg)
 
 The compiler is written in Burn ([`compiler/`](https://github.com/burnlang/burn/tree/master/compiler)) and runs on
 bvm, like every Burn program. `burn` itself is bvm running the command line written in Burn, which contains the

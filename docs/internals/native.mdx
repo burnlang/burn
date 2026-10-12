@@ -52,6 +52,8 @@ bf_1:
     ud2
 ```
 
+![The stack frame of add(a, b): arguments, return address, saved rbp, locals](../images/native-frame.svg)
+
 - **Functions** are labeled by number (`bf_1`); `--no-strip` keeps these labels in the symbol table.
 - **Arguments** are pushed on the stack by the caller, first argument first, so the last one is closest to the
   callee's frame; the caller removes them after the call. Results come back in `rax` (`x0` on ARM).

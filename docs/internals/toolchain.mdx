@@ -25,6 +25,8 @@ An installed toolchain looks like this:
     └── lib/             the runtime library for native executables
 ```
 
+![The bvm executable under several names, loading burn.bvm](../images/toolchain.svg)
+
 `burn`, `burni`, `burnc` and `burn-lsp` are all bvm. When bvm starts, it looks at the name it was started with. As
 `bvm`, it is the plain virtual machine with its own commands (`bvm app.bvmc`, `bvm asm`, `bvm link`, ...). As one of
 the four Burn names, it loads `share/burn/burn.bvm` from next to its `bin` folder (or the file `BURN_CLI_BVM` names)
@@ -99,6 +101,8 @@ prints the accumulated code.
 
 The compiler is a Burn program, so it needs a Burn compiler to build. `compiler/STAGE0` names a released toolchain,
 stage0. Building Burn (`scripts/package.sh`, or `scripts/bootstrap.sh`) then:
+
+![stage0 builds stage 1, stage 1 builds stage 2, and both must be identical](../images/bootstrap.svg)
 
 1. compiles `compiler/src` with stage0, giving stage 1;
 2. compiles `compiler/src` again with stage 1, giving stage 2;

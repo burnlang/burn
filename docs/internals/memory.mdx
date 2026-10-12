@@ -69,6 +69,8 @@ A few rules keep this safe without extra cost:
 releasing everything it holds. Freeing is a loop over a work list, not recursion, so releasing a linked list of a
 million nodes does not overflow the stack.
 
+![Reference counts going up and down until the object is freed](../images/refcount.svg)
+
 In native executables both are inlined into the generated code. A release is a handful of instructions:
 
 ```text
@@ -89,6 +91,8 @@ done:
 
 Reference counting alone cannot free objects that only reference each other: each keeps the other's count above
 zero. Burn finds them with trial deletion, the algorithm by Bacon and Rajan:
+
+![Trial deletion: candidate, subtract internal references, collect](../images/cycles.svg)
 
 1. **Which types can form cycles** is computed once from the type table, when the program starts. Following the
    types of a type's fields and elements, if you can get back to the same type, or reach `any`, an interface or a

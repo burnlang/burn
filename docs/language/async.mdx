@@ -27,6 +27,8 @@ fun main() {
 
 Both downloads run at the same time, so the program takes about 200ms instead of 400ms.
 
+![Tasks on their own threads, joined by await](../images/async-tasks.svg)
+
 ## Futures
 
 - An `async fun` returning `T` gives a `Future<T>` when called; one without a result gives a `Future<void>`, which

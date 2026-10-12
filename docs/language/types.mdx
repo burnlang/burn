@@ -210,6 +210,8 @@ in place where another name could see it, so sharing them is safe.)
 Arrays, maps, records, struct objects, enum values with data and functions are references: assigning or passing one
 shares the same object, and a change through one name is visible through every other.
 
+![Numbers are copied while arrays are shared between variables](../images/references.svg)
+
 ```burn
 def type Point {
     x: int

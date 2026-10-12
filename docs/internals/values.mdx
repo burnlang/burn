@@ -10,6 +10,8 @@ Burn compiles every value to one 64-bit word. Small values are stored in the wor
 to an object on the heap. The layout is the same on bvm and in native executables, which is what lets native
 programs embed and call bytecode libraries. (The JavaScript backend maps values to JavaScript values instead.)
 
+![Small values stored in the word, other values pointing to heap objects](../images/values-words.svg)
+
 ## Values stored in the word
 
 | Type | The word holds |
@@ -39,6 +41,8 @@ Every heap object starts with a 16-byte header:
 | 8 | 4 | size in bytes |
 | 12 | 4 | reference count |
 
+![The 16-byte object header and the layouts of strings, arrays and structs](../images/object-header.svg)
+
 Objects are allocated 16-byte aligned and zeroed. The type id is an index into the program's type table, which knows
 every type's name, fields and parents; it is what `print`, `is`, `as`, `==`, error messages and the cycle collector
 use to understand an object.
@@ -67,11 +71,15 @@ a fast multiplicative hash). That is why iteration and `keys(m)` follow insertio
 constant time on average; `remove` closes the gap, so it takes time proportional to the number of entries after
 the removed one.
 
+![A map with key and value arrays in insertion order and a hash index](../images/map-layout.svg)
+
 ## Records, structs and enum variants
 
 Records (`def type`), struct objects and enum variants with data are all struct objects: the header, then one word
 per field from +16, in declaration order. A struct that extends another starts with the parent's fields, so a child
 object can be passed wherever the parent is expected and the parent's code finds its fields at the same offsets.
+
+![A Dog object starts with the fields of Animal at the same offsets](../images/struct-inheritance.svg)
 
 ```text
 def struct Dog(name: string, breed: string) :: Animal(name)
@@ -134,6 +142,8 @@ long as one of them holds it. Calling a function value loads the address from fi
 as a hidden first argument, which is how the lambda finds its cells. Variables that are never captured stay ordinary
 locals.
 
+![A closure object and the cell it shares with makeCounter](../images/closure.svg)
+
 ## Method calls and dispatch
 
 How a call finds its code depends on what the compiler knows:
@@ -153,6 +163,8 @@ How a call finds its code depends on what the compiler knows:
 - **Devirtualization.** When only one struct implements a method, or [smart casts](../language/smart-casts.mdx) know
   the exact struct, the compiler emits a direct call instead.
 - **Function values.** Calling a lambda or function reference loads the address from the closure and calls it.
+
+![An interface call reads the type id and calls the function from the method's table](../images/dispatch.svg)
 
 ## Type checks
 

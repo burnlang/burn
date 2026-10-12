@@ -10,6 +10,8 @@ This section explains what Burn does in the background: how a program is read, c
 look like in memory, how memory is freed, and how bvm, native executables and the toolchain run it. None of this is
 needed to write Burn programs, but it explains why things behave as they do and what they cost.
 
+![The pipeline from source to bvm, native code and JavaScript](../images/pipeline.svg)
+
 ## The journey of `burn app.bn`
 
 Take this program:
@@ -41,6 +43,8 @@ Running `burn app.bn` goes through these steps:
 All of this happens in one process and usually takes a few milliseconds, which is why `burn app.bn` feels like an
 interpreter. `burn build` stops after step 5 and generates machine code instead
 ([native executables](./native.mdx)), or JavaScript with `--target js`.
+
+![The six steps of burn app.bn inside one bvm process](../images/run-burn.svg)
 
 ## Looking at every stage
 

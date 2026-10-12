@@ -10,6 +10,8 @@ bvm gets faster as a program runs. It never works on code the program doesn't us
 the functions the program spends its time in, while the program keeps running. There is nothing to
 configure and no cache on disk. It works for every language built on bvm, not just Burn.
 
+![Functions are prepared on first call and rebuilt when hot](../images/tiering.svg)
+
 ## Tier 0: only what runs
 
 When a module is loaded, bvm verifies it but doesn't prepare any function. A function is prepared the
