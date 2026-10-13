@@ -81,6 +81,7 @@ pub def type Item {
 pub def type ImportPath {
     string path
     Span span
+    Ident? alias
 }
 
 pub def enum ItemKind {

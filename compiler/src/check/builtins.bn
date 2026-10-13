@@ -268,7 +268,7 @@ pub fun gateBuiltin(c: Checker, name: string, at: SrcSpan) {
     if (scope.stdName != null || scope.snippet) {
         return
     }
-    for i in scope.imports {
+    for i in c.importsOf(m) {
         if (c.mods[i].stdName == home) {
             return
         }

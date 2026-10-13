@@ -99,16 +99,23 @@ def struct Writer() {
         open("", "Item ${visName(it.vis)} ${sp(it.span)}")
         annotations(it.annotations)
         match it.kind {
-            ItemKind.Import(paths) => {
-                open("", "Import")
-                for p in paths {
-                    line("path", quoted(p.path) + sp(p.span))
-                }
-                close()
-            }
+            ItemKind.Import(paths) => imports("", paths)
             ItemKind.Fun(f) => fun_("", f)
             ItemKind.Definition(d) => definition(d)
             ItemKind.Statement(s) => stmt("", s)
+        }
+        close()
+    }
+
+    fun imports(label: string, paths: [ImportPath]) {
+        open(label, "Import")
+        for p in paths {
+            var a = p.alias
+            if (a != null) {
+                line("path", quoted(p.path) + sp(p.span) + " as " + id(a))
+            } else {
+                line("path", quoted(p.path) + sp(p.span))
+            }
         }
         close()
     }

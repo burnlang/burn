@@ -1,0 +1,5 @@
+import "std/memory" as Mem
+
+unsafe {
+    var p = Memory.alloc(8)
+}

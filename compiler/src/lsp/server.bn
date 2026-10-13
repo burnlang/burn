@@ -476,6 +476,38 @@ priv fun identStart(b: [uint8], end: int): int {
     return s
 }
 
+priv fun aliasItems(a: Analysis, module: int): [Json] {
+    var items = new Items()
+    for f in a.funcs {
+        if (f.module == module && a.c.publicValue(module, f.name) != null) {
+            pushGeneral(items, f.name, 3, f.sig)
+        }
+    }
+    for g in a.globals {
+        if (g.module == module && a.c.publicValue(module, g.name) != null) {
+            pushGeneral(items, g.name, 6, a.show(g.ty))
+        }
+    }
+    for t in a.typeNames {
+        if (t.module == module && a.c.publicType(module, t.name)) {
+            var detail = a.show(t.ty)
+            if (t.ty == T_ERROR) {
+                detail = "generic type"
+            }
+            pushGeneral(items, t.name, 22, detail)
+        }
+    }
+    var home = a.c.mods[module].stdName
+    if (home != null) {
+        for b in BUILTIN_NAMES {
+            if (homeModule(b) == home) {
+                pushGeneral(items, b, 3, builtinSignature(b))
+            }
+        }
+    }
+    return items.items
+}
+
 priv fun pushGeneral(items: Items, label: string, kind: int, detail: string) {
     if (!items.fresh(label)) {
         return
@@ -532,6 +564,12 @@ pub fun completion(s: Server, uri: string, params: Json): Json {
                 restEnd = st - 1
             } else {
                 break
+            }
+        }
+        if (len(chain) == 1) {
+            var am = a.c.mods[a.rootModule].aliases[chain[0]]
+            if (am != null) {
+                return ja(aliasItems(a, am))
             }
         }
         var r = resolveChain(a, chain, off)

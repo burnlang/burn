@@ -253,6 +253,16 @@ pub fun resolveChain(a: Analysis, chain: [string], off: int): Resolved? {
             }
         }
     }
+    var start = 1
+    var am = a.c.mods[a.rootModule].aliases[first]
+    if (cur == null && am != null && len(chain) > 1) {
+        for t in a.typeNames {
+            if (cur == null && t.module == am && t.name == chain[1] && a.c.publicType(am, t.name)) {
+                cur = Resolved { ty: t.ty, statics: true }
+                start = 2
+            }
+        }
+    }
     if (cur == null) {
         for t in a.typeNames {
             if (cur == null && t.name == first) {
@@ -271,7 +281,7 @@ pub fun resolveChain(a: Analysis, chain: [string], off: int): Resolved? {
         return null
     }
     var r = cur
-    for i in 1..len(chain) {
+    for i in start..len(chain) {
         var seg = chain[i]
         var k = a.kind(r.ty)
         int? next = null

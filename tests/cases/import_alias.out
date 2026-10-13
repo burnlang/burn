@@ -1,0 +1,13 @@
+geometry module loaded
+5.0 4.0 6.0 1 default visibility is public
+true true true
+true 6 4.0 7 3
+99
+word abc
+number 42
+symbol +
+end
+end
+2 1
+2
+[2, 4]

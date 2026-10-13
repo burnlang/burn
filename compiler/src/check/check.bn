@@ -35,6 +35,7 @@ pub def type ModScope {
     {string: TypeEntry} gfuncs
     {string: TypeEntry} gtypes
     [int] imports
+    {string: int} aliases
     int init
     string? stdName
     bool snippet
@@ -43,6 +44,12 @@ pub def type ModScope {
 }
 
 pub def enum FnState { Pending, InProgress, Done }
+
+/** A name written with the alias of an imported module, like `Mem.Memory`: the module and the name in it. */
+pub def type Qualified {
+    int module
+    string name
+}
 
 pub def type FuncParam {
     string name
@@ -1044,13 +1051,126 @@ pub def struct Checker(loaded: Loaded) {
         return loaded.files[mods[mi].file].name
     }
 
+    /** The module that `alias` names in `module`, from an import with `as`. */
+    fun aliasTarget(module: int, alias: string): int? {
+        return mods[module].aliases[alias]
+    }
+
+    /** Splits `Alias.name` into the module the alias names and the name, or gives null when `name` does not start with an alias. */
+    fun splitQualified(module: int, name: string): Qualified? {
+        var dot = indexOf(name, ".")
+        if (dot <= 0) {
+            return null
+        }
+        var target = aliasTarget(module, substring(name, 0, dot))
+        if (target == null) {
+            return null
+        }
+        return Qualified { module: target, name: substring(name, dot + 1) }
+    }
+
+    /** The modules whose public names `module` sees without a qualifier: the ones it imports without `as`. */
+    fun importsOf(module: int): [int] {
+        return mods[module].imports
+    }
+
+    /** Reports `Alias.name` when the module of the alias has no public `name`; false when `name` has no alias. */
+    fun qualifiedMissing(module: int, name: string, span: SrcSpan, isType: bool): bool {
+        var q = splitQualified(module, name)
+        if (q == null) {
+            return false
+        }
+        var alias = substring(name, 0, len(name) - len(q.name) - 1)
+        var what = "`${alias}` (the module `${moduleLabel(q.module)}`)"
+        var v = mods[q.module].values[q.name]
+        var t = mods[q.module].types[q.name]
+        if ((v != null && v.vis == Vis.Priv) || (t != null && t.vis == Vis.Priv)) {
+            error(span, "`${q.name}` is private to ${what}")
+            return true
+        }
+        [string] cands = []
+        if (isType) {
+            for n in keys(mods[q.module].types) {
+                var e = mods[q.module].types[n]
+                if (e != null && e.vis != Vis.Priv) {
+                    cands.push(n)
+                }
+            }
+        } else {
+            for n in keys(mods[q.module].values) {
+                if (publicValue(q.module, n) != null) {
+                    cands.push(n)
+                }
+            }
+            for n in keys(mods[q.module].types) {
+                var e = mods[q.module].types[n]
+                if (e != null && e.vis != Vis.Priv) {
+                    cands.push(n)
+                }
+            }
+        }
+        var kind = "public name"
+        if (isType) {
+            kind = "public type"
+        }
+        var msg = "${what} has no ${kind} `${q.name}`"
+        var s = suggest(q.name, cands)
+        if (s != null) {
+            errorFix(span, msg, "${alias}.${s}")
+        } else {
+            error(span, msg)
+        }
+        return true
+    }
+
+    fun moduleLabel(mi: int): string {
+        var n = moduleName(mi)
+        if (endsWith(n, ".bn")) {
+            return substring(n, 0, len(n) - 3)
+        }
+        return n
+    }
+
+    /** `Alias.name` when `name` is a public name of a module that `module` imports with `as`. */
+    fun throughAlias(module: int, name: string): string? {
+        for a in keys(mods[module].aliases) {
+            var t = mods[module].aliases[a]
+            if (t != null && (publicValue(t, name) != null || publicType(t, name))) {
+                return "${a}.${name}"
+            }
+        }
+        return null
+    }
+
+    fun publicType(module: int, name: string): bool {
+        for which in 0..3 {
+            var e = typeTable(module, which)[name]
+            if (e != null && e.vis != Vis.Priv) {
+                return true
+            }
+        }
+        return false
+    }
+
+    fun publicValue(module: int, name: string): ValEntry? {
+        var e = mods[module].values[name]
+        if (e != null && e.vis != Vis.Priv) {
+            return e
+        }
+        return null
+    }
+
     fun visibleValue(module: int, name: string, ambiguous: [string]): ValEntry? {
+        var q = splitQualified(module, name)
+        if (q != null) {
+            return publicValue(q.module, q.name)
+        }
         var own = mods[module].values[name]
         if (own != null) {
             return own
         }
         ValEntry? found = null
-        for imp in mods[module].imports {
+        for imp in importsOf(module) {
             var e = mods[imp].values[name]
             if (e != null && e.vis != Vis.Priv) {
                 found = e
@@ -1074,12 +1194,20 @@ pub def struct Checker(loaded: Loaded) {
     }
 
     fun visibleType(module: int, name: string, which: int, ambiguous: [string]): TypeEntry? {
+        var q = splitQualified(module, name)
+        if (q != null) {
+            var e = typeTable(q.module, which)[q.name]
+            if (e != null && e.vis != Vis.Priv) {
+                return e
+            }
+            return null
+        }
         var own = typeTable(module, which)[name]
         if (own != null) {
             return own
         }
         TypeEntry? found = null
-        for imp in mods[module].imports {
+        for imp in importsOf(module) {
             var e = typeTable(imp, which)[name]
             if (e != null && e.vis != Vis.Priv) {
                 found = e
@@ -1093,7 +1221,13 @@ pub def struct Checker(loaded: Loaded) {
     }
 
     fun isPrivateElsewhere(module: int, name: string): bool {
-        for i in mods[module].imports {
+        var q = splitQualified(module, name)
+        if (q != null) {
+            var v = mods[q.module].values[q.name]
+            var t = mods[q.module].types[q.name]
+            return (v != null && v.vis == Vis.Priv) || (t != null && t.vis == Vis.Priv)
+        }
+        for i in importsOf(module) {
             var v = mods[i].values[name]
             if (v != null && v.vis == Vis.Priv) {
                 return true
@@ -1229,6 +1363,19 @@ pub def struct Checker(loaded: Loaded) {
             return T_ERROR
         }
         var dot = indexOf(name, ".")
+        var q = splitQualified(module, name)
+        if (q != null) {
+            var direct = lookupTypeName(module, name, span)
+            if (direct != null) {
+                return direct
+            }
+            var inner = indexOf(q.name, ".")
+            if (inner < 0) {
+                qualifiedMissing(module, name, span, true)
+                return T_ERROR
+            }
+            dot = dot + 1 + inner
+        }
         if (dot >= 0) {
             var base = substring(name, 0, dot)
             var v = substring(name, dot + 1)
@@ -1264,7 +1411,10 @@ pub def struct Checker(loaded: Loaded) {
             cands.push(c)
         }
         var s = suggest(name, cands)
-        if (s != null) {
+        var via = throughAlias(module, name)
+        if (via != null) {
+            errorFix(span, "unknown type `${name}`", via)
+        } else if (s != null) {
             errorFix(span, "unknown type `${name}`", s)
         } else if (isPrivateElsewhere(module, name)) {
             error(span, "type `${name}` is private to its module")
@@ -2677,8 +2827,25 @@ pub def struct Checker(loaded: Loaded) {
                 hir: null
             })
             [int] imports = []
+            {string: int} aliases = {}
             for r in m.imports {
-                imports.push(r.target)
+                var a = r.alias
+                if (a == null) {
+                    if (!contains(imports, r.target)) {
+                        imports.push(r.target)
+                    }
+                    continue
+                }
+                var prev = aliases[a]
+                if (prev != null && prev != r.target) {
+                    var pn = loaded.files[loaded.modules[prev].file].name
+                    if (endsWith(pn, ".bn")) {
+                        pn = substring(pn, 0, len(pn) - 3)
+                    }
+                    error(SrcSpan { file: m.file, start: r.start, end: r.end }, "`${a}` already names the module `${pn}`")
+                } else {
+                    aliases[a] = r.target
+                }
             }
             var importAt = 0
             var importSeen = false
@@ -2699,6 +2866,7 @@ pub def struct Checker(loaded: Loaded) {
                 gfuncs: {},
                 gtypes: {},
                 imports: imports,
+                aliases: aliases,
                 init: init,
                 stdName: stdName,
                 snippet: startsWith(m.key, "<<eval>>") || startsWith(m.key, "<repl>"),
@@ -2763,6 +2931,15 @@ pub def struct Checker(loaded: Loaded) {
         for mi in 0..len(loaded.modules) {
             for item in loaded.modules[mi].ast.items {
                 declareItem(mi, item)
+            }
+        }
+        for mi in 0..len(loaded.modules) {
+            var m = loaded.modules[mi]
+            for r in m.imports {
+                var a = r.alias
+                if (a != null && (has(mods[mi].values, a) || has(mods[mi].types, a) || has(mods[mi].gtypes, a) || has(mods[mi].gfuncs, a))) {
+                    error(SrcSpan { file: m.file, start: r.start, end: r.end }, "`${a}` is declared in this file, so it cannot also name an imported module")
+                }
             }
         }
     }

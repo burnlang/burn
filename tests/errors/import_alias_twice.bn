@@ -1,0 +1,5 @@
+import (
+    "std/math" as X
+    "std/strings" as X
+)
+print(X.PI)

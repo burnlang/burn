@@ -1,0 +1,5 @@
+import "std/math" as Box
+
+def type Box {
+    int x
+}
