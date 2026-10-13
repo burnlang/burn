@@ -107,9 +107,30 @@ fn native_code_calls_c_and_c_calls_burn() {
     }
     let root = root();
     let tmp = temp_dir("c-interop");
+    let asm = tmp.join("c_interop.s");
+    let (out, code) = output(
+        burn()
+            .current_dir(&root)
+            .arg("build")
+            .arg("tests/native/c_interop.bn")
+            .arg("-S")
+            .arg(&asm)
+            .arg("-o")
+            .arg(tmp.join("unused")),
+    );
+    assert_eq!(code, 0, "{}", out);
+    let lib_dir = toolchain().join("share/burn/lib");
+    let libs = std::fs::read_to_string(lib_dir.join("native-libs.txt")).unwrap_or_default();
     let exe = tmp.join("c_interop");
-    let (build_out, code) = output(burn().current_dir(&root).arg("build").arg("tests/native/c_interop.bn").arg("-o").arg(&exe));
-    assert_eq!(code, 0, "{}", build_out);
+    let mut cc = Command::new(std::env::var("CC").unwrap_or_else(|_| "cc".into()));
+    cc.arg(&asm)
+        .arg(root.join("tests/native/c_interop.c"))
+        .arg(lib_dir.join("libburn_runtime.a"))
+        .args(libs.split_whitespace())
+        .arg("-o")
+        .arg(&exe);
+    let (out, code) = output(&mut cc);
+    assert_eq!(code, 0, "{}", out);
     let (out, code) = output(&mut Command::new(&exe));
     assert_eq!(code, 0, "{}", out);
     let expected = std::fs::read_to_string(root.join("tests/native/c_interop.out")).unwrap();

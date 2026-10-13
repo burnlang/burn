@@ -35,8 +35,22 @@ fun compareInts(a: int, b: int): Int32 {
     return 0
 }
 
-@Extern("bsearch")
-fun bsearch(key: int, base: int, n: int, size: int, cmp: int): int
+@Extern("c_compare_ints_address")
+fun compareIntsAddress(): int
+
+@Extern("c_twice_via_burn")
+fun twiceViaBurn(x: float): float
+
+@Extern("c_calls_burn")
+fun callsBurn(x: int): int
+
+var counted = 0
+
+@Extern("burn_count_up")
+fun countUp(from: int): int {
+    counted += 1
+    return from + counted
+}
 
 unsafe {
     var p = Memory.alloc(16)
@@ -48,19 +62,7 @@ unsafe {
     for i in 0..5 {
         Memory.store64(xs + 8 * i, vals[i])
     }
-    var cmp = 0
-    asm {
-        x86_64 {
-            lea rax, [rip + burn_compare_ints]
-            mov {cmp}, rax
-        }
-        arm64 {
-            adrp x9, burn_compare_ints
-            add x9, x9, :lo12:burn_compare_ints
-            str x9, {cmp}
-        }
-    }
-    qsort(xs, 5, 8, cmp)
+    qsort(xs, 5, 8, compareIntsAddress())
     [int] sorted = []
     for i in 0..5 {
         sorted.push(Memory.load64(xs + 8 * i))
@@ -82,4 +84,8 @@ unsafe {
     Memory.store8(digits + 1, 46)
     Memory.store8(digits + 2, 53)
     print(strtod(digits, 0), twice(1.25, 2))
+}
+
+unsafe {
+    print(twiceViaBurn(1.25), callsBurn(4), callsBurn(4), counted)
 }
