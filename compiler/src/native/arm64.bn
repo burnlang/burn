@@ -952,7 +952,7 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
             e("blr x16")
             addSp(size)
         } else if (k is HKind.Rt) {
-            if (!inlineNum(k.name, k.args)) {
+            if (!inlineNum(k.name, k.args) && !inlineMem(k.name, k.args)) {
                 rtCall(k.name, k.args)
             }
         } else if (k is HKind.Spawn) {
@@ -1152,6 +1152,46 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
         coldKeep(mt, "Release", done)
         coldKeep(zero, "ReleaseZero", done)
         coldKeep(root, "PossibleRoot", done)
+    }
+
+    /** Loads and stores of raw memory (`Memory.load8` … `Memory.storeFloat`) as single instructions, without calling the runtime. */
+    fun inlineMem(f: string, args: [HExpr]): bool {
+        if (f != "Mem") {
+            return false
+        }
+        var k0 = args[0].kind
+        if (!(k0 is HKind.Int) || k0.value < 3 || k0.value > 12) {
+            return false
+        }
+        var op = k0.value
+        if (op <= 6 || op == 11) {
+            expr(args[1])
+            if (op == 3) {
+                e("ldrb w0, [x0]")
+            } else if (op == 4) {
+                e("ldrh w0, [x0]")
+            } else if (op == 5) {
+                e("ldr w0, [x0]")
+            } else {
+                e("ldr x0, [x0]")
+            }
+            return true
+        }
+        expr(args[1])
+        pushReg("x0")
+        expr(args[2])
+        popReg("x1")
+        if (op == 7) {
+            e("strb w0, [x1]")
+        } else if (op == 8) {
+            e("strh w0, [x1]")
+        } else if (op == 9) {
+            e("str w0, [x1]")
+        } else {
+            e("str x0, [x1]")
+        }
+        e("mov x0, #0")
+        return true
     }
 
     fun inlineNum(f: string, args: [HExpr]): bool {

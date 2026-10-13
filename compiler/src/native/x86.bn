@@ -882,7 +882,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
             e("call rax")
             popArgs(n)
         } else if (k is HKind.Rt) {
-            if (!inlineNum(k.name, k.args)) {
+            if (!inlineNum(k.name, k.args) && !inlineMem(k.name, k.args)) {
                 rtCall(k.name, k.args)
             }
         } else if (k is HKind.Spawn) {
@@ -1085,6 +1085,46 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
 
     fun locArg(x: HExpr): int {
         return locArgOf(x)
+    }
+
+    /** Loads and stores of raw memory (`Memory.load8` … `Memory.storeFloat`) as single instructions, without calling the runtime. */
+    fun inlineMem(f: string, args: [HExpr]): bool {
+        if (f != "Mem") {
+            return false
+        }
+        var k0 = args[0].kind
+        if (!(k0 is HKind.Int) || k0.value < 3 || k0.value > 12) {
+            return false
+        }
+        var op = k0.value
+        if (op <= 6 || op == 11) {
+            expr(args[1])
+            if (op == 3) {
+                e("movzx eax, byte ptr [rax]")
+            } else if (op == 4) {
+                e("movzx eax, word ptr [rax]")
+            } else if (op == 5) {
+                e("mov eax, dword ptr [rax]")
+            } else {
+                e("mov rax, qword ptr [rax]")
+            }
+            return true
+        }
+        expr(args[1])
+        e("push rax")
+        expr(args[2])
+        e("pop rcx")
+        if (op == 7) {
+            e("mov byte ptr [rcx], al")
+        } else if (op == 8) {
+            e("mov word ptr [rcx], ax")
+        } else if (op == 9) {
+            e("mov dword ptr [rcx], eax")
+        } else {
+            e("mov qword ptr [rcx], rax")
+        }
+        e("xor eax, eax")
+        return true
     }
 
     fun inlineNum(f: string, args: [HExpr]): bool {
