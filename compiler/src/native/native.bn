@@ -38,7 +38,7 @@ pub fun nativeProblem(p: HProgram, libFuncs: [string]): string? {
 pub fun nativeAssembly(c: Checker, p: HProgram, libs: [[int]], platform: string): string {
     var meta = encodeMeta(c)
     var funcs = lowerOwnership(c.types, p.funcs)
-    var np = NativeProgram { checker: c, funcs: funcs, globals: len(p.globals), entry: p.entry, libs: libs, library: false }
+    var np = NativeProgram { checker: c, funcs: funcs, globals: len(p.globals), entry: p.entry, libs: libs, library: false, name: "" }
     var t = asmTarget(platform)
     if (t.arch == "aarch64") {
         return generateArm64(np, meta, t)
@@ -64,10 +64,10 @@ pub fun runtimeLibraryProblem(c: Checker, p: HProgram): string? {
     return nativeProblem(p, [])
 }
 
-/** The assembly of the runtime library written in Burn for `platform`: its functions, the C functions it exports with @Extern and `burn_rtlib_init`, which runs its top-level code. */
-pub fun runtimeLibraryAssembly(c: Checker, p: HProgram, platform: string): string {
+/** The assembly of the runtime library `name` written in Burn for `platform`: its functions, the C functions it exports with @Extern and `burn_<name>_init`, which runs its top-level code. */
+pub fun runtimeLibraryAssembly(c: Checker, p: HProgram, platform: string, name: string): string {
     var funcs = lowerOwnership(c.types, p.funcs)
-    var np = NativeProgram { checker: c, funcs: funcs, globals: len(p.globals), entry: p.entry, libs: [], library: true }
+    var np = NativeProgram { checker: c, funcs: funcs, globals: len(p.globals), entry: p.entry, libs: [], library: true, name: name }
     var t = asmTarget(platform)
     if (t.arch == "aarch64") {
         return generateArm64(np, [], t)

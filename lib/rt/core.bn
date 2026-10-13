@@ -10,7 +10,7 @@ import "sys.bn"
 import "task.bn"
 import "text.bn"
 
-@Extern("burn_rtlib_init")
+@Extern("burn_runtime_init")
 fun runtimeInit(): void
 
 @Extern("burn_rt_init")

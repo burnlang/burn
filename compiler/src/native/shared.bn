@@ -30,7 +30,7 @@ pub fun asmTarget(platform: string): AsmTarget {
 }
 
 /** What the code generator needs of a checked program, after the ownership pass. */
-/** A program to compile to native code. A `library` is the runtime written in Burn: it has no `main` and no type table of its own, and its top-level code runs when the runtime calls `burn_rtlib_init`. */
+/** A program to compile to native code. A `library` is a runtime library written in Burn: it has no `main` and no type table of its own, and its top-level code runs when something calls `burn_<name>_init`. */
 pub def type NativeProgram {
     Checker checker
     [HFunc] funcs
@@ -38,6 +38,12 @@ pub def type NativeProgram {
     int entry
     [[int]] libs
     bool library
+    string name
+}
+
+/** The C function that runs the top-level code of a runtime library, named after the library so that several can be linked together. */
+pub fun libraryInit(p: NativeProgram): string {
+    return "burn_${p.name}_init"
 }
 
 /** The first type that is not built in: types below it have the same number in every program, so a runtime library may use them. */
@@ -46,7 +52,7 @@ pub const FIRST_PROGRAM_TYPE = 20
 /** The symbol of the program's global variables. */
 pub fun globalsName(p: NativeProgram): string {
     if (p.library) {
-        return "burn_rtlib_globals"
+        return "burn_${p.name}_globals"
     }
     return "burn_globals"
 }

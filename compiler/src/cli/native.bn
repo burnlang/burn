@@ -155,12 +155,52 @@ pub fun buildNative(c: Compiled, opts: NativeOptions): string? {
         }
         return link(asm, opts.output, opts.strip, core, "-lm")
     }
+    if (len(libs) > 0) {
+        return linkBvm(asm, opts)
+    }
     var libsText = readText(pathJoin(dir, "native-libs.txt")) ?? ""
     return link(asm, opts.output, opts.strip, pathJoin(dir, "libburn_runtime.a"), trim(libsText))
 }
 
-/** Writes the assembly of the runtime library written in Burn to `output`, for `scripts/native-runtime.sh` to assemble. Returns null or the error. */
-pub fun buildRuntimeLibrary(c: Compiled, output: string): string? {
+/** Links a program that runs bytecode against `libburn_bvm.a`, bvm with its runtime, or `libburn_runtime.a` in a toolchain that has only that. */
+priv fun linkBvm(asm: string, opts: NativeOptions): string? {
+    var dir = runtimeDir()
+    var bvmLib = pathJoin(dir, "libburn_bvm.a")
+    if (Files.isFile(bvmLib)) {
+        var libsText = readText(pathJoin(dir, "bvm-libs.txt")) ?? ""
+        return link(asm, opts.output, opts.strip, bvmLib, trim(libsText))
+    }
+    var libsText = readText(pathJoin(dir, "native-libs.txt")) ?? ""
+    return link(asm, opts.output, opts.strip, pathJoin(dir, "libburn_runtime.a"), trim(libsText))
+}
+
+/** `file`'s name without folders and extension, with every character that cannot be in a C symbol replaced by `_`. */
+pub fun libraryName(file: string): string {
+    var base = file
+    var slash = len(base) - 1
+    while (slash >= 0 && charAt(base, slash) != "/") {
+        slash -= 1
+    }
+    base = substring(base, slash + 1, len(base))
+    if (endsWith(base, ".bn")) {
+        base = substring(base, 0, len(base) - 3)
+    }
+    var out = ""
+    for ch in chars(base) {
+        if (ch >= "a" && ch <= "z" || ch >= "A" && ch <= "Z" || ch >= "0" && ch <= "9" || ch == "_") {
+            out += ch
+        } else {
+            out += "_"
+        }
+    }
+    if (out == "") {
+        return "lib"
+    }
+    return out
+}
+
+/** Writes the assembly of the runtime library `name` written in Burn to `output`, for `scripts/native-runtime.sh` to assemble. Returns null or the error. */
+pub fun buildRuntimeLibrary(c: Compiled, output: string, name: string): string? {
     var problem = runtimeLibraryProblem(c.checker, c.program)
     if (problem != null) {
         return problem
@@ -173,7 +213,7 @@ pub fun buildRuntimeLibrary(c: Compiled, output: string): string? {
     if (asmIssue != null) {
         return asmIssue
     }
-    if (!writeFile(output, runtimeLibraryAssembly(c.checker, c.program, targetPlatform()))) {
+    if (!writeFile(output, runtimeLibraryAssembly(c.checker, c.program, targetPlatform(), name))) {
         return "cannot write ${output}"
     }
     return null
@@ -211,7 +251,5 @@ pub fun buildLauncher(file: string, opts: NativeOptions): string? {
     if (unsupported != null) {
         return unsupported
     }
-    var rt = runtimeDir()
-    var libsText = readText(pathJoin(rt, "native-libs.txt")) ?? ""
-    return link(asm, opts.output, opts.strip, pathJoin(rt, "libburn_runtime.a"), trim(libsText))
+    return linkBvm(asm, opts)
 }
