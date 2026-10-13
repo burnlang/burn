@@ -978,7 +978,11 @@ fn language_server_completes_names_after_an_import_alias() {
     use std::io::{BufRead, BufReader, Read, Write};
     let dir = temp_dir("lsp-alias");
     std::fs::create_dir_all(dir.join("util")).unwrap();
-    std::fs::write(dir.join("util/helpers.bn"), "pub fun greet(): int {\n    return 1\n}\n\npriv fun hidden(): int {\n    return 2\n}\n").unwrap();
+    std::fs::write(
+        dir.join("util/helpers.bn"),
+        "pub fun greet(): int {\n    return 1\n}\n\npriv fun hidden(): int {\n    return 2\n}\n",
+    )
+    .unwrap();
     let main = dir.join("main.bn");
     let uri = format!("file://{}", main.display());
     let mut child = burn()
