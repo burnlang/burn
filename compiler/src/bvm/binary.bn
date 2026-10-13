@@ -1,0 +1,822 @@
+/**
+ * The binary bvm module format, like `bvm/src/binary.rs`: a module starts with `BVM\0`, the format version and the
+ * module's name, then its types, strings, locations, globals, imports, dispatch tables, entry, the runtime functions it
+ * calls, its functions and its annotations. Numbers are little-endian.
+ */
+import "../check/hir.bn"
+import "../vm/bits.bn"
+import "../vm/module.bn"
+import "../vm/runtime.bn"
+
+/** The newest bytecode format this bvm reads and the one it writes. */
+pub const FORMAT_VERSION = 2
+
+/** The first type of a module that is not built in; the ones before it are the same in every module. */
+pub const FIRST_USER_TYPE = 12
+
+/** Whether `bytes` start like a binary bvm module. */
+pub fun isBinary(bytes: [int]): bool {
+    return len(bytes) >= 4 && bytes[0] == 66 && bytes[1] == 86 && bytes[2] == 77 && bytes[3] == 0
+}
+
+/** The types every module starts with, like `builtin_descs`. */
+pub fun builtinDescs(): [Desc] {
+    return [Desc.Error, Desc.Void, Desc.Null, Desc.Int, Desc.Float, Desc.Bool, Desc.Str, Desc.Any, Desc.Array(7), Desc.Map(6, 7), Desc.Array(6), Desc.Array(3)]
+}
+
+/** An empty module with the built-in types. */
+pub fun emptyModule(): VModule {
+    return VModule { name: "", types: builtinDescs(), strings: [], locs: [], globals: [], imports: [], funcs: [], tables: [], annotations: [], entry: null }
+}
+
+priv def struct Writer() {
+    [int] b = []
+
+    fun u8(v: int) {
+        b.push(v & 255)
+    }
+
+    fun u16(v: int) {
+        u8(v)
+        u8(v >>> 8)
+    }
+
+    fun u32(v: int) {
+        u8(v)
+        u8(v >>> 8)
+        u8(v >>> 16)
+        u8(v >>> 24)
+    }
+
+    fun u64(v: int) {
+        u32(v)
+        u32(v >>> 32)
+    }
+
+    fun s(text: string) {
+        var bs = bytes(text)
+        u32(len(bs))
+        for x in bs {
+            b.push(x as int)
+        }
+    }
+}
+
+priv def struct Reader(b: [int]) {
+    int i = 0
+    string err = ""
+
+    fun failed(): bool {
+        return err != ""
+    }
+
+    fun fail(msg: string) {
+        if (err == "") {
+            err = msg
+        }
+        i = len(b)
+    }
+
+    fun take(n: int): bool {
+        if (len(b) - i < n) {
+            fail("the file ends early (at byte ${i})")
+            return false
+        }
+        return true
+    }
+
+    fun u8(): int {
+        if (!take(1)) {
+            return 0
+        }
+        i += 1
+        return b[i - 1]
+    }
+
+    fun u16(): int {
+        if (!take(2)) {
+            return 0
+        }
+        i += 2
+        return b[i - 2] | (b[i - 1] << 8)
+    }
+
+    fun u32(): int {
+        if (!take(4)) {
+            return 0
+        }
+        i += 4
+        return b[i - 4] | (b[i - 3] << 8) | (b[i - 2] << 16) | (b[i - 1] << 24)
+    }
+
+    fun u64(): int {
+        var lo = u32()
+        var hi = u32()
+        return lo | (hi << 32)
+    }
+
+    fun count(minSize: int): int {
+        var n = u32()
+        if (failed()) {
+            return 0
+        }
+        if (n * minSize > len(b) - i) {
+            fail("a count of ${n} at byte ${i - 4} is larger than the file")
+            return 0
+        }
+        return n
+    }
+
+    fun s(): string {
+        var n = count(1)
+        if (failed()) {
+            return ""
+        }
+        [uint8] raw = []
+        for k in 0..n {
+            raw.push(b[i + k] as uint8)
+        }
+        i += n
+        return fromBytes(raw)
+    }
+}
+
+/** The number of a comparison in the binary format. */
+fun cmpCode(c: Cmp): int {
+    return match c {
+        Cmp.Eq => 0
+        Cmp.Ne => 1
+        Cmp.Lt => 2
+        Cmp.Le => 3
+        Cmp.Gt => 4
+        Cmp.Ge => 5
+    }
+}
+
+fun cmpOf(r: Reader, v: int): Cmp {
+    if (v == 0) {
+        return Cmp.Eq
+    }
+    if (v == 1) {
+        return Cmp.Ne
+    }
+    if (v == 2) {
+        return Cmp.Lt
+    }
+    if (v == 3) {
+        return Cmp.Le
+    }
+    if (v == 4) {
+        return Cmp.Gt
+    }
+    if (v != 5) {
+        r.fail("bad comparison code ${v}")
+    }
+    return Cmp.Ge
+}
+
+fun writeDesc(w: Writer, d: Desc) {
+    if (d is Desc.Error) {
+        w.u8(0)
+    } else if (d is Desc.Void) {
+        w.u8(1)
+    } else if (d is Desc.Null) {
+        w.u8(2)
+    } else if (d is Desc.Int) {
+        w.u8(3)
+    } else if (d is Desc.Float) {
+        w.u8(4)
+    } else if (d is Desc.Bool) {
+        w.u8(5)
+    } else if (d is Desc.Str) {
+        w.u8(6)
+    } else if (d is Desc.Any) {
+        w.u8(7)
+    } else if (d is Desc.Array) {
+        w.u8(8)
+        w.u32(d.elem)
+    } else if (d is Desc.Map) {
+        w.u8(9)
+        w.u32(d.key)
+        w.u32(d.value)
+    } else if (d is Desc.Optional) {
+        w.u8(10)
+        w.u32(d.inner)
+    } else if (d is Desc.Func) {
+        w.u8(11)
+    } else if (d is Desc.Future) {
+        w.u8(12)
+        w.u32(d.inner)
+    } else if (d is Desc.Record) {
+        w.u8(13)
+        w.s(d.name)
+        if (d.isClass) {
+            w.u8(1)
+        } else {
+            w.u8(0)
+        }
+        w.u32(len(d.fields))
+        for f in d.fields {
+            w.s(f.name)
+            w.u32(f.ty)
+        }
+        w.u32(len(d.implements))
+        for t in d.implements {
+            w.u32(t)
+        }
+    } else if (d is Desc.Interface) {
+        w.u8(14)
+        w.s(d.name)
+    } else if (d is Desc.Num) {
+        w.u8(16)
+        w.u8(d.code + 1)
+    } else if (d is Desc.Enum) {
+        w.u8(15)
+        w.s(d.name)
+        w.u32(len(d.variants))
+        for v in d.variants {
+            w.s(v)
+        }
+    }
+}
+
+fun readDesc(r: Reader): Desc {
+    var k = r.u8()
+    if (k <= 7) {
+        return [Desc.Error, Desc.Void, Desc.Null, Desc.Int, Desc.Float, Desc.Bool, Desc.Str, Desc.Any][k]
+    }
+    if (k == 8) {
+        return Desc.Array(r.u32())
+    }
+    if (k == 9) {
+        var key = r.u32()
+        return Desc.Map(key, r.u32())
+    }
+    if (k == 10) {
+        return Desc.Optional(r.u32())
+    }
+    if (k == 11) {
+        return Desc.Func
+    }
+    if (k == 12) {
+        return Desc.Future(r.u32())
+    }
+    if (k == 16) {
+        var c = r.u8()
+        if (c < 1 || c > 8) {
+            r.fail("bad number type code ${c}")
+        }
+        return Desc.Num(c - 1)
+    }
+    if (k == 13) {
+        var name = r.s()
+        var isClass = r.u8() != 0
+        var nf = r.count(8)
+        [DescField] fields = []
+        for x in 0..nf {
+            var n = r.s()
+            fields.push(DescField { name: n, ty: r.u32() })
+        }
+        var ni = r.count(4)
+        [int] impls = []
+        for x in 0..ni {
+            impls.push(r.u32())
+        }
+        return Desc.Record(name, fields, isClass, impls)
+    }
+    if (k == 14) {
+        return Desc.Interface(r.s())
+    }
+    if (k == 15) {
+        var name = r.s()
+        var nv = r.count(4)
+        [string] variants = []
+        for x in 0..nv {
+            variants.push(r.s())
+        }
+        return Desc.Enum(name, variants)
+    }
+    r.fail("unknown type kind ${k}")
+    return Desc.Error
+}
+
+/** The opcode of `op` in the binary format, or -1 for an instruction that is never written. */
+pub fun opcode(op: Op): int {
+    return match op {
+        Op.Const(value) => 0
+        Op.Str(id) => 1
+        Op.FuncRef(func) => 2
+        Op.Load(slot) => 3
+        Op.Store(slot) => 4
+        Op.Tee(slot) => 5
+        Op.GLoad(id) => 6
+        Op.GStore(id) => 7
+        Op.GTee(id) => 8
+        Op.Pop => 9
+        Op.Dup => 10
+        Op.Swap => 11
+        Op.IAdd => 12
+        Op.ISub => 13
+        Op.IMul => 14
+        Op.IDiv(loc) => 15
+        Op.IRem(loc) => 16
+        Op.INeg => 17
+        Op.And => 18
+        Op.Or => 19
+        Op.Xor => 20
+        Op.Shl => 21
+        Op.Shr => 22
+        Op.UShr => 23
+        Op.FAdd => 24
+        Op.FSub => 25
+        Op.FMul => 26
+        Op.FDiv => 27
+        Op.FRem => 28
+        Op.FNeg => 29
+        Op.ICmp(cmp) => 30
+        Op.UCmp(cmp) => 31
+        Op.FCmp(cmp) => 32
+        Op.Not => 33
+        Op.I2F => 34
+        Op.F2I => 35
+        Op.Jmp(target) => 36
+        Op.Jz(target) => 37
+        Op.Jnz(target) => 38
+        Op.JzKeep(target) => 39
+        Op.JnzKeep(target) => 40
+        Op.Call(func) => 41
+        Op.CallInd(argc) => 42
+        Op.Dispatch(table, argc) => 43
+        Op.Ret => 44
+        Op.RetVoid => 45
+        Op.Rt(name) => 46
+        Op.Host(id) => 47
+        Op.Spawn(func, argc, ty) => 48
+        Op.NewRecord(ty, argc) => 49
+        Op.GetField(index) => 50
+        Op.SetField(index) => 51
+        Op.NewArray(ty, count) => 52
+        Op.Index(loc) => 53
+        Op.SetIndex(loc) => 54
+        Op.Len => 55
+        Op.Unbox => 56
+        Op.TypeConst(ty) => 57
+        Op.LocConst(loc) => 58
+        Op.IAddOv(loc) => 59
+        Op.ISubOv(loc) => 60
+        Op.IMulOv(loc) => 61
+        Op.INegOv(loc) => 62
+    }
+}
+
+/** The single 32-bit operand of `op`, or -1 when it has none or several. */
+fun operand(op: Op): int {
+    return match op {
+        Op.Str(id) => id
+        Op.TypeConst(ty) => ty
+        Op.LocConst(loc) => loc
+        Op.FuncRef(func) => func
+        Op.Load(slot) => slot
+        Op.Store(slot) => slot
+        Op.Tee(slot) => slot
+        Op.GLoad(id) => id
+        Op.GStore(id) => id
+        Op.GTee(id) => id
+        Op.IDiv(loc) => loc
+        Op.IAddOv(loc) => loc
+        Op.ISubOv(loc) => loc
+        Op.IMulOv(loc) => loc
+        Op.INegOv(loc) => loc
+        Op.IRem(loc) => loc
+        Op.Jmp(target) => target
+        Op.Jz(target) => target
+        Op.Jnz(target) => target
+        Op.JzKeep(target) => target
+        Op.JnzKeep(target) => target
+        Op.Call(func) => func
+        Op.CallInd(argc) => argc
+        Op.Host(id) => id
+        Op.GetField(index) => index
+        Op.SetField(index) => index
+        Op.Index(loc) => loc
+        Op.SetIndex(loc) => loc
+        else => -1
+    }
+}
+
+fun writeOp(w: Writer, op: Op, symbols: {string: string}, rt: {string: int}, rtList: [string]) {
+    w.u8(opcode(op))
+    var x = operand(op)
+    if (x >= 0) {
+        w.u32(x)
+        return
+    }
+    if (op is Op.Const) {
+        w.u64(op.value)
+    } else if (op is Op.ICmp) {
+        w.u8(cmpCode(op.cmp))
+    } else if (op is Op.UCmp) {
+        w.u8(cmpCode(op.cmp))
+    } else if (op is Op.FCmp) {
+        w.u8(cmpCode(op.cmp))
+    } else if (op is Op.Dispatch) {
+        w.u32(op.table)
+        w.u32(op.argc)
+    } else if (op is Op.NewRecord) {
+        w.u32(op.ty)
+        w.u32(op.argc)
+    } else if (op is Op.NewArray) {
+        w.u32(op.ty)
+        w.u32(op.count)
+    } else if (op is Op.Spawn) {
+        w.u32(op.func)
+        w.u32(op.argc)
+        w.u32(op.ty)
+    } else if (op is Op.Rt) {
+        var name = symbols[op.name] ?? op.name
+        var at = rt[name]
+        if (at == null) {
+            at = len(rtList)
+            rt[name] = len(rtList)
+            rtList.push(name)
+        }
+        w.u32(at)
+    }
+}
+
+fun readOp(r: Reader, rt: [string]): Op {
+    var code = r.u8()
+    if (code == 0) {
+        return Op.Const(r.u64())
+    }
+    if (code <= 8) {
+        var x = r.u32()
+        return [Op.Str(x), Op.FuncRef(x), Op.Load(x), Op.Store(x), Op.Tee(x), Op.GLoad(x), Op.GStore(x), Op.GTee(x)][code - 1]
+    }
+    if (code <= 14) {
+        return [Op.Pop, Op.Dup, Op.Swap, Op.IAdd, Op.ISub, Op.IMul][code - 9]
+    }
+    if (code == 15) {
+        return Op.IDiv(r.u32())
+    }
+    if (code == 16) {
+        return Op.IRem(r.u32())
+    }
+    if (code <= 29) {
+        return [Op.INeg, Op.And, Op.Or, Op.Xor, Op.Shl, Op.Shr, Op.UShr, Op.FAdd, Op.FSub, Op.FMul, Op.FDiv, Op.FRem, Op.FNeg][code - 17]
+    }
+    if (code == 30) {
+        return Op.ICmp(cmpOf(r, r.u8()))
+    }
+    if (code == 31) {
+        return Op.UCmp(cmpOf(r, r.u8()))
+    }
+    if (code == 32) {
+        return Op.FCmp(cmpOf(r, r.u8()))
+    }
+    if (code <= 35) {
+        return [Op.Not, Op.I2F, Op.F2I][code - 33]
+    }
+    if (code <= 42) {
+        var x = r.u32()
+        return [Op.Jmp(x), Op.Jz(x), Op.Jnz(x), Op.JzKeep(x), Op.JnzKeep(x), Op.Call(x), Op.CallInd(x)][code - 36]
+    }
+    if (code == 43) {
+        var a = r.u32()
+        return Op.Dispatch(a, r.u32())
+    }
+    if (code == 44) {
+        return Op.Ret
+    }
+    if (code == 45) {
+        return Op.RetVoid
+    }
+    if (code == 46) {
+        var i = r.u32()
+        if (i >= len(rt)) {
+            r.fail("runtime function reference ${i} is out of range")
+            return Op.Ret
+        }
+        return Op.Rt(rt[i])
+    }
+    if (code == 47) {
+        return Op.Host(r.u32())
+    }
+    if (code == 48) {
+        var a = r.u32()
+        var b = r.u32()
+        return Op.Spawn(a, b, r.u32())
+    }
+    if (code == 49) {
+        var a = r.u32()
+        return Op.NewRecord(a, r.u32())
+    }
+    if (code == 50) {
+        return Op.GetField(r.u32())
+    }
+    if (code == 51) {
+        return Op.SetField(r.u32())
+    }
+    if (code == 52) {
+        var a = r.u32()
+        return Op.NewArray(a, r.u32())
+    }
+    if (code == 53) {
+        return Op.Index(r.u32())
+    }
+    if (code == 54) {
+        return Op.SetIndex(r.u32())
+    }
+    if (code == 55) {
+        return Op.Len
+    }
+    if (code == 56) {
+        return Op.Unbox
+    }
+    if (code <= 62) {
+        var x = r.u32()
+        return [Op.TypeConst(x), Op.LocConst(x), Op.IAddOv(x), Op.ISubOv(x), Op.IMulOv(x), Op.INegOv(x)][code - 57]
+    }
+    r.fail("unknown opcode ${code} at byte ${r.i - 1}")
+    return Op.Ret
+}
+
+/** Module `m` in the binary format, like `encode`. */
+pub fun encode(m: VModule): [int] {
+    var symbols = runtimeSymbols()
+    {string: int} rt = {}
+    [string] rtList = []
+    var code = new Writer()
+    code.u32(len(m.funcs))
+    for f in m.funcs {
+        code.s(f.name)
+        var flags = 0
+        if (f.external) {
+            flags = 1
+        }
+        var sig = f.sig
+        if (sig != null) {
+            flags |= 2
+        }
+        code.u8(flags)
+        if (sig != null) {
+            code.u32(len(sig.params))
+            for t in sig.params {
+                code.u32(t)
+            }
+            code.u32(sig.ret)
+        }
+        code.u32(f.params)
+        code.u32(f.locals)
+        code.u32(len(f.names))
+        for n in f.names {
+            code.s(n)
+        }
+        code.u32(len(f.code))
+        for op in f.code {
+            writeOp(code, op, symbols, rt, rtList)
+        }
+    }
+    var w = new Writer()
+    w.u8(66)
+    w.u8(86)
+    w.u8(77)
+    w.u8(0)
+    w.u16(FORMAT_VERSION)
+    w.u16(0)
+    w.s(m.name)
+    var nt = len(m.types) - FIRST_USER_TYPE
+    if (nt < 0) {
+        nt = 0
+    }
+    w.u32(nt)
+    for t in FIRST_USER_TYPE..len(m.types) {
+        writeDesc(w, m.types[t])
+    }
+    for list in [m.strings, m.locs, m.globals] {
+        w.u32(len(list))
+        for s in list {
+            w.s(s)
+        }
+    }
+    w.u32(len(m.imports))
+    for imp in m.imports {
+        w.s(imp.name)
+        w.u32(imp.argc)
+    }
+    w.u32(len(m.tables))
+    for t in m.tables {
+        w.s(t.name)
+        w.u32(t.argc)
+        w.u32(len(t.entries))
+        for e in t.entries {
+            w.u32(e.ty)
+            w.u32(e.func)
+        }
+    }
+    w.u32(m.entry ?? 4294967295)
+    w.u32(len(rtList))
+    for n in rtList {
+        w.s(n)
+    }
+    for x in code.b {
+        w.b.push(x)
+    }
+    w.u32(len(m.annotations))
+    for a in m.annotations {
+        var t = a.target
+        if (t is Target.Module) {
+            w.u8(0)
+            w.u32(0)
+        } else if (t is Target.Func) {
+            w.u8(1)
+            w.u32(t.id)
+        } else if (t is Target.Type) {
+            w.u8(2)
+            w.u32(t.id)
+        } else if (t is Target.Global) {
+            w.u8(3)
+            w.u32(t.id)
+        }
+        w.s(a.name)
+        w.u32(len(a.args))
+        for arg in a.args {
+            w.s(arg.key)
+            var v = arg.value
+            if (v is Value.Int) {
+                w.u8(0)
+                w.u64(v.value)
+            } else if (v is Value.Float) {
+                w.u8(1)
+                w.u64(floatToBits(v.value))
+            } else if (v is Value.Bool) {
+                w.u8(2)
+                if (v.value) {
+                    w.u8(1)
+                } else {
+                    w.u8(0)
+                }
+            } else if (v is Value.Str) {
+                w.u8(3)
+                w.s(v.text)
+            }
+        }
+    }
+    return w.b
+}
+
+/** The result of `decode`: the module, or the reason the bytes are not one. */
+pub def type Decoded {
+    VModule module
+    string error
+}
+
+/** The module in `bytes`, like `decode`. */
+pub fun decode(bytes: [int]): Decoded {
+    var m = emptyModule()
+    if (!isBinary(bytes)) {
+        return Decoded { module: m, error: "not a bvm module (the file does not start with BVM\\0)" }
+    }
+    var r = new Reader(bytes)
+    r.i = 4
+    var version = r.u16()
+    if (version == 0 || version > FORMAT_VERSION) {
+        return Decoded { module: m, error: "the module uses bytecode format ${version}, but this bvm reads formats 1 to ${FORMAT_VERSION}" }
+    }
+    var v2 = version >= 2
+    r.u16()
+    if (v2) {
+        m.name = r.s()
+    }
+    var nt = r.count(1)
+    for x in 0..nt {
+        m.types.push(readDesc(r))
+    }
+    [[string]] lists = []
+    for x in 0..3 {
+        [string] l = []
+        var n = r.count(4)
+        for y in 0..n {
+            l.push(r.s())
+        }
+        lists.push(l)
+    }
+    m.strings = lists[0]
+    m.locs = lists[1]
+    m.globals = lists[2]
+    var ni = r.count(8)
+    for x in 0..ni {
+        var name = r.s()
+        m.imports.push(Import { name: name, argc: r.u32() })
+    }
+    var ntab = r.count(12)
+    for x in 0..ntab {
+        var name = r.s()
+        var argc = r.u32()
+        var ne = r.count(8)
+        [TableEntry] entries = []
+        for y in 0..ne {
+            var ty = r.u32()
+            entries.push(TableEntry { ty: ty, func: r.u32() })
+        }
+        m.tables.push(Table { name: name, argc: argc, entries: entries })
+    }
+    var entry = r.u32()
+    if (entry != 4294967295) {
+        m.entry = entry
+    }
+    {string: string} byName = {}
+    var symbols = runtimeSymbols()
+    for k in keys(symbols) {
+        byName[symbols[k] ?? k] = k
+    }
+    var nrt = r.count(4)
+    [string] rt = []
+    for x in 0..nrt {
+        var n = r.s()
+        var name = byName[n]
+        if (name == null) {
+            r.fail("the module calls runtime function ${n}, which this bvm does not have")
+        }
+        rt.push(name ?? n)
+    }
+    var nf = r.count(16)
+    for x in 0..nf {
+        var name = r.s()
+        var external = false
+        Sig? sig = null
+        if (v2) {
+            var flags = r.u8()
+            if (flags > 3) {
+                r.fail("bad function flags ${flags}")
+            }
+            if ((flags & 2) != 0) {
+                var np = r.count(4)
+                [int] params = []
+                for y in 0..np {
+                    params.push(r.u32())
+                }
+                sig = Sig { params: params, ret: r.u32() }
+            }
+            external = (flags & 1) != 0
+        }
+        var params = r.u32()
+        var locals = r.u32()
+        var nn = r.count(4)
+        [string] names = []
+        for y in 0..nn {
+            names.push(r.s())
+        }
+        var nc = r.count(1)
+        [Op] code = []
+        for y in 0..nc {
+            code.push(readOp(r, rt))
+        }
+        m.funcs.push(VFunc { name: name, params: params, locals: locals, names: names, code: code, external: external, sig: sig })
+    }
+    if (v2) {
+        var na = r.count(10)
+        for x in 0..na {
+            var kind = r.u8()
+            var idx = r.u32()
+            Target target = Target.Module
+            if (kind == 1) {
+                target = Target.Func(idx)
+            } else if (kind == 2) {
+                target = Target.Type(idx)
+            } else if (kind == 3) {
+                target = Target.Global(idx)
+            } else if (kind != 0) {
+                r.fail("bad annotation target kind ${kind}")
+            }
+            var name = r.s()
+            var nargs = r.count(5)
+            [ValueArg] args = []
+            for y in 0..nargs {
+                var k = r.s()
+                var tag = r.u8()
+                Value v = Value.Int(0)
+                if (tag == 0) {
+                    v = Value.Int(r.u64())
+                } else if (tag == 1) {
+                    v = Value.Float(floatFromBits(r.u64()))
+                } else if (tag == 2) {
+                    v = Value.Bool(r.u8() != 0)
+                } else if (tag == 3) {
+                    v = Value.Str(r.s())
+                } else {
+                    r.fail("bad annotation value tag ${tag}")
+                }
+                args.push(ValueArg { key: k, value: v })
+            }
+            m.annotations.push(VAnnotation { target: target, name: name, args: args })
+        }
+    }
+    if (r.failed()) {
+        return Decoded { module: m, error: r.err }
+    }
+    if (r.i != len(bytes)) {
+        return Decoded { module: m, error: "${len(bytes) - r.i} unexpected bytes at the end of the module" }
+    }
+    return Decoded { module: m, error: "" }
+}

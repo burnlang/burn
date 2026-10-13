@@ -394,6 +394,22 @@ pub fun cExport(f: HFunc): string? {
     return null
 }
 
+/** The C symbol of `f` for `__cfun`: the name it exports to C, or the C function it imports, or null. */
+pub fun cSymbol(f: HFunc, macos: bool): string? {
+    var exported = cExport(f)
+    if (exported != null) {
+        return exported
+    }
+    var ext = f.external
+    if (ext is External.C) {
+        if (macos) {
+            return ext.macos
+        }
+        return ext.symbol
+    }
+    return null
+}
+
 /** The space for the program's global variables after the label `name`, with a C symbol at each one marked `@Extern`. */
 pub fun globalsData(p: NativeProgram, name: string, prefix: string): string {
     var out = "${name}:\n"

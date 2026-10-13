@@ -1,6 +1,6 @@
 import "../check/hir.bn"
 
-/** A bvm instruction, like `Op` in `bvm/src/op.rs`; only the ones Burn code generation emits. */
+/** A bvm instruction, like `Op` in `bvm/src/op.rs`. */
 pub def enum Op {
     Const(value: int),
     TypeConst(ty: int),
@@ -14,6 +14,8 @@ pub def enum Op {
     GStore(id: int),
     GTee(id: int),
     Pop,
+    Dup,
+    Swap,
     IAdd,
     ISub,
     IMul,
@@ -23,6 +25,7 @@ pub def enum Op {
     IMulOv(loc: int),
     INegOv(loc: int),
     IRem(loc: int),
+    INeg,
     And,
     Or,
     Xor,
@@ -33,6 +36,7 @@ pub def enum Op {
     FSub,
     FMul,
     FDiv,
+    FRem,
     FNeg,
     ICmp(cmp: Cmp),
     UCmp(cmp: Cmp),
@@ -89,6 +93,8 @@ pub fun mnemonic(op: Op): string {
         Op.GStore(id) => "gstore"
         Op.GTee(id) => "gtee"
         Op.Pop => "pop"
+        Op.Dup => "dup"
+        Op.Swap => "swap"
         Op.IAdd => "iadd"
         Op.ISub => "isub"
         Op.IMul => "imul"
@@ -98,6 +104,7 @@ pub fun mnemonic(op: Op): string {
         Op.IMulOv(loc) => "imul.ovf"
         Op.INegOv(loc) => "ineg.ovf"
         Op.IRem(loc) => "irem"
+        Op.INeg => "ineg"
         Op.And => "and"
         Op.Or => "or"
         Op.Xor => "xor"
@@ -108,6 +115,7 @@ pub fun mnemonic(op: Op): string {
         Op.FSub => "fsub"
         Op.FMul => "fmul"
         Op.FDiv => "fdiv"
+        Op.FRem => "frem"
         Op.FNeg => "fneg"
         Op.ICmp(cmp) => "i${cmpLetters(cmp)}"
         Op.UCmp(cmp) => "u${cmpLetters(cmp)}"

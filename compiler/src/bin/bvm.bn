@@ -1,0 +1,30 @@
+import "../bvm/binary.bn"
+import "../bvm/files.bn"
+import "../vm/asm.bn"
+import "std/process"
+
+fun main() {
+    var a = args()
+    if (len(a) < 2) {
+        eprint("usage: bvm dis <file> | bvm copy <in> <out>")
+        exit(2)
+    }
+    var bytes = readBytes(a[1])
+    if (bytes == null) {
+        eprint("error: could not read ${a[1]}")
+        exit(1)
+    }
+    var d = decode(bytes)
+    if (d.error != "") {
+        eprint("error: ${a[1]}: ${d.error}")
+        exit(1)
+    }
+    if (a[0] == "dis") {
+        write(disassemble(d.module))
+    } else if (a[0] == "copy") {
+        if (!writeBytes(a[2], encode(d.module))) {
+            eprint("error: could not write ${a[2]}")
+            exit(1)
+        }
+    }
+}
