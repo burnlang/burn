@@ -1166,7 +1166,7 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
             var k0 = args[0].kind
             var name = ""
             if (k0 is HKind.Int && k0.value >= 0 && k0.value < len(p.funcs)) {
-                name = cExport(p.funcs[k0.value]) ?? ""
+                name = cSymbol(p.funcs[k0.value], t.macos) ?? ""
             }
             if (name == "") {
                 return false

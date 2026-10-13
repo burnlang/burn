@@ -197,6 +197,36 @@ fn runtime_libraries_written_in_burn_link_into_native_programs() {
 }
 
 #[test]
+fn the_bvm_written_in_burn_reads_and_writes_bytecode_like_bvm() {
+    if !native_supported() {
+        return;
+    }
+    let root = root();
+    let tmp = temp_dir("bvm-in-burn");
+    let exe = tmp.join("bvm");
+    let (out, code) = output(burn().current_dir(&root).arg("build").arg("compiler/src/bin/bvm.bn").arg("-o").arg(&exe));
+    assert_eq!(code, 0, "{}", out);
+    let fib = tmp.join("fib.bvmc");
+    let (out, code) = output(burn().current_dir(&root).args(["build", "--target", "bvm", "examples/fib.bn", "-o"]).arg(&fib));
+    assert_eq!(code, 0, "{}", out);
+    for module in [root.join("compiler/boot/compiler.bvmc"), fib] {
+        let copy = tmp.join("copy.bvmc");
+        let (out, code) = output(Command::new(&exe).arg("copy").arg(&module).arg(&copy));
+        assert_eq!(code, 0, "{}", out);
+        assert!(
+            std::fs::read(&module).unwrap() == std::fs::read(&copy).unwrap(),
+            "{} changed when read and written again",
+            module.display()
+        );
+        let ours = Command::new(&exe).arg("dis").arg(&module).output().unwrap();
+        let theirs = Command::new(bvm_exe()).arg("dis").arg(&module).arg("-o").arg("-").output().unwrap();
+        assert!(ours.status.success(), "{}", String::from_utf8_lossy(&ours.stderr));
+        assert!(ours.stdout == theirs.stdout, "{} disassembles differently", module.display());
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn native_matches_vm() {
     if !native_supported() {
         return;

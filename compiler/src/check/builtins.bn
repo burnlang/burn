@@ -1120,14 +1120,14 @@ fun builtinWith(c: Checker, name: string, recv: HExpr?, recvSpan: SrcSpan, args:
                                 marked = true
                             }
                         }
-                        if (marked && decl != null && !decl.bodyless) {
+                        if (marked && decl != null) {
                             return rt("CFun", [hint(sym.id)], T_INT)
                         }
                     }
                 }
             }
         }
-        c.error(xs[0].span, "`__cfun` needs the name of a function marked @Extern that has a body, which C can call")
+        c.error(xs[0].span, "`__cfun` needs the name of a function marked @Extern: a C function, or a Burn function that C can call")
         return errExpr()
     }
     if (name == "__str") {

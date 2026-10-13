@@ -1,0 +1,70 @@
+/** Reading and writing files as bytes, for bytecode modules and archives. */
+import "std/memory"
+
+@Extern("open")
+fun cOpen(path: int, flags: int): Int32
+
+@Extern("read")
+fun cRead(fd: int, buf: int, n: int): int
+
+@Extern("close")
+fun cClose(fd: int): Int32
+
+@Extern("fopen")
+fun cFopen(path: int, mode: int): int
+
+@Extern("fwrite")
+fun cFwrite(p: int, size: int, n: int, f: int): int
+
+@Extern("fclose")
+fun cFclose(f: int): Int32
+
+/** The bytes of the file at `path`, or null when it cannot be read. */
+pub fun readBytes(path: string): [int]? {
+    unsafe {
+        var p = path
+        var fd = cOpen(__addr(p) + 24, 0)
+        if (fd < 0) {
+            return null
+        }
+        [int] out = []
+        var buf = Memory.alloc(65536)
+        while (true) {
+            var n = cRead(fd, buf, 65536)
+            if (n <= 0) {
+                if (n < 0) {
+                    Memory.free(buf)
+                    cClose(fd)
+                    return null
+                }
+                break
+            }
+            for i in 0..n {
+                out.push(Memory.load8(buf + i))
+            }
+        }
+        Memory.free(buf)
+        cClose(fd)
+        return out
+    }
+}
+
+/** Writes `data`, one byte per number, to the file at `path`. Returns whether that worked. */
+pub fun writeBytes(path: string, data: [int]): bool {
+    unsafe {
+        var p = path
+        var mode = "wb"
+        var f = cFopen(__addr(p) + 24, __addr(mode) + 24)
+        if (f == 0) {
+            return false
+        }
+        var n = len(data)
+        var buf = Memory.alloc(n + 1)
+        for i in 0..n {
+            Memory.store8(buf + i, data[i])
+        }
+        var ok = n == 0 || cFwrite(buf, 1, n, f) == n
+        Memory.free(buf)
+        return cFclose(f) == 0 && ok
+    }
+}
