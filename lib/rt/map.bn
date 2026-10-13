@@ -1,0 +1,278 @@
+/**
+ * Maps, like `MapData` in `obj.rs`: keys and values in insertion order, with a hash table from keys to their position.
+ *
+ * A map object holds the address of its data block: keys, values, count, capacity, table and table size. The table
+ * uses open addressing; each slot holds the key's hash and its position plus one (0 for an empty slot).
+ */
+import "heap.bn"
+import "meta.bn"
+import "sys.bn"
+
+priv const D_KEYS = 0
+priv const D_VALS = 8
+priv const D_LEN = 16
+priv const D_CAP = 24
+priv const D_TABLE = 32
+priv const D_SLOTS = 40
+
+priv const KEY_PLAIN = 0
+priv const KEY_STRING = 1
+priv const KEY_ANY = 2
+
+/** A new, empty map of type `t`. */
+pub unsafe fun mapNew(t: int): int {
+    var p = allocObj(K_MAP, t, HDR + 8)
+    var d = zalloc(48)
+    var cap = 8
+    st64(d + D_KEYS, zalloc(8 * cap))
+    st64(d + D_VALS, zalloc(8 * cap))
+    st64(d + D_CAP, cap)
+    st64(d + D_TABLE, zalloc(16 * 16))
+    st64(d + D_SLOTS, 16)
+    st64(p + HDR, d)
+    return p
+}
+
+unsafe fun dataOf(m: int): int {
+    return ld64(m + HDR)
+}
+
+pub unsafe fun mapLen(m: int): int {
+    return ld64(dataOf(m) + D_LEN)
+}
+
+pub unsafe fun mapKeyAt(m: int, i: int): int {
+    return ld64(ld64(dataOf(m) + D_KEYS) + 8 * i)
+}
+
+pub unsafe fun mapValAt(m: int, i: int): int {
+    return ld64(ld64(dataOf(m) + D_VALS) + 8 * i)
+}
+
+pub unsafe fun setMapValAt(m: int, i: int, v: int) {
+    st64(ld64(dataOf(m) + D_VALS) + 8 * i, v)
+}
+
+pub unsafe fun mapKeyType(m: int): int {
+    var t = tidOf(m)
+    if (kindOf(t) == D_MAP) {
+        return descA(t)
+    }
+    return TID_STR
+}
+
+pub unsafe fun mapValueType(m: int): int {
+    var t = tidOf(m)
+    if (kindOf(t) == D_MAP) {
+        return descB(t)
+    }
+    return TID_INT
+}
+
+unsafe fun keyMode(m: int): int {
+    var k = kindOf(mapKeyType(m))
+    if (k == D_STR) {
+        return KEY_STRING
+    }
+    if (k == D_ANY) {
+        return KEY_ANY
+    }
+    return KEY_PLAIN
+}
+
+/** Whether key `k` of a map with key mode `mode` is compared as bytes (a string) rather than as 64 bits. */
+unsafe fun keyIsText(mode: int, k: int): bool {
+    if (mode == KEY_STRING) {
+        return true
+    }
+    if (mode == KEY_ANY) {
+        return k != 0 && tidOf(k) == TID_STR
+    }
+    return false
+}
+
+/** The string object or the 64 bits that identify key `k`. */
+unsafe fun keyBits(mode: int, k: int): int {
+    if (mode == KEY_STRING) {
+        return k
+    }
+    if (mode == KEY_ANY) {
+        if (k == 0) {
+            return 0
+        }
+        return boxVal(k)
+    }
+    return k
+}
+
+unsafe fun hashBytes(p: int, n: int): int {
+    var h = -3750763034362895579
+    for i in 0..n {
+        h = h ^ ld8(p + i)
+        h = wrappingMul(h, 1099511628211)
+    }
+    return h
+}
+
+unsafe fun hashBits(v: int): int {
+    var x = v
+    x = x ^ (x >>> 33)
+    x = wrappingMul(x, -49064778989728563)
+    x = x ^ (x >>> 33)
+    x = wrappingMul(x, -4265267296055464877)
+    x = x ^ (x >>> 33)
+    return x
+}
+
+unsafe fun keyHash(mode: int, k: int): int {
+    if (keyIsText(mode, k)) {
+        var s = keyBits(mode, k)
+        return hashBytes(s + STR_BYTES, ld64(s + STR_LEN)) | 1
+    }
+    return hashBits(keyBits(mode, k)) & -2
+}
+
+unsafe fun keysEqual(mode: int, a: int, b: int): bool {
+    var ta = keyIsText(mode, a)
+    if (ta != keyIsText(mode, b)) {
+        return false
+    }
+    var x = keyBits(mode, a)
+    var y = keyBits(mode, b)
+    if (!ta) {
+        return x == y
+    }
+    if (x == y) {
+        return true
+    }
+    var n = ld64(x + STR_LEN)
+    if (n != ld64(y + STR_LEN)) {
+        return false
+    }
+    return cMemcmp(x + STR_BYTES, y + STR_BYTES, n) == 0
+}
+
+/** The position of key `k` in map `m`, or -1. */
+pub unsafe fun mapFind(m: int, k: int): int {
+    var d = dataOf(m)
+    var mode = keyMode(m)
+    var h = keyHash(mode, k)
+    var slots = ld64(d + D_SLOTS)
+    var table = ld64(d + D_TABLE)
+    var keys = ld64(d + D_KEYS)
+    var i = h & (slots - 1)
+    while (true) {
+        var e = table + 16 * i
+        var pos = ld64(e + 8)
+        if (pos == 0) {
+            return -1
+        }
+        if (ld64(e) == h && keysEqual(mode, ld64(keys + 8 * (pos - 1)), k)) {
+            return pos - 1
+        }
+        i = (i + 1) & (slots - 1)
+    }
+}
+
+unsafe fun tableInsert(d: int, h: int, pos: int) {
+    var slots = ld64(d + D_SLOTS)
+    var table = ld64(d + D_TABLE)
+    var i = h & (slots - 1)
+    while (ld64(table + 16 * i + 8) != 0) {
+        i = (i + 1) & (slots - 1)
+    }
+    st64(table + 16 * i, h)
+    st64(table + 16 * i + 8, pos + 1)
+}
+
+unsafe fun rebuild(m: int, slots: int) {
+    var d = dataOf(m)
+    cFree(ld64(d + D_TABLE))
+    st64(d + D_TABLE, zalloc(16 * slots))
+    st64(d + D_SLOTS, slots)
+    var mode = keyMode(m)
+    var keys = ld64(d + D_KEYS)
+    for i in 0..ld64(d + D_LEN) {
+        tableInsert(d, keyHash(mode, ld64(keys + 8 * i)), i)
+    }
+}
+
+/** Adds key `k` with value `v` at the end; both are taken over. The key must not be in the map yet. */
+pub unsafe fun mapAppend(m: int, k: int, v: int) {
+    var d = dataOf(m)
+    var n = ld64(d + D_LEN)
+    var cap = ld64(d + D_CAP)
+    if (n == cap) {
+        cap *= 2
+        st64(d + D_KEYS, grow(ld64(d + D_KEYS), 8 * cap))
+        st64(d + D_VALS, grow(ld64(d + D_VALS), 8 * cap))
+        st64(d + D_CAP, cap)
+    }
+    st64(ld64(d + D_KEYS) + 8 * n, k)
+    st64(ld64(d + D_VALS) + 8 * n, v)
+    st64(d + D_LEN, n + 1)
+    if (2 * (n + 1) > ld64(d + D_SLOTS)) {
+        rebuild(m, 2 * ld64(d + D_SLOTS))
+    } else {
+        tableInsert(d, keyHash(keyMode(m), k), n)
+    }
+}
+
+/** Removes the entry at position `i`, keeping the order of the others; gives nothing back, so release key and value first. */
+pub unsafe fun mapRemoveAt(m: int, i: int) {
+    var d = dataOf(m)
+    var n = ld64(d + D_LEN)
+    var keys = ld64(d + D_KEYS)
+    var vals = ld64(d + D_VALS)
+    cMemmove(keys + 8 * i, keys + 8 * (i + 1), 8 * (n - i - 1))
+    cMemmove(vals + 8 * i, vals + 8 * (i + 1), 8 * (n - i - 1))
+    st64(d + D_LEN, n - 1)
+    rebuild(m, ld64(d + D_SLOTS))
+}
+
+/** The managed keys and values of map `p`, for the memory manager: their count, then the objects. */
+pub unsafe fun mapChildren(p: int): int {
+    var d = dataOf(p)
+    if (d == 0) {
+        return 0
+    }
+    var n = ld64(d + D_LEN)
+    var kt = managed(mapKeyType(p))
+    var vt = managed(mapValueType(p))
+    if (!kt && !vt) {
+        return 0
+    }
+    var out = zalloc(8 + 16 * n)
+    var c = 0
+    for i in 0..n {
+        if (kt) {
+            var k = ld64(ld64(d + D_KEYS) + 8 * i)
+            if (k != 0) {
+                st64(out + 8 + 8 * c, k)
+                c += 1
+            }
+        }
+        if (vt) {
+            var v = ld64(ld64(d + D_VALS) + 8 * i)
+            if (v != 0) {
+                st64(out + 8 + 8 * c, v)
+                c += 1
+            }
+        }
+    }
+    st64(out, c)
+    return out
+}
+
+/** Frees the data block of map `p`; the memory manager has already released its keys and values. */
+pub unsafe fun mapFree(p: int) {
+    var d = dataOf(p)
+    if (d == 0) {
+        return
+    }
+    cFree(ld64(d + D_KEYS))
+    cFree(ld64(d + D_VALS))
+    cFree(ld64(d + D_TABLE))
+    cFree(d)
+    st64(p + HDR, 0)
+}

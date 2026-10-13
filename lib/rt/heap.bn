@@ -1,0 +1,1177 @@
+/**
+ * Objects and their memory, like `obj.rs` and `rc.rs`.
+ *
+ * Every object starts with a 16-byte header: kind (1 byte), mark (1), flags (1), element code of packed arrays (1),
+ * type (4), size (4) and reference count (4). Objects are freed when their count reaches zero; objects that can be
+ * part of a cycle are also tracked by the cycle collector, which runs at safe points on the main thread.
+ */
+import "io.bn"
+import "map.bn"
+import "meta.bn"
+import "sys.bn"
+import "task.bn"
+
+pub const K_STR = 1
+pub const K_ARRAY = 2
+pub const K_STRUCT = 3
+pub const K_BOX = 4
+pub const K_MAP = 5
+pub const K_FUTURE = 6
+pub const K_DEAD = 7
+pub const K_FREED = 238
+
+pub const F_STATIC = 1
+pub const F_ASCII = 2
+pub const F_TRACK = 4
+pub const F_BUFFERED = 8
+pub const F_ZOMBIE = 16
+
+pub const HDR = 16
+pub const ARR_LEN = 16
+pub const ARR_CAP = 24
+pub const ARR_DATA = 32
+pub const STR_LEN = 16
+pub const STR_BYTES = 24
+pub const BOX_VAL = 16
+
+priv const BLACK = 0
+priv const GRAY = 1
+priv const WHITE = 2
+priv const PURPLE = 3
+
+priv const DEFAULT_THRESHOLD = 33554432
+priv const ROOTS_LIMIT = 20000
+
+/** Whether more than one thread runs Burn code; compiled code reads it before changing a reference count. */
+@Extern("burn_rc_mt")
+var rcMt = 0
+
+var tasks = 0
+var liveBytes = 0
+var sinceBytes = 0
+var collectionCount = 0
+var mainThread = 0
+var collecting = false
+var thresholdBytes = -1
+var maxHeapBytes = -1
+var checkMode = -1
+var statsMode = -1
+
+var roots = 0
+var rootCount = 0
+var rootCap = 0
+
+var zombies = 0
+var zombieCount = 0
+var zombieCap = 0
+var zombieLock = 0
+
+/** Memory for the counters that other threads change: `tasks`, the bytes alive and the bytes since the last collection. */
+var counters = 0
+
+pub unsafe fun kindOfObj(p: int): int {
+    return ld8(p)
+}
+
+pub unsafe fun tidOf(p: int): int {
+    return ld32(p + 4)
+}
+
+pub unsafe fun flagsOf(p: int): int {
+    return ld8(p + 2)
+}
+
+pub unsafe fun setFlags(p: int, f: int) {
+    st8(p + 2, f)
+}
+
+pub unsafe fun sizeOf(p: int): int {
+    return ld32(p + 8)
+}
+
+pub unsafe fun rcOf(p: int): int {
+    return ld32(p + 12)
+}
+
+unsafe fun setRc(p: int, v: int) {
+    st32(p + 12, v & 4294967295)
+}
+
+unsafe fun markOf(p: int): int {
+    return ld8(p + 1)
+}
+
+unsafe fun setMark(p: int, m: int) {
+    st8(p + 1, m)
+}
+
+pub unsafe fun isStatic(p: int): bool {
+    return (ld8(p + 2) & F_STATIC) != 0
+}
+
+unsafe fun counterBlock(): int {
+    if (counters == 0) {
+        counters = zalloc(64)
+    }
+    return counters
+}
+
+pub unsafe fun multi(): bool {
+    return rcMt != 0
+}
+
+/** Whether the code runs on the thread that started the program. */
+pub unsafe fun onMainThread(): bool {
+    return mainThread != 0 && cThreadSelf() == mainThread
+}
+
+pub unsafe fun setMainThread() {
+    mainThread = cThreadSelf()
+}
+
+pub unsafe fun taskStarted() {
+    atomicAdd64(counterBlock(), 1)
+    rcMt = 1
+}
+
+pub unsafe fun taskFinished() {
+    if (atomicAdd64(counterBlock(), -1) == 1) {
+        rcMt = 0
+    }
+}
+
+pub unsafe fun runningTasks(): int {
+    return atomicLoad64(counterBlock())
+}
+
+pub unsafe fun account(bytes: int) {
+    var c = counterBlock()
+    if (multi()) {
+        atomicAdd64(c + 8, bytes)
+        atomicAdd64(c + 16, bytes)
+    } else {
+        st64(c + 8, ld64(c + 8) + bytes)
+        st64(c + 16, ld64(c + 16) + bytes)
+    }
+}
+
+pub unsafe fun unaccount(bytes: int) {
+    var c = counterBlock()
+    if (multi()) {
+        atomicAdd64(c + 8, -bytes)
+    } else {
+        st64(c + 8, ld64(c + 8) - bytes)
+    }
+}
+
+pub unsafe fun live(): int {
+    return ld64(counterBlock() + 8)
+}
+
+pub unsafe fun collections(): int {
+    return collectionCount
+}
+
+/** The value of the environment variable `name` (a string literal), in an array, or an empty array when it is not set. */
+pub unsafe fun envText(name: string): [string] {
+    [string] out = []
+    var key = name
+    var v = cGetenv(__addr(key) + STR_BYTES)
+    if (v != 0) {
+        out.push(rawText(v, cStrlen(v)))
+    }
+    return out
+}
+
+/** The whole number, not negative, in `s` (spaces around it are fine), or -1. */
+pub unsafe fun plainInt(s: string): int {
+    var t = s
+    var b = __addr(t) + STR_BYTES
+    var n = ld64(__addr(t) + STR_LEN)
+    var i = 0
+    while (i < n && (ld8(b + i) == 32 || ld8(b + i) == 9 || ld8(b + i) == 10 || ld8(b + i) == 13)) {
+        i += 1
+    }
+    while (n > i && (ld8(b + n - 1) == 32 || ld8(b + n - 1) == 9 || ld8(b + n - 1) == 10 || ld8(b + n - 1) == 13)) {
+        n -= 1
+    }
+    if (i >= n) {
+        return -1
+    }
+    var v = 0
+    while (i < n) {
+        var c = ld8(b + i)
+        if (c < 48 || c > 57) {
+            return -1
+        }
+        v = v * 10 + (c - 48)
+        i += 1
+    }
+    return v
+}
+
+unsafe fun threshold(): int {
+    if (thresholdBytes < 0) {
+        thresholdBytes = DEFAULT_THRESHOLD
+        var v = envText("BURN_GC_THRESHOLD")
+        if (len(v) > 0) {
+            var n = plainInt(v[0])
+            if (n >= 0) {
+                thresholdBytes = n
+            }
+        }
+    }
+    return thresholdBytes
+}
+
+unsafe fun checking(): bool {
+    if (checkMode < 0) {
+        checkMode = 0
+        if (len(envText("BURN_RC_CHECK")) > 0) {
+            checkMode = 1
+        }
+    }
+    return checkMode == 1
+}
+
+unsafe fun gcStats(): bool {
+    if (statsMode < 0) {
+        statsMode = 0
+        if (len(envText("BURN_GC_STATS")) > 0) {
+            statsMode = 1
+        }
+    }
+    return statsMode == 1
+}
+
+/** The most memory the program may keep alive: `BURN_MAX_HEAP_MB`, or 3/4 of the computer's memory. */
+pub unsafe fun maxHeap(): int {
+    if (maxHeapBytes < 0) {
+        maxHeapBytes = 9223372036854775807
+        var v = envText("BURN_MAX_HEAP_MB")
+        var set = false
+        if (len(v) > 0) {
+            var mb = plainInt(v[0])
+            if (mb >= 0) {
+                set = true
+                if (mb != 0) {
+                    maxHeapBytes = mb * 1048576
+                }
+            }
+        }
+        if (!set) {
+            var pagesName = 85
+            var sizeName = 30
+            if (isMacos()) {
+                pagesName = 200
+                sizeName = 29
+            }
+            var pages = cSysconf(pagesName)
+            var size = cSysconf(sizeName)
+            if (pages > 0 && size > 0) {
+                maxHeapBytes = pages * size / 4 * 3
+            }
+        }
+    }
+    return maxHeapBytes
+}
+
+/** A new object of `size` bytes (rounded up to 16), with its header filled in and a reference count of 1. */
+pub unsafe fun allocObj(kind: int, tid: int, size: int): int {
+    var sz = (size + 15) & -16
+    if (sz > 4294967295) {
+        fatalError("out of memory: a single value is larger than 4 GB", -1)
+    }
+    var c = counterBlock()
+    if (ld64(c + 16) >= threshold() || ld64(c + 8) > maxHeap()) {
+        safePoint()
+    }
+    var p = zalloc(sz)
+    var track = 0
+    if (kind == K_BOX) {
+        track = info(tid) & I_BOX_TRACK
+    } else if (kind != K_STR) {
+        track = info(tid) & I_TRACK
+    }
+    st8(p, kind)
+    st32(p + 4, tid)
+    st32(p + 8, sz)
+    st32(p + 12, 1)
+    if (track != 0) {
+        st8(p + 2, F_TRACK)
+    }
+    account(sz)
+    return p
+}
+
+/** Whether `p` has exactly one reference, so it can be changed in place. */
+pub unsafe fun unique(p: int): bool {
+    if (p == 0) {
+        return false
+    }
+    if (isStatic(p) || ld8(p) == K_FREED) {
+        return false
+    }
+    if (multi()) {
+        return atomicAdd32(p + 12, 0) == 1
+    }
+    return rcOf(p) == 1
+}
+
+/** Makes object `p` `size` bytes large, moving it if needed; gives its new address. */
+pub unsafe fun resizeObj(p: int, size: int): int {
+    var sz = (size + 15) & -16
+    if (sz > 4294967295) {
+        fatalError("out of memory: a single value is larger than 4 GB", -1)
+    }
+    var old = sizeOf(p)
+    if (checking()) {
+        var q = zalloc(sz)
+        var keep = old
+        if (sz < keep) {
+            keep = sz
+        }
+        cMemcpy(q, p, keep)
+        st32(q + 8, sz)
+        account(sz)
+        freeObj(p)
+        return q
+    }
+    var q = grow(p, sz)
+    if (sz > old) {
+        cMemset(q + old, 0, sz - old)
+    }
+    st32(q + 8, sz)
+    if (sz >= old) {
+        account(sz - old)
+    } else {
+        unaccount(old - sz)
+    }
+    return q
+}
+
+unsafe fun safePoint() {
+    if (multi() || !onMainThread() || collecting) {
+        return
+    }
+    drainZombies()
+    if (rootCount > 0) {
+        collectCycles()
+    }
+    st64(counterBlock() + 16, 0)
+    var l = live()
+    var max = maxHeap()
+    if (l > max) {
+        fatalError("out of memory: the program keeps ${l >> 20} MB of data alive, more than its limit of ${max >> 20} MB", -1)
+    }
+}
+
+unsafe fun badObject(p: int, what: string) {
+    fatalError("internal error: ${what} of a freed object at ${hex(p)}", -1)
+}
+
+pub fun hex(v: int): string {
+    var digits = "0123456789abcdef"
+    var out = ""
+    var x = v
+    for i in 0..16 {
+        out = substring(digits, x & 15, (x & 15) + 1) + out
+        x = x >> 4
+        if (x == 0) {
+            break
+        }
+    }
+    return "0x" + out
+}
+
+@Extern("burn_retain")
+pub unsafe fun retain(p: int): int {
+    if (p == 0) {
+        return 0
+    }
+    if (isStatic(p)) {
+        return p
+    }
+    if (ld8(p) == K_FREED) {
+        badObject(p, "retain")
+    }
+    if (multi()) {
+        atomicAdd32(p + 12, 1)
+    } else {
+        setRc(p, rcOf(p) + 1)
+    }
+    return p
+}
+
+@Extern("burn_release")
+pub unsafe fun release(p: int): int {
+    if (p == 0) {
+        return 0
+    }
+    if (isStatic(p)) {
+        return 0
+    }
+    if (ld8(p) == K_FREED) {
+        badObject(p, "release")
+    }
+    if (multi()) {
+        if (atomicAdd32(p + 12, -1) == 1) {
+            zombie(p)
+        }
+        return 0
+    }
+    setRc(p, rcOf(p) - 1)
+    if (rcOf(p) == 0) {
+        releaseZero(p)
+    } else {
+        possibleRoot(p)
+    }
+    return 0
+}
+
+/** Retains `v` when values of type `t` are objects. */
+pub unsafe fun retainT(v: int, t: int): int {
+    if (managed(t)) {
+        retain(v)
+    }
+    return v
+}
+
+pub unsafe fun releaseT(v: int, t: int) {
+    if (managed(t)) {
+        release(v)
+    }
+}
+
+@Extern("burn_possible_root")
+pub unsafe fun possibleRoot(p: int): int {
+    var f = flagsOf(p)
+    if ((f & F_TRACK) == 0 || multi()) {
+        return 0
+    }
+    if (markOf(p) != PURPLE) {
+        setMark(p, PURPLE)
+        if ((f & F_BUFFERED) == 0) {
+            setFlags(p, f | F_BUFFERED)
+            pushRoot(p)
+        }
+    }
+    if (rootCount >= ROOTS_LIMIT && onMainThread()) {
+        st64(counterBlock() + 16, threshold())
+    }
+    return 0
+}
+
+unsafe fun pushRoot(p: int) {
+    if (rootCount >= rootCap) {
+        rootCap = rootCap * 2 + 64
+        roots = grow(roots, 8 * rootCap)
+    }
+    st64(roots + 8 * rootCount, p)
+    rootCount += 1
+}
+
+unsafe fun zombie(p: int) {
+    lock(zombieLockAddr())
+    var f = flagsOf(p)
+    if ((f & F_ZOMBIE) == 0) {
+        setFlags(p, f | F_ZOMBIE)
+        if (zombieCount >= zombieCap) {
+            zombieCap = zombieCap * 2 + 64
+            zombies = grow(zombies, 8 * zombieCap)
+        }
+        st64(zombies + 8 * zombieCount, p)
+        zombieCount += 1
+    }
+    unlock(zombieLockAddr())
+}
+
+unsafe fun zombieLockAddr(): int {
+    return counterBlock() + 24
+}
+
+/** Frees the objects whose count reached zero while several threads ran. */
+pub unsafe fun drainZombies() {
+    if (multi()) {
+        return
+    }
+    var list = zombies
+    var n = zombieCount
+    zombies = 0
+    zombieCount = 0
+    zombieCap = 0
+    for i in 0..n {
+        var p = ld64(list + 8 * i)
+        setFlags(p, flagsOf(p) & (255 - F_ZOMBIE))
+        if (rcOf(p) == 0) {
+            releaseZero(p)
+        }
+    }
+    if (list != 0) {
+        cFree(list)
+    }
+}
+
+/** The managed objects that `p` refers to, in a new block of memory: its count, then the objects. */
+unsafe fun children(p: int): int {
+    var k = ld8(p)
+    var t = tidOf(p)
+    if (k == K_ARRAY) {
+        var e = descA(t)
+        if (kindOf(t) == D_ARRAY && managed(e) && ld8(p + 3) == 0) {
+            var n = ld64(p + ARR_LEN)
+            var data = ld64(p + ARR_DATA)
+            var out = zalloc(8 + 8 * n)
+            var c = 0
+            for i in 0..n {
+                var w = ld64(data + 8 * i)
+                if (w != 0) {
+                    st64(out + 8 + 8 * c, w)
+                    c += 1
+                }
+            }
+            st64(out, c)
+            return out
+        }
+        return 0
+    }
+    if (k == K_STRUCT) {
+        if (kindOf(t) != D_RECORD) {
+            return 0
+        }
+        var nf = fieldCount(t)
+        var n = (sizeOf(p) - HDR) / 8
+        if (nf < n) {
+            n = nf
+        }
+        var out = zalloc(8 + 8 * n)
+        var c = 0
+        for i in 0..n {
+            if (managed(fieldType(t, i))) {
+                var w = ld64(p + HDR + 8 * i)
+                if (w != 0) {
+                    st64(out + 8 + 8 * c, w)
+                    c += 1
+                }
+            }
+        }
+        st64(out, c)
+        return out
+    }
+    if (k == K_BOX) {
+        if (managed(t)) {
+            var w = ld64(p + BOX_VAL)
+            if (w != 0) {
+                var out = zalloc(16)
+                st64(out, 1)
+                st64(out + 8, w)
+                return out
+            }
+        }
+        return 0
+    }
+    if (k == K_MAP) {
+        return mapChildren(p)
+    }
+    if (k == K_FUTURE) {
+        return futureChildren(p)
+    }
+    return 0
+}
+
+@Extern("burn_release_zero")
+pub unsafe fun releaseZero(p: int): int {
+    var work = zalloc(8 * 64)
+    var cap = 64
+    var n = 1
+    st64(work, p)
+    while (n > 0) {
+        n -= 1
+        var o = ld64(work + 8 * n)
+        var kids = children(o)
+        if (kids != 0) {
+            for i in 0..ld64(kids) {
+                var c = ld64(kids + 8 + 8 * i)
+                if (isStatic(c)) {
+                    continue
+                }
+                if (ld8(c) == K_FREED) {
+                    badObject(c, "release")
+                }
+                setRc(c, rcOf(c) - 1)
+                if (rcOf(c) == 0) {
+                    if (n >= cap) {
+                        cap *= 2
+                        work = grow(work, 8 * cap)
+                    }
+                    st64(work + 8 * n, c)
+                    n += 1
+                } else {
+                    possibleRoot(c)
+                }
+            }
+            cFree(kids)
+        }
+        setMark(o, BLACK)
+        if ((flagsOf(o) & F_BUFFERED) == 0) {
+            freeObj(o)
+        }
+    }
+    cFree(work)
+    return 0
+}
+
+/** Gives the memory of object `p` back. */
+pub unsafe fun freeObj(p: int) {
+    var k = ld8(p)
+    if (k == K_ARRAY) {
+        unaccount(ld64(p + ARR_CAP) * elemWidth(ld8(p + 3)))
+        var data = ld64(p + ARR_DATA)
+        if (data != 0) {
+            cFree(data)
+        }
+    } else if (k == K_MAP) {
+        mapFree(p)
+    } else if (k == K_FUTURE) {
+        futureFree(p)
+    }
+    var size = sizeOf(p)
+    unaccount(size)
+    if (checking()) {
+        st8(p, K_FREED)
+        st32(p + 12, 57005)
+        cMemset(p + HDR, 238, size - HDR)
+        return
+    }
+    cFree(p)
+}
+
+/** Runs the cycle collector now, for `gc()`. */
+@Extern("burn_gc_collect")
+pub unsafe fun forceCollect(): int {
+    if (multi() || !onMainThread()) {
+        return 0
+    }
+    drainZombies()
+    collectCycles()
+    return 0
+}
+
+unsafe fun markGray(p: int) {
+    var stack = zalloc(8 * 64)
+    var cap = 64
+    var n = 1
+    st64(stack, p)
+    while (n > 0) {
+        n -= 1
+        var s = ld64(stack + 8 * n)
+        if (markOf(s) == GRAY) {
+            continue
+        }
+        setMark(s, GRAY)
+        var kids = children(s)
+        if (kids != 0) {
+            for i in 0..ld64(kids) {
+                var c = ld64(kids + 8 + 8 * i)
+                if (isStatic(c)) {
+                    continue
+                }
+                setRc(c, rcOf(c) - 1)
+                if (markOf(c) != GRAY) {
+                    if (n >= cap) {
+                        cap *= 2
+                        stack = grow(stack, 8 * cap)
+                    }
+                    st64(stack + 8 * n, c)
+                    n += 1
+                }
+            }
+            cFree(kids)
+        }
+    }
+    cFree(stack)
+}
+
+unsafe fun scanBlack(p: int) {
+    var stack = zalloc(8 * 64)
+    var cap = 64
+    var n = 1
+    st64(stack, p)
+    setMark(p, BLACK)
+    while (n > 0) {
+        n -= 1
+        var s = ld64(stack + 8 * n)
+        var kids = children(s)
+        if (kids != 0) {
+            for i in 0..ld64(kids) {
+                var c = ld64(kids + 8 + 8 * i)
+                if (isStatic(c)) {
+                    continue
+                }
+                setRc(c, rcOf(c) + 1)
+                if (markOf(c) != BLACK) {
+                    setMark(c, BLACK)
+                    if (n >= cap) {
+                        cap *= 2
+                        stack = grow(stack, 8 * cap)
+                    }
+                    st64(stack + 8 * n, c)
+                    n += 1
+                }
+            }
+            cFree(kids)
+        }
+    }
+    cFree(stack)
+}
+
+unsafe fun scan(p: int) {
+    var stack = zalloc(8 * 64)
+    var cap = 64
+    var n = 1
+    st64(stack, p)
+    while (n > 0) {
+        n -= 1
+        var s = ld64(stack + 8 * n)
+        if (markOf(s) != GRAY) {
+            continue
+        }
+        if (rcOf(s) > 0) {
+            scanBlack(s)
+        } else {
+            setMark(s, WHITE)
+            var kids = children(s)
+            if (kids != 0) {
+                for i in 0..ld64(kids) {
+                    var c = ld64(kids + 8 + 8 * i)
+                    if (!isStatic(c) && markOf(c) == GRAY) {
+                        if (n >= cap) {
+                            cap *= 2
+                            stack = grow(stack, 8 * cap)
+                        }
+                        st64(stack + 8 * n, c)
+                        n += 1
+                    }
+                }
+                cFree(kids)
+            }
+        }
+    }
+    cFree(stack)
+}
+
+var garbage = 0
+var garbageCount = 0
+var garbageCap = 0
+
+unsafe fun collectWhite(p: int) {
+    var stack = zalloc(8 * 64)
+    var cap = 64
+    var n = 1
+    st64(stack, p)
+    while (n > 0) {
+        n -= 1
+        var s = ld64(stack + 8 * n)
+        if (markOf(s) != WHITE || (flagsOf(s) & F_BUFFERED) != 0) {
+            continue
+        }
+        setMark(s, BLACK)
+        var kids = children(s)
+        if (kids != 0) {
+            for i in 0..ld64(kids) {
+                var c = ld64(kids + 8 + 8 * i)
+                if (!isStatic(c) && markOf(c) == WHITE) {
+                    if (n >= cap) {
+                        cap *= 2
+                        stack = grow(stack, 8 * cap)
+                    }
+                    st64(stack + 8 * n, c)
+                    n += 1
+                }
+            }
+            cFree(kids)
+        }
+        if (garbageCount >= garbageCap) {
+            garbageCap = garbageCap * 2 + 64
+            garbage = grow(garbage, 8 * garbageCap)
+        }
+        st64(garbage + 8 * garbageCount, s)
+        garbageCount += 1
+    }
+    cFree(stack)
+}
+
+/** Finds groups of objects that only refer to each other and frees them, like `collect_cycles`. */
+pub unsafe fun collectCycles() {
+    if (collecting) {
+        return
+    }
+    collecting = true
+    var list = roots
+    var n = rootCount
+    roots = 0
+    rootCount = 0
+    rootCap = 0
+    var kept = zalloc(8 * n + 8)
+    var nk = 0
+    for i in 0..n {
+        var s = ld64(list + 8 * i)
+        if (markOf(s) == PURPLE && rcOf(s) > 0) {
+            markGray(s)
+            st64(kept + 8 * nk, s)
+            nk += 1
+        } else {
+            setFlags(s, flagsOf(s) & (255 - F_BUFFERED))
+            if (markOf(s) == BLACK && rcOf(s) == 0) {
+                freeObj(s)
+            }
+        }
+    }
+    if (list != 0) {
+        cFree(list)
+    }
+    for i in 0..nk {
+        scan(ld64(kept + 8 * i))
+    }
+    garbage = 0
+    garbageCount = 0
+    garbageCap = 0
+    for i in 0..nk {
+        var s = ld64(kept + 8 * i)
+        setFlags(s, flagsOf(s) & (255 - F_BUFFERED))
+        collectWhite(s)
+    }
+    cFree(kept)
+    var freed = garbageCount
+    for i in 0..garbageCount {
+        freeObj(ld64(garbage + 8 * i))
+    }
+    if (garbage != 0) {
+        cFree(garbage)
+    }
+    garbage = 0
+    garbageCount = 0
+    collectionCount += 1
+    if (gcStats()) {
+        var msg = "[gc] cycle collection ${collectionCount} freed ${freed} objects, ${live()} bytes live\n"
+        writeErrText(msg)
+    }
+    collecting = false
+}
+
+/** Hands the buffered cycle roots to the caller, for bvm while it runs another module. */
+pub unsafe fun takeRoots(): int {
+    var out = zalloc(8 * rootCount + 16)
+    st64(out, rootCount)
+    for i in 0..rootCount {
+        st64(out + 8 + 8 * i, ld64(roots + 8 * i))
+    }
+    rootCount = 0
+    return out
+}
+
+pub unsafe fun restoreRoots(list: int) {
+    for i in 0..ld64(list) {
+        pushRoot(ld64(list + 8 + 8 * i))
+    }
+    cFree(list)
+}
+
+/** A new string object with the `n` bytes at `p`. */
+pub unsafe fun strNew(p: int, n: int): int {
+    var s = allocObj(K_STR, TID_STR, HDR + 8 + n + 1)
+    st64(s + STR_LEN, n)
+    if (n > 0) {
+        cMemcpy(s + STR_BYTES, p, n)
+    }
+    if (bytesAscii(p, n)) {
+        setFlags(s, flagsOf(s) | F_ASCII)
+    }
+    return s
+}
+
+/** A new string object of `n` bytes, all zero, for the caller to fill; call `strFinish` when done. */
+pub unsafe fun strAlloc(n: int): int {
+    var s = allocObj(K_STR, TID_STR, HDR + 8 + n + 1)
+    st64(s + STR_LEN, n)
+    return s
+}
+
+/** Marks a string filled through `strAlloc` as ASCII when it is. */
+pub unsafe fun strFinish(s: int): int {
+    if (bytesAscii(s + STR_BYTES, ld64(s + STR_LEN))) {
+        setFlags(s, flagsOf(s) | F_ASCII)
+    }
+    return s
+}
+
+pub unsafe fun bytesAscii(p: int, n: int): bool {
+    var i = 0
+    while (i + 8 <= n) {
+        if ((ld64(p + i) & -9187201950435737472) != 0) {
+            return false
+        }
+        i += 8
+    }
+    while (i < n) {
+        if (ld8(p + i) >= 128) {
+            return false
+        }
+        i += 1
+    }
+    return true
+}
+
+pub unsafe fun strLenBytes(s: int): int {
+    return ld64(s + STR_LEN)
+}
+
+pub unsafe fun strData(s: int): int {
+    return s + STR_BYTES
+}
+
+pub unsafe fun strIsAscii(s: int): bool {
+    return (flagsOf(s) & F_ASCII) != 0
+}
+
+/** The packed element code of arrays of type `t`: 0 for 8-byte slots, or the code of a sized number other than uint64. */
+pub unsafe fun elemCode(t: int): int {
+    if (kindOf(t) != D_ARRAY) {
+        return 0
+    }
+    var e = descA(t)
+    if (kindOf(e) == D_NUM) {
+        var code = descA(e)
+        if (code != NUM_U64) {
+            return code
+        }
+    }
+    return 0
+}
+
+pub unsafe fun elemWidth(code: int): int {
+    if (code == 0) {
+        return 8
+    }
+    if (code == NUM_I8 || code == NUM_U8) {
+        return 1
+    }
+    if (code == NUM_I16 || code == NUM_U16) {
+        return 2
+    }
+    return 4
+}
+
+/** A new array of type `t` with `n` elements, all zero. */
+pub unsafe fun arrayNew(t: int, n: int): int {
+    var p = allocObj(K_ARRAY, t, HDR + 24)
+    var code = elemCode(t)
+    var cap = n
+    if (cap < 4) {
+        cap = 4
+    }
+    st8(p + 3, code)
+    var bytes = cap * elemWidth(code)
+    if (bytes < 8) {
+        bytes = 8
+    }
+    st64(p + ARR_DATA, zalloc(bytes))
+    st64(p + ARR_LEN, n)
+    st64(p + ARR_CAP, cap)
+    account(cap * elemWidth(code))
+    return p
+}
+
+pub unsafe fun arrayLen(p: int): int {
+    return ld64(p + ARR_LEN)
+}
+
+pub unsafe fun arrayCode(p: int): int {
+    return ld8(p + 3)
+}
+
+pub unsafe fun arrayData(p: int): int {
+    return ld64(p + ARR_DATA)
+}
+
+/** Element `i` of array `p`, widened to 64 bits like `array_at`. */
+pub unsafe fun arrayAt(p: int, i: int): int {
+    var d = ld64(p + ARR_DATA)
+    var code = ld8(p + 3)
+    if (code == 0) {
+        return ld64(d + 8 * i)
+    }
+    if (code == NUM_I8) {
+        var v = ld8(d + i)
+        if (v >= 128) {
+            return v - 256
+        }
+        return v
+    }
+    if (code == NUM_U8) {
+        return ld8(d + i)
+    }
+    if (code == NUM_I16) {
+        var v = ld16(d + 2 * i)
+        if (v >= 32768) {
+            return v - 65536
+        }
+        return v
+    }
+    if (code == NUM_U16) {
+        return ld16(d + 2 * i)
+    }
+    if (code == NUM_I32) {
+        return ld32s(d + 4 * i)
+    }
+    if (code == NUM_U32) {
+        return ld32(d + 4 * i)
+    }
+    return f32ToBits(ld32(d + 4 * i))
+}
+
+/** Stores `v` as element `i` of array `p`, narrowing it like `array_put`. */
+pub unsafe fun arrayPut(p: int, i: int, v: int) {
+    var d = ld64(p + ARR_DATA)
+    var code = ld8(p + 3)
+    if (code == 0) {
+        st64(d + 8 * i, v)
+    } else if (code == NUM_I8 || code == NUM_U8) {
+        st8(d + i, v & 255)
+    } else if (code == NUM_I16 || code == NUM_U16) {
+        st16(d + 2 * i, v & 65535)
+    } else if (code == NUM_I32 || code == NUM_U32) {
+        st32(d + 4 * i, v & 4294967295)
+    } else {
+        st32(d + 4 * i, bitsToF32(v))
+    }
+}
+
+/** The bits of the float32 `f32` (a 32-bit pattern) as the bits of the same number as a 64-bit float. */
+pub unsafe fun f32ToBits(f32: int): int {
+    var x = f32
+    var out = 0
+    asm {
+        x86_64 {
+            mov eax, dword ptr {x}
+            movd xmm0, eax
+            cvtss2sd xmm0, xmm0
+            movq rax, xmm0
+            mov {out}, rax
+        }
+        arm64 {
+            ldr w9, {x}
+            fmov s0, w9
+            fcvt d0, s0
+            fmov x9, d0
+            str x9, {out}
+        }
+    }
+    return out
+}
+
+/** The 32-bit pattern of the 64-bit float with bits `bits`, rounded to float32. */
+pub unsafe fun bitsToF32(bits: int): int {
+    var x = bits
+    var out = 0
+    asm {
+        x86_64 {
+            movq xmm0, {x}
+            cvtsd2ss xmm0, xmm0
+            movd eax, xmm0
+            mov {out}, rax
+        }
+        arm64 {
+            ldr d0, {x}
+            fcvt s0, d0
+            fmov w9, s0
+            str x9, {out}
+        }
+    }
+    return out
+}
+
+/** Makes room for `need` elements in array `p`. */
+pub unsafe fun arrayReserve(p: int, need: int) {
+    var cap = ld64(p + ARR_CAP)
+    if (need <= cap) {
+        return
+    }
+    var w = elemWidth(ld8(p + 3))
+    var newCap = cap * 2
+    if (need > newCap) {
+        newCap = need
+    }
+    var oldBytes = cap * w
+    if (oldBytes < 8) {
+        oldBytes = 8
+    }
+    var newBytes = newCap * w
+    if (newBytes < 8) {
+        newBytes = 8
+    }
+    var data = grow(ld64(p + ARR_DATA), newBytes)
+    cMemset(data + oldBytes, 0, newBytes - oldBytes)
+    st64(p + ARR_DATA, data)
+    st64(p + ARR_CAP, newCap)
+    account((newCap - cap) * w)
+}
+
+pub unsafe fun arrayPush(p: int, v: int) {
+    var n = ld64(p + ARR_LEN)
+    arrayReserve(p, n + 1)
+    arrayPut(p, n, v)
+    st64(p + ARR_LEN, n + 1)
+}
+
+pub unsafe fun arraySetLen(p: int, n: int) {
+    arrayReserve(p, n)
+    st64(p + ARR_LEN, n)
+}
+
+/** Moves `n` elements of array `p` from index `from` to index `to`; the ranges may overlap. */
+pub unsafe fun arrayMove(p: int, from: int, to: int, n: int) {
+    if (n <= 0) {
+        return
+    }
+    var w = elemWidth(ld8(p + 3))
+    var d = ld64(p + ARR_DATA)
+    cMemmove(d + to * w, d + from * w, n * w)
+}
+
+/** A new `[string]` array, empty. */
+pub unsafe fun stringArray(): int {
+    return arrayNew(TID_ARR_STR, 0)
+}
+
+@Extern("burn_struct_new")
+pub unsafe fun structNew(t: int, n: int): int {
+    var count = n
+    if (count < 1) {
+        count = 1
+    }
+    return allocObj(K_STRUCT, t, HDR + 8 * count)
+}
+
+pub unsafe fun structLen(p: int): int {
+    return (sizeOf(p) - HDR) / 8
+}
+
+pub unsafe fun fieldOf(p: int, i: int): int {
+    return ld64(p + HDR + 8 * i)
+}
+
+pub unsafe fun setFieldOf(p: int, i: int, v: int) {
+    st64(p + HDR + 8 * i, v)
+}
+
+/** A box of type `t` holding `v`, which the box takes over. */
+pub unsafe fun boxRaw(t: int, v: int): int {
+    var p = allocObj(K_BOX, t, HDR + 8)
+    st64(p + BOX_VAL, v)
+    return p
+}
+
+pub unsafe fun boxVal(p: int): int {
+    return ld64(p + BOX_VAL)
+}

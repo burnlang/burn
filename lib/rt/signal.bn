@@ -1,0 +1,76 @@
+/**
+ * Turns crashes into runtime errors, like `signal.rs`: a segmentation fault near the main stack is reported as a
+ * stack overflow, on a separate signal stack so the handler still has room to run.
+ */
+import "heap.bn"
+import "io.bn"
+import "sys.bn"
+
+@Extern("sigaction")
+fun cSigaction(sig: int, act: int, old: int): Int32
+
+@Extern("sigaltstack")
+fun cSigaltstack(ss: int, old: int): Int32
+
+var stackBase = 0
+
+unsafe fun writeText(s: string) {
+    var t = s
+    writeAll(2, __addr(t) + STR_BYTES, ld64(__addr(t) + STR_LEN))
+}
+
+/** The signal handler: says what went wrong and ends the program. */
+@Extern("burn_rt_on_signal")
+unsafe fun onSignal(sig: int, info: int, ctx: int): int {
+    var addr = 0
+    if (isMacos()) {
+        addr = ld64(info + 24)
+    } else {
+        addr = ld64(info + 16)
+    }
+    var base = stackBase
+    flushForSignal()
+    if (base != 0 && addr < base && base - addr < 1073741824) {
+        writeText("runtime error: stack overflow (recursion is too deep)\n")
+    } else {
+        writeText("runtime error: segmentation fault (this is a bug in Burn, please report it)\n")
+    }
+    cExitNow(1)
+    return 0
+}
+
+/** Installs the handler for SIGSEGV and SIGBUS; `base` is the top of the main thread's stack. */
+pub unsafe fun installSignals(base: int) {
+    stackBase = base
+    var size = 65536
+    var mem = cMalloc(size)
+    if (mem == 0) {
+        return
+    }
+    var ss = zalloc(32)
+    st64(ss, mem)
+    if (isMacos()) {
+        st64(ss + 8, size)
+        st32(ss + 16, 0)
+    } else {
+        st32(ss + 8, 0)
+        st64(ss + 16, size)
+    }
+    var r = cSigaltstack(ss, 0)
+    cFree(ss)
+    if (r != 0) {
+        return
+    }
+    var act = zalloc(160)
+    st64(act, __cfun(onSignal))
+    var bus = 7
+    if (isMacos()) {
+        st32(act + 12, 65)
+        bus = 10
+    } else {
+        st32(act + 136, 134217732)
+    }
+    cSigaction(11, act, 0)
+    cSigaction(bus, act, 0)
+    cFree(act)
+}

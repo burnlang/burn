@@ -68,6 +68,7 @@ unsafe {
         sorted.push(Memory.load64(xs + 8 * i))
     }
     print(sorted)
+    print(__cfun(compareInts) == compareIntsAddress())
 }
 
 @Extern("burn_twice")

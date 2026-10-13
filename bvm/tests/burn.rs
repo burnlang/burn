@@ -197,6 +197,71 @@ fn runtime_libraries_written_in_burn_link_into_native_programs() {
 }
 
 #[test]
+fn the_runtime_written_in_burn_runs_the_test_cases() {
+    if !native_supported() {
+        return;
+    }
+    let root = root();
+    let tmp = temp_dir("burn-runtime");
+    let rt_s = tmp.join("runtime.s");
+    let (out, code) = output(
+        burn()
+            .current_dir(&root)
+            .arg("build")
+            .arg("--target")
+            .arg("runtime")
+            .arg("lib/rt/runtime.bn")
+            .arg("-o")
+            .arg(&rt_s),
+    );
+    assert_eq!(code, 0, "{}", out);
+    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".into());
+    let rt_o = tmp.join("runtime.o");
+    let (out, code) = output(Command::new(&cc).arg("-c").arg(&rt_s).arg("-o").arg(&rt_o));
+    assert_eq!(code, 0, "{}", out);
+    let (out, code) = output(Command::new("ar").arg("rcs").arg(tmp.join("libburn_runtime.a")).arg(&rt_o));
+    assert_eq!(code, 0, "{}", out);
+    std::fs::write(tmp.join("native-libs.txt"), "-lpthread -lm").unwrap();
+    let mut failures = Vec::new();
+    for (file, expected) in cases() {
+        let rel = file.strip_prefix(&root).unwrap();
+        let exe = tmp.join(file.file_stem().unwrap());
+        let (build_out, code) = output(
+            burn()
+                .current_dir(&root)
+                .env("BURN_RUNTIME_DIR", &tmp)
+                .arg("build")
+                .arg(rel)
+                .arg("-o")
+                .arg(&exe),
+        );
+        if code != 0 {
+            failures.push(format!("{}: build failed\n{}", rel.display(), build_out));
+            continue;
+        }
+        for threshold in [None, Some("16384")] {
+            let mut cmd = Command::new(&exe);
+            cmd.current_dir(&root);
+            if let Some(t) = threshold {
+                cmd.env("BURN_GC_THRESHOLD", t);
+            }
+            let (out, _) = output(&mut cmd);
+            if out != expected {
+                failures.push(format!(
+                    "{} (gc threshold {:?}):\n--- expected\n{}\n--- got\n{}",
+                    rel.display(),
+                    threshold,
+                    expected,
+                    out
+                ));
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
 fn native_matches_vm() {
     if !native_supported() {
         return;
@@ -410,6 +475,7 @@ fn repository_sources_are_formatted() {
         "examples",
         "lib/std",
         "lib/runtime",
+        "lib/rt",
         "lib/tools",
         "tests/modules",
         "compiler/src",

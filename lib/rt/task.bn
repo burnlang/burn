@@ -1,0 +1,190 @@
+/**
+ * Async tasks and futures on threads, like `task.rs`.
+ *
+ * `async` calls run on their own thread with a 64 MB stack. While any task runs, reference counts change atomically
+ * and objects whose count reaches zero wait in a list until the program is single-threaded again.
+ */
+import "heap.bn"
+import "io.bn"
+import "meta.bn"
+import "sys.bn"
+
+@Extern("pthread_mutex_init")
+fun cMutexInit(m: int, attr: int): Int32
+
+@Extern("pthread_mutex_lock")
+fun cMutexLock(m: int): Int32
+
+@Extern("pthread_mutex_unlock")
+fun cMutexUnlock(m: int): Int32
+
+@Extern("pthread_cond_init")
+fun cCondInit(c: int, attr: int): Int32
+
+@Extern("pthread_cond_wait")
+fun cCondWait(c: int, m: int): Int32
+
+@Extern("pthread_cond_broadcast")
+fun cCondBroadcast(c: int): Int32
+
+@Extern("pthread_attr_init")
+fun cAttrInit(a: int): Int32
+
+@Extern("pthread_attr_setstacksize")
+fun cAttrStack(a: int, size: int): Int32
+
+@Extern("pthread_create")
+fun cThreadCreate(out: int, attr: int, start: int, arg: int): Int32
+
+@Extern("pthread_detach")
+fun cThreadDetach(t: int): Int32
+
+priv const F_MUTEX = 0
+priv const F_COND = 128
+priv const F_HAS = 256
+priv const F_VALUE = 264
+priv const F_SIZE = 272
+
+/** The function compiled code gives the runtime to call Burn functions: `trampoline(function, arguments, count)`. */
+var trampoline = 0
+var doneSync = 0
+
+pub unsafe fun setTrampoline(t: int) {
+    trampoline = t
+}
+
+pub unsafe fun callBurn(f: int, args: int, n: int): int {
+    return callC3(trampoline, f, args, n)
+}
+
+unsafe fun doneBlock(): int {
+    if (doneSync == 0) {
+        var b = zalloc(256)
+        cMutexInit(b, 0)
+        cCondInit(b + 128, 0)
+        doneSync = b
+    }
+    return doneSync
+}
+
+/** A new future of type `t`, without a value yet. */
+pub unsafe fun futureNew(t: int): int {
+    var p = allocObj(K_FUTURE, t, HDR + 8)
+    var d = zalloc(F_SIZE)
+    cMutexInit(d + F_MUTEX, 0)
+    cCondInit(d + F_COND, 0)
+    st64(p + HDR, d)
+    return p
+}
+
+pub unsafe fun futureResolve(p: int, v: int) {
+    var d = ld64(p + HDR)
+    cMutexLock(d + F_MUTEX)
+    st64(d + F_VALUE, v)
+    st64(d + F_HAS, 1)
+    cCondBroadcast(d + F_COND)
+    cMutexUnlock(d + F_MUTEX)
+}
+
+/** Waits until future `p` has its value and gives it. */
+pub unsafe fun futureWait(p: int): int {
+    var d = ld64(p + HDR)
+    cMutexLock(d + F_MUTEX)
+    while (ld64(d + F_HAS) == 0) {
+        cCondWait(d + F_COND, d + F_MUTEX)
+    }
+    var v = ld64(d + F_VALUE)
+    cMutexUnlock(d + F_MUTEX)
+    return v
+}
+
+/** The managed value a future holds, for the memory manager. */
+pub unsafe fun futureChildren(p: int): int {
+    var t = tidOf(p)
+    if (kindOf(t) != D_FUTURE || !managed(descA(t))) {
+        return 0
+    }
+    var d = ld64(p + HDR)
+    cMutexLock(d + F_MUTEX)
+    var has = ld64(d + F_HAS)
+    var v = ld64(d + F_VALUE)
+    cMutexUnlock(d + F_MUTEX)
+    if (has == 0 || v == 0) {
+        return 0
+    }
+    var out = zalloc(16)
+    st64(out, 1)
+    st64(out + 8, v)
+    return out
+}
+
+pub unsafe fun futureFree(p: int) {
+    var d = ld64(p + HDR)
+    if (d != 0) {
+        cFree(d)
+        st64(p + HDR, 0)
+    }
+}
+
+/** The body of a task's thread: runs the Burn function and hands its result to the future. */
+@Extern("burn_rt_task_main")
+unsafe fun taskMain(job: int): int {
+    var v = callBurn(ld64(job), ld64(job + 8), ld64(job + 16))
+    futureResolve(ld64(job + 24), v)
+    release(ld64(job + 24))
+    cFree(ld64(job + 8))
+    cFree(job)
+    var b = doneBlock()
+    cMutexLock(b)
+    taskFinished()
+    cCondBroadcast(b + 128)
+    cMutexUnlock(b)
+    return 0
+}
+
+@Extern("burn_spawn")
+pub unsafe fun spawn(f: int, argc: int, args: int, t: int): int {
+    taskStarted()
+    var fut = futureNew(t)
+    var job = zalloc(32)
+    var copy = zalloc(8 * argc + 8)
+    cMemcpy(copy, args, 8 * argc)
+    st64(job, f)
+    st64(job + 8, copy)
+    st64(job + 16, argc)
+    st64(job + 24, retain(fut))
+    var attr = zalloc(128)
+    cAttrInit(attr)
+    cAttrStack(attr, 67108864)
+    var th = zalloc(16)
+    var r = cThreadCreate(th, attr, __cfun(taskMain), job)
+    cFree(attr)
+    if (r != 0) {
+        cFree(th)
+        taskFinished()
+        fatalError("could not spawn async task", -1)
+    }
+    cThreadDetach(ld64(th))
+    cFree(th)
+    return fut
+}
+
+@Extern("burn_await")
+pub unsafe fun awaitFuture(fut: int): int {
+    var v = futureWait(fut)
+    var t = tidOf(fut)
+    if (kindOf(t) == D_FUTURE) {
+        return retainT(v, descA(t))
+    }
+    return v
+}
+
+/** Waits until every task has finished. */
+pub unsafe fun waitAll() {
+    var b = doneBlock()
+    cMutexLock(b)
+    while (runningTasks() > 0) {
+        cCondWait(b + 128, b)
+    }
+    cMutexUnlock(b)
+}

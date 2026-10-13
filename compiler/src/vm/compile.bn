@@ -368,6 +368,8 @@ fun expr(b: Builder, e: HExpr): void {
     } else if (k is HKind.CallIface) {
         args(b, k.args)
         emit(b, Op.Dispatch(k.slot, len(k.args)))
+    } else if (k is HKind.Rt && k.name == "CFun") {
+        emit(b, Op.Const(0))
     } else if (k is HKind.Rt) {
         args(b, k.args)
         emit(b, Op.Rt(k.name))

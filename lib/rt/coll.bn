@@ -1,0 +1,699 @@
+/**
+ * Arrays, maps, structs and dynamic values, like the collection and value functions of `api.rs`.
+ */
+import "fmt.bn"
+import "heap.bn"
+import "io.bn"
+import "map.bn"
+import "meta.bn"
+import "sys.bn"
+import "text.bn"
+
+unsafe fun elemTid(a: int): int {
+    var t = tidOf(a)
+    if (kindOf(t) == D_ARRAY) {
+        return descA(t)
+    }
+    return TID_INT
+}
+
+@Extern("burn_err_index")
+pub unsafe fun errIndex(loc: int, idx: int, n: int): int {
+    fatalError("index ${idx} out of bounds (length ${n})", loc)
+    return 0
+}
+
+@Extern("burn_arr_new")
+pub unsafe fun arrNew(t: int, n: int): int {
+    return arrayNew(t, n)
+}
+
+@Extern("burn_arr_len")
+pub unsafe fun arrLen(a: int): int {
+    return arrayLen(a)
+}
+
+@Extern("burn_arr_get")
+pub unsafe fun arrGet(a: int, i: int, loc: int): int {
+    var n = arrayLen(a)
+    if (i < 0 || i >= n) {
+        errIndex(loc, i, n)
+    }
+    return retainT(arrayAt(a, i), elemTid(a))
+}
+
+@Extern("burn_arr_set")
+pub unsafe fun arrSet(a: int, i: int, v: int, loc: int): int {
+    var n = arrayLen(a)
+    if (i < 0 || i >= n) {
+        errIndex(loc, i, n)
+    }
+    var et = elemTid(a)
+    retainT(v, et)
+    var old = arrayAt(a, i)
+    arrayPut(a, i, v)
+    releaseT(old, et)
+    return retainT(v, et)
+}
+
+@Extern("burn_arr_push")
+pub unsafe fun arrPush(a: int, v: int): int {
+    retainT(v, elemTid(a))
+    arrayPush(a, v)
+    return 0
+}
+
+@Extern("burn_arr_pop")
+pub unsafe fun arrPop(a: int, loc: int): int {
+    var n = arrayLen(a)
+    if (n == 0) {
+        fatalError("pop from empty array", loc)
+    }
+    var v = arrayAt(a, n - 1)
+    st64(a + ARR_LEN, n - 1)
+    return v
+}
+
+@Extern("burn_arr_insert")
+pub unsafe fun arrInsert(a: int, i: int, v: int, loc: int): int {
+    var n = arrayLen(a)
+    if (i < 0 || i > n) {
+        errIndex(loc, i, n)
+    }
+    retainT(v, elemTid(a))
+    arraySetLen(a, n + 1)
+    arrayMove(a, i, i + 1, n - i)
+    arrayPut(a, i, v)
+    return 0
+}
+
+@Extern("burn_arr_remove")
+pub unsafe fun arrRemove(a: int, i: int, loc: int): int {
+    var n = arrayLen(a)
+    if (i < 0 || i >= n) {
+        errIndex(loc, i, n)
+    }
+    var v = arrayAt(a, i)
+    arrayMove(a, i + 1, i, n - i - 1)
+    st64(a + ARR_LEN, n - 1)
+    return v
+}
+
+/** A new array of type `t` with elements `from` to `to` of `a`, each retained. */
+unsafe fun arrayRange(t: int, a: int, from: int, to: int): int {
+    var out = arrayNew(t, to - from)
+    var et = elemTid(out)
+    for i in from..to {
+        arrayPut(out, i - from, retainT(arrayAt(a, i), et))
+    }
+    return out
+}
+
+@Extern("burn_arr_concat")
+pub unsafe fun arrConcat(a: int, b: int): int {
+    var na = arrayLen(a)
+    var nb = arrayLen(b)
+    var out = arrayNew(tidOf(a), na + nb)
+    var et = elemTid(out)
+    for i in 0..na {
+        arrayPut(out, i, retainT(arrayAt(a, i), et))
+    }
+    for i in 0..nb {
+        arrayPut(out, na + i, retainT(arrayAt(b, i), et))
+    }
+    return out
+}
+
+@Extern("burn_arr_slice")
+pub unsafe fun arrSlice(a: int, s: int, e: int): int {
+    var n = arrayLen(a)
+    var end = clamp(e, 0, n)
+    var start = clamp(s, 0, end)
+    return arrayRange(tidOf(a), a, start, end)
+}
+
+@Extern("burn_arr_copy")
+pub unsafe fun arrCopy(a: int): int {
+    return arrayRange(tidOf(a), a, 0, arrayLen(a))
+}
+
+@Extern("burn_arr_index_of")
+pub unsafe fun arrIndexOf(a: int, v: int, et: int): int {
+    for i in 0..arrayLen(a) {
+        if (valuesEqual(arrayAt(a, i), v, et)) {
+            return i
+        }
+    }
+    return -1
+}
+
+@Extern("burn_arr_contains")
+pub unsafe fun arrContains(a: int, v: int, et: int): int {
+    if (arrIndexOf(a, v, et) >= 0) {
+        return 1
+    }
+    return 0
+}
+
+@Extern("burn_arr_join")
+pub unsafe fun arrJoin(a: int, sep: int, et: int): int {
+    var b = bufNew()
+    for i in 0..arrayLen(a) {
+        if (i > 0) {
+            bufAddStr(b, sep)
+        }
+        if (et == TID_STR) {
+            bufAddStr(b, arrayAt(a, i))
+        } else {
+            var text = valueText(arrayAt(a, i), et, false, 0)
+            bufAddStr(b, __addr(text))
+        }
+    }
+    return bufFinish(b)
+}
+
+@Extern("burn_arr_reverse")
+pub unsafe fun arrReverse(a: int): int {
+    var n = arrayLen(a)
+    var i = 0
+    var j = n - 1
+    while (i < j) {
+        var x = arrayAt(a, i)
+        arrayPut(a, i, arrayAt(a, j))
+        arrayPut(a, j, x)
+        i += 1
+        j -= 1
+    }
+    return 0
+}
+
+/** Sorts the `n` values at `p` by type `t` with a stable merge sort, using `tmp` (room for `n` values). */
+unsafe fun mergeSort(p: int, tmp: int, n: int, t: int) {
+    if (n < 2) {
+        return
+    }
+    if (n < 12) {
+        for i in 1..n {
+            var x = ld64(p + 8 * i)
+            var j = i - 1
+            while (j >= 0 && valuesCompare(ld64(p + 8 * j), x, t) > 0) {
+                st64(p + 8 * (j + 1), ld64(p + 8 * j))
+                j -= 1
+            }
+            st64(p + 8 * (j + 1), x)
+        }
+        return
+    }
+    var half = n / 2
+    mergeSort(p, tmp, half, t)
+    mergeSort(p + 8 * half, tmp, n - half, t)
+    if (valuesCompare(ld64(p + 8 * (half - 1)), ld64(p + 8 * half), t) <= 0) {
+        return
+    }
+    cMemcpy(tmp, p, 8 * half)
+    var i = 0
+    var j = half
+    var k = 0
+    while (i < half && j < n) {
+        if (valuesCompare(ld64(p + 8 * j), ld64(tmp + 8 * i), t) < 0) {
+            st64(p + 8 * k, ld64(p + 8 * j))
+            j += 1
+        } else {
+            st64(p + 8 * k, ld64(tmp + 8 * i))
+            i += 1
+        }
+        k += 1
+    }
+    while (i < half) {
+        st64(p + 8 * k, ld64(tmp + 8 * i))
+        i += 1
+        k += 1
+    }
+}
+
+@Extern("burn_arr_sort")
+pub unsafe fun arrSort(a: int, et: int): int {
+    var n = arrayLen(a)
+    var vals = zalloc(8 * n + 8)
+    for i in 0..n {
+        st64(vals + 8 * i, arrayAt(a, i))
+    }
+    var tmp = zalloc(8 * n + 8)
+    mergeSort(vals, tmp, n, et)
+    for i in 0..n {
+        arrayPut(a, i, ld64(vals + 8 * i))
+    }
+    cFree(vals)
+    cFree(tmp)
+    return 0
+}
+
+@Extern("burn_arr_clear")
+pub unsafe fun arrClear(a: int): int {
+    var et = elemTid(a)
+    var n = arrayLen(a)
+    if (managed(et)) {
+        var old = zalloc(8 * n + 8)
+        for i in 0..n {
+            st64(old + 8 * i, arrayAt(a, i))
+        }
+        st64(a + ARR_LEN, 0)
+        for i in 0..n {
+            release(ld64(old + 8 * i))
+        }
+        cFree(old)
+    } else {
+        st64(a + ARR_LEN, 0)
+    }
+    return 0
+}
+
+@Extern("burn_map_new")
+pub unsafe fun mapNewObj(t: int): int {
+    return mapNew(t)
+}
+
+@Extern("burn_map_set")
+pub unsafe fun mapSet(m: int, k: int, v: int): int {
+    var kt = mapKeyType(m)
+    var vt = mapValueType(m)
+    retainT(v, vt)
+    var i = mapFind(m, k)
+    if (i >= 0) {
+        var old = mapValAt(m, i)
+        setMapValAt(m, i, v)
+        releaseT(old, vt)
+    } else {
+        retainT(k, kt)
+        mapAppend(m, k, v)
+    }
+    return retainT(v, vt)
+}
+
+/** Adds `k` and `v`, which the map takes over, like `map_insert_owned`. */
+pub unsafe fun mapInsertOwned(m: int, k: int, v: int) {
+    var kt = mapKeyType(m)
+    var vt = mapValueType(m)
+    mapSet(m, k, v)
+    releaseT(k, kt)
+    releaseT(v, vt)
+    releaseT(v, vt)
+}
+
+@Extern("burn_map_get")
+pub unsafe fun mapGet(m: int, k: int, loc: int): int {
+    var i = mapFind(m, k)
+    if (i < 0) {
+        fatalError("key ${valueText(k, mapKeyType(m), true, 0)} not found in map", loc)
+    }
+    return retainT(mapValAt(m, i), mapValueType(m))
+}
+
+@Extern("burn_map_get_or")
+pub unsafe fun mapGetOr(m: int, k: int, dflt: int): int {
+    var i = mapFind(m, k)
+    var vt = mapValueType(m)
+    if (i >= 0) {
+        return retainT(mapValAt(m, i), vt)
+    }
+    return retainT(dflt, vt)
+}
+
+@Extern("burn_map_find")
+pub unsafe fun mapFindValue(m: int, k: int, vt: int): int {
+    var i = mapFind(m, k)
+    if (i < 0) {
+        return 0
+    }
+    if (isUnboxed(vt)) {
+        return boxValue(mapValAt(m, i), vt)
+    }
+    return retainT(mapValAt(m, i), vt)
+}
+
+@Extern("burn_map_has")
+pub unsafe fun mapHas(m: int, k: int): int {
+    if (mapFind(m, k) >= 0) {
+        return 1
+    }
+    return 0
+}
+
+@Extern("burn_map_remove")
+pub unsafe fun mapRemove(m: int, k: int): int {
+    var i = mapFind(m, k)
+    if (i < 0) {
+        return 0
+    }
+    var ok = mapKeyAt(m, i)
+    var ov = mapValAt(m, i)
+    mapRemoveAt(m, i)
+    releaseT(ok, mapKeyType(m))
+    releaseT(ov, mapValueType(m))
+    return 1
+}
+
+@Extern("burn_map_keys")
+pub unsafe fun mapKeys(m: int, t: int): int {
+    var n = mapLen(m)
+    var out = arrayNew(t, n)
+    var et = elemTid(out)
+    for i in 0..n {
+        arrayPut(out, i, retainT(mapKeyAt(m, i), et))
+    }
+    return out
+}
+
+@Extern("burn_map_values")
+pub unsafe fun mapValues(m: int, t: int): int {
+    var n = mapLen(m)
+    var out = arrayNew(t, n)
+    var et = elemTid(out)
+    for i in 0..n {
+        arrayPut(out, i, retainT(mapValAt(m, i), et))
+    }
+    return out
+}
+
+@Extern("burn_map_len")
+pub unsafe fun mapLenOf(m: int): int {
+    return mapLen(m)
+}
+
+@Extern("burn_box")
+pub unsafe fun boxValue(v: int, t: int): int {
+    var k = kindOf(t)
+    if (k == D_ANY) {
+        return retain(v)
+    }
+    if (k == D_NULL || k == D_VOID) {
+        return 0
+    }
+    if (k == D_OPTIONAL) {
+        if (v == 0) {
+            return 0
+        }
+        var inner = descA(t)
+        if (isUnboxed(inner)) {
+            return retain(v)
+        }
+        return boxValue(v, inner)
+    }
+    if (k == D_INTERFACE) {
+        if (v == 0) {
+            return 0
+        }
+        return boxRaw(tidOf(v), retain(v))
+    }
+    if (k == D_RECORD) {
+        return boxRaw(tidOf(v), retain(v))
+    }
+    return boxRaw(t, retainT(v, t))
+}
+
+unsafe fun dynMatches(actual: int, to: int): bool {
+    if (actual == to) {
+        return true
+    }
+    var k = kindOf(to)
+    if (k == D_INTERFACE || k == D_RECORD) {
+        return implements(actual, to)
+    }
+    if (k == D_ANY) {
+        return true
+    }
+    if (k == D_OPTIONAL) {
+        return dynMatches(actual, descA(to))
+    }
+    return false
+}
+
+@Extern("burn_is_type")
+pub unsafe fun isType(v: int, from: int, to: int): int {
+    if (kindOf(to) == D_NULL) {
+        if (v == 0) {
+            return 1
+        }
+        return 0
+    }
+    var k = kindOf(from)
+    var ok = false
+    if (k == D_ANY) {
+        ok = v != 0 && dynMatches(tidOf(v), to)
+    } else if (k == D_OPTIONAL) {
+        if (v == 0) {
+            return 0
+        }
+        var inner = descA(from)
+        if (isUnboxed(inner)) {
+            ok = dynMatches(inner, to)
+        } else {
+            return isType(v, inner, to)
+        }
+    } else if (k == D_INTERFACE || k == D_RECORD) {
+        ok = v != 0 && dynMatches(tidOf(v), to)
+    } else {
+        ok = dynMatches(from, to)
+    }
+    if (ok) {
+        return 1
+    }
+    return 0
+}
+
+unsafe fun payload(v: int, from: int, to: int): int {
+    var k = kindOf(from)
+    if (k == D_ANY) {
+        var kt = kindOf(to)
+        if (kt == D_ANY) {
+            return v
+        }
+        if (kt == D_OPTIONAL) {
+            if (isUnboxed(descA(to))) {
+                return v
+            }
+            return boxVal(v)
+        }
+        return boxVal(v)
+    }
+    if (k == D_OPTIONAL) {
+        if (isUnboxed(descA(from))) {
+            return boxVal(v)
+        }
+        return v
+    }
+    return v
+}
+
+@Extern("burn_cast")
+pub unsafe fun castValue(v: int, from: int, to: int, loc: int): int {
+    if (isType(v, from, to) == 0) {
+        var k = kindOf(from)
+        var actual = ""
+        if (k == D_ANY) {
+            if (v == 0) {
+                actual = "null"
+            } else {
+                actual = typeName(tidOf(v))
+            }
+        } else if (k == D_OPTIONAL && v == 0) {
+            actual = "null"
+        } else if (k == D_INTERFACE || k == D_RECORD) {
+            actual = typeName(tidOf(v))
+        } else {
+            actual = typeName(from)
+        }
+        fatalError("cannot cast value of type ${actual} to ${typeName(to)}", loc)
+    }
+    var out = payload(v, from, to)
+    if (managed(to)) {
+        retain(out)
+    }
+    return out
+}
+
+@Extern("burn_unwrap")
+pub unsafe fun unwrapValue(v: int, optTid: int, loc: int): int {
+    if (v == 0) {
+        fatalError("unexpected null value", loc)
+    }
+    if (kindOf(optTid) == D_OPTIONAL && isUnboxed(descA(optTid))) {
+        return boxVal(v)
+    }
+    return retain(v)
+}
+
+@Extern("burn_destroy")
+pub unsafe fun destroyValue(v: int, loc: int): int {
+    if (v == 0) {
+        fatalError("cannot destroy null", loc)
+    }
+    var k = kindOfObj(v)
+    if (k == K_DEAD) {
+        fatalError("this object was already destroyed", loc)
+    }
+    if (k != K_STRUCT) {
+        fatalError("only struct objects can be destroyed", loc)
+    }
+    var t = tidOf(v)
+    var n = structLen(v)
+    var kids = zalloc(8 * n + 8)
+    var c = 0
+    if (kindOf(t) == D_RECORD) {
+        var nf = fieldCount(t)
+        for i in 0..n {
+            if (i < nf && managed(fieldType(t, i))) {
+                var w = fieldOf(v, i)
+                if (w != 0) {
+                    st64(kids + 8 * c, w)
+                    c += 1
+                }
+            }
+        }
+    }
+    for i in 0..n {
+        setFieldOf(v, i, 0)
+    }
+    st8(v, K_DEAD)
+    for i in 0..c {
+        release(ld64(kids + 8 * i))
+    }
+    cFree(kids)
+    return 0
+}
+
+@Extern("burn_alive")
+pub unsafe fun aliveValue(v: int, loc: int): int {
+    if (v != 0 && kindOfObj(v) == K_DEAD) {
+        fatalError("this object was destroyed and can no longer be used", loc)
+    }
+    return retain(v)
+}
+
+@Extern("burn_eq")
+pub unsafe fun eqValues(a: int, b: int, t: int): int {
+    if (valuesEqual(a, b, t)) {
+        return 1
+    }
+    return 0
+}
+
+@Extern("burn_cmp")
+pub unsafe fun cmpValues(a: int, b: int, t: int): int {
+    return valuesCompare(a, b, t)
+}
+
+@Extern("burn_type_name")
+pub unsafe fun typeNameOf(v: int, t: int): int {
+    var k = kindOf(t)
+    var name = ""
+    if (k == D_ANY) {
+        if (v == 0) {
+            name = "null"
+        } else {
+            name = typeName(tidOf(v))
+        }
+    } else if (k == D_INTERFACE) {
+        name = typeName(tidOf(v))
+    } else if (k == D_OPTIONAL && v == 0) {
+        name = "null"
+    } else if (k == D_OPTIONAL) {
+        name = typeName(descA(t))
+    } else {
+        name = typeName(t)
+    }
+    return retain(__addr(name))
+}
+
+@Extern("burn_any_index")
+pub unsafe fun anyIndex(v: int, key: int, keyTid: int, loc: int): int {
+    if (v == 0) {
+        fatalError("cannot index null", loc)
+    }
+    var inner = boxVal(v)
+    var t = tidOf(v)
+    var k = kindOf(t)
+    if (k == D_MAP) {
+        var kt = descA(t)
+        var vt = descB(t)
+        var raw = key
+        if (kindOf(kt) == D_ANY) {
+            raw = boxValue(key, keyTid)
+        } else if (kindOf(keyTid) == D_ANY) {
+            if (key == 0) {
+                raw = 0
+            } else {
+                raw = boxVal(key)
+            }
+        }
+        var i = mapFind(inner, raw)
+        if (kindOf(kt) == D_ANY) {
+            release(raw)
+        }
+        if (i < 0) {
+            return 0
+        }
+        return boxValue(mapValAt(inner, i), vt)
+    }
+    if (k == D_ARRAY) {
+        var i = 0
+        if (kindOf(keyTid) == D_INT) {
+            i = key
+        } else if (kindOf(keyTid) == D_ANY && key != 0 && tidOf(key) == TID_INT) {
+            i = boxVal(key)
+        } else {
+            fatalError("array index must be an int", loc)
+        }
+        var n = arrayLen(inner)
+        if (i < 0 || i >= n) {
+            errIndex(loc, i, n)
+        }
+        return boxValue(arrayAt(inner, i), descA(t))
+    }
+    if (k == D_RECORD) {
+        var name = 0
+        if (kindOf(keyTid) == D_STR) {
+            name = key
+        } else if (kindOf(keyTid) == D_ANY && key != 0 && tidOf(key) == TID_STR) {
+            name = boxVal(key)
+        } else {
+            fatalError("record field name must be a string", loc)
+        }
+        for i in 0..fieldCount(t) {
+            var nl = fieldNameLen(t, i)
+            if (nl == ld64(name + STR_LEN) && cMemcmp(fieldNameAt(t, i), name + STR_BYTES, nl) == 0) {
+                return boxValue(fieldOf(inner, i), fieldType(t, i))
+            }
+        }
+        return 0
+    }
+    if (k == D_STR) {
+        if (kindOf(keyTid) != D_INT) {
+            fatalError("string index must be an int", loc)
+        }
+        return boxRaw(TID_STR, strIndex(inner, key, loc))
+    }
+    fatalError("cannot index value of type ${typeName(t)}", loc)
+    return 0
+}
+
+@Extern("burn_any_len")
+pub unsafe fun anyLen(v: int, loc: int): int {
+    if (v == 0) {
+        return 0
+    }
+    var inner = boxVal(v)
+    var t = tidOf(v)
+    var k = kindOf(t)
+    if (k == D_MAP) {
+        return mapLen(inner)
+    }
+    if (k == D_ARRAY) {
+        return arrayLen(inner)
+    }
+    if (k == D_STR) {
+        return charCount(inner)
+    }
+    fatalError("value of type ${typeName(t)} has no length", loc)
+    return 0
+}

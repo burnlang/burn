@@ -1,0 +1,438 @@
+/**
+ * Output, runtime errors and the program's arguments, like `io.rs`.
+ *
+ * Standard output is buffered; the buffer is written when it grows past 64 KB, at every newline when the output is
+ * a terminal, before anything goes to standard error, and when the program ends.
+ */
+import "heap.bn"
+import "meta.bn"
+import "sys.bn"
+
+var outBuf = 0
+var outLen = 0
+var outCap = 0
+var outLock = 0
+var ttyState = 2
+var captureBuf = 0
+var captureLen = 0
+var captureCap = 0
+var capturing = false
+var argList = 0
+var envBlock = 0
+var readError = 0
+
+unsafe fun outLockAddr(): int {
+    if (outLock == 0) {
+        outLock = zalloc(8)
+    }
+    return outLock
+}
+
+unsafe fun isTty(): bool {
+    if (ttyState == 2) {
+        ttyState = 0
+        if (cIsatty(1) != 0) {
+            ttyState = 1
+        }
+    }
+    return ttyState == 1
+}
+
+/** Adds `n` bytes at `p` to standard output. */
+pub unsafe fun writeOut(p: int, n: int) {
+    lock(outLockAddr())
+    if (outLen + n > outCap) {
+        var cap = outCap * 2 + 4096
+        if (cap < outLen + n) {
+            cap = outLen + n
+        }
+        outBuf = grow(outBuf, cap)
+        outCap = cap
+    }
+    cMemcpy(outBuf + outLen, p, n)
+    outLen += n
+    var nl = false
+    if (isTty()) {
+        for i in 0..n {
+            if (ld8(p + i) == 10) {
+                nl = true
+                break
+            }
+        }
+    }
+    if (outLen > 65536 || nl) {
+        flushLocked()
+    }
+    unlock(outLockAddr())
+}
+
+unsafe fun flushLocked() {
+    if (outLen == 0) {
+        return
+    }
+    if (capturing) {
+        if (captureLen + outLen > captureCap) {
+            var cap = captureCap * 2 + outLen + 4096
+            captureBuf = grow(captureBuf, cap)
+            captureCap = cap
+        }
+        cMemcpy(captureBuf + captureLen, outBuf, outLen)
+        captureLen += outLen
+    } else {
+        writeAll(1, outBuf, outLen)
+    }
+    outLen = 0
+}
+
+/** Writes everything buffered for standard output. */
+pub unsafe fun flush() {
+    lock(outLockAddr())
+    flushLocked()
+    unlock(outLockAddr())
+}
+
+/** Writes what is buffered for standard output from a signal handler, unless another thread is writing it. */
+pub unsafe fun flushForSignal() {
+    if (outLock == 0 || !compareSwap64(outLock, 0, 1)) {
+        return
+    }
+    if (outLen > 0 && !capturing) {
+        writeAll(1, outBuf, outLen)
+        outLen = 0
+    }
+    unlock(outLock)
+}
+
+/** Sends standard output to a buffer instead, until `takeCapture`, for bvm's in-process runs. */
+pub unsafe fun startCapture() {
+    flush()
+    capturing = true
+    captureLen = 0
+}
+
+/** The output since `startCapture`, as a new string object; standard output goes to the terminal again. */
+pub unsafe fun takeCapture(): int {
+    flush()
+    capturing = false
+    var s = strNew(captureBuf, captureLen)
+    captureLen = 0
+    return s
+}
+
+/** Writes `n` bytes at `p` to standard error, after flushing standard output. */
+pub unsafe fun writeErrBytes(p: int, n: int) {
+    flush()
+    writeAll(2, p, n)
+}
+
+pub unsafe fun writeErrText(s: string) {
+    var t = s
+    writeErrBytes(__addr(t) + STR_BYTES, ld64(__addr(t) + STR_LEN))
+}
+
+/** Stops the program with the runtime error `msg` at the source location with index `loc` (-1 for none). */
+pub unsafe fun fatalError(msg: string, loc: int) {
+    flush()
+    writeErrText(formatError(msg, loc) + "\n")
+    cExit(1)
+}
+
+/** The number after `key` in `msg`, like `number_after`, or -1. */
+fun numberAfter(msg: string, key: string): int {
+    var i = indexOf(msg, key)
+    if (i < 0) {
+        return -1
+    }
+    var rest = substring(msg, i + len(key), len(msg))
+    var digits = ""
+    for c in chars(rest) {
+        if (c < "0" || c > "9") {
+            break
+        }
+        digits += c
+    }
+    if (digits == "") {
+        return -1
+    }
+    return toInt(digits)
+}
+
+/** The values a number type holds, or "". */
+fun rangeHelp(name: string): string {
+    var r = match name {
+        "int" => "-9223372036854775808 to 9223372036854775807"
+        "int8" => "-128 to 127"
+        "uint8" => "0 to 255"
+        "int16" => "-32768 to 32767"
+        "uint16" => "0 to 65535"
+        "int32" => "-2147483648 to 2147483647"
+        "uint32" => "0 to 4294967295"
+        "uint64" => "0 to 18446744073709551615"
+        else => ""
+    }
+    if (r == "") {
+        return ""
+    }
+    return "${name} holds values from ${r}"
+}
+
+fun lastWord(s: string): string {
+    var parts = split(s, " ")
+    return parts[len(parts) - 1]
+}
+
+/** What to do about a runtime error, like `error_help`, or "". */
+fun errorHelp(msg: string): string {
+    if (startsWith(msg, "integer overflow: ")) {
+        var r = rangeHelp(lastWord(msg))
+        if (r == "") {
+            return ""
+        }
+        return "${r}; use a wider type, or `wrappingAdd`, `wrappingSub` and `wrappingMul` to wrap around"
+    }
+    if (startsWith(msg, "cannot convert ") && !startsWith(msg, "cannot convert \"")) {
+        var r = rangeHelp(lastWord(msg))
+        if (r != "") {
+            return "${r}; check the value before converting it with `as`"
+        }
+    }
+    if (startsWith(msg, "index ") || startsWith(msg, "string index ")) {
+        var n = numberAfter(msg, "(length ")
+        if (n < 0) {
+            return ""
+        }
+        if (n == 0) {
+            return "it is empty, so there is nothing to read; check `len(...) > 0` first"
+        }
+        return "valid indexes go from 0 to ${n - 1}; check the index against `len(...)` first"
+    }
+    if (msg == "integer overflow") {
+        return "the result does not fit in `int` (-9223372036854775808 to 9223372036854775807); use `float` for larger numbers"
+    }
+    if (startsWith(msg, "cannot shift by ")) {
+        return "the shift amount must be from 0 to 63"
+    }
+    if (msg == "division by zero") {
+        return "check that the divisor is not 0 before dividing"
+    }
+    if (msg == "unexpected null value") {
+        return "the value was null; check it with `if (x != null)` instead of using `!!`"
+    }
+    if (msg == "cannot index null") {
+        return "the value was null; check it with `if (x != null)` before indexing"
+    }
+    if (startsWith(msg, "key ") && endsWith(msg, " not found in map")) {
+        return "check the key with `has(map, key)` first, or pass a default: `get(map, key, fallback)`"
+    }
+    if (msg == "pop from empty array") {
+        return "check `len(items) > 0` before calling `pop`"
+    }
+    if (startsWith(msg, "cannot convert ")) {
+        return "the text is not a number; check it first or handle the bad input"
+    }
+    if (startsWith(msg, "cannot cast value")) {
+        return "check the type with `is` before casting with `as`"
+    }
+    if (msg == "this object was destroyed and can no longer be used") {
+        return "another variable or function destroyed this object; do not use it after `destroy`"
+    }
+    if (msg == "this object was already destroyed") {
+        return "each object can be destroyed only once"
+    }
+    if (msg == "function ended without returning a value") {
+        return "make sure every path through the function ends with `return`"
+    }
+    if (startsWith(msg, "out of memory")) {
+        return "the limit keeps the computer responsive; it is 3/4 of the memory by default, set BURN_MAX_HEAP_MB to change it (0 turns it off)"
+    }
+    if (startsWith(msg, "stack overflow")) {
+        return "a function probably calls itself without ever stopping; check its base case"
+    }
+    return ""
+}
+
+fun spaces(n: int): string {
+    var out = ""
+    for i in 0..n {
+        out += " "
+    }
+    return out
+}
+
+/** The text of line `line` of the file at `path`, as an array with that one line, or an empty array. */
+unsafe fun sourceLine(path: string, line: int): [string] {
+    [string] none = []
+    var text = readTextFile(path)
+    if (len(text) == 0 || line < 1) {
+        return none
+    }
+    var lines = split(text[0], "\n")
+    if (line > len(lines)) {
+        return none
+    }
+    var l = lines[line - 1]
+    while (endsWith(l, "\r")) {
+        l = substring(l, 0, len(l) - 1)
+    }
+    return [l]
+}
+
+/** A runtime error with the source line it happened at and a hint, like `format_error`. */
+pub unsafe fun formatError(msg: string, loc: int): string {
+    var out = "runtime error: ${msg}"
+    var help = errorHelp(msg)
+    var l = location(loc)
+    if (l == "") {
+        if (help != "") {
+            out += "\n  = help: ${help}"
+        }
+        return out
+    }
+    var parts = split(l, ":")
+    var n = len(parts)
+    [string] found = []
+    var line = 0
+    var col = 0
+    if (n >= 3 && isInt(parts[n - 1]) && isInt(parts[n - 2])) {
+        col = toInt(parts[n - 1])
+        line = toInt(parts[n - 2])
+        var file = join(slice(parts, 0, n - 2), ":")
+        found = sourceLine(file, line)
+    }
+    if (len(found) == 0) {
+        out += "\n --> ${l}"
+        if (help != "") {
+            out += "\n  = help: ${help}"
+        }
+        return out
+    }
+    var text = found[0]
+    var w = len("${line}")
+    var pad = ""
+    var k = 0
+    for c in chars(text) {
+        if (k >= col - 1) {
+            break
+        }
+        if (c == "\t") {
+            pad += "\t"
+        } else {
+            pad += " "
+        }
+        k += 1
+    }
+    out += "\n${spaces(w)}--> ${l}\n${spaces(w)} |\n${line} | ${text}\n${spaces(w)} | ${pad}^"
+    if (help != "") {
+        out += "\n${spaces(w)} = help: ${help}"
+    }
+    return out
+}
+
+@Extern("open")
+fun cOpen(path: int, flags: int): Int32
+
+@Extern("close")
+fun cClose(fd: int): Int32
+
+/** The contents of the file at `path` in an array, or an empty array when it cannot be read. */
+pub unsafe fun readTextFile(path: string): [string] {
+    [string] out = []
+    var b = readFileBytes(path)
+    if (b == 0) {
+        return out
+    }
+    var s = __str(b)
+    release(b)
+    out.push(s)
+    return out
+}
+
+/** The contents of the file at `path` as a new string object (bytes as they are), or 0 when it cannot be read. */
+pub unsafe fun readFileBytes(path: string): int {
+    var p = path
+    var c = cString(__addr(p) + STR_BYTES, ld64(__addr(p) + STR_LEN))
+    var fd = cOpen(c, 0)
+    readError = errno()
+    cFree(c)
+    if (fd < 0) {
+        return 0
+    }
+    var cap = 65536
+    var buf = zalloc(cap)
+    var n = 0
+    while (true) {
+        if (n == cap) {
+            cap *= 2
+            buf = grow(buf, cap)
+        }
+        var r = cRead(fd, buf + n, cap - n)
+        if (r < 0 && errno() == 4) {
+            continue
+        }
+        if (r <= 0) {
+            if (r < 0) {
+                readError = errno()
+                cClose(fd)
+                cFree(buf)
+                return 0
+            }
+            break
+        }
+        n += r
+    }
+    cClose(fd)
+    var s = strNew(buf, n)
+    cFree(buf)
+    return s
+}
+
+/** The error number of the last `readFileBytes` that failed. */
+pub unsafe fun lastReadError(): int {
+    return readError
+}
+
+/** The environment the program started with, as a C array of `NAME=value` strings ending in 0. */
+pub unsafe fun environment(): int {
+    if (envBlock == 0) {
+        envBlock = zalloc(8)
+    }
+    return envBlock
+}
+
+/** Keeps the program's arguments (without the program name), from `argc` and `argv`. */
+pub unsafe fun setArgs(argc: int, argv: int) {
+    if (argv != 0) {
+        envBlock = argv + 8 * (argc + 1)
+    }
+    var a = stringArray()
+    for i in 1..argc {
+        var p = ld64(argv + 8 * i)
+        if (p != 0) {
+            arrayPush(a, strNew(p, cStrlen(p)))
+        }
+    }
+    if (argList != 0) {
+        release(argList)
+    }
+    argList = a
+}
+
+/** Replaces the program's arguments with the `[string]` array `a`, for bvm. */
+pub unsafe fun setArgList(a: int) {
+    retain(a)
+    if (argList != 0) {
+        release(argList)
+    }
+    argList = a
+}
+
+/** A new `[string]` array with the program's arguments. */
+pub unsafe fun argsArray(): int {
+    var out = stringArray()
+    if (argList != 0) {
+        for i in 0..arrayLen(argList) {
+            arrayPush(out, retain(arrayAt(argList, i)))
+        }
+    }
+    return out
+}

@@ -1097,6 +1097,18 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
 
     /** Loads and stores of raw memory (`Memory.load8` … `Memory.storeFloat`) as single instructions, without calling the runtime. */
     fun inlineMem(f: string, args: [HExpr]): bool {
+        if (f == "CFun") {
+            var k0 = args[0].kind
+            var name = ""
+            if (k0 is HKind.Int && k0.value >= 0 && k0.value < len(p.funcs)) {
+                name = cExport(p.funcs[k0.value]) ?? ""
+            }
+            if (name == "") {
+                return false
+            }
+            e("lea rax, [rip + ${sym(name)}]")
+            return true
+        }
         if (f != "Mem") {
             return false
         }

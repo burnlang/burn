@@ -1,0 +1,649 @@
+/**
+ * Files, directories, the environment, other programs and the local time, like the file and process parts of
+ * `api.rs`.
+ */
+import "fmt.bn"
+import "heap.bn"
+import "io.bn"
+import "meta.bn"
+import "sys.bn"
+import "text.bn"
+
+@Extern("strerror")
+fun cStrerror(code: int): int
+
+@Extern("fopen")
+fun cFopen(path: int, mode: int): int
+
+@Extern("fwrite")
+fun cFwrite(p: int, size: int, n: int, f: int): int
+
+@Extern("fclose")
+fun cFclose(f: int): Int32
+
+@Extern("stat")
+fun cStat(path: int, out: int): Int32
+
+@Extern("lstat")
+fun cLstat(path: int, out: int): Int32
+
+@Extern("chmod")
+fun cChmod(path: int, mode: int): Int32
+
+@Extern("mkdir")
+fun cMkdir(path: int, mode: int): Int32
+
+@Extern("rmdir")
+fun cRmdir(path: int): Int32
+
+@Extern("unlink")
+fun cUnlink(path: int): Int32
+
+@Extern("rename")
+fun cRename(from: int, to: int): Int32
+
+@Extern("chdir")
+fun cChdir(path: int): Int32
+
+@Extern("getcwd")
+fun cGetcwd(buf: int, size: int): int
+
+@Extern("opendir")
+fun cOpendir(path: int): int
+
+@Extern("readdir")
+fun cReaddir(dir: int): int
+
+@Extern("closedir")
+fun cClosedir(dir: int): Int32
+
+@Extern("localtime_r")
+fun cLocaltime(t: int, out: int): int
+
+@Extern("pipe2", macos: "pipe")
+fun cPipe(fds: int, flags: int): Int32
+
+@Extern("close")
+fun cCloseFd(fd: int): Int32
+
+@Extern("poll")
+fun cPoll(fds: int, n: int, timeout: int): Int32
+
+@Extern("waitpid")
+fun cWaitpid(pid: int, status: int, options: int): Int32
+
+@Extern("posix_spawnp")
+fun cSpawnp(pid: int, file: int, actions: int, attr: int, argv: int, envp: int): Int32
+
+@Extern("posix_spawn_file_actions_init")
+fun cActionsInit(fa: int): Int32
+
+@Extern("posix_spawn_file_actions_destroy")
+fun cActionsDestroy(fa: int): Int32
+
+@Extern("posix_spawn_file_actions_adddup2")
+fun cActionsDup2(fa: int, fd: int, to: int): Int32
+
+@Extern("posix_spawn_file_actions_addclose")
+fun cActionsClose(fa: int, fd: int): Int32
+
+@Extern("posix_spawn_file_actions_addopen")
+fun cActionsOpen(fa: int, fd: int, path: int, flags: int, mode: int): Int32
+
+const S_IFMT = 61440
+const S_IFDIR = 16384
+const S_IFREG = 32768
+const S_IFLNK = 40960
+
+/** An error number as Rust's `io::Error` shows it, like `No such file or directory (os error 2)`. */
+pub unsafe fun osError(code: int): string {
+    var p = cStrerror(code)
+    return "${rawText(p, cStrlen(p))} (os error ${code})"
+}
+
+/** The C string inside string object `s`; Burn strings end in a zero byte already. */
+unsafe fun cPath(s: int): int {
+    return s + STR_BYTES
+}
+
+/** The type bits of a file's mode, from `stat` (or `lstat` when `link`), or -1 when it does not exist. */
+unsafe fun fileMode(path: int, link: bool): int {
+    var buf = zalloc(256)
+    var r = 0
+    if (link) {
+        r = cLstat(path, buf)
+    } else {
+        r = cStat(path, buf)
+    }
+    var mode = -1
+    if (r == 0) {
+        if (isMacos()) {
+            mode = ld16(buf + 4)
+        } else if (isArm64()) {
+            mode = ld32(buf + 16)
+        } else {
+            mode = ld32(buf + 24)
+        }
+    }
+    cFree(buf)
+    return mode
+}
+
+unsafe fun isDirPath(path: int): bool {
+    var m = fileMode(path, false)
+    return m >= 0 && (m & S_IFMT) == S_IFDIR
+}
+
+unsafe fun boolInt(b: bool): int {
+    if (b) {
+        return 1
+    }
+    return 0
+}
+
+@Extern("burn_read_file")
+pub unsafe fun readFile(path: int, loc: int): int {
+    var b = readFileBytes(textOf(path))
+    if (b == 0) {
+        fatalError("cannot read file \"${textOf(path)}\": ${osError(lastReadError())}", loc)
+    }
+    if (validUtf8(b + STR_BYTES, ld64(b + STR_LEN))) {
+        return b
+    }
+    var s = lossyText(b + STR_BYTES, ld64(b + STR_LEN))
+    release(b)
+    return s
+}
+
+unsafe fun writeBytes(path: int, content: int, mode: string): bool {
+    var m = mode
+    var f = cFopen(cPath(path), __addr(m) + STR_BYTES)
+    if (f == 0) {
+        return false
+    }
+    var n = ld64(content + STR_LEN)
+    var ok = true
+    if (n > 0) {
+        ok = cFwrite(content + STR_BYTES, 1, n, f) == n
+    }
+    if (cFclose(f) != 0) {
+        ok = false
+    }
+    return ok
+}
+
+@Extern("burn_write_file")
+pub unsafe fun writeFile(path: int, content: int): int {
+    return boolInt(writeBytes(path, content, "w"))
+}
+
+@Extern("burn_append_file")
+pub unsafe fun appendFile(path: int, content: int): int {
+    return boolInt(writeBytes(path, content, "a"))
+}
+
+@Extern("burn_file_exists")
+pub unsafe fun fileExists(path: int): int {
+    return boolInt(fileMode(cPath(path), false) >= 0)
+}
+
+@Extern("burn_env")
+pub unsafe fun envVar(name: int): int {
+    var p = cGetenv(cPath(name))
+    if (p == 0) {
+        return strNew(0, 0)
+    }
+    return lossyText(p, cStrlen(p))
+}
+
+/** The directory that contains `path`, like Rust's `Path::parent`, or [] for a root or an empty path. */
+fun parentOf(path: string): [string] {
+    [string] none = []
+    var p = path
+    while (len(p) > 1 && endsWith(p, "/")) {
+        p = substring(p, 0, len(p) - 1)
+    }
+    if (p == "" || p == "/") {
+        return none
+    }
+    var i = len(p) - 1
+    while (i >= 0 && charAt(p, i) != "/") {
+        i -= 1
+    }
+    if (i < 0) {
+        return [""]
+    }
+    var parent = substring(p, 0, i)
+    while (len(parent) > 1 && endsWith(parent, "/")) {
+        parent = substring(parent, 0, len(parent) - 1)
+    }
+    if (parent == "" && startsWith(p, "/")) {
+        return ["/"]
+    }
+    return [parent]
+}
+
+unsafe fun cText(s: string): int {
+    var t = s
+    return cString(__addr(t) + STR_BYTES, ld64(__addr(t) + STR_LEN))
+}
+
+/** Creates the directory `path` and the ones above it that are missing, like `create_dir_all`. */
+unsafe fun makeDirs(path: string): bool {
+    if (path == "") {
+        return true
+    }
+    var c = cText(path)
+    if (cMkdir(c, 511) == 0) {
+        cFree(c)
+        return true
+    }
+    var e = errno()
+    if (e != 2) {
+        var ok = isDirPath(c)
+        cFree(c)
+        return ok
+    }
+    var parent = parentOf(path)
+    if (len(parent) == 0 || !makeDirs(parent[0])) {
+        cFree(c)
+        return false
+    }
+    var ok = cMkdir(c, 511) == 0 || isDirPath(c)
+    cFree(c)
+    return ok
+}
+
+/** Removes the directory `path` and everything in it. */
+unsafe fun removeTree(path: string): bool {
+    for name in dirNames(path) {
+        var child = path + "/" + name
+        var c = cText(child)
+        var m = fileMode(c, true)
+        var ok = true
+        if (m >= 0 && (m & S_IFMT) == S_IFDIR) {
+            ok = removeTree(child)
+        } else {
+            ok = cUnlink(c) == 0
+        }
+        cFree(c)
+        if (!ok) {
+            return false
+        }
+    }
+    var c = cText(path)
+    var ok = cRmdir(c) == 0
+    cFree(c)
+    return ok
+}
+
+unsafe fun copyFile(from: int, to: int): bool {
+    var m = fileMode(cPath(from), false)
+    if (m < 0 || (m & S_IFMT) != S_IFREG) {
+        return false
+    }
+    var b = readFileBytes(textOf(from))
+    if (b == 0) {
+        return false
+    }
+    var ok = writeBytes(to, b, "w")
+    release(b)
+    if (ok) {
+        var buf = zalloc(256)
+        if (cStat(cPath(from), buf) == 0) {
+            var mode = 0
+            if (isMacos()) {
+                mode = ld16(buf + 4)
+            } else if (isArm64()) {
+                mode = ld32(buf + 16)
+            } else {
+                mode = ld32(buf + 24)
+            }
+            cChmod(cPath(to), mode & 4095)
+        }
+        cFree(buf)
+    }
+    return ok
+}
+
+@Extern("burn_fs_op")
+pub unsafe fun fsOp(op: int, a: int, c: int): int {
+    var name = textOf(op)
+    var pa = cPath(a)
+    if (name == "mkdir") {
+        return boolInt(makeDirs(textOf(a)))
+    }
+    if (name == "remove") {
+        var m = fileMode(pa, true)
+        var ok = false
+        if (m >= 0 && (m & S_IFMT) == S_IFDIR) {
+            ok = removeTree(textOf(a))
+        } else {
+            ok = cUnlink(pa) == 0
+        }
+        return boolInt(ok || fileMode(pa, true) < 0)
+    }
+    if (name == "rename") {
+        return boolInt(cRename(pa, cPath(c)) == 0)
+    }
+    if (name == "copy") {
+        return boolInt(copyFile(a, c))
+    }
+    if (name == "isDir") {
+        return boolInt(isDirPath(pa))
+    }
+    if (name == "isFile") {
+        var m = fileMode(pa, false)
+        return boolInt(m >= 0 && (m & S_IFMT) == S_IFREG)
+    }
+    if (name == "chdir") {
+        return boolInt(cChdir(pa) == 0)
+    }
+    return 0
+}
+
+/** The names in directory `path` except `.` and `..`, in no order. */
+unsafe fun dirNames(path: string): [string] {
+    [string] out = []
+    var c = cText(path)
+    var d = cOpendir(c)
+    cFree(c)
+    if (d == 0) {
+        return out
+    }
+    var off = 19
+    if (isMacos()) {
+        off = 21
+    }
+    while (true) {
+        var e = cReaddir(d)
+        if (e == 0) {
+            break
+        }
+        var p = e + off
+        var n = cStrlen(p)
+        var s = lossyText(p, n)
+        var name = __str(s)
+        release(s)
+        if (name != "." && name != "..") {
+            out.push(name)
+        }
+    }
+    cClosedir(d)
+    return out
+}
+
+@Extern("burn_list_dir")
+pub unsafe fun listDir(path: int): int {
+    var names = dirNames(textOf(path))
+    var a = arrayNew(TID_ARR_STR, 0)
+    sort(names)
+    for n in names {
+        var t = n
+        arrayPush(a, retain(__addr(t)))
+    }
+    return a
+}
+
+@Extern("burn_cwd")
+pub unsafe fun cwd(): int {
+    var size = 4096
+    while (true) {
+        var buf = zalloc(size)
+        if (cGetcwd(buf, size) != 0) {
+            var s = lossyText(buf, cStrlen(buf))
+            cFree(buf)
+            return s
+        }
+        cFree(buf)
+        if (errno() != 34) {
+            return strNew(0, 0)
+        }
+        size *= 2
+    }
+}
+
+@Extern("burn_local_time")
+pub unsafe fun localTime(): int {
+    var ts = zalloc(16)
+    var tm = zalloc(64)
+    var ns = clockWall()
+    st64(ts, ns / 1000000000)
+    var ms = (ns % 1000000000) / 1000000
+    var a = arrayNew(TID_ARR_INT, 0)
+    if (cLocaltime(ts, tm) != 0) {
+        arrayPush(a, ld32s(tm + 20) + 1900)
+        arrayPush(a, ld32s(tm + 16) + 1)
+        arrayPush(a, ld32s(tm + 12))
+        arrayPush(a, ld32s(tm + 8))
+        arrayPush(a, ld32s(tm + 4))
+        arrayPush(a, ld32s(tm))
+        arrayPush(a, ms)
+        arrayPush(a, ld32s(tm + 24))
+        arrayPush(a, ld64(tm + 40))
+    } else {
+        var secs = ld64(ts)
+        var days = secs / 86400
+        var rem = secs % 86400
+        var z = days + 719468
+        var era = z / 146097
+        var doe = z - era * 146097
+        var yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+        var y = yoe + era * 400
+        var doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+        var mp = (5 * doy + 2) / 153
+        var d = doy - (153 * mp + 2) / 5 + 1
+        var m = mp - 9
+        if (mp < 10) {
+            m = mp + 3
+        }
+        if (m <= 2) {
+            y += 1
+        }
+        arrayPush(a, y)
+        arrayPush(a, m)
+        arrayPush(a, d)
+        arrayPush(a, rem / 3600)
+        arrayPush(a, (rem % 3600) / 60)
+        arrayPush(a, rem % 60)
+        arrayPush(a, ms)
+        arrayPush(a, (days + 4) % 7)
+        arrayPush(a, 0)
+    }
+    cFree(ts)
+    cFree(tm)
+    return a
+}
+
+@Extern("clock_gettime")
+fun cClock(clock: int, ts: int): Int32
+
+unsafe fun clockWall(): int {
+    var ts = zalloc(16)
+    cClock(0, ts)
+    var ns = ld64(ts) * 1000000000 + ld64(ts + 8)
+    cFree(ts)
+    return ns
+}
+
+const R_CODE = 0
+const R_OUT = 8
+const R_ERR = 16
+const R_FAIL = 24
+
+/**
+ * Runs `program` with the `[string]` array `args` and waits for it. With `capture`, its output and errors are kept
+ * and its input is the `n` bytes at `input` (nothing when `input` is 0). The result is a block with the exit code,
+ * the output and error string objects, and the error number when the program could not be started.
+ */
+pub unsafe fun runProcess(program: int, args: int, capture: bool, input: int, n: int): int {
+    var res = zalloc(32)
+    var argc = arrayLen(args)
+    var argv = zalloc(8 * argc + 16)
+    st64(argv, cPath(program))
+    for i in 0..argc {
+        st64(argv + 8 + 8 * i, cPath(arrayAt(args, i)))
+    }
+    var fa = zalloc(256)
+    cActionsInit(fa)
+    var fds = zalloc(32)
+    var cloexec = 524288
+    if (capture) {
+        cPipe(fds, cloexec)
+        cPipe(fds + 8, cloexec)
+        cPipe(fds + 16, cloexec)
+        cActionsDup2(fa, ld32s(fds + 16), 0)
+        cActionsDup2(fa, ld32s(fds + 4), 1)
+        cActionsDup2(fa, ld32s(fds + 12), 2)
+        for i in 0..6 {
+            cActionsClose(fa, ld32s(fds + 4 * i))
+        }
+        if (input == 0) {
+            var devnull = "/dev/null"
+            cActionsOpen(fa, 0, __addr(devnull) + STR_BYTES, 0, 0)
+        }
+    } else {
+        flush()
+    }
+    var pid = zalloc(8)
+    var r = cSpawnp(pid, cPath(program), fa, 0, argv, environment())
+    cActionsDestroy(fa)
+    cFree(fa)
+    cFree(argv)
+    if (capture) {
+        cCloseFd(ld32s(fds + 4))
+        cCloseFd(ld32s(fds + 12))
+        cCloseFd(ld32s(fds + 16))
+    }
+    if (r != 0) {
+        if (capture) {
+            cCloseFd(ld32s(fds))
+            cCloseFd(ld32s(fds + 8))
+            cCloseFd(ld32s(fds + 20))
+        }
+        cFree(fds)
+        cFree(pid)
+        st64(res + R_FAIL, r)
+        st64(res + R_OUT, strNew(0, 0))
+        st64(res + R_ERR, strNew(0, 0))
+        return res
+    }
+    if (capture) {
+        var w = ld32s(fds + 20)
+        if (input != 0) {
+            writeAll(w, input, n)
+        }
+        cCloseFd(w)
+        var outB = bufNew()
+        var errB = bufNew()
+        var pfd = zalloc(16)
+        st32(pfd, ld32(fds))
+        st16(pfd + 4, 1)
+        st32(pfd + 8, ld32(fds + 8))
+        st16(pfd + 12, 1)
+        var chunk = zalloc(65536)
+        var open = 2
+        while (open > 0) {
+            st16(pfd + 6, 0)
+            st16(pfd + 14, 0)
+            if (cPoll(pfd, 2, -1) < 0) {
+                if (errno() == 4) {
+                    continue
+                }
+                break
+            }
+            for k in 0..2 {
+                var e = pfd + 8 * k
+                if (ld32s(e) >= 0 && ld16(e + 6) != 0) {
+                    var got = cRead(ld32s(e), chunk, 65536)
+                    if (got > 0) {
+                        if (k == 0) {
+                            bufAdd(outB, chunk, got)
+                        } else {
+                            bufAdd(errB, chunk, got)
+                        }
+                    } else if (got == 0 || errno() != 4) {
+                        cCloseFd(ld32s(e))
+                        st32(e, 4294967295)
+                        open -= 1
+                    }
+                }
+            }
+        }
+        for k in 0..2 {
+            if (ld32s(pfd + 8 * k) >= 0) {
+                cCloseFd(ld32s(pfd + 8 * k))
+            }
+        }
+        cFree(chunk)
+        cFree(pfd)
+        st64(res + R_OUT, lossyText(ld64(outB), ld64(outB + 8)))
+        st64(res + R_ERR, lossyText(ld64(errB), ld64(errB + 8)))
+        cFree(ld64(outB))
+        cFree(outB)
+        cFree(ld64(errB))
+        cFree(errB)
+    } else {
+        st64(res + R_OUT, strNew(0, 0))
+        st64(res + R_ERR, strNew(0, 0))
+    }
+    var status = zalloc(8)
+    while (cWaitpid(ld32s(pid), status, 0) < 0 && errno() == 4) {
+    }
+    var s = ld32(status)
+    var code = 1
+    if ((s & 127) == 0) {
+        code = (s >> 8) & 255
+    }
+    st64(res + R_CODE, code)
+    cFree(status)
+    cFree(pid)
+    cFree(fds)
+    return res
+}
+
+pub unsafe fun processCode(res: int): int {
+    return ld64(res + R_CODE)
+}
+
+pub unsafe fun processFailure(res: int): int {
+    return ld64(res + R_FAIL)
+}
+
+/** The output of the finished process `res` as a new string object. */
+pub unsafe fun processOutput(res: int): int {
+    return retain(ld64(res + R_OUT))
+}
+
+/** The error output of the finished process `res` as a new string object. */
+pub unsafe fun processErrors(res: int): int {
+    return retain(ld64(res + R_ERR))
+}
+
+pub unsafe fun processFree(res: int) {
+    release(ld64(res + R_OUT))
+    release(ld64(res + R_ERR))
+    cFree(res)
+}
+
+unsafe fun textObj(s: string): int {
+    var t = s
+    return retain(__addr(t))
+}
+
+@Extern("burn_exec")
+pub unsafe fun exec(program: int, args: int, capture: int): int {
+    var res = runProcess(program, args, capture != 0, 0, 0)
+    var out = stringArray()
+    if (processFailure(res) != 0) {
+        arrayPush(out, textObj("-1"))
+        arrayPush(out, strNew(0, 0))
+        arrayPush(out, textObj(osError(processFailure(res))))
+    } else {
+        arrayPush(out, textObj("${processCode(res)}"))
+        arrayPush(out, processOutput(res))
+        arrayPush(out, processErrors(res))
+    }
+    processFree(res)
+    return out
+}
