@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Import aliases: `import "std/memory" as Mem` loads a module without bringing its names into the file; they are used through the alias instead, as `Mem.Memory.alloc(16)`, in expressions, types (`Geo.Vec2 v`, `[Geo.Vec2]`), `new Geo.Point()`, struct literals, enum variants and `match` patterns (`Tok.Token.Word(w)`), generic types (`new C.Stack<int>()`) and the functions of the standard library (`M.sqrt(2.0)`). Aliases work in import lists too (`import ( "std/math" as M, "utils" )`), and two aliases for the same module are fine. Errors name the module behind an alias and suggest close names (`` `M` (the module `std/math`) has no public name `sqrtt` ``), a name used without the alias it needs gets `did you mean `Mem.Memory`?`, and an alias may not reuse a name the file declares or name two modules. The language server completes the names of a module after `Alias.` and the members after `Alias.Type.`, and hover and go to definition work through aliases.
+
 ## 26.1.0-experimental-5
 
 Low-level code: `unsafe` blocks and functions, inline assembly for every target and raw memory. Native executables for arm64, and Burn builds itself without a released Burn.

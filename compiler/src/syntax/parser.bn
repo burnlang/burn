@@ -208,6 +208,45 @@ def struct Parser(toks: [Token]) {
     bool noStruct = false
     bool hasDestroy = false
     [int] splits = []
+    {string: bool} aliases = {}
+
+    fun scanAliases() {
+        var i = 0
+        var inImport = false
+        while (i + 2 < len(toks)) {
+            var k = toks[i].kind
+            if (k == Kind.Import) {
+                inImport = true
+            } else if (k != Kind.Str && k != Kind.As && k != Kind.Ident && k != Kind.LParen && k != Kind.Comma && k != Kind.Semi) {
+                inImport = false
+            }
+            if (inImport && k == Kind.Str && toks[i + 1].kind == Kind.As && toks[i + 2].kind == Kind.Ident) {
+                aliases[toks[i + 2].text] = true
+                i += 3
+                continue
+            }
+            if (k == Kind.RParen) {
+                inImport = false
+            }
+            i += 1
+        }
+    }
+
+    fun isAlias(name: string): bool {
+        return has(aliases, name)
+    }
+
+    fun qualified(first: Token): Ident {
+        var name = first.text
+        var span = spanOf(first)
+        if (isAlias(name) && at(Kind.Dot) && peekAt(1).kind == Kind.Ident) {
+            advance()
+            var v = advance()
+            name = "${name}.${v.text}"
+            span = join(span, spanOf(v))
+        }
+        return Ident { name: name, span: span }
+    }
 
     fun last(): int {
         return len(toks) - 1
@@ -633,13 +672,26 @@ def struct Parser(toks: [Token]) {
         return peekAt(i).kind == Kind.Fun && peekAt(i + 1).kind == Kind.LParen
     }
 
+    fun importAlias(): Ident? {
+        if (!at(Kind.As)) {
+            return null
+        }
+        advance()
+        return ident("a name for the module after `as`")
+    }
+
     fun importList(): [ImportPath]? {
         [ImportPath] out = []
         if (eat(Kind.LParen)) {
             while (!at(Kind.RParen) && !at(Kind.Eof)) {
                 var t = advance()
                 if (t.kind == Kind.Str) {
-                    out.push(ImportPath { path: t.text, span: spanOf(t) })
+                    var asAt = at(Kind.As)
+                    var alias = importAlias()
+                    if (asAt && alias == null) {
+                        return null
+                    }
+                    out.push(ImportPath { path: t.text, span: spanOf(t), alias: alias })
                 } else if (t.kind != Kind.Comma && t.kind != Kind.Semi) {
                     err(spanOf(t), "expected import path string but found ${describe(t)}")
                     return null
@@ -654,7 +706,12 @@ def struct Parser(toks: [Token]) {
                 err(spanOf(t), "expected import path string but found ${describe(t)}")
                 return null
             }
-            out.push(ImportPath { path: t.text, span: spanOf(t) })
+            var asAt = at(Kind.As)
+            var alias = importAlias()
+            if (asAt && alias == null) {
+                return null
+            }
+            out.push(ImportPath { path: t.text, span: spanOf(t), alias: alias })
         }
         endStmt()
         return out
@@ -1264,7 +1321,7 @@ def struct Parser(toks: [Token]) {
         TypeExpr? t = null
         if (first.kind == Kind.Ident) {
             advance()
-            var name = first.text
+            var name = qualified(first).name
             if (at(Kind.Dot) && !peek().nl) {
                 var v = peekAt(1)
                 if (v.kind == Kind.Ident && startsUpper(v.text) && startsUpper(name)) {
@@ -1420,7 +1477,7 @@ def struct Parser(toks: [Token]) {
                 return !n.nl
             }
             var third = peekAt(2)
-            var dotted = n.kind == Kind.Dot && startsUpper(t.text) && third.kind == Kind.Ident && startsUpper(third.text)
+            var dotted = n.kind == Kind.Dot && third.kind == Kind.Ident && ((startsUpper(t.text) && startsUpper(third.text)) || isAlias(t.text))
             if (!dotted && n.kind != Kind.Question && n.kind != Kind.Lt) {
                 return false
             }
@@ -2328,6 +2385,7 @@ def struct Parser(toks: [Token]) {
                 Part.Lit(text) => out.push(TplExpr.Lit(text))
                 Part.Code(tokens, start, end) => {
                     var sub = newParser(tokens)
+                    sub.aliases = aliases
                     var e = sub.expr()
                     if (e != null && !sub.at(Kind.Eof)) {
                         var t = sub.peek()
@@ -2379,10 +2437,7 @@ def struct Parser(toks: [Token]) {
             kind = ExprKind.Null
         } else if (t.kind == Kind.Ident && t.text == "new" && peekAt(1).kind == Kind.Ident && !peekAt(1).nl) {
             advance()
-            var name = ident("struct name")
-            if (name == null) {
-                return null
-            }
+            var name = qualified(advance())
             [TypeExpr] targs = []
             if (at(Kind.Lt) && !peek().nl) {
                 advance()
@@ -2413,14 +2468,16 @@ def struct Parser(toks: [Token]) {
             return matchExpr()
         } else if (t.kind == Kind.Ident) {
             advance()
+            var q = qualified(t)
+            span = q.span
             if (at(Kind.LBrace) && !noStruct && !peek().nl && braceIsStructLit()) {
                 var fields = structFields()
                 if (fields == null) {
                     return null
                 }
-                return expr(ExprKind.StructLit(ident(t.text, span), fields), join(span, prevSpan()))
+                return expr(ExprKind.StructLit(q, fields), join(span, prevSpan()))
             }
-            kind = ExprKind.Ident(t.text)
+            kind = ExprKind.Ident(q.name)
         } else if (t.kind == Kind.LParen) {
             advance()
             var saved = noStruct
@@ -2736,6 +2793,7 @@ pub def type Parsed {
 pub fun parse(src: string): Parsed {
     var lexed = lex(src)
     var p = newParser(lexed.tokens)
+    p.scanAliases()
     var items = p.items()
     [Diag] diags = []
     for d in lexed.diags {

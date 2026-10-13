@@ -974,6 +974,82 @@ fn language_server_completes_imports_and_reports_ambiguity_once() {
 }
 
 #[test]
+fn language_server_completes_names_after_an_import_alias() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let dir = temp_dir("lsp-alias");
+    std::fs::create_dir_all(dir.join("util")).unwrap();
+    std::fs::write(
+        dir.join("util/helpers.bn"),
+        "pub fun greet(): int {\n    return 1\n}\n\npriv fun hidden(): int {\n    return 2\n}\n",
+    )
+    .unwrap();
+    let main = dir.join("main.bn");
+    let uri = format!("file://{}", main.display());
+    let mut child = burn()
+        .arg("lsp")
+        .current_dir(&dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let mut send = |body: String| {
+        write!(stdin, "Content-Length: {}\r\n\r\n{}", body.len(), body).unwrap();
+        stdin.flush().unwrap();
+    };
+    let mut read = || -> String {
+        let mut len = 0usize;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if line.trim().is_empty() {
+                break;
+            }
+            if let Some(v) = line.trim().strip_prefix("Content-Length:") {
+                len = v.trim().parse().unwrap();
+            }
+        }
+        let mut buf = vec![0u8; len];
+        reader.read_exact(&mut buf).unwrap();
+        String::from_utf8(buf).unwrap()
+    };
+    send(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}"#.to_string());
+    read();
+    let text = "import \"std/math\" as M\nimport \"util/helpers\" as H\nprint(H.greet())\nprint(H.)\nprint(M.Math.)\n";
+    send(format!(
+        r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{}","languageId":"burn","version":1,"text":{:?}}}}}}}"#,
+        uri, text
+    ));
+    loop {
+        let m = read();
+        if m.contains("publishDiagnostics") && m.contains("main.bn") {
+            break;
+        }
+    }
+    let mut complete = |id: u32, line: u32, character: u32| -> String {
+        send(format!(
+            r#"{{"jsonrpc":"2.0","id":{},"method":"textDocument/completion","params":{{"textDocument":{{"uri":"{}"}},"position":{{"line":{},"character":{}}}}}}}"#,
+            id, uri, line, character
+        ));
+        loop {
+            let m = read();
+            if m.contains(&format!("\"id\":{}", id)) {
+                break m;
+            }
+        }
+    };
+    let module = complete(2, 3, 8);
+    assert!(module.contains("\"greet\""), "{}", module);
+    assert!(!module.contains("\"hidden\""), "{}", module);
+    let statics = complete(3, 4, 13);
+    assert!(statics.contains("\"gcd\""), "{}", statics);
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn apps_can_be_imported_as_bytecode_and_changed_with_mixins() {
     let dir = temp_dir("app-bytecode");
     let run = |cwd: &Path, args: &[&str]| output(burn().current_dir(cwd).env("BURN_HOME", dir.join("home")).args(args));

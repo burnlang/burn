@@ -1,0 +1,3 @@
+import "../modules/secret.bn" as S
+
+print(S.hidden())

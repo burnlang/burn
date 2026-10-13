@@ -1,0 +1,3 @@
+import "std/math" as M
+
+print(M.Math.gcd(4, 6), M.sqrtt(2.0))

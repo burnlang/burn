@@ -260,6 +260,19 @@ pub fun callExpr(c: Checker, callee: Expr, args: [Expr], span: SrcSpan, expected
     if (t != null) {
         return construct(c, t, args, span, cspan)
     }
+    var q = c.splitQualified(m, name)
+    if (q != null) {
+        var home = homeModule(q.name)
+        if (home != null && home == c.mods[q.module].stdName) {
+            var qb = builtinCall(c, q.name, null, args, span, expected)
+            if (qb != null) {
+                return qb
+            }
+        }
+        c.qualifiedMissing(m, name, cspan, false)
+        evalAll(c, args)
+        return errExpr()
+    }
     var b = builtinCall(c, name, null, args, span, expected)
     if (b != null) {
         gateBuiltin(c, name, cspan)

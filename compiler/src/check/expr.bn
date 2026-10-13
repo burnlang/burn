@@ -731,7 +731,12 @@ pub fun identExpr(c: Checker, name: string, span: SrcSpan): HExpr {
         c.error(span, "built-in function `${name}` must be called, e.g. `${name}(...)`")
     } else if (c.isPrivateElsewhere(m, name)) {
         c.error(span, "`${name}` is private to its module")
-    } else {
+    } else if (!c.qualifiedMissing(m, name, span, false)) {
+        var via = c.throughAlias(m, name)
+        if (via != null) {
+            c.errorFix(span, "cannot find `${name}` in this scope", via)
+            return errExpr()
+        }
         [string] cands = []
         if (len(c.fx) > 0) {
             for s in c.ctx().scopes {
@@ -743,7 +748,7 @@ pub fun identExpr(c: Checker, name: string, span: SrcSpan): HExpr {
         for n in keys(c.mods[m].values) {
             cands.push(n)
         }
-        for imp in c.mods[m].imports {
+        for imp in c.importsOf(m) {
             for n in keys(c.mods[imp].values) {
                 var e = c.mods[imp].values[n]
                 if (e != null && e.vis != Vis.Priv) {
@@ -1619,7 +1624,7 @@ fun visibleRecords(c: Checker): [int] {
     var m = c.curModule()
     [int] out = []
     [int] ms = [m]
-    for i in c.mods[m].imports {
+    for i in c.importsOf(m) {
         ms.push(i)
     }
     for mi in ms {

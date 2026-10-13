@@ -1,0 +1,50 @@
+import "std/memory" as Mem
+import "std/math" as M
+import "../modules/geometry.bn" as Geo
+import (
+    "../modules/tokens.bn" as Tok
+    "std/collections" as C
+    "std/list"
+)
+
+fun norm(a: Geo.Vec2): float {
+    return Geo.length(a)
+}
+
+fun describe(t: Tok.Token): string {
+    return match t {
+        Tok.Token.Word(text) => "word ${text}"
+        Tok.Token.Number(value) => "number ${value}"
+        Tok.Token.Symbol(char) => "symbol ${char}"
+        Tok.Token.End => "end"
+    }
+}
+
+var v = Geo.make(3.0, 4.0)
+Geo.Vec2 w = Geo.Vec2 { x: 1.0, y: 2.0 }
+var sum = Geo.add(v, w)
+print(Geo.length(v), sum.x, sum.y, Geo.createdCount(), Geo.helper())
+print(norm(w) > 2.0, "${Geo.length(w) > 2.0} ${M.PI > 3.0}")
+
+print(M.PI > 3.0, M.Math.gcd(12, 18), M.sqrt(16.0), M.max(2, 7), M.abs(-3))
+
+unsafe {
+    var p = Mem.Memory.alloc(8)
+    Mem.Memory.store64(p, 99)
+    print(Mem.Memory.load64(p))
+    Mem.Memory.free(p)
+}
+
+for t in Tok.tokenize("abc 42 +") {
+    print(describe(t))
+}
+print(describe(Tok.Token.End))
+
+var s = new C.Stack<int>()
+s.push(1)
+s.push(2)
+print(s.pop(), s.size())
+C.Set<string> names = C.setOf(["a", "b", "a"])
+print(names.size())
+
+print(filter([1, 2, 3, 4], fun(x: int): bool { return x % 2 == 0 }))
