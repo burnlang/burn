@@ -27,6 +27,9 @@ fun cStat(path: int, out: int): Int32
 @Extern("lstat")
 fun cLstat(path: int, out: int): Int32
 
+@Extern("dlsym")
+fun cDlsym(handle: int, name: int): int
+
 @Extern("chmod")
 fun cChmod(path: int, mode: int): Int32
 
@@ -101,6 +104,57 @@ pub unsafe fun osError(code: int): string {
     return "${rawText(p, cStrlen(p))} (os error ${code})"
 }
 
+/**
+ * The C function `name` with the 64-bit inode suffix (`stat$INODE64`) on Intel Macs, where the plain symbols use an
+ * older layout of `struct stat` and `struct dirent`; 0 everywhere else.
+ */
+unsafe fun inode64(name: string): int {
+    if (!isMacos() || isArm64()) {
+        return 0
+    }
+    var full = name + "$INODE64"
+    return cDlsym(-2, __addr(full) + STR_BYTES)
+}
+
+unsafe fun statCall(path: int, buf: int, link: bool): int {
+    var name = "stat"
+    if (link) {
+        name = "lstat"
+    }
+    var f = inode64(name)
+    if (f != 0) {
+        return callResult(callC3(f, path, buf, 0))
+    }
+    if (link) {
+        return cLstat(path, buf)
+    }
+    return cStat(path, buf)
+}
+
+unsafe fun callResult(r: int): int {
+    var cell = zalloc(8)
+    st64(cell, r)
+    var v = ld32s(cell)
+    cFree(cell)
+    return v
+}
+
+unsafe fun openDir(path: int): int {
+    var f = inode64("opendir")
+    if (f != 0) {
+        return callC3(f, path, 0, 0)
+    }
+    return cOpendir(path)
+}
+
+unsafe fun readDir(d: int): int {
+    var f = inode64("readdir")
+    if (f != 0) {
+        return callC3(f, d, 0, 0)
+    }
+    return cReaddir(d)
+}
+
 /** The C string inside string object `s`; Burn strings end in a zero byte already. */
 unsafe fun cPath(s: int): int {
     return s + STR_BYTES
@@ -109,12 +163,7 @@ unsafe fun cPath(s: int): int {
 /** The type bits of a file's mode, from `stat` (or `lstat` when `link`), or -1 when it does not exist. */
 unsafe fun fileMode(path: int, link: bool): int {
     var buf = zalloc(256)
-    var r = 0
-    if (link) {
-        r = cLstat(path, buf)
-    } else {
-        r = cStat(path, buf)
-    }
+    var r = statCall(path, buf, link)
     var mode = -1
     if (r == 0) {
         if (isMacos()) {
@@ -290,7 +339,7 @@ unsafe fun copyFile(from: int, to: int): bool {
     release(b)
     if (ok) {
         var buf = zalloc(256)
-        if (cStat(cPath(from), buf) == 0) {
+        if (statCall(cPath(from), buf, false) == 0) {
             var mode = 0
             if (isMacos()) {
                 mode = ld16(buf + 4)
@@ -346,7 +395,7 @@ pub unsafe fun fsOp(op: int, a: int, c: int): int {
 unsafe fun dirNames(path: string): [string] {
     [string] out = []
     var c = cText(path)
-    var d = cOpendir(c)
+    var d = openDir(c)
     cFree(c)
     if (d == 0) {
         return out
@@ -356,7 +405,7 @@ unsafe fun dirNames(path: string): [string] {
         off = 21
     }
     while (true) {
-        var e = cReaddir(d)
+        var e = readDir(d)
         if (e == 0) {
             break
         }

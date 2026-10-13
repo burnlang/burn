@@ -339,7 +339,7 @@ priv fun buildOne(file: string, output: string?, target: string, emitAsm: string
     }
     if (target == "runtime") {
         var out = output ?? defaultOutput(file, "s")
-        var problem = buildRuntimeLibrary(c, out)
+        var problem = buildRuntimeLibrary(c, out, libraryName(file))
         if (problem != null) {
             return fail(problem, 1)
         }

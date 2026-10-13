@@ -283,7 +283,7 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
             func(p.funcs[i])
         }
         if (p.library) {
-            cExportThunk(p.entry, p.funcs[p.entry], "burn_rtlib_init")
+            cExportThunk(p.entry, p.funcs[p.entry], libraryInit(p))
         }
         for i in 0..len(p.funcs) {
             var name = cExport(p.funcs[i])

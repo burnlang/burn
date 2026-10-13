@@ -1,4 +1,4 @@
-@Extern("burn_rtlib_init")
+@Extern("burn_library_init")
 fun libInit(): void
 
 @Extern("lib_bump")
