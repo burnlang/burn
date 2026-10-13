@@ -1,0 +1,51 @@
+import "std/math" as M
+
+fun root(x: float): float {
+    import "std/math"
+    return sqrt(x)
+}
+
+fun cube(x: int): int {
+    if (x > 0) {
+        import "std/math" as Local
+        return Local.pow(x, 3)
+    }
+    return 0
+}
+
+fun scaled(xs: [float]): [float] {
+    import (
+        "std/list"
+        "std/math"
+    )
+    return map(xs, fun(x: float): float { return floor(x * 2.5) })
+}
+
+fun shapes(): string {
+    import "../modules/geometry.bn" as Geo
+    var v = Geo.make(6.0, 8.0)
+    return "${Geo.length(v)} ${M.PI > 3.0}"
+}
+
+def struct Counter() {
+    int n = 0
+
+    fun tick(): int {
+        import "std/math"
+        n = max(n + 1, 2)
+        return n
+    }
+}
+
+print(root(49.0), cube(3), cube(-1), scaled([1.0, 2.0]))
+print(shapes())
+var c = new Counter()
+print(c.tick(), c.tick())
+if (true) {
+    import "std/strings"
+    print(padLeft("7", 3, "0"))
+}
+for i in 0..2 {
+    import "std/math" as Inner
+    print(Inner.abs(-i))
+}

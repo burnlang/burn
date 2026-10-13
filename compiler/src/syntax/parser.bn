@@ -209,6 +209,7 @@ def struct Parser(toks: [Token]) {
     bool hasDestroy = false
     [int] splits = []
     {string: bool} aliases = {}
+    [ImportPath] nested = []
 
     fun scanAliases() {
         var i = 0
@@ -1438,7 +1439,20 @@ def struct Parser(toks: [Token]) {
             }
             var before = pos
             var k = peek().kind
-            if (k == Kind.Pub || k == Kind.Priv || k == Kind.Import || k == Kind.Def || (k == Kind.Fun && !isLambdaStart())) {
+            if (k == Kind.Import) {
+                var istart = spanOf(advance())
+                var list = importList()
+                if (list == null) {
+                    syncStmt()
+                    continue
+                }
+                for ip in list {
+                    nested.push(ip)
+                }
+                stmts.push(Stmt { kind: StmtKind.Import(list), span: join(istart, prevSpan()) })
+                continue
+            }
+            if (k == Kind.Pub || k == Kind.Priv || k == Kind.Def || (k == Kind.Fun && !isLambdaStart())) {
                 err(spanOf(peek()), "declarations like this are only allowed at the top level")
                 sync()
                 continue
@@ -2802,5 +2816,5 @@ pub fun parse(src: string): Parsed {
     for d in p.diags {
         diags.push(d)
     }
-    return Parsed { module: Module { items: items, hasDestroy: p.hasDestroy }, diags: diags }
+    return Parsed { module: Module { items: items, hasDestroy: p.hasDestroy, nested: p.nested }, diags: diags }
 }

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Local imports: `import` works inside functions, methods and blocks, and what it imports is only visible there, until the block ends (lambdas inside see it too). `import "std/math"` inside a function makes `sqrt` available in that function only, and `import "std/math" as M` inside an `if` names the module `M` only in that branch. The module itself is loaded and initialized once, before the file that imports it, like any other import. Bytecode libraries can still only be imported at the top level.
 - Import aliases: `import "std/memory" as Mem` loads a module without bringing its names into the file; they are used through the alias instead, as `Mem.Memory.alloc(16)`, in expressions, types (`Geo.Vec2 v`, `[Geo.Vec2]`), `new Geo.Point()`, struct literals, enum variants and `match` patterns (`Tok.Token.Word(w)`), generic types (`new C.Stack<int>()`) and the functions of the standard library (`M.sqrt(2.0)`). Aliases work in import lists too (`import ( "std/math" as M, "utils" )`), and two aliases for the same module are fine. Errors name the module behind an alias and suggest close names (`` `M` (the module `std/math`) has no public name `sqrtt` ``), a name used without the alias it needs gets `did you mean `Mem.Memory`?`, and an alias may not reuse a name the file declares or name two modules. The language server completes the names of a module after `Alias.` and the members after `Alias.Type.`, and hover and go to definition work through aliases.
 
 ## 26.1.0-experimental-5

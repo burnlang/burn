@@ -587,7 +587,31 @@ pub fun stmtOf(c: Checker, s: Stmt): [HStmt] {
     if (k is StmtKind.Asm) {
         return asmStmt(c, k.sections, k.fallback, span)
     }
+    if (k is StmtKind.Import) {
+        importStmt(c, k.paths)
+    }
     return []
+}
+
+fun importStmt(c: Checker, paths: [ImportPath]) {
+    if (len(c.fx) == 0) {
+        return
+    }
+    var x = c.ctx()
+    for p in paths {
+        for r in c.loaded.modules[x.module].imports {
+            if (!r.local || r.start != p.span.start) {
+                continue
+            }
+            var key = "${IMPORT_KEY}*${r.target}"
+            var a = p.alias
+            if (a != null) {
+                key = "${IMPORT_KEY}${a.name}"
+            }
+            x.scopes[len(x.scopes) - 1][key] = LocalSym { slot: r.target, isConst: true, span: c.sp(p.span) }
+            c.localImports += 1
+        }
+    }
 }
 
 fun unsafeStmt(c: Checker, b: Block, span: SrcSpan): [HStmt] {

@@ -5,12 +5,16 @@ import "paths.bn"
 import "project.bn"
 import "stdlib.bn"
 
-/** An import of a module or a bytecode library, by index, with the span of its path and the name after `as`, if any. */
+/**
+ * An import of a module or a bytecode library, by index, with the span of its path.
+ * `alias` is the name after `as`, and `local` is set for an import inside a function or block.
+ */
 pub def type ImportRef {
     int target
     int start
     int end
     string? alias
+    bool local
 }
 
 pub def type LoadedModule {
@@ -361,7 +365,13 @@ pub def struct Loader() {
                 }
             }
         }
-        for ip in items {
+        var top = len(items)
+        for ip in parsed.module.nested {
+            items.push(ip)
+        }
+        for k in 0..len(items) {
+            var ip = items[k]
+            var local = k >= top
             string? alias = null
             var a = ip.alias
             if (a != null) {
@@ -373,11 +383,15 @@ pub def struct Loader() {
                     diags.push(LoadDiag { file: file, diag: errorAt(ip.span.start, ip.span.end, "a bytecode library cannot be imported with `as`, because its functions are not in a module") })
                     continue
                 }
+                if (local) {
+                    diags.push(LoadDiag { file: file, diag: errorAt(ip.span.start, ip.span.end, "a bytecode library can only be imported at the top level of a file") })
+                    continue
+                }
                 var li = loadLibrary(ip.path, base, e)
                 if (li < 0) {
                     diags.push(LoadDiag { file: file, diag: errorAt(ip.span.start, ip.span.end, e.message) })
-                } else if (!listed(loaded.libs, li, null)) {
-                    loaded.libs.push(ImportRef { target: li, start: ip.span.start, end: ip.span.end, alias: null })
+                } else if (!listed(loaded.libs, li, null, false)) {
+                    loaded.libs.push(ImportRef { target: li, start: ip.span.start, end: ip.span.end, alias: null, local: false })
                 }
                 continue
             }
@@ -386,16 +400,16 @@ pub def struct Loader() {
                 diags.push(LoadDiag { file: file, diag: errorAt(ip.span.start, ip.span.end, e.message) })
             } else if (m == idx) {
                 diags.push(LoadDiag { file: file, diag: errorAt(ip.span.start, ip.span.end, "a module cannot import itself") })
-            } else if (!listed(loaded.imports, m, alias)) {
-                loaded.imports.push(ImportRef { target: m, start: ip.span.start, end: ip.span.end, alias: alias })
+            } else if (local || !listed(loaded.imports, m, alias, false)) {
+                loaded.imports.push(ImportRef { target: m, start: ip.span.start, end: ip.span.end, alias: alias, local: local })
             }
         }
         return idx
     }
 
-    fun listed(refs: [ImportRef], target: int, alias: string?): bool {
+    fun listed(refs: [ImportRef], target: int, alias: string?, local: bool): bool {
         for r in refs {
-            if (r.target == target && r.alias == alias) {
+            if (r.target == target && r.alias == alias && r.local == local) {
                 return true
             }
         }
