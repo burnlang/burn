@@ -382,12 +382,7 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
             out += ".bss\n"
         }
         out += ".p2align 4\n"
-        out += "${sym(globalsName(p))}:\n"
-        var g = p.globals
-        if (g < 1) {
-            g = 1
-        }
-        out += "    .zero ${8 * g}\n"
+        out += globalsData(p, sym(globalsName(p)), t.prefix)
         if (!t.macos) {
             out += ".section .note.GNU-stack,\"\",@progbits\n"
         }

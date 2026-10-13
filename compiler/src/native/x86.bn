@@ -272,12 +272,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
             out += ".bss\n"
         }
         out += ".p2align 4\n"
-        out += "${globSym}:\n"
-        var g = p.globals
-        if (g < 1) {
-            g = 1
-        }
-        out += "    .zero ${8 * g}\n"
+        out += globalsData(p, globSym, t.prefix)
         if (!t.macos) {
             out += ".section .note.GNU-stack,\"\",@progbits\n"
         }

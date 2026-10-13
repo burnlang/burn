@@ -249,7 +249,8 @@ pub const FACT_KEY = 1073741824
 pub def enum Site {
     Func(method: bool, bodyless: bool),
     Type(isClass: bool),
-    Field
+    Field,
+    Global
 }
 
 fun describeSite(site: Site): string {
@@ -264,6 +265,9 @@ fun describeSite(site: Site): string {
             return "a struct"
         }
         return "a type"
+    }
+    if (site is Site.Global) {
+        return "a global variable"
     }
     return "a field"
 }
@@ -565,6 +569,7 @@ pub def struct Checker(loaded: Loaded) {
     [StdUse] stdUses = []
     {string: bool} gated = {}
     [AsmUse] asmUses = []
+    {int: string} cGlobals = {}
 
     fun fileOf(mi: int): int {
         return loaded.modules[mi].file
@@ -2231,8 +2236,9 @@ pub def struct Checker(loaded: Loaded) {
                 }
                 args = builtinArgs(mi, a, ["name"], ["string"], null)
             } else if (name == "Extern") {
-                if (!(site is Site.Func) || site == Site.Func(true, false) || site == Site.Func(true, true)) {
-                    error(aspan, "@Extern can only be used on top-level functions")
+                var ok = site == Site.Global || site == Site.Func(false, false) || site == Site.Func(false, true)
+                if (!ok) {
+                    error(aspan, "@Extern can only be used on top-level functions and global variables")
                 }
                 args = builtinArgs(mi, a, ["name"], ["string"], null)
             } else if (name == "Inject" || name == "Overwrite" || name == "Redirect") {
@@ -3101,6 +3107,13 @@ pub def struct Checker(loaded: Loaded) {
                 var g = len(globals)
                 globals.push(GlobalInfo { name: sk.name.name, ty: null, isConst: sk.isConst, module: mi, span: spanIn(mi, sk.name.span) })
                 addValue(mi, sk.name.name, ValSym.Global(g), item.vis, spanIn(mi, sk.name.span))
+                if (len(item.annotations) > 0) {
+                    for a in resolveAnnotations(mi, item.annotations, Site.Global) {
+                        if (a.name == "Extern") {
+                            cGlobals[g] = strArg(a, "name") ?? sk.name.name
+                        }
+                    }
+                }
             }
         }
     }

@@ -159,6 +159,9 @@ fn runtime_libraries_written_in_burn_link_into_native_programs() {
             .arg(&lib_s),
     );
     assert_eq!(code, 0, "{}", out);
+    let lib_asm = std::fs::read_to_string(&lib_s).unwrap();
+    assert!(lib_asm.contains("lib_flag:"), "the @Extern global has no symbol");
+    assert!(!lib_asm.contains("burn_meta"), "a runtime library has no type table");
     let prog_s = tmp.join("program.s");
     let (out, code) = output(
         burn()
