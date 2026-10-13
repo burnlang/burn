@@ -297,7 +297,11 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
             return
         }
         if (ext is External.C) {
-            cImport(f, ext.symbol)
+            var csym = ext.symbol
+            if (t.macos) {
+                csym = ext.macos
+            }
+            cImport(f, csym)
             return
         }
         e("push rbp")

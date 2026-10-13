@@ -42,7 +42,7 @@ pub fun strArg(a: HirAnnotation, key: string): string? {
 pub def enum External {
     Lib(lib: int, name: string),
     Native(name: string),
-    C(symbol: string)
+    C(symbol: string, macos: string)
 }
 
 pub def type SlotImpl {
