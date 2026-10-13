@@ -168,6 +168,12 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
             fid = i
             func(p.funcs[i])
         }
+        for i in 0..len(p.funcs) {
+            var name = cExport(p.funcs[i])
+            if (name != null) {
+                cExportThunk(i, p.funcs[i], name)
+            }
+        }
         if (t.macos) {
             out += ".section __TEXT,__const\n"
         } else {
@@ -286,6 +292,10 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
             e("ret")
             return
         }
+        if (ext is External.C) {
+            cImport(f, ext.symbol)
+            return
+        }
         e("push rbp")
         e("mov rbp, rsp")
         var n = len(f.locals)
@@ -307,6 +317,93 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
         e("ret")
         out += cold
         cold = ""
+    }
+
+    /** The body of a function that C provides: moves the arguments from the stack into the registers C reads them from, and widens the result. */
+    fun cImport(f: HFunc, name: string) {
+        e("push rbp")
+        e("mov rbp, rsp")
+        var np = f.params
+        var floats = cFloatParams(p.checker, f)
+        var ni = 0
+        var nf = 0
+        for i in 0..np {
+            var at = "qword ptr [rbp + ${16 + 8 * (np - 1 - i)}]"
+            if (floats[i]) {
+                e("movq xmm${nf}, ${at}")
+                nf += 1
+            } else {
+                e("mov ${ARG_REGS[ni]}, ${at}")
+                ni += 1
+            }
+        }
+        e("and rsp, -16")
+        e("mov eax, ${nf}")
+        e(callTarget(name))
+        var r = cRet(p.checker, f.ret)
+        if (r is CRet.Float) {
+            e("movq rax, xmm0")
+        } else if (r is CRet.Void) {
+            e("xor eax, eax")
+        } else if (r is CRet.Signed) {
+            if (r.bits == 8) {
+                e("movsx rax, al")
+            } else if (r.bits == 16) {
+                e("movsx rax, ax")
+            } else {
+                e("movsxd rax, eax")
+            }
+        } else if (r is CRet.Unsigned) {
+            if (r.bits == 8) {
+                e("movzx eax, al")
+            } else if (r.bits == 16) {
+                e("movzx eax, ax")
+            } else {
+                e("mov eax, eax")
+            }
+        }
+        e("leave")
+        e("ret")
+    }
+
+    /** A function C can call under `name`: it keeps the registers C expects to survive, and passes the arguments on the stack like Burn does. */
+    fun cExportThunk(i: int, f: HFunc, name: string) {
+        out += ".globl ${sym(name)}\n"
+        out += ".p2align 4\n"
+        out += "${sym(name)}:\n"
+        e("push rbp")
+        e("mov rbp, rsp")
+        e("push rbx")
+        e("push r12")
+        e("push r13")
+        e("push r14")
+        e("push r15")
+        e("sub rsp, 8")
+        var floats = cFloatParams(p.checker, f)
+        var ni = 0
+        var nf = 0
+        for k in 0..f.params {
+            if (floats[k]) {
+                e("movq rax, xmm${nf}")
+                e("push rax")
+                nf += 1
+            } else {
+                e("push ${ARG_REGS[ni]}")
+                ni += 1
+            }
+        }
+        e("call bf_${i}")
+        if (p.checker.types.kindOf(f.ret) is Ty.Float) {
+            e("movq xmm0, rax")
+        }
+        e("lea rsp, [rbp - 40]")
+        e("pop r15")
+        e("pop r14")
+        e("pop r13")
+        e("pop r12")
+        e("pop rbx")
+        e("pop rbp")
+        e("ret")
     }
 
     fun stmts(ss: [HStmt]): void {

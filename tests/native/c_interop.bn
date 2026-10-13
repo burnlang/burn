@@ -1,0 +1,85 @@
+import "std/memory"
+
+@Extern("strlen")
+fun cStrlen(s: int): int
+
+@Extern("labs")
+fun labs(x: int): int
+
+@Extern("sqrt")
+fun cSqrt(x: float): float
+
+@Extern("ldexp")
+fun ldexp(x: float, e: int): float
+
+@Extern("toupper")
+fun toUpper(c: int): Int32
+
+@Extern("qsort")
+fun qsort(base: int, n: int, size: int, cmp: int): void
+
+@Extern("burn_compare_ints")
+fun compareInts(a: int, b: int): Int32 {
+    var x = 0
+    var y = 0
+    unsafe {
+        x = Memory.load64(a)
+        y = Memory.load64(b)
+    }
+    if (x < y) {
+        return -1
+    }
+    if (x > y) {
+        return 1
+    }
+    return 0
+}
+
+@Extern("bsearch")
+fun bsearch(key: int, base: int, n: int, size: int, cmp: int): int
+
+unsafe {
+    var p = Memory.alloc(16)
+    Memory.store8(p, 104)
+    Memory.store8(p + 1, 105)
+    print(cStrlen(p), labs(-42), cSqrt(2.0), ldexp(1.5, 4), toUpper(97))
+    var xs = Memory.alloc(40)
+    var vals = [5, -3, 9, 0, 7]
+    for i in 0..5 {
+        Memory.store64(xs + 8 * i, vals[i])
+    }
+    var cmp = 0
+    asm {
+        x86_64 {
+            lea rax, [rip + burn_compare_ints]
+            mov {cmp}, rax
+        }
+        arm64 {
+            adrp x9, burn_compare_ints
+            add x9, x9, :lo12:burn_compare_ints
+            str x9, {cmp}
+        }
+    }
+    qsort(xs, 5, 8, cmp)
+    [int] sorted = []
+    for i in 0..5 {
+        sorted.push(Memory.load64(xs + 8 * i))
+    }
+    print(sorted)
+}
+
+@Extern("burn_twice")
+fun twice(x: float, n: int): float {
+    return x * toFloat(n) * 2.0
+}
+
+@Extern("strtod")
+fun strtod(s: int, end: int): float
+
+unsafe {
+    var digits = Memory.alloc(8)
+    Memory.store8(digits, 50)
+    Memory.store8(digits + 1, 46)
+    Memory.store8(digits + 2, 53)
+    print(strtod(digits, 0), twice(1.25, 2))
+}

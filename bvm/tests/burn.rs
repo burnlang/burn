@@ -101,6 +101,25 @@ fn native_supported() -> bool {
 }
 
 #[test]
+fn native_code_calls_c_and_c_calls_burn() {
+    if !native_supported() {
+        return;
+    }
+    let root = root();
+    let tmp = temp_dir("c-interop");
+    let exe = tmp.join("c_interop");
+    let (build_out, code) = output(burn().current_dir(&root).arg("build").arg("tests/native/c_interop.bn").arg("-o").arg(&exe));
+    assert_eq!(code, 0, "{}", build_out);
+    let (out, code) = output(&mut Command::new(&exe));
+    assert_eq!(code, 0, "{}", out);
+    let expected = std::fs::read_to_string(root.join("tests/native/c_interop.out")).unwrap();
+    assert_eq!(out, expected);
+    let (vm_out, _) = output(burn().current_dir(&root).arg("tests/native/c_interop.bn"));
+    assert!(vm_out.contains("only exists in native executables"), "{}", vm_out);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn native_matches_vm() {
     if !native_supported() {
         return;

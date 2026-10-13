@@ -8,7 +8,7 @@ import "hir.bn"
 import "std/strings"
 import "types.bn"
 
-pub const ANNOTATION_BUILTINS = ["Getter", "Setter", "Deprecated", "Export", "Native", "Inject", "Overwrite", "Redirect"]
+pub const ANNOTATION_BUILTINS = ["Getter", "Setter", "Deprecated", "Export", "Native", "Extern", "Inject", "Overwrite", "Redirect"]
 
 pub def enum ValSym {
     Func(id: int),
@@ -2230,6 +2230,11 @@ pub def struct Checker(loaded: Loaded) {
                     error(aspan, "@${name} can only be used on ${what}")
                 }
                 args = builtinArgs(mi, a, ["name"], ["string"], null)
+            } else if (name == "Extern") {
+                if (!(site is Site.Func) || site == Site.Func(true, false) || site == Site.Func(true, true)) {
+                    error(aspan, "@Extern can only be used on top-level functions")
+                }
+                args = builtinArgs(mi, a, ["name"], ["string"], null)
             } else if (name == "Inject" || name == "Overwrite" || name == "Redirect") {
                 if (site != Site.Func(false, false)) {
                     error(aspan, "@${name} can only be used on top-level functions")
@@ -2474,16 +2479,30 @@ pub def struct Checker(loaded: Loaded) {
         var annotations = resolveAnnotations(mi, f.annotations, Site.Func(method, f.bodyless))
         var deprecated = deprecationNote(annotations)
         External? external = null
+        var externAt = false
         for a in annotations {
             if (external == null && a.name == "Native") {
                 external = External.Native(strArg(a, "name") ?? f.name.name)
             }
+            if (a.name == "Extern") {
+                externAt = true
+                if (f.bodyless && external == null) {
+                    external = External.C(strArg(a, "name") ?? f.name.name)
+                }
+            }
         }
         if (f.bodyless && external == null) {
-            errorNote(nspan, "function `${f.name.name}` has no body", "only functions provided by the host can be declared without a body; mark them with @Native")
+            errorNote(nspan, "function `${f.name.name}` has no body", "only functions provided by the host (@Native) or by C (@Extern) can be declared without a body")
+        }
+        if (externAt && !method) {
+            checkCSignature(mi, f, params, ret)
         }
         if (external != null && rt == null) {
-            var d = errorDiag(nspan, "@Native function `${f.name.name}` needs a return type")
+            var which = "@Native"
+            if (external is External.C) {
+                which = "@Extern"
+            }
+            var d = errorDiag(nspan, "${which} function `${f.name.name}` needs a return type")
             var at = paramsClose(nspan)
             if (at != null) {
                 addFix(d.diag, "if it returns nothing, say so", at.start, at.end, ": void", false)
@@ -2516,6 +2535,47 @@ pub def struct Checker(loaded: Loaded) {
             hir: null
         })
         return fid
+    }
+
+    /** Whether `t` can cross into C: an `int`, a sized integer, a `float` (a C `double`) or a `bool`. */
+    fun cType(t: int): bool {
+        var k = types.kindOf(t)
+        if (k is Ty.Num) {
+            return k.code != 7
+        }
+        return k is Ty.Int || k is Ty.Float || k is Ty.Bool || k is Ty.Error
+    }
+
+    fun checkCSignature(mi: int, f: FunDecl, params: [FuncParam], ret: int?) {
+        if (f.isAsync || len(f.tparams) > 0) {
+            error(spanIn(mi, f.name.span), "an @Extern function cannot be async or generic")
+        }
+        for i in 0..len(params) {
+            if (i < len(f.params) && !cType(params[i].ty)) {
+                error(spanIn(mi, f.params[i].name.span), "`${params[i].name}` has type ${show(params[i].ty)}, but C functions only take numbers and bools (pass memory as an `int` address)")
+            }
+        }
+        if (ret != null && ret != T_VOID && !cType(ret)) {
+            error(spanIn(mi, f.name.span), "`${f.name.name}` returns ${show(ret)}, but C functions only return numbers, bools or nothing")
+        }
+        var ints = 0
+        var floats = 0
+        for p in params {
+            if (types.kindOf(p.ty) is Ty.Float) {
+                floats += 1
+            } else {
+                ints += 1
+            }
+        }
+        if (ints > 6 || floats > 8) {
+            error(spanIn(mi, f.name.span), "an @Extern function can take at most 6 integer and 8 float parameters, which C passes in registers")
+        }
+    }
+
+    /** Whether calling the function needs unsafe code: an `unsafe fun`, or a C function. */
+    fun unsafeFunc(fid: int): bool {
+        var decl = funcs[fid].decl
+        return (decl != null && decl.isUnsafe) || funcs[fid].external is External.C
     }
 
     fun abstractSig(ri: int, name: string): AbstractSig? {

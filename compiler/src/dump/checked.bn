@@ -280,6 +280,8 @@ fun funcLines(out: [string], i: int, f: HFunc) {
     var x = f.external
     if (x is External.Native) {
         ext = "native ${x.name}"
+    } else if (x is External.C) {
+        ext = "c ${x.symbol}"
     } else if (x is External.Lib) {
         ext = "lib ${x.lib} ${x.name}"
     }

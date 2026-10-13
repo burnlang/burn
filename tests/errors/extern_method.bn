@@ -1,0 +1,6 @@
+def struct Box() {
+    @Extern("box_size")
+    fun size(): int {
+        return 1
+    }
+}
