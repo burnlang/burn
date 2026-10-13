@@ -1,0 +1,1 @@
+2:10 `s` has type string, but C functions only take numbers and bools

@@ -1,0 +1,2 @@
+@Extern("puts")
+fun puts(s: string): int

@@ -147,7 +147,13 @@ fun checkFuncInner(c: Checker, fid: int) {
         var info = c.funcs[fid]
         var ret = info.ret ?? T_VOID
         info.ret = ret
-        info.hir = HFunc { name: info.name, params: len(info.params), locals: paramTypes(info), ret: ret, body: [], isAsync: info.isAsync, span: info.span, endLoc: 0, annotations: info.annotations, external: info.external }
+        [HStmt] body = []
+        var ext = info.external
+        if (ext is External.C) {
+            var msg = c.strLit("`${info.name}` is the C function `${ext.symbol}` (@Extern), which only exists in native executables")
+            body = [HStmt.Eval(rt("Panic", [msg, c.locExpr(info.span)], T_VOID))]
+        }
+        info.hir = HFunc { name: info.name, params: len(info.params), locals: paramTypes(info), ret: ret, body: body, isAsync: info.isAsync, span: info.span, endLoc: 0, annotations: info.annotations, external: info.external }
         info.state = FnState.Done
         return
     }

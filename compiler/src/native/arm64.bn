@@ -280,6 +280,12 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
             fid = i
             func(p.funcs[i])
         }
+        for i in 0..len(p.funcs) {
+            var name = cExport(p.funcs[i])
+            if (name != null) {
+                cExportThunk(i, p.funcs[i], name)
+            }
+        }
         if (t.macos) {
             out += ".section __TEXT,__const\n"
         } else {
@@ -408,6 +414,10 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
             e("ret")
             return
         }
+        if (ext is External.C) {
+            cImport(f, ext.symbol)
+            return
+        }
         var n = len(f.locals)
         if (f.params > n) {
             n = f.params
@@ -426,6 +436,88 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
         epilogue()
         out += cold
         cold = ""
+    }
+
+    /** The body of a function that C provides: loads the arguments from the stack into the registers C reads them from, and widens the result. */
+    fun cImport(f: HFunc, name: string) {
+        e("stp x29, x30, [sp, #-16]!")
+        e("mov x29, sp")
+        var np = f.params
+        var floats = cFloatParams(p.checker, f)
+        var ni = 0
+        var nf = 0
+        for i in 0..np {
+            var off = 16 + 8 * (np - 1 - i)
+            if (floats[i]) {
+                e("ldr d${nf}, [x29, #${off}]")
+                nf += 1
+            } else {
+                e("ldr x${ni}, [x29, #${off}]")
+                ni += 1
+            }
+        }
+        call(name)
+        var r = cRet(p.checker, f.ret)
+        if (r is CRet.Float) {
+            e("fmov x0, d0")
+        } else if (r is CRet.Void) {
+            e("mov x0, #0")
+        } else if (r is CRet.Signed) {
+            if (r.bits == 8) {
+                e("sxtb x0, w0")
+            } else if (r.bits == 16) {
+                e("sxth x0, w0")
+            } else {
+                e("sxtw x0, w0")
+            }
+        } else if (r is CRet.Unsigned) {
+            if (r.bits == 8) {
+                e("and x0, x0, #0xff")
+            } else if (r.bits == 16) {
+                e("and x0, x0, #0xffff")
+            } else {
+                e("mov w0, w0")
+            }
+        }
+        e("ldp x29, x30, [sp], #16")
+        e("ret")
+    }
+
+    /** A function C can call under `name`: it keeps the registers C expects to survive, and passes the arguments on the stack like Burn does. */
+    fun cExportThunk(i: int, f: HFunc, name: string) {
+        out += ".text\n.globl ${sym(name)}\n.p2align 2\n"
+        out += "${sym(name)}:\n"
+        e("stp x29, x30, [sp, #-16]!")
+        e("mov x29, sp")
+        for pair in ["x19, x20", "x21, x22", "x23, x24", "x25, x26", "x27, x28", "d8, d9", "d10, d11", "d12, d13", "d14, d15"] {
+            e("stp ${pair}, [sp, #-16]!")
+        }
+        var np = f.params
+        var size = area(np)
+        subSp(size)
+        var floats = cFloatParams(p.checker, f)
+        var ni = 0
+        var nf = 0
+        for k in 0..np {
+            var off = 8 * (np - 1 - k)
+            if (floats[k]) {
+                e("str d${nf}, [sp, #${off}]")
+                nf += 1
+            } else {
+                e("str x${ni}, [sp, #${off}]")
+                ni += 1
+            }
+        }
+        e("bl bf_${i}")
+        addSp(size)
+        if (p.checker.types.kindOf(f.ret) is Ty.Float) {
+            e("fmov d0, x0")
+        }
+        for pair in ["d14, d15", "d12, d13", "d10, d11", "d8, d9", "x27, x28", "x25, x26", "x23, x24", "x21, x22", "x19, x20"] {
+            e("ldp ${pair}, [sp], #16")
+        }
+        e("ldp x29, x30, [sp], #16")
+        e("ret")
     }
 
     fun stmts(ss: [HStmt]): void {
