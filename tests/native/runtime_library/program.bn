@@ -1,0 +1,16 @@
+@Extern("burn_rtlib_init")
+fun libInit(): void
+
+@Extern("lib_bump")
+fun bump(by: int): int
+
+@Extern("lib_mean")
+fun mean(a: float, b: float): float
+
+@Extern("lib_message_len")
+fun messageLen(): int
+
+unsafe {
+    libInit()
+    print(bump(1), bump(10), mean(1.0, 4.0), messageLen())
+}

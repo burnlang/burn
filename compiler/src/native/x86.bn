@@ -91,7 +91,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
     }
 
     fun global(g: int): string {
-        return "qword ptr [rip + ${sym("burn_globals")} + ${8 * g}]"
+        return "qword ptr [rip + ${sym(globalsName(p))} + ${8 * g}]"
     }
 
     fun callTarget(name: string): string {
@@ -161,12 +161,19 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
 
     fun emitAll(meta: [int]) {
         var exps = exports()
-        out += replace(replace(replace(ENTRY, "{P}", t.prefix), "{PLT}", plt()), "{PRE_ENTRY}", preEntry(exps))
-        out += ".set burn_entry, bf_${p.entry}\n"
-        var globSym = sym("burn_globals")
+        if (p.library) {
+            out += ".intel_syntax noprefix\n.text\n"
+        } else {
+            out += replace(replace(replace(ENTRY, "{P}", t.prefix), "{PLT}", plt()), "{PRE_ENTRY}", preEntry(exps))
+            out += ".set burn_entry, bf_${p.entry}\n"
+        }
+        var globSym = sym(globalsName(p))
         for i in 0..len(p.funcs) {
             fid = i
             func(p.funcs[i])
+        }
+        if (p.library) {
+            cExportThunk(p.entry, p.funcs[p.entry], "burn_rtlib_init")
         }
         for i in 0..len(p.funcs) {
             var name = cExport(p.funcs[i])
@@ -180,10 +187,12 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
             out += ".section .rodata\n"
         }
         out += ".p2align 4\n"
-        out += "burn_meta_len:\n    .quad ${len(meta)}\n"
-        out += "burn_nglobals:\n    .quad ${p.globals}\n"
-        out += "burn_meta:\n"
-        byteLines(meta)
+        if (!p.library) {
+            out += "burn_meta_len:\n    .quad ${len(meta)}\n"
+            out += "burn_nglobals:\n    .quad ${p.globals}\n"
+            out += "burn_meta:\n"
+            byteLines(meta)
+        }
         for i in 0..len(p.libs) {
             out += ".p2align 4\n"
             out += "burn_lib_${i}_len:\n    .quad ${len(p.libs[i])}\n"
@@ -263,12 +272,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
             out += ".bss\n"
         }
         out += ".p2align 4\n"
-        out += "${globSym}:\n"
-        var g = p.globals
-        if (g < 1) {
-            g = 1
-        }
-        out += "    .zero ${8 * g}\n"
+        out += globalsData(p, globSym, t.prefix)
         if (!t.macos) {
             out += ".section .note.GNU-stack,\"\",@progbits\n"
         }
@@ -293,7 +297,11 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
             return
         }
         if (ext is External.C) {
-            cImport(f, ext.symbol)
+            var csym = ext.symbol
+            if (t.macos) {
+                csym = ext.macos
+            }
+            cImport(f, csym)
             return
         }
         e("push rbp")

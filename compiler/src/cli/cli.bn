@@ -20,7 +20,7 @@ import "std/process"
 import "targets.bn"
 import "tools.bn"
 
-priv const TARGETS = ["native", "exe", "asm", "js", "javascript", "node", "bvm", "bytecode", "bar"]
+priv const TARGETS = ["native", "exe", "asm", "js", "javascript", "node", "bvm", "bytecode", "bar", "runtime"]
 
 priv const TEXT_DUMPS = ["--tokens", "--ast", "--diagnostics", "--toml", "--project", "--modules", "--decls", "--checked", "--owned", "--bvm", "--index"]
 
@@ -336,6 +336,15 @@ priv fun buildOne(file: string, output: string?, target: string, emitAsm: string
     }
     if (target == "js" || target == "javascript" || target == "node") {
         return writeJs(c, output ?? defaultOutput(file, "js"))
+    }
+    if (target == "runtime") {
+        var out = output ?? defaultOutput(file, "s")
+        var problem = buildRuntimeLibrary(c, out)
+        if (problem != null) {
+            return fail(problem, 1)
+        }
+        print("built ${out}")
+        return 0
     }
     if (target == "native" || target == "exe" || target == "asm") {
         var exe = output ?? defaultOutput(file, "")

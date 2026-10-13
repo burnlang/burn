@@ -141,6 +141,62 @@ fn native_code_calls_c_and_c_calls_burn() {
 }
 
 #[test]
+fn runtime_libraries_written_in_burn_link_into_native_programs() {
+    if !native_supported() {
+        return;
+    }
+    let root = root();
+    let dir = root.join("tests/native/runtime_library");
+    let tmp = temp_dir("runtime-library");
+    let lib_s = tmp.join("library.s");
+    let (out, code) = output(
+        burn()
+            .arg("build")
+            .arg("--target")
+            .arg("runtime")
+            .arg(dir.join("library.bn"))
+            .arg("-o")
+            .arg(&lib_s),
+    );
+    assert_eq!(code, 0, "{}", out);
+    let lib_asm = std::fs::read_to_string(&lib_s).unwrap();
+    assert!(lib_asm.contains("lib_flag:"), "the @Extern global has no symbol");
+    assert!(!lib_asm.contains("burn_meta"), "a runtime library has no type table");
+    let prog_s = tmp.join("program.s");
+    let (out, code) = output(
+        burn()
+            .arg("build")
+            .arg(dir.join("program.bn"))
+            .arg("-S")
+            .arg(&prog_s)
+            .arg("-o")
+            .arg(tmp.join("unused")),
+    );
+    assert_eq!(code, 0, "{}", out);
+    let lib_dir = toolchain().join("share/burn/lib");
+    let libs = std::fs::read_to_string(lib_dir.join("native-libs.txt")).unwrap_or_default();
+    let exe = tmp.join("program");
+    let mut cc = Command::new(std::env::var("CC").unwrap_or_else(|_| "cc".into()));
+    cc.arg(&prog_s)
+        .arg(&lib_s)
+        .arg(lib_dir.join("libburn_runtime.a"))
+        .args(libs.split_whitespace())
+        .arg("-o")
+        .arg(&exe);
+    let (out, code) = output(&mut cc);
+    assert_eq!(code, 0, "{}", out);
+    let (out, code) = output(&mut Command::new(&exe));
+    assert_eq!(code, 0, "{}", out);
+    assert_eq!(out, std::fs::read_to_string(dir.join("program.out")).unwrap());
+    let bad = tmp.join("typed.bn");
+    std::fs::write(&bad, "def type P {\n    int x\n}\n").unwrap();
+    let (out, code) = output(burn().arg("build").arg("--target").arg("runtime").arg(&bad).arg("-o").arg(tmp.join("typed.s")));
+    assert_ne!(code, 0);
+    assert!(out.contains("can only use the built-in types"), "{}", out);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn native_matches_vm() {
     if !native_supported() {
         return;

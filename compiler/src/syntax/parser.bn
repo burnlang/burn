@@ -563,9 +563,15 @@ def struct Parser(toks: [Token]) {
                 itemAnns = []
             }
             ItemKind.Definition(_) => {}
+            ItemKind.Statement(st) => {
+                if (len(itemAnns) > 0 && !(st.kind is StmtKind.Var)) {
+                    err(itemAnns[0].span, "annotations can only be placed on definitions, functions, global variables, fields and methods")
+                    itemAnns = []
+                }
+            }
             else => {
                 if (len(itemAnns) > 0) {
-                    err(itemAnns[0].span, "annotations can only be placed on definitions, functions, fields and methods")
+                    err(itemAnns[0].span, "annotations can only be placed on definitions, functions, global variables, fields and methods")
                 }
                 itemAnns = []
             }

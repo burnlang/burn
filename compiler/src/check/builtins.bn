@@ -8,7 +8,7 @@ import "numeric.bn"
 import "structs.bn"
 import "types.bn"
 
-pub const BUILTIN_NAMES = ["print", "println", "eprint", "write", "input", "readStdin", "toString", "str", "toInt", "toFloat", "parseInt", "parseFloat", "isInt", "isNumber", "len", "length", "size", "push", "append", "pop", "insert", "remove", "contains", "indexOf", "join", "reverse", "sort", "slice", "copy", "clear", "keys", "values", "has", "get", "substring", "charAt", "split", "trim", "upper", "lower", "toUpper", "toLower", "toUpperCase", "toLowerCase", "startsWith", "endsWith", "replace", "repeat", "chars", "charCode", "isLetter", "isDigit", "isAlphanumeric", "isWhitespace", "fromCharCode", "bytes", "fromBytes", "sqrt", "pow", "abs", "floor", "ceil", "round", "min", "max", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "log", "log10", "exp", "random", "randomInt", "seed", "now", "nowMs", "millis", "clock", "sleep", "typeOf", "annotationsOf", "parseJSON", "toJSON", "readFile", "writeFile", "appendFile", "fileExists", "env", "args", "exit", "panic", "assert", "gc", "wrappingAdd", "wrappingSub", "wrappingMul", "__localTime", "__httpRequest", "__exec", "__fsOp", "__listDir", "__cwd", "__fail", "__mem", "__memLoadFloat", "__memStoreFloat"]
+pub const BUILTIN_NAMES = ["print", "println", "eprint", "write", "input", "readStdin", "toString", "str", "toInt", "toFloat", "parseInt", "parseFloat", "isInt", "isNumber", "len", "length", "size", "push", "append", "pop", "insert", "remove", "contains", "indexOf", "join", "reverse", "sort", "slice", "copy", "clear", "keys", "values", "has", "get", "substring", "charAt", "split", "trim", "upper", "lower", "toUpper", "toLower", "toUpperCase", "toLowerCase", "startsWith", "endsWith", "replace", "repeat", "chars", "charCode", "isLetter", "isDigit", "isAlphanumeric", "isWhitespace", "fromCharCode", "bytes", "fromBytes", "sqrt", "pow", "abs", "floor", "ceil", "round", "min", "max", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "log", "log10", "exp", "random", "randomInt", "seed", "now", "nowMs", "millis", "clock", "sleep", "typeOf", "annotationsOf", "parseJSON", "toJSON", "readFile", "writeFile", "appendFile", "fileExists", "env", "args", "exit", "panic", "assert", "gc", "wrappingAdd", "wrappingSub", "wrappingMul", "__localTime", "__httpRequest", "__exec", "__fsOp", "__listDir", "__cwd", "__fail", "__mem", "__memLoadFloat", "__memStoreFloat", "__addr", "__str"]
 
 pub const NO_STD_HELP = "this program is built without the standard library (`std = false` in burn.toml, or `--no-std`); only the built-in core is available, so remove that setting to use it"
 
@@ -1099,6 +1099,25 @@ fun builtinWith(c: Checker, name: string, recv: HExpr?, recvSpan: SrcSpan, args:
         var m = bargTo(c, xs[0], T_STR)
         var l = bargTo(c, xs[1], T_INT)
         return rt("Fail", [m, l], T_VOID)
+    }
+    if (name == "__str") {
+        c.requireUnsafe(span, "`__str` reads a string object at an address, so it needs an `unsafe` block")
+        if (!arity(c, name, n, 1, 1, span)) {
+            return errExpr()
+        }
+        return rt("Retain", [bargTo(c, xs[0], T_INT)], T_STR)
+    }
+    if (name == "__addr") {
+        c.requireUnsafe(span, "`__addr` gives the address of a value in memory, so it needs an `unsafe` block")
+        if (!arity(c, name, n, 1, 1, span)) {
+            return errExpr()
+        }
+        var h = barg(c, xs[0], null)
+        if (c.types.isUnboxed(h.ty) || h.ty == T_VOID || h.ty == T_NULL) {
+            c.error(xs[0].span, "`__addr` needs a value that lives in memory, like a string, an array or a struct, not ${c.show(h.ty)}")
+            return errExpr()
+        }
+        return hexpr(HKind.Seq([], h), T_INT)
     }
     if (name == "__mem" || name == "__memLoadFloat" || name == "__memStoreFloat") {
         c.requireUnsafe(span, "`${name}` reads and writes raw memory, so it needs an `unsafe` block")

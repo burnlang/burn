@@ -30,12 +30,25 @@ pub fun asmTarget(platform: string): AsmTarget {
 }
 
 /** What the code generator needs of a checked program, after the ownership pass. */
+/** A program to compile to native code. A `library` is the runtime written in Burn: it has no `main` and no type table of its own, and its top-level code runs when the runtime calls `burn_rtlib_init`. */
 pub def type NativeProgram {
     Checker checker
     [HFunc] funcs
     int globals
     int entry
     [[int]] libs
+    bool library
+}
+
+/** The first type that is not built in: types below it have the same number in every program, so a runtime library may use them. */
+pub const FIRST_PROGRAM_TYPE = 20
+
+/** The symbol of the program's global variables. */
+pub fun globalsName(p: NativeProgram): string {
+    if (p.library) {
+        return "burn_rtlib_globals"
+    }
+    return "burn_globals"
 }
 
 pub fun quote(s: string): string {
@@ -373,4 +386,27 @@ pub fun cExport(f: HFunc): string? {
         }
     }
     return null
+}
+
+/** The space for the program's global variables after the label `name`, with a C symbol at each one marked `@Extern`. */
+pub fun globalsData(p: NativeProgram, name: string, prefix: string): string {
+    var out = "${name}:\n"
+    var g = p.globals
+    if (g < 1) {
+        g = 1
+    }
+    var pending = 0
+    for i in 0..g {
+        var c = p.checker.cGlobals[i]
+        if (c != null) {
+            if (pending > 0) {
+                out += "    .zero ${8 * pending}\n"
+                pending = 0
+            }
+            out += ".globl ${prefix}${c}\n${prefix}${c}:\n"
+        }
+        pending += 1
+    }
+    out += "    .zero ${8 * pending}\n"
+    return out
 }

@@ -1,0 +1,26 @@
+var counter = 40
+
+@Extern("lib_bump")
+fun bump(by: int): int {
+    counter += by
+    return counter
+}
+
+@Extern("lib_mean")
+fun mean(a: float, b: float): float {
+    return (a + b) / 2.0
+}
+
+counter += 1
+
+@Extern("lib_flag")
+var flag = 7
+
+@Extern("lib_message_len")
+fun messageLen(): int {
+    var n = 0
+    unsafe {
+        n = __mem(6, __addr("hello, runtime") + 16, 0, 0)
+    }
+    return n + flag
+}

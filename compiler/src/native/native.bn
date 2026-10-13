@@ -38,12 +38,41 @@ pub fun nativeProblem(p: HProgram, libFuncs: [string]): string? {
 pub fun nativeAssembly(c: Checker, p: HProgram, libs: [[int]], platform: string): string {
     var meta = encodeMeta(c)
     var funcs = lowerOwnership(c.types, p.funcs)
-    var np = NativeProgram { checker: c, funcs: funcs, globals: len(p.globals), entry: p.entry, libs: libs }
+    var np = NativeProgram { checker: c, funcs: funcs, globals: len(p.globals), entry: p.entry, libs: libs, library: false }
     var t = asmTarget(platform)
     if (t.arch == "aarch64") {
         return generateArm64(np, meta, t)
     }
     return generateX86(np, meta, t)
+}
+
+/** Why the program cannot be the runtime library, or null: it may only use the types every program has, so that its code works with the type table of whatever program it runs in. */
+pub fun runtimeLibraryProblem(c: Checker, p: HProgram): string? {
+    var n = c.types.count()
+    if (n > FIRST_PROGRAM_TYPE) {
+        [string] extra = []
+        for t in FIRST_PROGRAM_TYPE..n {
+            if (len(extra) < 5) {
+                extra.push("`${c.show(t)}`")
+            }
+        }
+        return "a runtime library can only use the built-in types (numbers, `bool`, `string`, `any`, `[string]`, `[int]`, `[any]` and `{string: any}`), but it uses ${join(extra, ", ")}"
+    }
+    if (len(c.libPaths) > 0) {
+        return "a runtime library cannot import bytecode libraries"
+    }
+    return nativeProblem(p, [])
+}
+
+/** The assembly of the runtime library written in Burn for `platform`: its functions, the C functions it exports with @Extern and `burn_rtlib_init`, which runs its top-level code. */
+pub fun runtimeLibraryAssembly(c: Checker, p: HProgram, platform: string): string {
+    var funcs = lowerOwnership(c.types, p.funcs)
+    var np = NativeProgram { checker: c, funcs: funcs, globals: len(p.globals), entry: p.entry, libs: [], library: true }
+    var t = asmTarget(platform)
+    if (t.arch == "aarch64") {
+        return generateArm64(np, [], t)
+    }
+    return generateX86(np, [], t)
 }
 
 /** The assembly of an executable that runs the bvm module or archive `bundle`, like `launcher_assembly` in `native/mod.rs`. */
