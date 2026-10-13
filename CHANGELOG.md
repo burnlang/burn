@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 26.1.0-experimental-5
+
+Low-level code: `unsafe` blocks and functions, inline assembly for every target and raw memory. Native executables for arm64, and Burn builds itself without a released Burn.
 
 - `std/memory`: raw memory for unsafe code. `Memory.alloc`, `resize` and `free` manage blocks of bytes addressed by plain `int`s, `load8`/`16`/`32`/`64`, `loadFloat`, `store8`/`16`/`32`/`64` and `storeFloat` read and write little-endian numbers at any address, and `copy` and `fill` work on ranges of bytes. Every function is an `unsafe fun`, so it can only be called in unsafe code. It works on bvm, in native executables (x86-64 and arm64) and in JavaScript (a heap in an `ArrayBuffer`), through one new runtime function, `Mem`.
 - The compiler uses inline assembly itself: `floatToBits` and `floatFromBits` in `compiler/src/vm/bits.bn`, which turn float constants into their bits for bvm and native code, read the bits straight from the value with `bvm`, `x86_64` and `arm64` sections, and keep the arithmetic version as the `else` fallback. Its output is the same as before.
