@@ -8,7 +8,7 @@ import "numeric.bn"
 import "structs.bn"
 import "types.bn"
 
-pub const BUILTIN_NAMES = ["print", "println", "eprint", "write", "input", "readStdin", "toString", "str", "toInt", "toFloat", "parseInt", "parseFloat", "isInt", "isNumber", "len", "length", "size", "push", "append", "pop", "insert", "remove", "contains", "indexOf", "join", "reverse", "sort", "slice", "copy", "clear", "keys", "values", "has", "get", "substring", "charAt", "split", "trim", "upper", "lower", "toUpper", "toLower", "toUpperCase", "toLowerCase", "startsWith", "endsWith", "replace", "repeat", "chars", "charCode", "isLetter", "isDigit", "isAlphanumeric", "isWhitespace", "fromCharCode", "bytes", "fromBytes", "sqrt", "pow", "abs", "floor", "ceil", "round", "min", "max", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "log", "log10", "exp", "random", "randomInt", "seed", "now", "nowMs", "millis", "clock", "sleep", "typeOf", "annotationsOf", "parseJSON", "toJSON", "readFile", "writeFile", "appendFile", "fileExists", "env", "args", "exit", "panic", "assert", "gc", "wrappingAdd", "wrappingSub", "wrappingMul", "__localTime", "__httpRequest", "__exec", "__fsOp", "__listDir", "__cwd", "__fail", "__mem", "__memLoadFloat", "__memStoreFloat", "__addr", "__str"]
+pub const BUILTIN_NAMES = ["print", "println", "eprint", "write", "input", "readStdin", "toString", "str", "toInt", "toFloat", "parseInt", "parseFloat", "isInt", "isNumber", "len", "length", "size", "push", "append", "pop", "insert", "remove", "contains", "indexOf", "join", "reverse", "sort", "slice", "copy", "clear", "keys", "values", "has", "get", "substring", "charAt", "split", "trim", "upper", "lower", "toUpper", "toLower", "toUpperCase", "toLowerCase", "startsWith", "endsWith", "replace", "repeat", "chars", "charCode", "isLetter", "isDigit", "isAlphanumeric", "isWhitespace", "fromCharCode", "bytes", "fromBytes", "sqrt", "pow", "abs", "floor", "ceil", "round", "min", "max", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "log", "log10", "exp", "random", "randomInt", "seed", "now", "nowMs", "millis", "clock", "sleep", "typeOf", "annotationsOf", "parseJSON", "toJSON", "readFile", "writeFile", "appendFile", "fileExists", "env", "args", "exit", "panic", "assert", "gc", "wrappingAdd", "wrappingSub", "wrappingMul", "__localTime", "__httpRequest", "__exec", "__fsOp", "__listDir", "__cwd", "__fail", "__mem", "__memLoadFloat", "__memStoreFloat", "__addr", "__str", "__cfun"]
 
 pub const NO_STD_HELP = "this program is built without the standard library (`std = false` in burn.toml, or `--no-std`); only the built-in core is available, so remove that setting to use it"
 
@@ -1099,6 +1099,36 @@ fun builtinWith(c: Checker, name: string, recv: HExpr?, recvSpan: SrcSpan, args:
         var m = bargTo(c, xs[0], T_STR)
         var l = bargTo(c, xs[1], T_INT)
         return rt("Fail", [m, l], T_VOID)
+    }
+    if (name == "__cfun") {
+        c.requireUnsafe(span, "`__cfun` gives the address of a function for C code, so it needs an `unsafe` block")
+        if (!arity(c, name, n, 1, 1, span)) {
+            return errExpr()
+        }
+        var e = xs[0].e
+        if (e != null) {
+            var ek = e.kind
+            if (ek is ExprKind.Ident) {
+                var entry = c.lookupValueEntry(c.curModule(), ek.name)
+                if (entry != null) {
+                    var sym = entry.sym
+                    if (sym is ValSym.Func) {
+                        var decl = c.funcs[sym.id].decl
+                        var marked = false
+                        for a in c.funcs[sym.id].annotations {
+                            if (a.name == "Extern") {
+                                marked = true
+                            }
+                        }
+                        if (marked && decl != null && !decl.bodyless) {
+                            return rt("CFun", [hint(sym.id)], T_INT)
+                        }
+                    }
+                }
+            }
+        }
+        c.error(xs[0].span, "`__cfun` needs the name of a function marked @Extern that has a body, which C can call")
+        return errExpr()
     }
     if (name == "__str") {
         c.requireUnsafe(span, "`__str` reads a string object at an address, so it needs an `unsafe` block")

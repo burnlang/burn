@@ -1,0 +1,395 @@
+/**
+ * `parseJSON` and `toJSON`, like `json.rs`. Parsed values are `any`: objects become `{string: any}`, arrays `[any]`,
+ * whole numbers `int` and other numbers `float`.
+ */
+import "coll.bn"
+import "fmt.bn"
+import "heap.bn"
+import "io.bn"
+import "map.bn"
+import "meta.bn"
+import "sys.bn"
+import "text.bn"
+
+const P_DATA = 0
+const P_LEN = 8
+const P_POS = 16
+const P_LOC = 24
+
+unsafe fun pos(st: int): int {
+    return ld64(st + P_POS)
+}
+
+unsafe fun setPos(st: int, i: int) {
+    st64(st + P_POS, i)
+}
+
+unsafe fun atEnd(st: int): bool {
+    return ld64(st + P_POS) >= ld64(st + P_LEN)
+}
+
+unsafe fun peek(st: int): int {
+    return ld8(ld64(st + P_DATA) + ld64(st + P_POS))
+}
+
+unsafe fun fail(st: int, msg: string) {
+    fatalError("invalid JSON: ${msg} at offset ${pos(st)}", ld64(st + P_LOC))
+}
+
+unsafe fun skipSpace(st: int) {
+    while (!atEnd(st)) {
+        var c = peek(st)
+        if (c != 32 && c != 10 && c != 13 && c != 9) {
+            return
+        }
+        setPos(st, pos(st) + 1)
+    }
+}
+
+unsafe fun literal(st: int, word: string): bool {
+    var w = word
+    var n = ld64(__addr(w) + STR_LEN)
+    if (pos(st) + n > ld64(st + P_LEN)) {
+        return false
+    }
+    if (cMemcmp(ld64(st + P_DATA) + pos(st), __addr(w) + STR_BYTES, n) != 0) {
+        return false
+    }
+    setPos(st, pos(st) + n)
+    return true
+}
+
+unsafe fun hexDigit(c: int): int {
+    if (c >= 48 && c <= 57) {
+        return c - 48
+    }
+    if (c >= 97 && c <= 102) {
+        return c - 87
+    }
+    if (c >= 65 && c <= 70) {
+        return c - 55
+    }
+    return -1
+}
+
+unsafe fun hex4(st: int): int {
+    if (pos(st) + 4 > ld64(st + P_LEN)) {
+        fail(st, "invalid unicode escape")
+    }
+    var p = ld64(st + P_DATA) + pos(st)
+    setPos(st, pos(st) + 4)
+    var i = 0
+    if (ld8(p) == 43) {
+        i = 1
+    }
+    var v = 0
+    while (i < 4) {
+        var d = hexDigit(ld8(p + i))
+        if (d < 0) {
+            fatalError("invalid JSON: invalid unicode escape", ld64(st + P_LOC))
+        }
+        v = v * 16 + d
+        i += 1
+    }
+    return v
+}
+
+unsafe fun stringAt(st: int): int {
+    setPos(st, pos(st) + 1)
+    var b = bufNew()
+    while (!atEnd(st)) {
+        var c = peek(st)
+        setPos(st, pos(st) + 1)
+        if (c == 34) {
+            var s = lossyText(ld64(b), ld64(b + 8))
+            cFree(ld64(b))
+            cFree(b)
+            return s
+        }
+        if (c != 92) {
+            bufAdd(b, byteCell(c), 1)
+            continue
+        }
+        if (atEnd(st)) {
+            break
+        }
+        var e = peek(st)
+        setPos(st, pos(st) + 1)
+        if (e == 110) {
+            bufAdd(b, byteCell(10), 1)
+        } else if (e == 116) {
+            bufAdd(b, byteCell(9), 1)
+        } else if (e == 114) {
+            bufAdd(b, byteCell(13), 1)
+        } else if (e == 98) {
+            bufAdd(b, byteCell(8), 1)
+        } else if (e == 102) {
+            bufAdd(b, byteCell(12), 1)
+        } else if (e == 117) {
+            var cp = hex4(st)
+            if (cp >= 55296 && cp < 56320 && pos(st) + 2 <= ld64(st + P_LEN) && peek(st) == 92 && ld8(ld64(st + P_DATA) + pos(st) + 1) == 117) {
+                setPos(st, pos(st) + 2)
+                var lo = hex4(st)
+                cp = 65536 + ((cp - 55296) << 10) + ((lo - 56320) & 1023)
+            }
+            if (cp >= 55296 && cp < 57344 || cp > 1114111) {
+                cp = 65533
+            }
+            bufAddCode(b, cp)
+        } else {
+            bufAdd(b, byteCell(e), 1)
+        }
+    }
+    fail(st, "unterminated string")
+    return 0
+}
+
+var cells = 0
+
+unsafe fun byteCell(c: int): int {
+    if (cells == 0) {
+        cells = zalloc(256)
+        for i in 0..256 {
+            st8(cells + i, i)
+        }
+    }
+    return cells + (c & 255)
+}
+
+unsafe fun numberAt(st: int): int {
+    var start = pos(st)
+    setPos(st, pos(st) + 1)
+    var isFloat = false
+    while (!atEnd(st)) {
+        var c = peek(st)
+        if (c >= 48 && c <= 57) {
+            setPos(st, pos(st) + 1)
+        } else if (c == 46 || c == 101 || c == 69 || c == 43 || c == 45) {
+            isFloat = true
+            setPos(st, pos(st) + 1)
+        } else {
+            break
+        }
+    }
+    var t = rawText(ld64(st + P_DATA) + start, pos(st) - start)
+    if (!isFloat) {
+        var v = parseI64(t, 10)
+        if (lastParseOk()) {
+            return boxRaw(TID_INT, v)
+        }
+    }
+    if (!floatSyntax(t)) {
+        fail(st, "invalid number")
+    }
+    return boxRaw(4, floatBits(parseF64(t)))
+}
+
+unsafe fun valueAt(st: int): int {
+    skipSpace(st)
+    if (atEnd(st)) {
+        fail(st, "unexpected end of input")
+    }
+    var c = peek(st)
+    if (c == 123) {
+        setPos(st, pos(st) + 1)
+        var m = mapNew(TID_MAP_STR_ANY)
+        skipSpace(st)
+        if (!atEnd(st) && peek(st) == 125) {
+            setPos(st, pos(st) + 1)
+            return boxRaw(TID_MAP_STR_ANY, m)
+        }
+        while (true) {
+            skipSpace(st)
+            if (atEnd(st) || peek(st) != 34) {
+                fail(st, "expected string key")
+            }
+            var k = stringAt(st)
+            skipSpace(st)
+            if (atEnd(st) || peek(st) != 58) {
+                fail(st, "expected ':'")
+            }
+            setPos(st, pos(st) + 1)
+            var v = valueAt(st)
+            mapInsertOwned(m, k, v)
+            skipSpace(st)
+            if (!atEnd(st) && peek(st) == 44) {
+                setPos(st, pos(st) + 1)
+                continue
+            }
+            if (!atEnd(st) && peek(st) == 125) {
+                setPos(st, pos(st) + 1)
+                break
+            }
+            fail(st, "expected ',' or '}'")
+        }
+        return boxRaw(TID_MAP_STR_ANY, m)
+    }
+    if (c == 91) {
+        setPos(st, pos(st) + 1)
+        var a = arrayNew(TID_ARR_ANY, 0)
+        skipSpace(st)
+        if (!atEnd(st) && peek(st) == 93) {
+            setPos(st, pos(st) + 1)
+            return boxRaw(TID_ARR_ANY, a)
+        }
+        while (true) {
+            arrayPush(a, valueAt(st))
+            skipSpace(st)
+            if (!atEnd(st) && peek(st) == 44) {
+                setPos(st, pos(st) + 1)
+                continue
+            }
+            if (!atEnd(st) && peek(st) == 93) {
+                setPos(st, pos(st) + 1)
+                break
+            }
+            fail(st, "expected ',' or ']'")
+        }
+        return boxRaw(TID_ARR_ANY, a)
+    }
+    if (c == 34) {
+        return boxRaw(TID_STR, stringAt(st))
+    }
+    if (c == 116 && literal(st, "true")) {
+        return boxRaw(5, 1)
+    }
+    if (c == 102 && literal(st, "false")) {
+        return boxRaw(5, 0)
+    }
+    if (c == 110 && literal(st, "null")) {
+        return 0
+    }
+    if (c == 45 || c >= 48 && c <= 57) {
+        return numberAt(st)
+    }
+    fail(st, "unexpected character")
+    return 0
+}
+
+@Extern("burn_json_parse")
+pub unsafe fun jsonParse(s: int, loc: int): int {
+    var st = zalloc(32)
+    st64(st + P_DATA, s + STR_BYTES)
+    st64(st + P_LEN, ld64(s + STR_LEN))
+    st64(st + P_LOC, loc)
+    var v = valueAt(st)
+    skipSpace(st)
+    if (!atEnd(st)) {
+        fail(st, "trailing characters")
+    }
+    cFree(st)
+    return v
+}
+
+unsafe fun finite(bits: int): bool {
+    var f = bitsFloat(bits)
+    return f - f == 0.0
+}
+
+unsafe fun jsonText(v: int, t: int): string {
+    var k = kindOf(t)
+    if (k == D_INT) {
+        return "${v}"
+    }
+    if (k == D_FLOAT) {
+        if (finite(v)) {
+            return floatText(v)
+        }
+        return "null"
+    }
+    if (k == D_NUM) {
+        var n = descA(t)
+        if (n == NUM_F32 && !finite(v)) {
+            return "null"
+        }
+        return numText(v, n)
+    }
+    if (k == D_BOOL) {
+        if (v != 0) {
+            return "true"
+        }
+        return "false"
+    }
+    if (k == D_STR) {
+        return quoted(textOf(v))
+    }
+    if (k == D_ENUM) {
+        if (v >= 0 && v < variantCount(t)) {
+            return quoted(variantName(t, v))
+        }
+        return quoted("")
+    }
+    if (k == D_ANY) {
+        if (v == 0) {
+            return "null"
+        }
+        return jsonText(boxVal(v), tidOf(v))
+    }
+    if (k == D_OPTIONAL) {
+        if (v == 0) {
+            return "null"
+        }
+        var inner = descA(t)
+        if (isUnboxed(inner)) {
+            return jsonText(boxVal(v), inner)
+        }
+        return jsonText(v, inner)
+    }
+    if (k == D_ARRAY) {
+        var e = descA(t)
+        var out = "["
+        for i in 0..arrayLen(v) {
+            if (i > 0) {
+                out += ","
+            }
+            out += jsonText(arrayAt(v, i), e)
+        }
+        return out + "]"
+    }
+    if (k == D_MAP) {
+        var kt = descA(t)
+        var vt = descB(t)
+        var out = "{"
+        for i in 0..mapLen(v) {
+            if (i > 0) {
+                out += ","
+            }
+            out += quoted(valueText(mapKeyAt(v, i), kt, false, 0))
+            out += ":"
+            out += jsonText(mapValAt(v, i), vt)
+        }
+        return out + "}"
+    }
+    if (k == D_RECORD) {
+        if (v != 0 && kindOfObj(v) == K_DEAD) {
+            return "null"
+        }
+        var real = tidOf(v)
+        if (real != t && kindOf(real) == D_RECORD) {
+            return jsonText(v, real)
+        }
+        var out = "{"
+        for i in 0..fieldCount(t) {
+            if (i > 0) {
+                out += ","
+            }
+            out += quoted(rawText(fieldNameAt(t, i), fieldNameLen(t, i)))
+            out += ":"
+            out += jsonText(fieldOf(v, i), fieldType(t, i))
+        }
+        return out + "}"
+    }
+    if (k == D_INTERFACE) {
+        if (v == 0) {
+            return "null"
+        }
+        return jsonText(v, tidOf(v))
+    }
+    return "null"
+}
+
+@Extern("burn_json_stringify")
+pub unsafe fun jsonStringify(v: int, t: int): int {
+    var text = jsonText(v, t)
+    return retain(__addr(text))
+}

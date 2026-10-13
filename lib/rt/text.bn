@@ -1,0 +1,1072 @@
+/**
+ * Strings, like the string functions of `api.rs`.
+ *
+ * Strings are UTF-8. Indexes and lengths count characters (code points); strings that are all ASCII, which their
+ * header marks, take the fast path where a character is a byte.
+ */
+import "fmt.bn"
+import "heap.bn"
+import "io.bn"
+import "meta.bn"
+import "sys.bn"
+
+@Extern("strtod")
+fun cStrtod(s: int, end: int): float
+
+/** The number of bytes of the UTF-8 sequence that starts with byte `b`. */
+pub fun seqLen(b: int): int {
+    if (b < 128) {
+        return 1
+    }
+    if (b >= 240) {
+        return 4
+    }
+    if (b >= 224) {
+        return 3
+    }
+    if (b >= 192) {
+        return 2
+    }
+    return 1
+}
+
+/** The code point at byte `i` of the `n` bytes at `p`. */
+pub unsafe fun decodeAt(p: int, n: int, i: int): int {
+    var b = ld8(p + i)
+    if (b < 128) {
+        return b
+    }
+    var l = seqLen(b)
+    if (i + l > n) {
+        return 65533
+    }
+    if (l == 2) {
+        return ((b & 31) << 6) | (ld8(p + i + 1) & 63)
+    }
+    if (l == 3) {
+        return ((b & 15) << 12) | ((ld8(p + i + 1) & 63) << 6) | (ld8(p + i + 2) & 63)
+    }
+    if (l == 4) {
+        return ((b & 7) << 18) | ((ld8(p + i + 1) & 63) << 12) | ((ld8(p + i + 2) & 63) << 6) | (ld8(p + i + 3) & 63)
+    }
+    return 65533
+}
+
+/** Writes code point `c` as UTF-8 at `p`; gives the number of bytes. */
+pub unsafe fun encodeAt(p: int, c: int): int {
+    if (c < 128) {
+        st8(p, c)
+        return 1
+    }
+    if (c < 2048) {
+        st8(p, 192 | (c >> 6))
+        st8(p + 1, 128 | (c & 63))
+        return 2
+    }
+    if (c < 65536) {
+        st8(p, 224 | (c >> 12))
+        st8(p + 1, 128 | ((c >> 6) & 63))
+        st8(p + 2, 128 | (c & 63))
+        return 3
+    }
+    st8(p, 240 | (c >> 18))
+    st8(p + 1, 128 | ((c >> 12) & 63))
+    st8(p + 2, 128 | ((c >> 6) & 63))
+    st8(p + 3, 128 | (c & 63))
+    return 4
+}
+
+pub unsafe fun charCount(s: int): int {
+    var n = ld64(s + STR_LEN)
+    if (strIsAscii(s)) {
+        return n
+    }
+    var p = s + STR_BYTES
+    var count = 0
+    for i in 0..n {
+        if ((ld8(p + i) & 192) != 128) {
+            count += 1
+        }
+    }
+    return count
+}
+
+/** The byte offset of character `ci` of string `s`, or its length when `ci` is past the end. */
+pub unsafe fun byteOffset(s: int, ci: int): int {
+    var n = ld64(s + STR_LEN)
+    if (strIsAscii(s)) {
+        if (ci < n) {
+            return ci
+        }
+        return n
+    }
+    var p = s + STR_BYTES
+    var count = 0
+    for i in 0..n {
+        if ((ld8(p + i) & 192) != 128) {
+            if (count == ci) {
+                return i
+            }
+            count += 1
+        }
+    }
+    return n
+}
+
+/** A new string with bytes `from` to `to` of string `s`. */
+pub unsafe fun sliceBytes(s: int, from: int, to: int): int {
+    return strNew(s + STR_BYTES + from, to - from)
+}
+
+@Extern("burn_str_concat")
+pub unsafe fun strConcat(a: int, b: int): int {
+    var na = ld64(a + STR_LEN)
+    var nb = ld64(b + STR_LEN)
+    if (na == 0) {
+        return retain(b)
+    }
+    if (nb == 0) {
+        return retain(a)
+    }
+    var s = strAlloc(na + nb)
+    cMemcpy(s + STR_BYTES, a + STR_BYTES, na)
+    cMemcpy(s + STR_BYTES + na, b + STR_BYTES, nb)
+    if (strIsAscii(a) && strIsAscii(b)) {
+        setFlags(s, flagsOf(s) | F_ASCII)
+    }
+    return s
+}
+
+@Extern("burn_str_append")
+pub unsafe fun strAppend(a: int, c: int): int {
+    if (a == c || !unique(a)) {
+        var r = strConcat(a, c)
+        release(a)
+        return r
+    }
+    var nc = ld64(c + STR_LEN)
+    if (nc == 0) {
+        return a
+    }
+    var n = ld64(a + STR_LEN)
+    var need = HDR + 8 + n + nc + 1
+    var p = a
+    var size = sizeOf(p)
+    if (need > size) {
+        var want = size * 2
+        if (need > want) {
+            want = need
+        }
+        p = resizeObj(p, want)
+    }
+    cMemcpy(p + STR_BYTES + n, c + STR_BYTES, nc)
+    st8(p + STR_BYTES + n + nc, 0)
+    st64(p + STR_LEN, n + nc)
+    if (!strIsAscii(c)) {
+        setFlags(p, flagsOf(p) & (255 - F_ASCII))
+    }
+    return p
+}
+
+@Extern("burn_str_eq")
+pub unsafe fun strEq(a: int, b: int): int {
+    if (a == b || bytesEqual(a, b)) {
+        return 1
+    }
+    return 0
+}
+
+@Extern("burn_str_cmp")
+pub unsafe fun strCmp(a: int, b: int): int {
+    return valuesCompare(a, b, TID_STR)
+}
+
+@Extern("burn_str_len")
+pub unsafe fun strLen(s: int): int {
+    return charCount(s)
+}
+
+@Extern("burn_str_index")
+pub unsafe fun strIndex(s: int, i: int, loc: int): int {
+    var n = charCount(s)
+    if (i < 0 || i >= n) {
+        fatalError("string index ${i} out of bounds (length ${n})", loc)
+    }
+    if (strIsAscii(s)) {
+        return sliceBytes(s, i, i + 1)
+    }
+    var at = byteOffset(s, i)
+    return sliceBytes(s, at, at + seqLen(ld8(s + STR_BYTES + at)))
+}
+
+@Extern("burn_str_sub")
+pub unsafe fun strSub(s: int, a: int, e: int): int {
+    var n = charCount(s)
+    var start = clamp(a, 0, n)
+    var end = clamp(e, 0, n)
+    if (start > end) {
+        start = end
+    }
+    return sliceBytes(s, byteOffset(s, start), byteOffset(s, end))
+}
+
+pub fun clamp(v: int, lo: int, hi: int): int {
+    if (v < lo) {
+        return lo
+    }
+    if (v > hi) {
+        return hi
+    }
+    return v
+}
+
+/** The byte position of `sub` in `s` at or after byte `from`, or -1. */
+pub unsafe fun findBytes(s: int, sub: int, from: int): int {
+    var n = ld64(s + STR_LEN)
+    var m = ld64(sub + STR_LEN)
+    if (m == 0) {
+        if (from <= n) {
+            return from
+        }
+        return -1
+    }
+    var p = s + STR_BYTES
+    var q = sub + STR_BYTES
+    var first = ld8(q)
+    var i = from
+    while (i + m <= n) {
+        if (ld8(p + i) == first && cMemcmp(p + i, q, m) == 0) {
+            return i
+        }
+        i += 1
+    }
+    return -1
+}
+
+/** The number of characters in the first `bytes` bytes of `s`. */
+pub unsafe fun charsBefore(s: int, bytes: int): int {
+    if (strIsAscii(s)) {
+        return bytes
+    }
+    var p = s + STR_BYTES
+    var count = 0
+    for i in 0..bytes {
+        if ((ld8(p + i) & 192) != 128) {
+            count += 1
+        }
+    }
+    return count
+}
+
+@Extern("burn_str_find")
+pub unsafe fun strFind(s: int, sub: int): int {
+    var at = findBytes(s, sub, 0)
+    if (at < 0) {
+        return -1
+    }
+    return charsBefore(s, at)
+}
+
+@Extern("burn_str_contains")
+pub unsafe fun strContains(s: int, sub: int): int {
+    if (findBytes(s, sub, 0) >= 0) {
+        return 1
+    }
+    return 0
+}
+
+/** A growing string being built: a block with the address of its bytes, the count and the capacity. */
+pub unsafe fun bufNew(): int {
+    var b = zalloc(24)
+    st64(b, zalloc(64))
+    st64(b + 16, 64)
+    return b
+}
+
+pub unsafe fun bufAdd(b: int, p: int, n: int) {
+    var used = ld64(b + 8)
+    var cap = ld64(b + 16)
+    if (used + n > cap) {
+        cap = cap * 2 + n
+        st64(b, grow(ld64(b), cap))
+        st64(b + 16, cap)
+    }
+    cMemcpy(ld64(b) + used, p, n)
+    st64(b + 8, used + n)
+}
+
+pub unsafe fun bufAddStr(b: int, s: int) {
+    bufAdd(b, s + STR_BYTES, ld64(s + STR_LEN))
+}
+
+pub unsafe fun bufAddCode(b: int, c: int) {
+    var tmp = zalloc(8)
+    var n = encodeAt(tmp, c)
+    bufAdd(b, tmp, n)
+    cFree(tmp)
+}
+
+/** The string built in `b`, which is freed. */
+pub unsafe fun bufFinish(b: int): int {
+    var s = strNew(ld64(b), ld64(b + 8))
+    cFree(ld64(b))
+    cFree(b)
+    return s
+}
+
+@Extern("burn_str_replace")
+pub unsafe fun strReplace(s: int, from: int, to: int): int {
+    var m = ld64(from + STR_LEN)
+    if (m == 0) {
+        return retain(s)
+    }
+    var b = bufNew()
+    var at = 0
+    while (true) {
+        var i = findBytes(s, from, at)
+        if (i < 0) {
+            break
+        }
+        bufAdd(b, s + STR_BYTES + at, i - at)
+        bufAddStr(b, to)
+        at = i + m
+    }
+    bufAdd(b, s + STR_BYTES + at, ld64(s + STR_LEN) - at)
+    return bufFinish(b)
+}
+
+@Extern("burn_str_split")
+pub unsafe fun strSplit(s: int, sep: int): int {
+    var m = ld64(sep + STR_LEN)
+    if (m == 0) {
+        return strChars(s)
+    }
+    var out = stringArray()
+    var at = 0
+    while (true) {
+        var i = findBytes(s, sep, at)
+        if (i < 0) {
+            break
+        }
+        arrayPush(out, sliceBytes(s, at, i))
+        at = i + m
+    }
+    arrayPush(out, sliceBytes(s, at, ld64(s + STR_LEN)))
+    return out
+}
+
+@Extern("burn_str_chars")
+pub unsafe fun strChars(s: int): int {
+    var out = stringArray()
+    var n = ld64(s + STR_LEN)
+    var i = 0
+    while (i < n) {
+        var l = seqLen(ld8(s + STR_BYTES + i))
+        if (i + l > n) {
+            l = n - i
+        }
+        arrayPush(out, sliceBytes(s, i, i + l))
+        i += l
+    }
+    return out
+}
+
+/** Whether code point `c` is white space, like Rust's `char::is_whitespace`. */
+pub fun isSpaceCode(c: int): bool {
+    if (c == 32 || (c >= 9 && c <= 13)) {
+        return true
+    }
+    if (c < 128) {
+        return false
+    }
+    return c == 133 || c == 160 || c == 5760 || (c >= 8192 && c <= 8202) || c == 8232 || c == 8233 || c == 8239 || c == 8287 || c == 12288
+}
+
+@Extern("burn_str_trim")
+pub unsafe fun strTrim(s: int): int {
+    var n = ld64(s + STR_LEN)
+    var p = s + STR_BYTES
+    var start = 0
+    while (start < n) {
+        var c = decodeAt(p, n, start)
+        if (!isSpaceCode(c)) {
+            break
+        }
+        start += seqLen(ld8(p + start))
+    }
+    var end = n
+    while (end > start) {
+        var b = end - 1
+        while (b > start && (ld8(p + b) & 192) == 128) {
+            b -= 1
+        }
+        if (!isSpaceCode(decodeAt(p, n, b))) {
+            break
+        }
+        end = b
+    }
+    return sliceBytes(s, start, end)
+}
+
+/** The upper-case form of code point `c`, for the scripts Burn programs use most; -1 for `ß`, which becomes `SS`. */
+pub fun upperCode(c: int): int {
+    if (c >= 97 && c <= 122) {
+        return c - 32
+    }
+    if (c < 128) {
+        return c
+    }
+    if (c == 181) {
+        return 924
+    }
+    if (c == 223) {
+        return -1
+    }
+    if (c >= 224 && c <= 254 && c != 247) {
+        return c - 32
+    }
+    if (c == 255) {
+        return 376
+    }
+    if (c >= 256 && c <= 311 && c % 2 == 1) {
+        return c - 1
+    }
+    if (c >= 313 && c <= 328 && c % 2 == 0) {
+        return c - 1
+    }
+    if (c >= 330 && c <= 375 && c % 2 == 1) {
+        return c - 1
+    }
+    if (c >= 377 && c <= 382 && c % 2 == 0) {
+        return c - 1
+    }
+    if (c == 383) {
+        return 83
+    }
+    if (c >= 945 && c <= 969) {
+        if (c == 962) {
+            return 931
+        }
+        return c - 32
+    }
+    if (c == 940) {
+        return 902
+    }
+    if (c >= 941 && c <= 943) {
+        return c - 37
+    }
+    if (c == 972) {
+        return 908
+    }
+    if (c == 973 || c == 974) {
+        return c - 63
+    }
+    if (c >= 1072 && c <= 1103) {
+        return c - 32
+    }
+    if (c >= 1104 && c <= 1119) {
+        return c - 80
+    }
+    return c
+}
+
+/** The lower-case form of code point `c`. */
+pub fun lowerCode(c: int): int {
+    if (c >= 65 && c <= 90) {
+        return c + 32
+    }
+    if (c < 128) {
+        return c
+    }
+    if (c >= 192 && c <= 222 && c != 215) {
+        return c + 32
+    }
+    if (c == 376) {
+        return 255
+    }
+    if (c >= 256 && c <= 311 && c % 2 == 0) {
+        return c + 1
+    }
+    if (c >= 313 && c <= 328 && c % 2 == 1) {
+        return c + 1
+    }
+    if (c >= 330 && c <= 375 && c % 2 == 0) {
+        return c + 1
+    }
+    if (c >= 377 && c <= 382 && c % 2 == 1) {
+        return c + 1
+    }
+    if (c >= 913 && c <= 937 && c != 930) {
+        return c + 32
+    }
+    if (c == 902) {
+        return 940
+    }
+    if (c >= 904 && c <= 906) {
+        return c + 37
+    }
+    if (c == 908) {
+        return 972
+    }
+    if (c == 910 || c == 911) {
+        return c + 63
+    }
+    if (c >= 1040 && c <= 1071) {
+        return c + 32
+    }
+    if (c >= 1024 && c <= 1039) {
+        return c + 80
+    }
+    return c
+}
+
+unsafe fun mapCase(s: int, upper: bool): int {
+    var n = ld64(s + STR_LEN)
+    var p = s + STR_BYTES
+    if (strIsAscii(s)) {
+        var out = strAlloc(n)
+        for i in 0..n {
+            var c = ld8(p + i)
+            if (upper && c >= 97 && c <= 122) {
+                c -= 32
+            } else if (!upper && c >= 65 && c <= 90) {
+                c += 32
+            }
+            st8(out + STR_BYTES + i, c)
+        }
+        setFlags(out, flagsOf(out) | F_ASCII)
+        return out
+    }
+    var b = bufNew()
+    var i = 0
+    while (i < n) {
+        var c = decodeAt(p, n, i)
+        i += seqLen(ld8(p + i))
+        if (upper) {
+            var u = upperCode(c)
+            if (u < 0) {
+                bufAddCode(b, 83)
+                bufAddCode(b, 83)
+            } else {
+                bufAddCode(b, u)
+            }
+        } else {
+            bufAddCode(b, lowerCode(c))
+        }
+    }
+    return bufFinish(b)
+}
+
+@Extern("burn_str_upper")
+pub unsafe fun strUpper(s: int): int {
+    return mapCase(s, true)
+}
+
+@Extern("burn_str_lower")
+pub unsafe fun strLower(s: int): int {
+    return mapCase(s, false)
+}
+
+@Extern("burn_str_starts")
+pub unsafe fun strStarts(s: int, pre: int): int {
+    var m = ld64(pre + STR_LEN)
+    if (m <= ld64(s + STR_LEN) && cMemcmp(s + STR_BYTES, pre + STR_BYTES, m) == 0) {
+        return 1
+    }
+    return 0
+}
+
+@Extern("burn_str_ends")
+pub unsafe fun strEnds(s: int, suf: int): int {
+    var n = ld64(s + STR_LEN)
+    var m = ld64(suf + STR_LEN)
+    if (m <= n && cMemcmp(s + STR_BYTES + n - m, suf + STR_BYTES, m) == 0) {
+        return 1
+    }
+    return 0
+}
+
+@Extern("burn_str_repeat")
+pub unsafe fun strRepeat(s: int, count: int): int {
+    var n = ld64(s + STR_LEN)
+    var times = count
+    if (times < 0) {
+        times = 0
+    }
+    var out = strAlloc(n * times)
+    for i in 0..times {
+        cMemcpy(out + STR_BYTES + n * i, s + STR_BYTES, n)
+    }
+    if (strIsAscii(s)) {
+        setFlags(out, flagsOf(out) | F_ASCII)
+    }
+    return out
+}
+
+@Extern("burn_str_to_bytes")
+pub unsafe fun strToBytes(s: int, t: int): int {
+    var n = ld64(s + STR_LEN)
+    var a = arrayNew(t, n)
+    for i in 0..n {
+        arrayPut(a, i, ld8(s + STR_BYTES + i))
+    }
+    return a
+}
+
+@Extern("burn_str_from_bytes")
+pub unsafe fun strFromBytes(a: int): int {
+    var n = arrayLen(a)
+    var raw = zalloc(n + 1)
+    for i in 0..n {
+        st8(raw + i, arrayAt(a, i) & 255)
+    }
+    var s = lossyText(raw, n)
+    cFree(raw)
+    return s
+}
+
+/** A string with the `n` bytes at `p`, where every invalid UTF-8 sequence becomes U+FFFD, like `from_utf8_lossy`. */
+pub unsafe fun lossyText(p: int, n: int): int {
+    if (validUtf8(p, n)) {
+        return strNew(p, n)
+    }
+    var b = bufNew()
+    var i = 0
+    while (i < n) {
+        var l = validSeqAt(p, n, i)
+        if (l > 0) {
+            bufAdd(b, p + i, l)
+            i += l
+        } else {
+            bufAddCode(b, 65533)
+            i += invalidRun(p, n, i)
+        }
+    }
+    return bufFinish(b)
+}
+
+/** The length of the valid UTF-8 sequence at byte `i`, or 0. */
+unsafe fun validSeqAt(p: int, n: int, i: int): int {
+    var b = ld8(p + i)
+    if (b < 128) {
+        return 1
+    }
+    var l = 0
+    var lo = 128
+    var hi = 191
+    if (b >= 194 && b <= 223) {
+        l = 2
+    } else if (b >= 224 && b <= 239) {
+        l = 3
+        if (b == 224) {
+            lo = 160
+        } else if (b == 237) {
+            hi = 159
+        }
+    } else if (b >= 240 && b <= 244) {
+        l = 4
+        if (b == 240) {
+            lo = 144
+        } else if (b == 244) {
+            hi = 143
+        }
+    } else {
+        return 0
+    }
+    if (i + l > n) {
+        return 0
+    }
+    var c1 = ld8(p + i + 1)
+    if (c1 < lo || c1 > hi) {
+        return 0
+    }
+    for k in 2..l {
+        var c = ld8(p + i + k)
+        if (c < 128 || c > 191) {
+            return 0
+        }
+    }
+    return l
+}
+
+/** How many bytes from `i` make up one invalid sequence, as Rust replaces it with one U+FFFD. */
+unsafe fun invalidRun(p: int, n: int, i: int): int {
+    var b = ld8(p + i)
+    var l = 1
+    var lo = 128
+    var hi = 191
+    var want = 0
+    if (b >= 194 && b <= 223) {
+        want = 2
+    } else if (b >= 224 && b <= 239) {
+        want = 3
+        if (b == 224) {
+            lo = 160
+        } else if (b == 237) {
+            hi = 159
+        }
+    } else if (b >= 240 && b <= 244) {
+        want = 4
+        if (b == 240) {
+            lo = 144
+        } else if (b == 244) {
+            hi = 143
+        }
+    } else {
+        return 1
+    }
+    while (l < want && i + l < n) {
+        var c = ld8(p + i + l)
+        if (l == 1) {
+            if (c < lo || c > hi) {
+                return l
+            }
+        } else if (c < 128 || c > 191) {
+            return l
+        }
+        l += 1
+    }
+    return l
+}
+
+pub unsafe fun validUtf8(p: int, n: int): bool {
+    var i = 0
+    while (i < n) {
+        var l = validSeqAt(p, n, i)
+        if (l == 0) {
+            return false
+        }
+        i += l
+    }
+    return true
+}
+
+/** Whether code point `c` is a letter, like `char::is_alphabetic`, for the common scripts. */
+pub fun isLetterCode(c: int): bool {
+    if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122)) {
+        return true
+    }
+    if (c < 128) {
+        return false
+    }
+    if (c == 170 || c == 181 || c == 186) {
+        return true
+    }
+    if (c >= 192 && c <= 591) {
+        return c != 215 && c != 247
+    }
+    if (c >= 880 && c <= 1023) {
+        return c != 894 && c != 903 && c != 885
+    }
+    if (c >= 1024 && c <= 1327) {
+        return c < 1154 || c > 1161
+    }
+    if (c >= 1488 && c <= 1514) {
+        return true
+    }
+    if (c >= 1568 && c <= 1610) {
+        return true
+    }
+    if (c >= 7680 && c <= 8188) {
+        return true
+    }
+    if (c >= 12353 && c <= 12543) {
+        return c != 12443 && c != 12444 && c != 12539
+    }
+    if (c >= 13312 && c <= 40959) {
+        return true
+    }
+    if (c >= 44032 && c <= 55203) {
+        return true
+    }
+    return false
+}
+
+/** Whether code point `c` is a number, like `char::is_numeric`, for the common forms. */
+pub fun isNumberCode(c: int): bool {
+    if (c >= 48 && c <= 57) {
+        return true
+    }
+    return c == 178 || c == 179 || c == 185 || (c >= 188 && c <= 190) || (c >= 1632 && c <= 1641) || (c >= 65296 && c <= 65305)
+}
+
+@Extern("burn_char_class")
+pub unsafe fun charClass(s: int, kind: int): int {
+    var n = ld64(s + STR_LEN)
+    if (n == 0) {
+        return 0
+    }
+    var p = s + STR_BYTES
+    var i = 0
+    while (i < n) {
+        var c = decodeAt(p, n, i)
+        i += seqLen(ld8(p + i))
+        var ok = false
+        if (kind == 0) {
+            ok = isLetterCode(c)
+        } else if (kind == 1) {
+            ok = c >= 48 && c <= 57
+        } else if (kind == 2) {
+            ok = isLetterCode(c) || isNumberCode(c)
+        } else {
+            ok = isSpaceCode(c)
+        }
+        if (!ok) {
+            return 0
+        }
+    }
+    return 1
+}
+
+@Extern("burn_str_code")
+pub unsafe fun strCode(s: int): int {
+    var n = ld64(s + STR_LEN)
+    if (n == 0) {
+        return -1
+    }
+    return decodeAt(s + STR_BYTES, n, 0)
+}
+
+@Extern("burn_str_from_code")
+pub unsafe fun strFromCode(c: int): int {
+    if (c < 0 || c > 1114111 || (c >= 55296 && c <= 57343)) {
+        return strNew(0, 0)
+    }
+    var tmp = zalloc(8)
+    var n = encodeAt(tmp, c)
+    var s = strNew(tmp, n)
+    cFree(tmp)
+    return s
+}
+
+@Extern("burn_to_str")
+pub unsafe fun toStr(v: int, t: int): int {
+    if (t == TID_STR) {
+        return retain(v)
+    }
+    var text = valueText(v, t, false, 0)
+    return retain(__addr(text))
+}
+
+/** The bytes of string `s` without white space around them, as a new Burn string. */
+unsafe fun trimmedText(s: int): string {
+    var t = strTrim(s)
+    var out = __str(t)
+    release(t)
+    return out
+}
+
+/** The 64-bit integer written in `t` (an optional sign and digits), like Rust's `i64::from_str`; `parsedOk` says whether it was one. */
+var parsedOk = false
+
+pub fun lastParseOk(): bool {
+    return parsedOk
+}
+
+pub unsafe fun parseI64(t: string, radix: int): int {
+    parsedOk = false
+    var s = t
+    var p = __addr(s) + STR_BYTES
+    var n = ld64(__addr(s) + STR_LEN)
+    var i = 0
+    var neg = false
+    if (n > 0 && (ld8(p) == 43 || ld8(p) == 45)) {
+        neg = ld8(p) == 45
+        i = 1
+    }
+    if (i >= n) {
+        return 0
+    }
+    var v = 0
+    while (i < n) {
+        var c = ld8(p + i)
+        var d = 99
+        if (c >= 48 && c <= 57) {
+            d = c - 48
+        } else if (c >= 97 && c <= 122) {
+            d = c - 87
+        } else if (c >= 65 && c <= 90) {
+            d = c - 55
+        }
+        if (d >= radix) {
+            return 0
+        }
+        if (neg) {
+            if (v < (-9223372036854775807 - 1 + d) / radix) {
+                return 0
+            }
+            v = v * radix - d
+        } else {
+            if (v > (9223372036854775807 - d) / radix) {
+                return 0
+            }
+            v = v * radix + d
+        }
+        i += 1
+    }
+    parsedOk = true
+    return v
+}
+
+/** Whether `t` is written like a Rust float: `1`, `-2.5`, `.5`, `3.`, `1e10`, `inf`, `NaN`. */
+pub unsafe fun floatSyntax(t: string): bool {
+    var s = t
+    var p = __addr(s) + STR_BYTES
+    var n = ld64(__addr(s) + STR_LEN)
+    var i = 0
+    if (n > 0 && (ld8(p) == 43 || ld8(p) == 45)) {
+        i = 1
+    }
+    var rest = lower(substring(t, i, len(t)))
+    if (rest == "inf" || rest == "infinity" || rest == "nan") {
+        return true
+    }
+    var digits = 0
+    while (i < n && ld8(p + i) >= 48 && ld8(p + i) <= 57) {
+        i += 1
+        digits += 1
+    }
+    if (i < n && ld8(p + i) == 46) {
+        i += 1
+        while (i < n && ld8(p + i) >= 48 && ld8(p + i) <= 57) {
+            i += 1
+            digits += 1
+        }
+    }
+    if (digits == 0) {
+        return false
+    }
+    if (i < n && (ld8(p + i) == 101 || ld8(p + i) == 69)) {
+        i += 1
+        if (i < n && (ld8(p + i) == 43 || ld8(p + i) == 45)) {
+            i += 1
+        }
+        var ed = 0
+        while (i < n && ld8(p + i) >= 48 && ld8(p + i) <= 57) {
+            i += 1
+            ed += 1
+        }
+        if (ed == 0) {
+            return false
+        }
+    }
+    return i == n
+}
+
+/** The float written in `t`, which must pass `floatSyntax`. */
+pub unsafe fun parseF64(t: string): float {
+    var s = t
+    var c = cString(__addr(s) + STR_BYTES, ld64(__addr(s) + STR_LEN))
+    var v = cStrtod(c, 0)
+    cFree(c)
+    return v
+}
+
+@Extern("burn_parse_int")
+pub unsafe fun parseInt(s: int, loc: int): int {
+    var t = trimmedText(s)
+    var v = parseI64(t, 10)
+    if (parsedOk) {
+        return v
+    }
+    if (floatSyntax(t)) {
+        var f = parseF64(t)
+        if (f == f && f != 1.0 / 0.0 && f != -1.0 / 0.0) {
+            return truncToInt(f)
+        }
+    }
+    fatalError("cannot convert \"${t}\" to int", loc)
+    return 0
+}
+
+/** `f` without its fraction, as an `int`, saturating like Rust's `as i64`. */
+pub unsafe fun truncToInt(f: float): int {
+    if (f != f) {
+        return 0
+    }
+    if (f >= 9223372036854775807.0) {
+        return 9223372036854775807
+    }
+    if (f <= -9223372036854775808.0) {
+        return -9223372036854775807 - 1
+    }
+    return toInt(f)
+}
+
+unsafe fun radixOf(r: int, loc: int): int {
+    if (r < 2 || r > 36) {
+        fatalError("radix ${r} is out of range, it must be between 2 and 36", loc)
+    }
+    return r
+}
+
+@Extern("burn_parse_int_radix")
+pub unsafe fun parseIntRadix(s: int, r: int, loc: int): int {
+    var radix = radixOf(r, loc)
+    var t = trimmedText(s)
+    var v = parseI64(t, radix)
+    if (!parsedOk) {
+        fatalError("cannot convert \"${t}\" to an int in base ${radix}", loc)
+    }
+    return v
+}
+
+@Extern("burn_is_int_radix")
+pub unsafe fun isIntRadix(s: int, r: int, loc: int): int {
+    var radix = radixOf(r, loc)
+    parseI64(trimmedText(s), radix)
+    if (parsedOk) {
+        return 1
+    }
+    return 0
+}
+
+@Extern("burn_int_to_str_radix")
+pub unsafe fun intToStrRadix(v: int, r: int, loc: int): int {
+    var radix = radixOf(r, loc)
+    var digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+    var neg = v < 0
+    var out = ""
+    var x = v
+    while (true) {
+        var d = x % radix
+        if (d < 0) {
+            d = -d
+        }
+        out = substring(digits, d, d + 1) + out
+        x = x / radix
+        if (x == 0) {
+            break
+        }
+    }
+    if (neg) {
+        out = "-" + out
+    }
+    return retain(__addr(out))
+}
+
+@Extern("burn_parse_float")
+pub unsafe fun parseFloat(s: int, loc: int): int {
+    var t = trimmedText(s)
+    if (!floatSyntax(t)) {
+        fatalError("cannot convert \"${t}\" to float", loc)
+    }
+    return floatBits(parseF64(t))
+}
+
+@Extern("burn_is_int_str")
+pub unsafe fun isIntStr(s: int): int {
+    parseI64(trimmedText(s), 10)
+    if (parsedOk) {
+        return 1
+    }
+    return 0
+}
+
+@Extern("burn_is_float_str")
+pub unsafe fun isFloatStr(s: int): int {
+    if (floatSyntax(trimmedText(s))) {
+        return 1
+    }
+    return 0
+}

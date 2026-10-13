@@ -1,0 +1,808 @@
+/**
+ * Starting and ending a program, printing, errors and numbers, like the rest of `api.rs`.
+ */
+import "fmt.bn"
+import "heap.bn"
+import "io.bn"
+import "meta.bn"
+import "signal.bn"
+import "sys.bn"
+import "task.bn"
+import "text.bn"
+
+@Extern("burn_rtlib_init")
+fun runtimeInit(): void
+
+@Extern("burn_rt_init")
+pub unsafe fun rtInit(meta: int, metaLen: int, globals: int, nglobals: int, stackBase: int, tramp: int): int {
+    runtimeInit()
+    metaSet(metaDecode(meta, metaLen))
+    setMainThread()
+    installSignals(stackBase)
+    setTrampoline(tramp)
+    return 0
+}
+
+@Extern("burn_rt_set_args")
+pub unsafe fun rtSetArgs(argc: int, argv: int): int {
+    setArgs(argc, argv)
+    return 0
+}
+
+@Extern("burn_rt_exit")
+pub unsafe fun rtExit(code: int): int {
+    waitAll()
+    flush()
+    return code
+}
+
+@Extern("burn_exit_now")
+pub unsafe fun exitNow(code: int): int {
+    waitAll()
+    flush()
+    cExit(code)
+    return 0
+}
+
+@Extern("burn_args")
+pub unsafe fun argsValue(): int {
+    return argsArray()
+}
+
+@Extern("burn_print")
+pub unsafe fun printLine(s: int): int {
+    var n = ld64(s + STR_LEN)
+    var tmp = zalloc(n + 1)
+    cMemcpy(tmp, s + STR_BYTES, n)
+    st8(tmp + n, 10)
+    writeOut(tmp, n + 1)
+    cFree(tmp)
+    return 0
+}
+
+@Extern("burn_print_raw")
+pub unsafe fun printRaw(s: int): int {
+    writeOut(s + STR_BYTES, ld64(s + STR_LEN))
+    return 0
+}
+
+@Extern("burn_print_err")
+pub unsafe fun printErr(s: int): int {
+    flush()
+    writeAll(2, s + STR_BYTES, ld64(s + STR_LEN))
+    var nl = zalloc(8)
+    st8(nl, 10)
+    writeAll(2, nl, 1)
+    cFree(nl)
+    return 0
+}
+
+unsafe fun readAllStdin(): int {
+    var cap = 65536
+    var buf = zalloc(cap)
+    var n = 0
+    while (true) {
+        if (n == cap) {
+            cap *= 2
+            buf = grow(buf, cap)
+        }
+        var r = cRead(0, buf + n, cap - n)
+        if (r < 0 && errno() == 4) {
+            continue
+        }
+        if (r <= 0) {
+            break
+        }
+        n += r
+    }
+    var s = lossyText(buf, n)
+    cFree(buf)
+    return s
+}
+
+@Extern("burn_read_stdin")
+pub unsafe fun readStdin(): int {
+    flush()
+    return readAllStdin()
+}
+
+@Extern("burn_input")
+pub unsafe fun inputLine(prompt: int): int {
+    writeOut(prompt + STR_BYTES, ld64(prompt + STR_LEN))
+    flush()
+    var cap = 256
+    var buf = zalloc(cap)
+    var n = 0
+    var one = zalloc(8)
+    while (true) {
+        var r = cRead(0, one, 1)
+        if (r < 0 && errno() == 4) {
+            continue
+        }
+        if (r <= 0 || ld8(one) == 10) {
+            break
+        }
+        if (n == cap) {
+            cap *= 2
+            buf = grow(buf, cap)
+        }
+        st8(buf + n, ld8(one))
+        n += 1
+    }
+    while (n > 0 && ld8(buf + n - 1) == 13) {
+        n -= 1
+    }
+    var s = lossyText(buf, n)
+    cFree(buf)
+    cFree(one)
+    return s
+}
+
+@Extern("burn_panic")
+pub unsafe fun panicNow(msg: int, loc: int): int {
+    fatalError(textOf(msg), loc)
+    return 0
+}
+
+@Extern("burn_fail")
+pub unsafe fun failNow(msg: int, loc: int): int {
+    fatalError(textOf(msg), loc)
+    return 0
+}
+
+@Extern("burn_assert")
+pub unsafe fun assertTrue(cond: int, msg: int, loc: int): int {
+    if (cond == 0) {
+        fatalError("assertion failed: ${textOf(msg)}", loc)
+    }
+    return 0
+}
+
+@Extern("burn_err_overflow")
+pub unsafe fun errOverflow(loc: int): int {
+    fatalError("integer overflow", loc)
+    return 0
+}
+
+@Extern("burn_err_divzero")
+pub unsafe fun errDivZero(loc: int): int {
+    fatalError("division by zero", loc)
+    return 0
+}
+
+@Extern("burn_err_null")
+pub unsafe fun errNull(loc: int): int {
+    fatalError("unexpected null value", loc)
+    return 0
+}
+
+@Extern("burn_err_return")
+pub unsafe fun errReturn(loc: int): int {
+    fatalError("function ended without returning a value", loc)
+    return 0
+}
+
+@Extern("burn_shift_check")
+pub unsafe fun shiftCheck(amount: int, loc: int): int {
+    if (amount < 0 || amount >= 64) {
+        fatalError("cannot shift by ${amount}", loc)
+    }
+    return amount
+}
+
+@Extern("burn_err_shift")
+pub unsafe fun errShift(loc: int, amount: int): int {
+    fatalError("cannot shift by ${amount}", loc)
+    return 0
+}
+
+@Extern("sqrt")
+fun cSqrt(x: float): float
+
+@Extern("floor")
+fun cFloor(x: float): float
+
+@Extern("ceil")
+fun cCeilF(x: float): float
+
+@Extern("round")
+fun cRound(x: float): float
+
+@Extern("fabs")
+fun cFabs(x: float): float
+
+@Extern("sin")
+fun cSin(x: float): float
+
+@Extern("cos")
+fun cCos(x: float): float
+
+@Extern("tan")
+fun cTan(x: float): float
+
+@Extern("log")
+fun cLog(x: float): float
+
+@Extern("log10")
+fun cLog10F(x: float): float
+
+@Extern("exp")
+fun cExp(x: float): float
+
+@Extern("asin")
+fun cAsin(x: float): float
+
+@Extern("acos")
+fun cAcos(x: float): float
+
+@Extern("atan")
+fun cAtan(x: float): float
+
+@Extern("pow")
+fun cPow(x: float, y: float): float
+
+@Extern("atan2")
+fun cAtan2(y: float, x: float): float
+
+@Extern("fmod")
+fun cFmod(x: float, y: float): float
+
+@Extern("trunc")
+fun cTrunc(x: float): float
+
+@Extern("burn_fmath")
+pub unsafe fun fmath(op: int, bits: int): int {
+    var x = bitsFloat(bits)
+    var r = match op {
+        0 => cSqrt(x)
+        1 => cFloor(x)
+        2 => cCeilF(x)
+        3 => cRound(x)
+        4 => cFabs(x)
+        5 => cSin(x)
+        6 => cCos(x)
+        7 => cTan(x)
+        8 => cLog(x)
+        9 => cLog10F(x)
+        10 => cExp(x)
+        11 => cAsin(x)
+        12 => cAcos(x)
+        13 => cAtan(x)
+        else => x
+    }
+    return floatBits(r)
+}
+
+@Extern("burn_fpow")
+pub unsafe fun fpow(a: int, b: int): int {
+    return floatBits(cPow(bitsFloat(a), bitsFloat(b)))
+}
+
+@Extern("burn_fatan2")
+pub unsafe fun fatan2(a: int, b: int): int {
+    return floatBits(cAtan2(bitsFloat(a), bitsFloat(b)))
+}
+
+@Extern("burn_fmod")
+pub unsafe fun fmodBits(a: int, b: int): int {
+    return floatBits(cFmod(bitsFloat(a), bitsFloat(b)))
+}
+
+@Extern("burn_ipow")
+pub unsafe fun ipow(a: int, e: int): int {
+    if (e < 0) {
+        return 0
+    }
+    var base = a
+    var exp = e
+    var r = 1
+    while (exp > 0) {
+        if ((exp & 1) == 1) {
+            r = checkedMul(r, base)
+        }
+        exp = exp >> 1
+        if (exp > 0) {
+            base = checkedMul(base, base)
+        }
+    }
+    return r
+}
+
+unsafe fun checkedMul(a: int, b: int): int {
+    var r = wrappingMul(a, b)
+    if (a != 0 && (r / a != b || (a == -1 && b == -9223372036854775807 - 1) || (b == -1 && a == -9223372036854775807 - 1))) {
+        fatalError("integer overflow", -1)
+    }
+    return r
+}
+
+@Extern("burn_iabs")
+pub unsafe fun iabs(a: int): int {
+    if (a < 0) {
+        return wrappingSub(0, a)
+    }
+    return a
+}
+
+@Extern("burn_imin")
+pub unsafe fun imin(a: int, b: int): int {
+    if (a < b) {
+        return a
+    }
+    return b
+}
+
+@Extern("burn_imax")
+pub unsafe fun imax(a: int, b: int): int {
+    if (a > b) {
+        return a
+    }
+    return b
+}
+
+@Extern("burn_fmin")
+pub unsafe fun fminBits(a: int, b: int): int {
+    var x = bitsFloat(a)
+    var y = bitsFloat(b)
+    if (x != x) {
+        return b
+    }
+    if (y != y) {
+        return a
+    }
+    if (y < x) {
+        return b
+    }
+    return a
+}
+
+@Extern("burn_fmax")
+pub unsafe fun fmaxBits(a: int, b: int): int {
+    var x = bitsFloat(a)
+    var y = bitsFloat(b)
+    if (x != x) {
+        return b
+    }
+    if (y != y) {
+        return a
+    }
+    if (y > x) {
+        return b
+    }
+    return a
+}
+
+var rng = 0
+
+@Extern("clock_gettime")
+fun cClockGettime(clock: int, ts: int): Int32
+
+/** Nanoseconds from the clock `clock` (0 is the wall clock). */
+pub unsafe fun clockNs(clock: int): int {
+    var ts = zalloc(16)
+    cClockGettime(clock, ts)
+    var ns = ld64(ts) * 1000000000 + ld64(ts + 8)
+    cFree(ts)
+    return ns
+}
+
+unsafe fun nextRand(): int {
+    var x = rng
+    if (x == 0) {
+        x = clockNs(0) | 1
+    }
+    x = x ^ (x << 13)
+    x = x ^ (x >>> 7)
+    x = x ^ (x << 17)
+    rng = x
+    return x
+}
+
+@Extern("burn_random")
+pub unsafe fun randomFloat(): int {
+    return floatBits(toFloat(nextRand() >>> 11) / 9007199254740992.0)
+}
+
+@Extern("burn_random_int")
+pub unsafe fun randomInt(lo: int, hi: int): int {
+    if (hi <= lo) {
+        return lo
+    }
+    var span = wrappingAdd(wrappingSub(hi, lo), 1)
+    var r = nextRand()
+    var m = 0
+    if (span > 0) {
+        m = unsignedMod(r, span)
+    } else {
+        m = r
+    }
+    return wrappingAdd(lo, m)
+}
+
+/** `a % b` for unsigned 64-bit numbers with `b > 0`. */
+unsafe fun unsignedMod(a: int, b: int): int {
+    if (a >= 0) {
+        return a % b
+    }
+    var q = ((a >>> 1) / b) << 1
+    var r = wrappingSub(a, wrappingMul(q, b))
+    while (r < 0 || r >= b) {
+        r = wrappingSub(r, b)
+    }
+    return r
+}
+
+@Extern("burn_seed")
+pub unsafe fun seed(s: int): int {
+    rng = s | 1
+    return 0
+}
+
+@Extern("burn_num_fit")
+pub unsafe fun numFit(v: int, code: int, loc: int): int {
+    var n = code & 15
+    if (!fits(v, n, n == NUM_U64)) {
+        fatalError("integer overflow: ${numValueText(v, n == NUM_U64)} does not fit in ${numName(n)}", loc)
+    }
+    return v
+}
+
+@Extern("burn_num_conv")
+pub unsafe fun numConv(v: int, code: int, loc: int): int {
+    var n = code & 15
+    var fromU64 = (code & 16) != 0
+    var ok = false
+    if (n == 0) {
+        ok = !fromU64 || v >= 0
+    } else {
+        ok = fits(v, n, fromU64)
+    }
+    if (!ok) {
+        var name = "int"
+        if (n != 0) {
+            name = numName(n)
+        }
+        fatalError("cannot convert ${numValueText(v, fromU64)} to ${name}", loc)
+    }
+    return v
+}
+
+unsafe fun numValueText(v: int, unsigned: bool): string {
+    if (unsigned) {
+        return unsignedText(v)
+    }
+    return "${v}"
+}
+
+/** Whether `v` (unsigned when `unsigned`) fits in the sized number type with code `n`. */
+unsafe fun fits(v: int, n: int, unsigned: bool): bool {
+    if (unsigned && v < 0) {
+        return n == NUM_U64
+    }
+    if (n == NUM_I8) {
+        return v >= -128 && v <= 127
+    }
+    if (n == NUM_U8) {
+        return v >= 0 && v <= 255
+    }
+    if (n == NUM_I16) {
+        return v >= -32768 && v <= 32767
+    }
+    if (n == NUM_U16) {
+        return v >= 0 && v <= 65535
+    }
+    if (n == NUM_I32) {
+        return v >= -2147483648 && v <= 2147483647
+    }
+    if (n == NUM_U32) {
+        return v >= 0 && v <= 4294967295
+    }
+    if (n == NUM_U64) {
+        return v >= 0 || unsigned
+    }
+    return true
+}
+
+@Extern("burn_num_wrap")
+pub unsafe fun numWrap(v: int, code: int): int {
+    var n = code & 15
+    if (n == NUM_I8) {
+        var x = v & 255
+        if (x >= 128) {
+            return x - 256
+        }
+        return x
+    }
+    if (n == NUM_U8) {
+        return v & 255
+    }
+    if (n == NUM_I16) {
+        var x = v & 65535
+        if (x >= 32768) {
+            return x - 65536
+        }
+        return x
+    }
+    if (n == NUM_U16) {
+        return v & 65535
+    }
+    if (n == NUM_I32) {
+        var x = v & 4294967295
+        if (x >= 2147483648) {
+            return x - 4294967296
+        }
+        return x
+    }
+    if (n == NUM_U32) {
+        return v & 4294967295
+    }
+    if (n == NUM_F32) {
+        return f32ToBits(bitsToF32(v))
+    }
+    return v
+}
+
+@Extern("burn_uadd")
+pub unsafe fun uadd(a: int, b: int, loc: int): int {
+    var r = wrappingAdd(a, b)
+    if ((r ^ -9223372036854775808) < (a ^ -9223372036854775808)) {
+        fatalError("integer overflow: ${unsignedText(a)} + ${unsignedText(b)} does not fit in uint64", loc)
+    }
+    return r
+}
+
+@Extern("burn_usub")
+pub unsafe fun usub(a: int, b: int, loc: int): int {
+    if ((a ^ -9223372036854775808) < (b ^ -9223372036854775808)) {
+        fatalError("integer overflow: ${unsignedText(a)} - ${unsignedText(b)} does not fit in uint64", loc)
+    }
+    return wrappingSub(a, b)
+}
+
+@Extern("burn_umul")
+pub unsafe fun umul(a: int, b: int, loc: int): int {
+    var hi = 0
+    var lo = 0
+    var x = a
+    var y = b
+    asm {
+        x86_64 {
+            mov rax, {x}
+            mul qword ptr {y}
+            mov {lo}, rax
+            mov {hi}, rdx
+        }
+        arm64 {
+            ldr x9, {x}
+            ldr x10, {y}
+            mul x11, x9, x10
+            umulh x12, x9, x10
+            str x11, {lo}
+            str x12, {hi}
+        }
+    }
+    if (hi != 0) {
+        fatalError("integer overflow: ${unsignedText(a)} * ${unsignedText(b)} does not fit in uint64", loc)
+    }
+    return lo
+}
+
+unsafe fun udivRaw(a: int, b: int, rem: bool): int {
+    var x = a
+    var y = b
+    var q = 0
+    var r = 0
+    asm {
+        x86_64 {
+            mov rax, {x}
+            xor edx, edx
+            div qword ptr {y}
+            mov {q}, rax
+            mov {r}, rdx
+        }
+        arm64 {
+            ldr x9, {x}
+            ldr x10, {y}
+            udiv x11, x9, x10
+            msub x12, x11, x10, x9
+            str x11, {q}
+            str x12, {r}
+        }
+    }
+    if (rem) {
+        return r
+    }
+    return q
+}
+
+@Extern("burn_udiv")
+pub unsafe fun udiv(a: int, b: int, loc: int): int {
+    if (b == 0) {
+        errDivZero(loc)
+    }
+    return udivRaw(a, b, false)
+}
+
+@Extern("burn_umod")
+pub unsafe fun umod(a: int, b: int, loc: int): int {
+    if (b == 0) {
+        errDivZero(loc)
+    }
+    return udivRaw(a, b, true)
+}
+
+@Extern("burn_u2f")
+pub unsafe fun u2f(v: int): int {
+    if (v >= 0) {
+        return floatBits(toFloat(v))
+    }
+    var half = (v >>> 1) | (v & 1)
+    return floatBits(toFloat(half) * 2.0)
+}
+
+@Extern("burn_f2num")
+pub unsafe fun f2num(bits: int, code: int, loc: int): int {
+    var x = bitsFloat(bits)
+    var t = cTrunc(x)
+    var n = code & 15
+    var name = "int"
+    var lo = -9223372036854775808.0
+    var hi = 9223372036854775808.0
+    if (n != 0) {
+        name = numName(n)
+        if (n == NUM_I8) {
+            lo = -128.0
+            hi = 128.0
+        } else if (n == NUM_U8) {
+            lo = 0.0
+            hi = 256.0
+        } else if (n == NUM_I16) {
+            lo = -32768.0
+            hi = 32768.0
+        } else if (n == NUM_U16) {
+            lo = 0.0
+            hi = 65536.0
+        } else if (n == NUM_I32) {
+            lo = -2147483648.0
+            hi = 2147483648.0
+        } else if (n == NUM_U32) {
+            lo = 0.0
+            hi = 4294967296.0
+        } else if (n == NUM_U64) {
+            lo = 0.0
+            hi = 18446744073709551616.0
+        }
+    }
+    if (x != x || t < lo || t >= hi) {
+        fatalError("cannot convert ${floatText(bits)} to ${name}", loc)
+    }
+    if (n == NUM_U64 && t >= 9223372036854775808.0) {
+        return toInt(t - 9223372036854775808.0) ^ (-9223372036854775807 - 1)
+    }
+    return toInt(t)
+}
+
+@Extern("burn_f32_round")
+pub unsafe fun f32Round(v: int): int {
+    return f32ToBits(bitsToF32(v))
+}
+
+@Extern("burn_now_ms")
+pub unsafe fun nowMs(): int {
+    return clockNs(0) / 1000000
+}
+
+@Extern("burn_now_sec")
+pub unsafe fun nowSec(): int {
+    var ns = clockNs(0)
+    return floatBits(toFloat(ns / 1000000000) + toFloat(ns % 1000000000) / 1000000000.0)
+}
+
+var clockStart = -1
+
+@Extern("burn_clock_ns")
+pub unsafe fun clockSinceStart(): int {
+    var mono = 1
+    if (isMacos()) {
+        mono = 6
+    }
+    var now = clockNs(mono)
+    if (clockStart < 0) {
+        clockStart = now
+    }
+    return now - clockStart
+}
+
+@Extern("nanosleep")
+fun cNanosleep(req: int, rem: int): Int32
+
+@Extern("burn_sleep")
+pub unsafe fun sleepMs(ms: int): int {
+    flush()
+    var t = ms
+    if (t < 0) {
+        t = 0
+    }
+    var ts = zalloc(32)
+    st64(ts, t / 1000)
+    st64(ts + 8, (t % 1000) * 1000000)
+    while (cNanosleep(ts, ts) != 0 && errno() == 4) {
+    }
+    cFree(ts)
+    return 0
+}
+
+@Extern("burn_mem")
+pub unsafe fun memOp(op: int, a: int, b: int, c: int): int {
+    if (op == 0) {
+        return memAlloc(a)
+    }
+    if (op == 1) {
+        if (a != 0) {
+            cFree(a - 16)
+        }
+        return 0
+    }
+    if (op == 2) {
+        if (a == 0) {
+            return memAlloc(b)
+        }
+        var size = b
+        if (size < 0 || size > 9223372036854775807 - 32) {
+            return 0
+        }
+        var old = ld64(a - 16)
+        var q = cRealloc(a - 16, size + 16)
+        if (q == 0) {
+            return 0
+        }
+        if (size > old) {
+            cMemset(q + 16 + old, 0, size - old)
+        }
+        st64(q, size)
+        return q + 16
+    }
+    if (op == 3) {
+        return ld8(a)
+    }
+    if (op == 4) {
+        return ld16(a)
+    }
+    if (op == 5) {
+        return ld32(a)
+    }
+    if (op == 6 || op == 11) {
+        return ld64(a)
+    }
+    if (op == 7) {
+        st8(a, b & 255)
+    } else if (op == 8) {
+        st16(a, b & 65535)
+    } else if (op == 9) {
+        st32(a, b & 4294967295)
+    } else if (op == 10 || op == 12) {
+        st64(a, b)
+    } else if (op == 13) {
+        if (c > 0) {
+            cMemmove(a, b, c)
+        }
+    } else if (op == 14) {
+        if (c > 0) {
+            cMemset(a, b & 255, c)
+        }
+    }
+    return 0
+}
+
+unsafe fun memAlloc(n: int): int {
+    var size = n
+    if (size < 0 || size > 9223372036854775807 - 32) {
+        return 0
+    }
+    var p = cCalloc(1, size + 16)
+    if (p == 0) {
+        return 0
+    }
+    st64(p, size)
+    return p + 16
+}

@@ -1,0 +1,509 @@
+/**
+ * The type table of the running program, like `meta.rs`.
+ *
+ * A program describes its types in a blob (the format of `meta::encode`). The runtime keeps the blob and indexes it:
+ * for each type its kind, the types it refers to and what the memory manager needs to know about it. bvm swaps the
+ * table while it runs a module, with `metaCurrent` and `metaSet`.
+ */
+import "heap.bn"
+import "sys.bn"
+
+pub const D_ERROR = 0
+pub const D_VOID = 1
+pub const D_NULL = 2
+pub const D_INT = 3
+pub const D_FLOAT = 4
+pub const D_BOOL = 5
+pub const D_STR = 6
+pub const D_ANY = 7
+pub const D_ARRAY = 8
+pub const D_MAP = 9
+pub const D_OPTIONAL = 10
+pub const D_FUNC = 11
+pub const D_FUTURE = 12
+pub const D_RECORD = 13
+pub const D_INTERFACE = 14
+pub const D_ENUM = 15
+pub const D_NUM = 16
+
+pub const TID_INT = 3
+pub const TID_STR = 6
+pub const TID_ANY = 7
+pub const TID_ARR_ANY = 8
+pub const TID_MAP_STR_ANY = 9
+pub const TID_ARR_STR = 10
+pub const TID_ARR_INT = 11
+
+pub const I_MANAGED = 1
+pub const I_TRACK = 2
+pub const I_BOX_TRACK = 4
+
+pub const NUM_I8 = 1
+pub const NUM_U8 = 2
+pub const NUM_I16 = 3
+pub const NUM_U16 = 4
+pub const NUM_I32 = 5
+pub const NUM_U32 = 6
+pub const NUM_U64 = 7
+pub const NUM_F32 = 8
+
+priv const M_BLOB = 0
+priv const M_LEN = 8
+priv const M_COUNT = 16
+priv const M_KIND = 24
+priv const M_A = 32
+priv const M_B = 40
+priv const M_INFO = 48
+priv const M_NAME = 56
+priv const M_LOCS = 64
+priv const M_NLOCS = 72
+priv const M_SIZE = 80
+
+/** The table in use, a block of `M_SIZE` bytes. */
+var current = 0
+
+/**
+ * Reads a type table from the blob at `p` (`n` bytes), which stays owned by the caller and must outlive the table.
+ *
+ * Per type it keeps the kind (`D_*`), `a` and `b` (the element, key and value types, the inner type, the code of a
+ * sized number, or a block with the fields of a record or the variants of an enum), and the place of its name.
+ */
+pub unsafe fun metaDecode(p: int, n: int): int {
+    var m = zalloc(M_SIZE)
+    st64(m + M_BLOB, p)
+    st64(m + M_LEN, n)
+    var at = p
+    var count = ld32(at)
+    at += 4
+    var kinds = zalloc(count)
+    var descs = zalloc(8 * count)
+    var bs = zalloc(8 * count)
+    var names = zalloc(8 * count)
+    st64(m + M_COUNT, count)
+    st64(m + M_KIND, kinds)
+    st64(m + M_A, descs)
+    st64(m + M_B, bs)
+    st64(m + M_NAME, names)
+    for t in 0..count {
+        var k = ld8(at)
+        at += 1
+        st8(kinds + t, k)
+        if (k == D_ARRAY || k == D_OPTIONAL || k == D_FUTURE) {
+            st64(descs + 8 * t, ld32(at))
+            at += 4
+        } else if (k == D_MAP) {
+            st64(descs + 8 * t, ld32(at))
+            st64(bs + 8 * t, ld32(at + 4))
+            at += 8
+        } else if (k == D_NUM) {
+            st64(descs + 8 * t, ld8(at))
+            at += 1
+        } else if (k == D_RECORD) {
+            st64(names + 8 * t, at - p)
+            at += 4 + ld32(at)
+            st64(bs + 8 * t, ld8(at))
+            at += 1
+            var nf = ld32(at)
+            at += 4
+            var fields = zalloc(8 + 24 * nf)
+            st64(fields, nf)
+            for i in 0..nf {
+                var nl = ld32(at)
+                st64(fields + 8 + 24 * i + 8, at + 4 - p)
+                st64(fields + 8 + 24 * i + 16, nl)
+                at += 4 + nl
+                st64(fields + 8 + 24 * i, ld32(at))
+                at += 4
+            }
+            var ni = ld32(at)
+            at += 4
+            var impls = zalloc(8 + 8 * ni)
+            st64(impls, ni)
+            for i in 0..ni {
+                st64(impls + 8 + 8 * i, ld32(at))
+                at += 4
+            }
+            st64(descs + 8 * t, fields)
+            st8(kinds + t, D_RECORD)
+            recordImpls(m, t, impls)
+        } else if (k == D_INTERFACE) {
+            st64(names + 8 * t, at - p)
+            at += 4 + ld32(at)
+        } else if (k > D_NUM || k == D_ENUM) {
+            st8(kinds + t, D_ENUM)
+            st64(names + 8 * t, at - p)
+            at += 4 + ld32(at)
+            var nv = ld32(at)
+            at += 4
+            var vars = zalloc(8 + 16 * nv)
+            st64(vars, nv)
+            for i in 0..nv {
+                var vl = ld32(at)
+                st64(vars + 8 + 16 * i, at + 4 - p)
+                st64(vars + 8 + 16 * i + 8, vl)
+                at += 4 + vl
+            }
+            st64(descs + 8 * t, vars)
+        }
+    }
+    var nl = ld32(at)
+    at += 4
+    var locs = zalloc(16 * nl + 8)
+    for i in 0..nl {
+        var ll = ld32(at)
+        st64(locs + 16 * i, at + 4 - p)
+        st64(locs + 16 * i + 8, ll)
+        at += 4 + ll
+    }
+    st64(m + M_LOCS, locs)
+    st64(m + M_NLOCS, nl)
+    st64(m + M_INFO, typeInfo(m))
+    return m
+}
+
+unsafe fun recordImpls(m: int, t: int, impls: int) {
+    var fields = ld64(ld64(m + M_A) + 8 * t)
+    var nf = ld64(fields)
+    var grown = grow(fields, 8 + 24 * nf + 8)
+    st64(grown + 8 + 24 * nf, impls)
+    st64(ld64(m + M_A) + 8 * t, grown)
+}
+
+/** Makes `m` the table in use. */
+pub unsafe fun metaSet(m: int) {
+    current = m
+}
+
+/** The table in use, built from the built-in types when no program has set one. */
+pub unsafe fun metaCurrent(): int {
+    if (current == 0) {
+        current = metaDecode(builtinBlob(), builtinLen)
+    }
+    return current
+}
+
+var builtinLen = 0
+
+unsafe fun builtinBlob(): int {
+    var b = zalloc(64)
+    st32(b, 12)
+    var at = 4
+    for c in 0..8 {
+        st8(b + at, c)
+        at += 1
+    }
+    st8(b + at, D_ARRAY)
+    st32(b + at + 1, TID_ANY)
+    at += 5
+    st8(b + at, D_MAP)
+    st32(b + at + 1, TID_STR)
+    st32(b + at + 5, TID_ANY)
+    at += 9
+    st8(b + at, D_ARRAY)
+    st32(b + at + 1, TID_STR)
+    at += 5
+    st8(b + at, D_ARRAY)
+    st32(b + at + 1, TID_INT)
+    at += 5
+    st32(b + at, 0)
+    at += 4
+    builtinLen = at
+    return b
+}
+
+pub unsafe fun typeCount(): int {
+    return ld64(metaCurrent() + M_COUNT)
+}
+
+/** The kind of type `t` (`D_*`), `D_ERROR` for a type the table does not have. */
+pub unsafe fun kindOf(t: int): int {
+    var m = metaCurrent()
+    if (t < 0 || t >= ld64(m + M_COUNT)) {
+        return D_ERROR
+    }
+    return ld8(ld64(m + M_KIND) + t)
+}
+
+/** The element type of an array, the key type of a map, the inner type of an optional or future, or the code of a sized number. */
+pub unsafe fun descA(t: int): int {
+    var m = metaCurrent()
+    if (t < 0 || t >= ld64(m + M_COUNT)) {
+        return 0
+    }
+    return ld64(ld64(m + M_A) + 8 * t)
+}
+
+/** The value type of a map, or whether a record is a struct (`1`) rather than a plain type. */
+pub unsafe fun descB(t: int): int {
+    var m = metaCurrent()
+    if (t < 0 || t >= ld64(m + M_COUNT)) {
+        return 0
+    }
+    return ld64(ld64(m + M_B) + 8 * t)
+}
+
+pub unsafe fun info(t: int): int {
+    var m = metaCurrent()
+    if (t < 0 || t >= ld64(m + M_COUNT)) {
+        return 0
+    }
+    return ld8(ld64(m + M_INFO) + t)
+}
+
+/** Whether values of type `t` are objects with a reference count. */
+pub unsafe fun managed(t: int): bool {
+    return (info(t) & I_MANAGED) != 0
+}
+
+/** Whether type `t` is stored in place rather than as an object: numbers, bools, enums, functions and void. */
+pub unsafe fun isUnboxed(t: int): bool {
+    var k = kindOf(t)
+    return k == D_INT || k == D_FLOAT || k == D_NUM || k == D_BOOL || k == D_ENUM || k == D_FUNC || k == D_VOID
+}
+
+pub unsafe fun fieldCount(t: int): int {
+    if (kindOf(t) != D_RECORD) {
+        return 0
+    }
+    return ld64(descA(t))
+}
+
+pub unsafe fun fieldType(t: int, i: int): int {
+    return ld64(descA(t) + 8 + 24 * i)
+}
+
+/** The name of field `i` of record `t`, as the address and length of its bytes. */
+pub unsafe fun fieldNameAt(t: int, i: int): int {
+    return ld64(metaCurrent() + M_BLOB) + ld64(descA(t) + 8 + 24 * i + 8)
+}
+
+pub unsafe fun fieldNameLen(t: int, i: int): int {
+    return ld64(descA(t) + 8 + 24 * i + 16)
+}
+
+/** Whether record `t` implements interface (or extends struct) `iface`. */
+pub unsafe fun implements(t: int, iface: int): bool {
+    if (kindOf(t) != D_RECORD) {
+        return false
+    }
+    var impls = ld64(descA(t) + 8 + 24 * fieldCount(t))
+    for i in 0..ld64(impls) {
+        if (ld64(impls + 8 + 8 * i) == iface) {
+            return true
+        }
+    }
+    return false
+}
+
+pub unsafe fun variantCount(t: int): int {
+    if (kindOf(t) != D_ENUM) {
+        return 0
+    }
+    return ld64(descA(t))
+}
+
+pub unsafe fun variantName(t: int, i: int): string {
+    var v = descA(t)
+    return rawText(ld64(metaCurrent() + M_BLOB) + ld64(v + 8 + 16 * i), ld64(v + 16 + 16 * i))
+}
+
+/** The declared name of a record, interface or enum. */
+pub unsafe fun declName(t: int): string {
+    var m = metaCurrent()
+    var at = ld64(m + M_BLOB) + ld64(ld64(m + M_NAME) + 8 * t)
+    return rawText(at + 4, ld32(at))
+}
+
+/** The source location `i` (`file:line:col`), or "". */
+pub unsafe fun location(i: int): string {
+    var m = metaCurrent()
+    if (i < 0 || i >= ld64(m + M_NLOCS)) {
+        return ""
+    }
+    var locs = ld64(m + M_LOCS)
+    return rawText(ld64(m + M_BLOB) + ld64(locs + 16 * i), ld64(locs + 16 * i + 8))
+}
+
+/** The name of a sized number type. */
+pub fun numName(code: int): string {
+    return match code {
+        1 => "int8"
+        2 => "uint8"
+        3 => "int16"
+        4 => "uint16"
+        5 => "int32"
+        6 => "uint32"
+        7 => "uint64"
+        else => "float32"
+    }
+}
+
+/** How a type is written in Burn, like `meta::type_name`. */
+pub unsafe fun typeName(t: int): string {
+    var k = kindOf(t)
+    if (k == D_ERROR) {
+        return "<error>"
+    }
+    if (k == D_VOID) {
+        return "void"
+    }
+    if (k == D_NULL) {
+        return "null"
+    }
+    if (k == D_INT) {
+        return "int"
+    }
+    if (k == D_FLOAT) {
+        return "float"
+    }
+    if (k == D_BOOL) {
+        return "bool"
+    }
+    if (k == D_STR) {
+        return "string"
+    }
+    if (k == D_ANY) {
+        return "any"
+    }
+    if (k == D_NUM) {
+        return numName(descA(t))
+    }
+    if (k == D_ARRAY) {
+        return "[${typeName(descA(t))}]"
+    }
+    if (k == D_MAP) {
+        return "{${typeName(descA(t))}: ${typeName(descB(t))}}"
+    }
+    if (k == D_OPTIONAL) {
+        return "${typeName(descA(t))}?"
+    }
+    if (k == D_FUNC) {
+        return "fun"
+    }
+    if (k == D_FUTURE) {
+        return "Future<${typeName(descA(t))}>"
+    }
+    if (k == D_RECORD) {
+        var name = declName(t)
+        if (name != "") {
+            return name
+        }
+        var out = "{"
+        for i in 0..fieldCount(t) {
+            if (i > 0) {
+                out += ", "
+            }
+            out += "${rawText(fieldNameAt(t, i), fieldNameLen(t, i))}: ${typeName(fieldType(t, i))}"
+        }
+        return out + "}"
+    }
+    return declName(t)
+}
+
+/** A new Burn string with the `n` bytes at `p`. */
+pub unsafe fun rawText(p: int, n: int): string {
+    var o = strNew(p, n)
+    var s = __str(o)
+    release(o)
+    return s
+}
+
+unsafe fun childCount(m: int, t: int): int {
+    var k = ld8(ld64(m + M_KIND) + t)
+    if (k == D_ARRAY || k == D_OPTIONAL || k == D_FUTURE) {
+        return 1
+    }
+    if (k == D_MAP) {
+        return 2
+    }
+    if (k == D_RECORD) {
+        return ld64(ld64(ld64(m + M_A) + 8 * t))
+    }
+    return 0
+}
+
+unsafe fun child(m: int, t: int, i: int): int {
+    var k = ld8(ld64(m + M_KIND) + t)
+    var a = ld64(ld64(m + M_A) + 8 * t)
+    if (k == D_RECORD) {
+        return ld64(a + 8 + 24 * i)
+    }
+    if (i == 1) {
+        return ld64(ld64(m + M_B) + 8 * t)
+    }
+    return a
+}
+
+unsafe fun isManagedKind(k: int): bool {
+    return k == D_STR || k == D_ANY || k == D_ARRAY || k == D_MAP || k == D_OPTIONAL || k == D_FUNC || k == D_FUTURE || k == D_RECORD || k == D_INTERFACE
+}
+
+unsafe fun anyLike(k: int): bool {
+    return k == D_ANY || k == D_INTERFACE || k == D_FUNC
+}
+
+/** For each type, whether it is managed, whether its objects can be part of a cycle, and whether boxing it can, like `meta::type_info`. */
+unsafe fun typeInfo(m: int): int {
+    var n = ld64(m + M_COUNT)
+    var kinds = ld64(m + M_KIND)
+    var out = zalloc(n)
+    var seen = zalloc(8 * n)
+    var stack = zalloc(8 * (n + 1))
+    var cap = n + 1
+    var stamp = 0
+    for t in 0..n {
+        var k = ld8(kinds + t)
+        if (!isManagedKind(k)) {
+            continue
+        }
+        var flags = I_MANAGED
+        stamp += 1
+        var sp = 0
+        for i in 0..childCount(m, t) {
+            if (sp >= cap) {
+                cap *= 2
+                stack = grow(stack, 8 * cap)
+            }
+            st64(stack + 8 * sp, child(m, t, i))
+            sp += 1
+        }
+        var reachesAny = anyLike(k)
+        var reachesSelf = false
+        while (sp > 0) {
+            sp -= 1
+            var c = ld64(stack + 8 * sp)
+            if (c < 0 || c >= n) {
+                continue
+            }
+            if (c == t) {
+                reachesSelf = true
+            }
+            if (ld64(seen + 8 * c) == stamp) {
+                continue
+            }
+            st64(seen + 8 * c, stamp)
+            if (anyLike(ld8(kinds + c))) {
+                reachesAny = true
+            }
+            for i in 0..childCount(m, c) {
+                if (sp >= cap) {
+                    cap *= 2
+                    stack = grow(stack, 8 * cap)
+                }
+                st64(stack + 8 * sp, child(m, c, i))
+                sp += 1
+            }
+        }
+        var container = k == D_ARRAY || k == D_MAP || k == D_RECORD || k == D_FUTURE
+        if (container && (reachesAny || reachesSelf)) {
+            flags = flags | I_TRACK
+        }
+        if (reachesAny) {
+            flags = flags | I_BOX_TRACK
+        }
+        st8(out + t, flags)
+    }
+    cFree(seen)
+    cFree(stack)
+    return out
+}

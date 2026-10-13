@@ -1,0 +1,452 @@
+/**
+ * HTTP requests for `std/http`, like `http.rs`: plain `http://` over a socket, and `https://` through the `curl`
+ * program.
+ */
+import "fmt.bn"
+import "heap.bn"
+import "io.bn"
+import "meta.bn"
+import "os.bn"
+import "sys.bn"
+import "text.bn"
+
+@Extern("getaddrinfo")
+fun cGetaddrinfo(host: int, port: int, hints: int, out: int): Int32
+
+@Extern("freeaddrinfo")
+fun cFreeaddrinfo(list: int): void
+
+@Extern("gai_strerror")
+fun cGaiStrerror(code: int): int
+
+@Extern("socket")
+fun cSocket(family: int, kind: int, protocol: int): Int32
+
+@Extern("connect")
+fun cConnect(fd: int, addr: int, len: int): Int32
+
+@Extern("setsockopt")
+fun cSetsockopt(fd: int, level: int, name: int, value: int, len: int): Int32
+
+@Extern("close")
+fun cCloseSocket(fd: int): Int32
+
+const VERSION = "26.1.0-experimental-6"
+
+/** The parts of a URL: whether it is `https`, the host, the port and the path with the query. */
+fun urlParts(url: string): [string] {
+    [string] none = []
+    var https = false
+    var rest = ""
+    if (startsWith(url, "https://")) {
+        https = true
+        rest = substring(url, 8, len(url))
+    } else if (startsWith(url, "http://")) {
+        rest = substring(url, 7, len(url))
+    } else {
+        return none
+    }
+    var hostport = rest
+    var path = "/"
+    var slash = indexOf(rest, "/")
+    var query = indexOf(rest, "?")
+    if (slash >= 0) {
+        hostport = substring(rest, 0, slash)
+        path = substring(rest, slash, len(rest))
+    } else if (query >= 0) {
+        hostport = substring(rest, 0, query)
+        path = substring(rest, query, len(rest))
+    }
+    if (startsWith(path, "?")) {
+        path = "/" + path
+    }
+    var port = "80"
+    if (https) {
+        port = "443"
+    }
+    var host = hostport
+    var colon = len(hostport) - 1
+    while (colon >= 0 && charAt(hostport, colon) != ":") {
+        colon -= 1
+    }
+    if (colon >= 0) {
+        var digits = substring(hostport, colon + 1, len(hostport))
+        var allDigits = digits != ""
+        for c in chars(digits) {
+            if (c < "0" || c > "9") {
+                allDigits = false
+            }
+        }
+        if (allDigits) {
+            host = substring(hostport, 0, colon)
+            port = "80"
+            if (len(digits) <= 5 && toInt(digits) <= 65535) {
+                port = "${toInt(digits)}"
+            }
+        }
+    }
+    if (host == "") {
+        return ["", "", "", ""]
+    }
+    var scheme = "http"
+    if (https) {
+        scheme = "https"
+    }
+    return [scheme, host, port, path]
+}
+
+/** The index of the bytes `sub` (`m` of them) in the `n` bytes at `p`, from `from`, or -1. */
+unsafe fun findIn(p: int, n: int, from: int, sub: int, m: int): int {
+    var i = from
+    while (i + m <= n) {
+        if (cMemcmp(p + i, sub, m) == 0) {
+            return i
+        }
+        i += 1
+    }
+    return -1
+}
+
+/** The lines of `s` like Rust's `str::lines`. */
+fun linesOf(s: string): [string] {
+    [string] out = []
+    if (s == "") {
+        return out
+    }
+    var parts = split(s, "\n")
+    var n = len(parts)
+    if (endsWith(s, "\n")) {
+        n -= 1
+    }
+    for i in 0..n {
+        var l = parts[i]
+        if (i < len(parts) - 1 && endsWith(l, "\r")) {
+            l = substring(l, 0, len(l) - 1)
+        }
+        out.push(l)
+    }
+    return out
+}
+
+fun asciiLower(s: string): string {
+    var out = ""
+    for c in chars(s) {
+        if (c >= "A" && c <= "Z") {
+            out += fromCharCode(charCode(c) + 32)
+        } else {
+            out += c
+        }
+    }
+    return out
+}
+
+fun asciiUpper(s: string): string {
+    var out = ""
+    for c in chars(s) {
+        if (c >= "a" && c <= "z") {
+            out += fromCharCode(charCode(c) - 32)
+        } else {
+            out += c
+        }
+    }
+    return out
+}
+
+/** A response with its status, the header lines and the body as a string object. */
+const RESP_STATUS = 0
+const RESP_HEADERS = 8
+const RESP_BODY = 16
+
+/** Splits the raw response in the `n` bytes at `p` into status, headers and body, skipping `100 Continue` parts. */
+unsafe fun splitResponse(p: int, n: int): int {
+    var sep = "\r\n\r\n"
+    var start = 0
+    while (true) {
+        var at = findIn(p, n, start, __addr(sep) + STR_BYTES, 4)
+        var headEnd = n
+        var bodyStart = n
+        if (at >= 0) {
+            headEnd = at
+            bodyStart = at + 4
+        }
+        var headObj = lossyText(p + start, headEnd - start)
+        var head = __str(headObj)
+        release(headObj)
+        var lines = linesOf(head)
+        var first = ""
+        if (len(lines) > 0) {
+            first = lines[0]
+        }
+        var status = 0
+        [string] words = []
+        for w in split(first, " ") {
+            if (trim(w) != "") {
+                words.push(trim(w))
+            }
+        }
+        if (len(words) > 1 && isInt(words[1])) {
+            status = toInt(words[1])
+        }
+        var tunnel = indexOf(asciiLower(first), "connection established") >= 0
+        var httpPrefix = "HTTP/"
+        var nextIsHttp = bodyStart + 5 <= n && cMemcmp(p + bodyStart, __addr(httpPrefix) + STR_BYTES, 5) == 0
+        if ((status / 100 == 1 || tunnel) && nextIsHttp) {
+            start = bodyStart
+            continue
+        }
+        var headers = ""
+        for i in 1..len(lines) {
+            if (i > 1) {
+                headers += "\n"
+            }
+            headers += lines[i]
+        }
+        var res = zalloc(24)
+        st64(res + RESP_STATUS, status)
+        var h = headers
+        st64(res + RESP_HEADERS, retain(__addr(h)))
+        st64(res + RESP_BODY, strNew(p + bodyStart, n - bodyStart))
+        return res
+    }
+}
+
+/** The body of a `Transfer-Encoding: chunked` response without the chunk sizes, as a new string object. */
+unsafe fun dechunk(body: int): int {
+    var p = body + STR_BYTES
+    var n = ld64(body + STR_LEN)
+    var out = bufNew()
+    var crlf = "\r\n"
+    var i = 0
+    while (i < n) {
+        var lineEnd = findIn(p, n, i, __addr(crlf) + STR_BYTES, 2)
+        if (lineEnd < 0) {
+            break
+        }
+        var sizeObj = lossyText(p + i, lineEnd - i)
+        var sizeText = trim(split(__str(sizeObj), ";")[0])
+        release(sizeObj)
+        var size = 0
+        if (!startsWith(sizeText, "-")) {
+            size = parseI64(sizeText, 16)
+            if (!lastParseOk()) {
+                size = 0
+            }
+        }
+        i = lineEnd + 2
+        if (size == 0) {
+            break
+        }
+        var end = i + size
+        if (end > n) {
+            end = n
+        }
+        bufAdd(out, p + i, end - i)
+        i = end + 2
+    }
+    return bufFinish(out)
+}
+
+/** The result of a request: status, body and headers, or status 0 with the error as the body. */
+unsafe fun result(status: int, body: string, headers: string): int {
+    var out = stringArray()
+    var parts = ["${status}", body, headers]
+    for s in parts {
+        var t = s
+        arrayPush(out, retain(__addr(t)))
+    }
+    return out
+}
+
+unsafe fun responseResult(res: int, chunked: bool): int {
+    var body = ld64(res + RESP_BODY)
+    var headers = __str(ld64(res + RESP_HEADERS))
+    if (chunked && indexOf(asciiLower(headers), "transfer-encoding: chunked") >= 0) {
+        var plain = dechunk(body)
+        release(body)
+        body = plain
+    }
+    var text = lossyText(body + STR_BYTES, ld64(body + STR_LEN))
+    var out = stringArray()
+    var status = "${ld64(res + RESP_STATUS)}"
+    arrayPush(out, retain(__addr(status)))
+    arrayPush(out, text)
+    arrayPush(out, retain(__addr(headers)))
+    release(body)
+    release(ld64(res + RESP_HEADERS))
+    cFree(res)
+    return out
+}
+
+/** A socket connected to `host` on `port`, or -1 with the error in `err[0]`. */
+unsafe fun connectTo(host: string, port: string, err: [string]): int {
+    var hints = zalloc(64)
+    st32(hints + 8, 1)
+    var list = zalloc(8)
+    var h = host
+    var pt = port
+    var r = cGetaddrinfo(__addr(h) + STR_BYTES, __addr(pt) + STR_BYTES, hints, list)
+    cFree(hints)
+    if (r != 0) {
+        var msg = cGaiStrerror(r)
+        err.push("failed to lookup address information: ${rawText(msg, cStrlen(msg))}")
+        cFree(list)
+        return -1
+    }
+    var first = ld64(list)
+    cFree(list)
+    var ai = first
+    var last = "could not resolve to any addresses"
+    var fd = -1
+    var addrAt = 24
+    if (isMacos()) {
+        addrAt = 32
+    }
+    while (ai != 0) {
+        var s = cSocket(ld32s(ai + 4), ld32s(ai + 8), ld32s(ai + 12))
+        if (s >= 0) {
+            if (cConnect(s, ld64(ai + addrAt), ld32(ai + 16)) == 0) {
+                fd = s
+                break
+            }
+            last = osError(errno())
+            cCloseSocket(s)
+        } else {
+            last = osError(errno())
+        }
+        ai = ld64(ai + 40)
+    }
+    cFreeaddrinfo(first)
+    if (fd < 0) {
+        err.push(last)
+    }
+    return fd
+}
+
+unsafe fun plainRequest(method: string, host: string, port: string, path: string, body: int, headers: [string]): int {
+    [string] err = []
+    var fd = connectTo(host, port, err)
+    if (fd < 0) {
+        return result(0, err[0], "")
+    }
+    var tv = zalloc(16)
+    st64(tv, 60)
+    if (isMacos()) {
+        cSetsockopt(fd, 65535, 4102, tv, 16)
+    } else {
+        cSetsockopt(fd, 1, 20, tv, 16)
+    }
+    cFree(tv)
+    var req = "${method} ${path} HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n"
+    var hasAgent = false
+    for h in headers {
+        if (startsWith(asciiLower(h), "user-agent:")) {
+            hasAgent = true
+        }
+    }
+    if (!hasAgent) {
+        req += "User-Agent: BurnLang/${VERSION}\r\n"
+    }
+    for h in headers {
+        req += h + "\r\n"
+    }
+    var n = ld64(body + STR_LEN)
+    if (n > 0 || method != "GET") {
+        req += "Content-Length: ${n}\r\n"
+    }
+    req += "\r\n"
+    var rq = req
+    if (!writeAll(fd, __addr(rq) + STR_BYTES, ld64(__addr(rq) + STR_LEN)) || !writeAll(fd, body + STR_BYTES, n)) {
+        var e = osError(errno())
+        cCloseSocket(fd)
+        return result(0, e, "")
+    }
+    var cap = 65536
+    var buf = zalloc(cap)
+    var got = 0
+    while (true) {
+        if (got == cap) {
+            cap *= 2
+            buf = grow(buf, cap)
+        }
+        var r = cRead(fd, buf + got, cap - got)
+        if (r < 0 && errno() == 4) {
+            continue
+        }
+        if (r < 0) {
+            var e = osError(errno())
+            cCloseSocket(fd)
+            cFree(buf)
+            return result(0, e, "")
+        }
+        if (r == 0) {
+            break
+        }
+        got += r
+    }
+    cCloseSocket(fd)
+    var res = splitResponse(buf, got)
+    cFree(buf)
+    return responseResult(res, true)
+}
+
+unsafe fun curlRequest(method: string, url: string, body: int, headers: [string]): int {
+    var args = ["-sS", "-i", "-X", method]
+    var hasAgent = false
+    for h in headers {
+        if (startsWith(asciiLower(h), "user-agent:")) {
+            hasAgent = true
+        }
+    }
+    if (!hasAgent) {
+        args.push("-H")
+        args.push("User-Agent: BurnLang/${VERSION}")
+    }
+    for h in headers {
+        args.push("-H")
+        args.push(h)
+    }
+    var n = ld64(body + STR_LEN)
+    if (n > 0) {
+        args.push("--data-binary")
+        args.push("@-")
+    }
+    args.push(url)
+    var curl = "curl"
+    var input = body + STR_BYTES
+    var res = runProcess(__addr(curl), __addr(args), true, input, n)
+    if (processFailure(res) != 0) {
+        var e = osError(processFailure(res))
+        processFree(res)
+        return result(0, "https requires curl: ${e}", "")
+    }
+    var out = ld64(res + 8)
+    if (processCode(res) != 0 && ld64(out + STR_LEN) == 0) {
+        var e = trim(__str(ld64(res + 16)))
+        processFree(res)
+        return result(0, e, "")
+    }
+    var split = splitResponse(out + STR_BYTES, ld64(out + STR_LEN))
+    processFree(res)
+    return responseResult(split, false)
+}
+
+@Extern("burn_http_request")
+pub unsafe fun httpRequest(method: int, url: int, body: int, headers: int): int {
+    var m = asciiUpper(textOf(method))
+    var u = textOf(url)
+    [string] hs = []
+    for i in 0..arrayLen(headers) {
+        hs.push(textOf(arrayAt(headers, i)))
+    }
+    var parts = urlParts(u)
+    if (len(parts) == 0) {
+        return result(0, "unsupported URL: ${u}", "")
+    }
+    if (parts[0] == "") {
+        return result(0, "invalid URL: ${u}", "")
+    }
+    if (parts[0] == "https") {
+        return curlRequest(m, u, body, hs)
+    }
+    return plainRequest(m, parts[1], parts[2], parts[3], body, hs)
+}

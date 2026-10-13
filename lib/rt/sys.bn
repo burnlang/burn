@@ -1,0 +1,379 @@
+/**
+ * The C library and raw memory for the runtime written in Burn.
+ *
+ * Everything here works on plain `int` addresses: the runtime is the code that gives Burn values their layout, so it
+ * cannot use them for itself.
+ */
+
+@Extern("malloc")
+fun cMalloc(n: int): int
+
+@Extern("calloc")
+fun cCalloc(n: int, size: int): int
+
+@Extern("realloc")
+fun cRealloc(p: int, n: int): int
+
+@Extern("free")
+fun cFree(p: int): void
+
+@Extern("memcpy")
+fun cMemcpy(to: int, from: int, n: int): int
+
+@Extern("memmove")
+fun cMemmove(to: int, from: int, n: int): int
+
+@Extern("memset")
+fun cMemset(to: int, byte: int, n: int): int
+
+@Extern("memcmp")
+fun cMemcmp(a: int, b: int, n: int): Int32
+
+@Extern("write")
+fun cWrite(fd: int, buf: int, n: int): int
+
+@Extern("read")
+fun cRead(fd: int, buf: int, n: int): int
+
+@Extern("exit")
+fun cExit(code: int): void
+
+@Extern("_exit")
+fun cExitNow(code: int): void
+
+@Extern("abort")
+fun cAbort(): void
+
+@Extern("getenv")
+fun cGetenv(name: int): int
+
+@Extern("strlen")
+fun cStrlen(s: int): int
+
+@Extern("isatty")
+fun cIsatty(fd: int): Int32
+
+@Extern("uname")
+fun cUname(buf: int): Int32
+
+@Extern("sysconf")
+fun cSysconf(name: int): int
+
+@Extern("pthread_self")
+fun cThreadSelf(): int
+
+/** Whether the program runs on macOS rather than Linux, which changes some constants of the C library. */
+var macos = false
+var platformKnown = false
+
+pub unsafe fun isMacos(): bool {
+    if (!platformKnown) {
+        var buf = cCalloc(1, 2048)
+        cUname(buf)
+        macos = ld8(buf) == 68 && ld8(buf + 1) == 97
+        cFree(buf)
+        platformKnown = true
+    }
+    return macos
+}
+
+/** Whether the program runs on an ARM64 processor rather than x86-64. */
+pub unsafe fun isArm64(): bool {
+    var r = 0
+    asm {
+        x86_64 {
+            xor eax, eax
+            mov {r}, rax
+        }
+        arm64 {
+            mov x9, #1
+            str x9, {r}
+        }
+    }
+    return r == 1
+}
+
+pub unsafe fun ld8(a: int): int {
+    return __mem(3, a, 0, 0)
+}
+
+pub unsafe fun ld16(a: int): int {
+    return __mem(4, a, 0, 0)
+}
+
+pub unsafe fun ld32(a: int): int {
+    return __mem(5, a, 0, 0)
+}
+
+pub unsafe fun ld64(a: int): int {
+    return __mem(6, a, 0, 0)
+}
+
+pub unsafe fun st8(a: int, v: int) {
+    __mem(7, a, v, 0)
+}
+
+pub unsafe fun st16(a: int, v: int) {
+    __mem(8, a, v, 0)
+}
+
+pub unsafe fun st32(a: int, v: int) {
+    __mem(9, a, v, 0)
+}
+
+pub unsafe fun st64(a: int, v: int) {
+    __mem(10, a, v, 0)
+}
+
+/** A signed 32-bit number read from memory. */
+pub unsafe fun ld32s(a: int): int {
+    var v = ld32(a)
+    if (v >= 2147483648) {
+        return v - 4294967296
+    }
+    return v
+}
+
+/** Memory for `n` bytes, all zero; stops the program when there is none. */
+pub unsafe fun zalloc(n: int): int {
+    var size = n
+    if (size < 1) {
+        size = 1
+    }
+    var p = cCalloc(1, size)
+    if (p == 0) {
+        outOfMemory(size)
+    }
+    return p
+}
+
+/** Makes the memory at `p` hold `n` bytes; stops the program when there is none. */
+pub unsafe fun grow(p: int, n: int): int {
+    var size = n
+    if (size < 1) {
+        size = 1
+    }
+    var q = cRealloc(p, size)
+    if (q == 0) {
+        outOfMemory(size)
+    }
+    return q
+}
+
+unsafe fun outOfMemory(n: int) {
+    var msg = "memory allocation of ${n} bytes failed\n"
+    writeAll(2, __addr(msg) + 24, ld64(__addr(msg) + 16))
+    cAbort()
+}
+
+/** Writes `n` bytes at `p` to the file descriptor `fd`, retrying until all are written or it fails. */
+pub unsafe fun writeAll(fd: int, p: int, n: int): bool {
+    var done = 0
+    while (done < n) {
+        var w = cWrite(fd, p + done, n - done)
+        if (w <= 0) {
+            if (w < 0 && errno() == 4) {
+                continue
+            }
+            return false
+        }
+        done += w
+    }
+    return true
+}
+
+@Extern("__errno_location", macos: "__error")
+fun cErrno(): int
+
+/** The `errno` of the calling thread. */
+pub unsafe fun errno(): int {
+    return ld32s(cErrno())
+}
+
+/** Adds `v` to the 32-bit number at `p` in one step, so other threads see the whole change, and gives the old value. */
+pub unsafe fun atomicAdd32(p: int, v: int): int {
+    var a = p
+    var x = v
+    asm {
+        x86_64 {
+            mov rcx, {a}
+            mov rax, {x}
+            lock xadd dword ptr [rcx], eax
+            mov eax, eax
+            mov {x}, rax
+        }
+        arm64 {
+            ldr x9, {a}
+            ldr x10, {x}
+        1:
+            ldaxr w11, [x9]
+            add w12, w11, w10
+            stlxr w13, w12, [x9]
+            cbnz w13, 1b
+            str x11, {x}
+        }
+    }
+    return x
+}
+
+/** Adds `v` to the 64-bit number at `p` in one step and gives the old value. */
+pub unsafe fun atomicAdd64(p: int, v: int): int {
+    var a = p
+    var x = v
+    asm {
+        x86_64 {
+            mov rcx, {a}
+            mov rax, {x}
+            lock xadd qword ptr [rcx], rax
+            mov {x}, rax
+        }
+        arm64 {
+            ldr x9, {a}
+            ldr x10, {x}
+        1:
+            ldaxr x11, [x9]
+            add x12, x11, x10
+            stlxr w13, x12, [x9]
+            cbnz w13, 1b
+            str x11, {x}
+        }
+    }
+    return x
+}
+
+/** Sets the 64-bit number at `p` to `new` if it is `old`; gives whether it did. */
+pub unsafe fun compareSwap64(p: int, old: int, new: int): bool {
+    var a = p
+    var o = old
+    var n = new
+    var ok = 0
+    asm {
+        x86_64 {
+            mov rcx, {a}
+            mov rax, {o}
+            mov rdx, {n}
+            lock cmpxchg qword ptr [rcx], rdx
+            sete al
+            movzx eax, al
+            mov {ok}, rax
+        }
+        arm64 {
+            ldr x9, {a}
+            ldr x10, {o}
+            ldr x11, {n}
+            mov x14, #0
+        1:
+            ldaxr x12, [x9]
+            cmp x12, x10
+            b.ne 2f
+            stlxr w13, x11, [x9]
+            cbnz w13, 1b
+            mov x14, #1
+        2:
+            clrex
+            str x14, {ok}
+        }
+    }
+    return ok != 0
+}
+
+/** Reads the 64-bit number at `p` after everything other threads wrote before it. */
+pub unsafe fun atomicLoad64(p: int): int {
+    return atomicAdd64(p, 0)
+}
+
+/** Takes the spin lock at `p`, a 64-bit number that is 0 when the lock is free. */
+pub unsafe fun lock(p: int) {
+    while (!compareSwap64(p, 0, 1)) {
+        spinPause()
+    }
+}
+
+pub unsafe fun unlock(p: int) {
+    compareSwap64(p, 1, 0)
+}
+
+unsafe fun spinPause() {
+    asm {
+        x86_64 {
+            pause
+        }
+        arm64 {
+            yield
+        }
+    }
+}
+
+/** The bits of a float, as an `int`. */
+pub unsafe fun floatBits(f: float): int {
+    var x = f
+    var bits = 0
+    asm {
+        x86_64 {
+            mov rax, {x}
+            mov {bits}, rax
+        }
+        arm64 {
+            ldr x9, {x}
+            str x9, {bits}
+        }
+    }
+    return bits
+}
+
+/** The float with the bits `b`. */
+pub unsafe fun bitsFloat(b: int): float {
+    var bits = b
+    var x = 0.0
+    asm {
+        x86_64 {
+            mov rax, {bits}
+            mov {x}, rax
+        }
+        arm64 {
+            ldr x9, {bits}
+            str x9, {x}
+        }
+    }
+    return x
+}
+
+/** A C string (bytes ending in a zero byte) with the bytes from `p` to `p + n`, in new memory the caller frees. */
+pub unsafe fun cString(p: int, n: int): int {
+    var c = zalloc(n + 1)
+    cMemcpy(c, p, n)
+    return c
+}
+
+/** Calls the C function at address `f` with three arguments and gives its result. */
+pub unsafe fun callC3(f: int, a: int, b: int, c: int): int {
+    var fp = f
+    var x = a
+    var y = b
+    var z = c
+    var r = 0
+    asm {
+        x86_64 {
+            push r12
+            mov rax, {fp}
+            mov rdi, {x}
+            mov rsi, {y}
+            mov rdx, {z}
+            mov r12, rsp
+            and rsp, -16
+            call rax
+            mov rsp, r12
+            pop r12
+            mov {r}, rax
+        }
+        arm64 {
+            ldr x9, {fp}
+            ldr x0, {x}
+            ldr x1, {y}
+            ldr x2, {z}
+            blr x9
+            str x0, {r}
+        }
+    }
+    return r
+}

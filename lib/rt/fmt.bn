@@ -1,0 +1,821 @@
+/**
+ * Turning values into text, and comparing them, like `fmt.rs`.
+ *
+ * Floats print with the fewest digits that read back as the same number, found with the free-format algorithm of
+ * Burger and Dybvig on big integers, so the output is the same as Rust's.
+ */
+import "heap.bn"
+import "map.bn"
+import "meta.bn"
+import "sys.bn"
+
+@Extern("log10")
+fun cLog10(x: float): float
+
+@Extern("ceil")
+fun cCeil(x: float): float
+
+priv const LIMBS = 120
+
+unsafe fun bnNew(): int {
+    return zalloc(8 * (LIMBS + 1))
+}
+
+unsafe fun bnSize(b: int): int {
+    return ld64(b)
+}
+
+unsafe fun bnLimb(b: int, i: int): int {
+    return ld64(b + 8 + 8 * i)
+}
+
+unsafe fun bnSetLimb(b: int, i: int, v: int) {
+    st64(b + 8 + 8 * i, v)
+}
+
+unsafe fun bnTrim(b: int) {
+    var n = bnSize(b)
+    while (n > 0 && bnLimb(b, n - 1) == 0) {
+        n -= 1
+    }
+    st64(b, n)
+}
+
+unsafe fun bnSet(b: int, v: int) {
+    bnSetLimb(b, 0, v & 4294967295)
+    bnSetLimb(b, 1, (v >>> 32) & 4294967295)
+    st64(b, 2)
+    bnTrim(b)
+}
+
+unsafe fun bnCopy(to: int, from: int) {
+    cMemcpy(to, from, 8 * (LIMBS + 1))
+}
+
+unsafe fun bnMulSmall(b: int, m: int) {
+    var carry = 0
+    var n = bnSize(b)
+    for i in 0..n {
+        var x = bnLimb(b, i) * m + carry
+        bnSetLimb(b, i, x & 4294967295)
+        carry = x >>> 32
+    }
+    while (carry != 0) {
+        bnSetLimb(b, n, carry & 4294967295)
+        carry = carry >>> 32
+        n += 1
+    }
+    st64(b, n)
+}
+
+unsafe fun bnShl(b: int, k: int) {
+    var words = k / 32
+    var bits = k % 32
+    var n = bnSize(b)
+    if (n == 0) {
+        return
+    }
+    if (bits > 0) {
+        var carry = 0
+        for i in 0..n {
+            var x = (bnLimb(b, i) << bits) | carry
+            bnSetLimb(b, i, x & 4294967295)
+            carry = x >>> 32
+        }
+        if (carry != 0) {
+            bnSetLimb(b, n, carry)
+            n += 1
+        }
+    }
+    if (words > 0) {
+        var i = n - 1
+        while (i >= 0) {
+            bnSetLimb(b, i + words, bnLimb(b, i))
+            i -= 1
+        }
+        for j in 0..words {
+            bnSetLimb(b, j, 0)
+        }
+        n += words
+    }
+    st64(b, n)
+}
+
+unsafe fun bnPow10(b: int, k: int) {
+    var left = k
+    while (left >= 9) {
+        bnMulSmall(b, 1000000000)
+        left -= 9
+    }
+    var m = 1
+    for i in 0..left {
+        m *= 10
+    }
+    if (m > 1) {
+        bnMulSmall(b, m)
+    }
+}
+
+unsafe fun bnCmp(a: int, b: int): int {
+    var na = bnSize(a)
+    var nb = bnSize(b)
+    if (na != nb) {
+        if (na < nb) {
+            return -1
+        }
+        return 1
+    }
+    var i = na - 1
+    while (i >= 0) {
+        var x = bnLimb(a, i)
+        var y = bnLimb(b, i)
+        if (x != y) {
+            if (x < y) {
+                return -1
+            }
+            return 1
+        }
+        i -= 1
+    }
+    return 0
+}
+
+/** `to = a + b`; `to` may be `a`. */
+unsafe fun bnAdd(to: int, a: int, b: int) {
+    var n = bnSize(a)
+    if (bnSize(b) > n) {
+        n = bnSize(b)
+    }
+    var carry = 0
+    for i in 0..n {
+        var x = bnLimb(a, i) + bnLimb(b, i) + carry
+        bnSetLimb(to, i, x & 4294967295)
+        carry = x >>> 32
+    }
+    if (carry != 0) {
+        bnSetLimb(to, n, carry)
+        n += 1
+    }
+    st64(to, n)
+}
+
+/** `a -= b`, with `a >= b`. */
+unsafe fun bnSub(a: int, b: int) {
+    var borrow = 0
+    for i in 0..bnSize(a) {
+        var x = bnLimb(a, i) - bnLimb(b, i) - borrow
+        if (x < 0) {
+            x += 4294967296
+            borrow = 1
+        } else {
+            borrow = 0
+        }
+        bnSetLimb(a, i, x)
+    }
+    bnTrim(a)
+}
+
+var digitsK = 0
+
+/**
+ * The shortest digits that identify the float `mant * 2^exp`, like Rust's `format_shortest`; `digitsK` is set so the
+ * value is `0.digits * 10^digitsK`. `lowest` is the mantissa of the smallest normal number (the hidden bit) and
+ * `minExp` the exponent of subnormal numbers, which change how far the next smaller number is.
+ */
+unsafe fun shortestDigits(mant: int, exp: int, lowest: int, minExp: int, value: float): string {
+    var r = bnNew()
+    var s = bnNew()
+    var mp = bnNew()
+    var mm = bnNew()
+    var even = mant % 2 == 0
+    if (exp >= 0) {
+        if (mant != lowest) {
+            bnSet(r, mant)
+            bnShl(r, exp + 1)
+            bnSet(s, 2)
+            bnSet(mp, 1)
+            bnShl(mp, exp)
+            bnSet(mm, 1)
+            bnShl(mm, exp)
+        } else {
+            bnSet(r, mant)
+            bnShl(r, exp + 2)
+            bnSet(s, 4)
+            bnSet(mp, 1)
+            bnShl(mp, exp + 1)
+            bnSet(mm, 1)
+            bnShl(mm, exp)
+        }
+    } else if (exp == minExp || mant != lowest) {
+        bnSet(r, mant)
+        bnShl(r, 1)
+        bnSet(s, 1)
+        bnShl(s, 1 - exp)
+        bnSet(mp, 1)
+        bnSet(mm, 1)
+    } else {
+        bnSet(r, mant)
+        bnShl(r, 2)
+        bnSet(s, 1)
+        bnShl(s, 2 - exp)
+        bnSet(mp, 2)
+        bnSet(mm, 1)
+    }
+    var k = toInt(cCeil(cLog10(value) - 0.0000000001))
+    if (k >= 0) {
+        bnPow10(s, k)
+    } else {
+        bnPow10(r, -k)
+        bnPow10(mp, -k)
+        bnPow10(mm, -k)
+    }
+    var t = bnNew()
+    bnAdd(t, r, mp)
+    var c = bnCmp(t, s)
+    if (c > 0 || (c == 0 && even)) {
+        k += 1
+        bnMulSmall(s, 10)
+    }
+    var out = ""
+    while (true) {
+        bnMulSmall(r, 10)
+        bnMulSmall(mp, 10)
+        bnMulSmall(mm, 10)
+        var d = 0
+        while (bnCmp(r, s) >= 0) {
+            bnSub(r, s)
+            d += 1
+        }
+        var lo = bnCmp(r, mm)
+        var tc1 = lo < 0 || (lo == 0 && even)
+        bnAdd(t, r, mp)
+        var hi = bnCmp(t, s)
+        var tc2 = hi > 0 || (hi == 0 && even)
+        if (!tc1 && !tc2) {
+            out += intText(d)
+            continue
+        }
+        if (tc1 && !tc2) {
+            out += intText(d)
+        } else if (!tc1 && tc2) {
+            out += intText(d + 1)
+        } else {
+            bnAdd(t, r, r)
+            if (bnCmp(t, s) < 0) {
+                out += intText(d)
+            } else {
+                out += intText(d + 1)
+            }
+        }
+        break
+    }
+    cFree(r)
+    cFree(s)
+    cFree(mp)
+    cFree(mm)
+    cFree(t)
+    digitsK = k
+    return out
+}
+
+fun zeros(n: int): string {
+    var out = ""
+    for i in 0..n {
+        out += "0"
+    }
+    return out
+}
+
+/** `digits` with the decimal point `k` digits in, like Rust's `{}`. */
+unsafe fun plainDecimal(digits: string, k: int): string {
+    var n = len(digits)
+    if (k <= 0) {
+        return "0." + zeros(-k) + digits
+    }
+    if (k >= n) {
+        return digits + zeros(k - n)
+    }
+    return substring(digits, 0, k) + "." + substring(digits, k, n)
+}
+
+/** `digits` in scientific notation, like Rust's `{:e}`. */
+unsafe fun expDecimal(digits: string, k: int): string {
+    var n = len(digits)
+    var out = substring(digits, 0, 1)
+    if (n > 1) {
+        out += "." + substring(digits, 1, n)
+    }
+    return out + "e" + intText(k - 1)
+}
+
+/** The digits of the integral float with bits `bits` and magnitude below 2^63. */
+unsafe fun integralText(f: float): string {
+    return intText(toInt(f))
+}
+
+/** A float as Burn prints it, like `float_str`: `NaN`, `Infinity`, `3.0`, `0.1`, `1e16`, `1.5e-7`. */
+pub unsafe fun floatText(bits: int): string {
+    var f = bitsFloat(bits)
+    if (f != f) {
+        return "NaN"
+    }
+    var neg = bits < 0
+    var biased = (bits >>> 52) & 2047
+    var frac = bits & 4503599627370495
+    if (biased == 2047) {
+        if (neg) {
+            return "-Infinity"
+        }
+        return "Infinity"
+    }
+    var sign = ""
+    if (neg) {
+        sign = "-"
+    }
+    var mag = f
+    if (neg) {
+        mag = -f
+    }
+    if (biased == 0 && frac == 0) {
+        return sign + "0.0"
+    }
+    if (mag < 10000000000000000.0 && mag == toFloat(toInt(mag))) {
+        return sign + intText(toInt(mag)) + ".0"
+    }
+    var mant = frac
+    var exp = -1074
+    if (biased != 0) {
+        mant = frac | 4503599627370496
+        exp = biased - 1075
+    }
+    var digits = shortestDigits(mant, exp, 4503599627370496, -1074, mag)
+    if (mag >= 10000000000000000.0 || mag < 0.000001) {
+        return sign + expDecimal(digits, digitsK)
+    }
+    return sign + plainDecimal(digits, digitsK)
+}
+
+/** A float32 as Burn prints it, like `float32_str`; `bits` holds the number as a 64-bit float. */
+pub unsafe fun float32Text(bits: int): string {
+    var f = bitsFloat(bits)
+    if (f != f) {
+        return "NaN"
+    }
+    var b32 = bitsToF32(bits)
+    var neg = (b32 & 2147483648) != 0
+    var biased = (b32 >>> 23) & 255
+    var frac = b32 & 8388607
+    if (biased == 255) {
+        if (neg) {
+            return "-Infinity"
+        }
+        return "Infinity"
+    }
+    var sign = ""
+    if (neg) {
+        sign = "-"
+    }
+    var mag = f
+    if (neg) {
+        mag = -f
+    }
+    if (biased == 0 && frac == 0) {
+        return sign + "0.0"
+    }
+    if (mag < 10000000000000000.0 && mag == toFloat(toInt(mag))) {
+        return sign + intText(toInt(mag)) + ".0"
+    }
+    var mant = frac
+    var exp = -149
+    if (biased != 0) {
+        mant = frac | 8388608
+        exp = biased - 150
+    }
+    var digits = shortestDigits(mant, exp, 8388608, -149, mag)
+    if (mag >= 10000000000000000.0 || mag < 0.000001) {
+        return sign + expDecimal(digits, digitsK)
+    }
+    return sign + plainDecimal(digits, digitsK)
+}
+
+/** `v` in decimal, made without `to_str`, which uses this. */
+pub unsafe fun intText(v: int): string {
+    var buf = zalloc(32)
+    var i = 31
+    var x = v
+    var neg = x < 0
+    if (x == 0) {
+        i -= 1
+        st8(buf + i, 48)
+    }
+    while (x != 0) {
+        var d = x % 10
+        if (d < 0) {
+            d = -d
+        }
+        i -= 1
+        st8(buf + i, 48 + d)
+        x = x / 10
+    }
+    if (neg) {
+        i -= 1
+        st8(buf + i, 45)
+    }
+    var s = strNew(buf + i, 31 - i)
+    cFree(buf)
+    var out = __str(s)
+    release(s)
+    return out
+}
+
+/** An unsigned 64-bit number in decimal. */
+pub unsafe fun unsignedText(v: int): string {
+    if (v >= 0) {
+        return intText(v)
+    }
+    var high = (v >>> 1) / 5
+    var low = wrappingSub(v, wrappingMul(high, 10))
+    return intText(high) + intText(low)
+}
+
+/** A sized number as Burn prints it. */
+pub unsafe fun numText(v: int, code: int): string {
+    if (code == NUM_U64) {
+        return unsignedText(v)
+    }
+    if (code == NUM_F32) {
+        return float32Text(v)
+    }
+    return intText(v)
+}
+
+/** `s` in double quotes with escapes, like `quote`. */
+pub fun quoted(s: string): string {
+    var out = "\""
+    for c in chars(s) {
+        if (c == "\"") {
+            out += "\\\""
+        } else if (c == "\\") {
+            out += "\\\\"
+        } else if (c == "\n") {
+            out += "\\n"
+        } else if (c == "\t") {
+            out += "\\t"
+        } else if (c == "\r") {
+            out += "\\r"
+        } else if (charCode(c) < 32) {
+            var h = "0123456789abcdef"
+            var n = charCode(c)
+            out += "\\u00" + substring(h, n >> 4, (n >> 4) + 1) + substring(h, n & 15, (n & 15) + 1)
+        } else {
+            out += c
+        }
+    }
+    return out + "\""
+}
+
+/** A new Burn string for the string object `p`, which is borrowed. */
+pub unsafe fun textOf(p: int): string {
+    return __str(p)
+}
+
+/** Value `v` of type `t` as `print` shows it, like `fmt::write`; strings inside other values get quotes. */
+pub unsafe fun valueText(v: int, t: int, nested: bool, depth: int): string {
+    if (depth > 64) {
+        return "..."
+    }
+    var k = kindOf(t)
+    if (k == D_INT) {
+        return intText(v)
+    }
+    if (k == D_FLOAT) {
+        return floatText(v)
+    }
+    if (k == D_NUM) {
+        return numText(v, descA(t))
+    }
+    if (k == D_BOOL) {
+        if (v != 0) {
+            return "true"
+        }
+        return "false"
+    }
+    if (k == D_STR) {
+        if (nested) {
+            return quoted(textOf(v))
+        }
+        return textOf(v)
+    }
+    if (k == D_VOID || k == D_NULL) {
+        return "null"
+    }
+    if (k == D_ERROR) {
+        return "<error>"
+    }
+    if (k == D_FUNC) {
+        return "<fun>"
+    }
+    if (k == D_FUTURE) {
+        return "<future>"
+    }
+    if (k == D_ANY) {
+        if (v == 0) {
+            return "null"
+        }
+        return valueText(boxVal(v), tidOf(v), nested, depth + 1)
+    }
+    if (k == D_OPTIONAL) {
+        if (v == 0) {
+            return "null"
+        }
+        var inner = descA(t)
+        if (isUnboxed(inner)) {
+            return valueText(boxVal(v), inner, nested, depth + 1)
+        }
+        return valueText(v, inner, nested, depth + 1)
+    }
+    if (k == D_ENUM) {
+        if (v >= 0 && v < variantCount(t)) {
+            return variantName(t, v)
+        }
+        return intText(v)
+    }
+    if (k == D_ARRAY) {
+        var e = descA(t)
+        var out = "["
+        for i in 0..arrayLen(v) {
+            if (i > 0) {
+                out += ", "
+            }
+            out += valueText(arrayAt(v, i), e, true, depth + 1)
+        }
+        return out + "]"
+    }
+    if (k == D_MAP) {
+        var kt = descA(t)
+        var vt = descB(t)
+        var out = "{"
+        for i in 0..mapLen(v) {
+            if (i > 0) {
+                out += ", "
+            }
+            out += valueText(mapKeyAt(v, i), kt, true, depth + 1)
+            out += ": "
+            out += valueText(mapValAt(v, i), vt, true, depth + 1)
+        }
+        return out + "}"
+    }
+    if (k == D_INTERFACE) {
+        if (v == 0) {
+            return "null"
+        }
+        return valueText(v, tidOf(v), nested, depth)
+    }
+    if (k == D_RECORD) {
+        if (v != 0 && kindOfObj(v) == K_DEAD) {
+            return "<destroyed ${typeName(tidOf(v))}>"
+        }
+        var real = tidOf(v)
+        if (real != t && kindOf(real) == D_RECORD) {
+            return valueText(v, real, nested, depth)
+        }
+        var name = declName(t)
+        var nf = fieldCount(t)
+        if (indexOf(name, ".") >= 0) {
+            var out = name
+            if (nf > 0) {
+                out += "("
+                for i in 0..nf {
+                    if (i > 0) {
+                        out += ", "
+                    }
+                    out += valueText(fieldOf(v, i), fieldType(t, i), true, depth + 1)
+                }
+                out += ")"
+            }
+            return out
+        }
+        var out = ""
+        if (name != "") {
+            out = name + " "
+        }
+        out += "{"
+        for i in 0..nf {
+            if (i > 0) {
+                out += ","
+            }
+            out += " " + rawText(fieldNameAt(t, i), fieldNameLen(t, i)) + ": "
+            out += valueText(fieldOf(v, i), fieldType(t, i), true, depth + 1)
+        }
+        if (nf > 0) {
+            out += " "
+        }
+        return out + "}"
+    }
+    return "<error>"
+}
+
+unsafe fun isNumberKind(t: int): bool {
+    var k = kindOf(t)
+    return k == D_INT || k == D_FLOAT || k == D_NUM
+}
+
+unsafe fun isFloatType(t: int): bool {
+    var k = kindOf(t)
+    return k == D_FLOAT || (k == D_NUM && descA(t) == NUM_F32)
+}
+
+/** Number `v` of type `t` as a float, like `as_f64`. */
+pub unsafe fun asFloat(v: int, t: int): float {
+    if (isFloatType(t)) {
+        return bitsFloat(v)
+    }
+    if (kindOf(t) == D_NUM && descA(t) == NUM_U64) {
+        if (v >= 0) {
+            return toFloat(v)
+        }
+        return toFloat(v >>> 1) * 2.0 + toFloat(v & 1)
+    }
+    return toFloat(v)
+}
+
+unsafe fun bytesEqual(a: int, b: int): bool {
+    var n = ld64(a + STR_LEN)
+    if (n != ld64(b + STR_LEN)) {
+        return false
+    }
+    return cMemcmp(a + STR_BYTES, b + STR_BYTES, n) == 0
+}
+
+/** Whether values `a` and `b` of type `t` are equal, like `fmt::equals`. */
+pub unsafe fun valuesEqual(a: int, b: int, t: int): bool {
+    var k = kindOf(t)
+    if (a == b) {
+        if (isFloatType(t)) {
+            var f = bitsFloat(a)
+            return f == f
+        }
+        return true
+    }
+    if (isFloatType(t)) {
+        return bitsFloat(a) == bitsFloat(b)
+    }
+    if (k == D_NUM || k == D_INT || k == D_BOOL || k == D_ENUM || k == D_VOID || k == D_NULL) {
+        return false
+    }
+    if (k == D_FUNC) {
+        if (a == 0 || b == 0 || kindOfObj(a) != K_STRUCT || kindOfObj(b) != K_STRUCT || structLen(a) != structLen(b)) {
+            return false
+        }
+        for i in 0..structLen(a) {
+            if (fieldOf(a, i) != fieldOf(b, i)) {
+                return false
+            }
+        }
+        return true
+    }
+    if (k == D_STR) {
+        return bytesEqual(a, b)
+    }
+    if (k == D_ANY) {
+        if (a == 0 || b == 0) {
+            return false
+        }
+        var ta = tidOf(a)
+        var tb = tidOf(b)
+        if (ta != tb) {
+            if (isNumberKind(ta) && isNumberKind(tb)) {
+                return asFloat(boxVal(a), ta) == asFloat(boxVal(b), tb)
+            }
+            return false
+        }
+        return valuesEqual(boxVal(a), boxVal(b), ta)
+    }
+    if (k == D_OPTIONAL) {
+        if (a == 0 || b == 0) {
+            return false
+        }
+        var inner = descA(t)
+        if (isUnboxed(inner)) {
+            return valuesEqual(boxVal(a), boxVal(b), inner)
+        }
+        return valuesEqual(a, b, inner)
+    }
+    if (k == D_ARRAY) {
+        var n = arrayLen(a)
+        if (n != arrayLen(b)) {
+            return false
+        }
+        var e = descA(t)
+        for i in 0..n {
+            if (!valuesEqual(arrayAt(a, i), arrayAt(b, i), e)) {
+                return false
+            }
+        }
+        return true
+    }
+    if (k == D_MAP) {
+        var n = mapLen(a)
+        if (n != mapLen(b)) {
+            return false
+        }
+        var vt = descB(t)
+        for i in 0..n {
+            var j = mapFind(b, mapKeyAt(a, i))
+            if (j < 0 || !valuesEqual(mapValAt(a, i), mapValAt(b, j), vt)) {
+                return false
+            }
+        }
+        return true
+    }
+    if (k == D_RECORD) {
+        if (a == 0 || b == 0 || tidOf(a) != tidOf(b)) {
+            return false
+        }
+        for i in 0..fieldCount(t) {
+            if (!valuesEqual(fieldOf(a, i), fieldOf(b, i), fieldType(t, i))) {
+                return false
+            }
+        }
+        return true
+    }
+    if (k == D_INTERFACE) {
+        if (a == 0 || b == 0 || tidOf(a) != tidOf(b)) {
+            return false
+        }
+        return valuesEqual(a, b, tidOf(a))
+    }
+    return false
+}
+
+unsafe fun sign(x: int, y: int): int {
+    if (x < y) {
+        return -1
+    }
+    if (x > y) {
+        return 1
+    }
+    return 0
+}
+
+unsafe fun usign(x: int, y: int): int {
+    return sign(x ^ -9223372036854775808, y ^ -9223372036854775808)
+}
+
+unsafe fun fsign(x: float, y: float): int {
+    if (x < y) {
+        return -1
+    }
+    if (x > y) {
+        return 1
+    }
+    return 0
+}
+
+/** How values `a` and `b` of type `t` are ordered (-1, 0 or 1), like `fmt::compare`. */
+pub unsafe fun valuesCompare(a: int, b: int, t: int): int {
+    var k = kindOf(t)
+    if (k == D_INT || k == D_ENUM) {
+        return sign(a, b)
+    }
+    if (isFloatType(t)) {
+        return fsign(bitsFloat(a), bitsFloat(b))
+    }
+    if (k == D_NUM) {
+        if (descA(t) == NUM_U64) {
+            return usign(a, b)
+        }
+        return sign(a, b)
+    }
+    if (k == D_BOOL) {
+        return usign(a, b)
+    }
+    if (k == D_STR) {
+        var na = ld64(a + STR_LEN)
+        var nb = ld64(b + STR_LEN)
+        var n = na
+        if (nb < n) {
+            n = nb
+        }
+        var c = cMemcmp(a + STR_BYTES, b + STR_BYTES, n)
+        if (c < 0) {
+            return -1
+        }
+        if (c > 0) {
+            return 1
+        }
+        return sign(na, nb)
+    }
+    if (k == D_ANY) {
+        if (a == 0 || b == 0) {
+            return usign(a, b)
+        }
+        var ta = tidOf(a)
+        var tb = tidOf(b)
+        if (ta == tb) {
+            return valuesCompare(boxVal(a), boxVal(b), ta)
+        }
+        return fsign(asFloat(boxVal(a), ta), asFloat(boxVal(b), tb))
+    }
+    return 0
+}

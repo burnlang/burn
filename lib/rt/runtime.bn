@@ -1,0 +1,19 @@
+/**
+ * The Burn runtime: memory, strings, collections, printing, errors, files, processes, JSON, HTTP and tasks for
+ * native programs, written in Burn. `burn build --target runtime` turns it into the `libburn_runtime.a` that native
+ * programs link against.
+ */
+import "coll.bn"
+import "core.bn"
+import "fmt.bn"
+import "heap.bn"
+import "http.bn"
+import "io.bn"
+import "json.bn"
+import "map.bn"
+import "meta.bn"
+import "os.bn"
+import "signal.bn"
+import "sys.bn"
+import "task.bn"
+import "text.bn"

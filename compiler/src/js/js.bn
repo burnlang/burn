@@ -273,6 +273,13 @@ priv def struct Gen(c: Checker, p: HProgram) {
         }
     }
 
+    fun rtCallJs(name: string, xs: [HExpr]): string {
+        if (name == "CFun") {
+            return "0"
+        }
+        return "$R.${name}(${args(xs)})"
+    }
+
     fun args(xs: [HExpr]): string {
         [string] parts = []
         for x in xs {
@@ -410,7 +417,7 @@ priv def struct Gen(c: Checker, p: HProgram) {
             HKind.Call(func, xs) => "f${func}(${args(xs)})"
             HKind.CallIndirect(callee, xs) => indirect(callee, xs)
             HKind.CallIface(slot, xs) => "$ci($I${slot}, ${args(xs)})"
-            HKind.Rt(name, xs) => "$R.${name}(${args(xs)})"
+            HKind.Rt(name, xs) => rtCallJs(name, xs)
             HKind.Spawn(func, xs) => "({v: f${func}(${args(xs)})})"
             HKind.FuncRef(func) => "f${func}"
             HKind.NewStruct(ty, xs) => "$rec(${ty}, [${args(xs)}])"
