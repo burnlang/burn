@@ -51,6 +51,9 @@ pub def type Qualified {
     string name
 }
 
+/** The key in a block's scope of an import inside it: `IMPORT_KEY` and the alias, or `IMPORT_KEY`, `*` and the module. */
+pub const IMPORT_KEY = "\u{1}"
+
 pub def type FuncParam {
     string name
     int ty
@@ -511,6 +514,7 @@ const MAX_INSTANCES = 256
 /** The type checker, ported from `check/` part by part. This part declares every type, function and global. */
 pub def struct Checker(loaded: Loaded) {
     Types types = new Types()
+    int localImports = 0
     [string] libPaths = []
     bool wantIndex = false
     [Builtin]? builtinDocList = null
@@ -1051,8 +1055,30 @@ pub def struct Checker(loaded: Loaded) {
         return loaded.files[mods[mi].file].name
     }
 
-    /** The module that `alias` names in `module`, from an import with `as`. */
+    fun inLocalScope(module: int): bool {
+        return localImports > 0 && len(fx) > 0 && module == curModule()
+    }
+
+    /** The module that `alias` names in `module`, from an import with `as` in a block around the code or at the top of the file. */
     fun aliasTarget(module: int, alias: string): int? {
+        if (inLocalScope(module)) {
+            var d = len(fx) - 1
+            while (d >= 0) {
+                var scopes = fx[d].scopes
+                var i = len(scopes) - 1
+                while (i >= 0) {
+                    var l = scopes[i]["${IMPORT_KEY}${alias}"]
+                    if (l != null) {
+                        return l.slot
+                    }
+                    i -= 1
+                }
+                if (!fx[d].lambda) {
+                    break
+                }
+                d -= 1
+            }
+        }
         return mods[module].aliases[alias]
     }
 
@@ -1069,9 +1095,33 @@ pub def struct Checker(loaded: Loaded) {
         return Qualified { module: target, name: substring(name, dot + 1) }
     }
 
-    /** The modules whose public names `module` sees without a qualifier: the ones it imports without `as`. */
+    /** The modules whose public names `module` sees without a qualifier: its imports, and those of the blocks around the code. */
     fun importsOf(module: int): [int] {
-        return mods[module].imports
+        if (!inLocalScope(module)) {
+            return mods[module].imports
+        }
+        [int] out = []
+        for i in mods[module].imports {
+            out.push(i)
+        }
+        var d = len(fx) - 1
+        while (d >= 0) {
+            for scope in fx[d].scopes {
+                for k in keys(scope) {
+                    if (startsWith(k, "${IMPORT_KEY}*")) {
+                        var l = scope[k]
+                        if (l != null && !contains(out, l.slot)) {
+                            out.push(l.slot)
+                        }
+                    }
+                }
+            }
+            if (!fx[d].lambda) {
+                break
+            }
+            d -= 1
+        }
+        return out
     }
 
     /** Reports `Alias.name` when the module of the alias has no public `name`; false when `name` has no alias. */
@@ -2830,6 +2880,9 @@ pub def struct Checker(loaded: Loaded) {
             {string: int} aliases = {}
             for r in m.imports {
                 var a = r.alias
+                if (r.local) {
+                    continue
+                }
                 if (a == null) {
                     if (!contains(imports, r.target)) {
                         imports.push(r.target)
@@ -2937,7 +2990,7 @@ pub def struct Checker(loaded: Loaded) {
             var m = loaded.modules[mi]
             for r in m.imports {
                 var a = r.alias
-                if (a != null && (has(mods[mi].values, a) || has(mods[mi].types, a) || has(mods[mi].gtypes, a) || has(mods[mi].gfuncs, a))) {
+                if (a != null && !r.local && (has(mods[mi].values, a) || has(mods[mi].types, a) || has(mods[mi].gtypes, a) || has(mods[mi].gfuncs, a))) {
                     error(SrcSpan { file: m.file, start: r.start, end: r.end }, "`${a}` is declared in this file, so it cannot also name an imported module")
                 }
             }

@@ -58,6 +58,7 @@ pub fun symbolOf(op: BinOp): string {
 pub def type Module {
     [Item] items
     bool hasDestroy
+    [ImportPath] nested
 }
 
 pub def type AnnArg {
@@ -214,7 +215,8 @@ pub def enum StmtKind {
     Extend(target: Ident, decl: FunDecl),
     Destroy(target: Ident, args: [Expr]),
     Unsafe(block: Block),
-    Asm(sections: [AsmSection], fallback: Block?)
+    Asm(sections: [AsmSection], fallback: Block?),
+    Import(paths: [ImportPath])
 }
 
 /** One section of an `asm` block: the target it is written for, and its code as written, between the braces at `span`. */

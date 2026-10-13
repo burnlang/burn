@@ -741,7 +741,9 @@ pub fun identExpr(c: Checker, name: string, span: SrcSpan): HExpr {
         if (len(c.fx) > 0) {
             for s in c.ctx().scopes {
                 for n in keys(s) {
-                    cands.push(n)
+                    if (!startsWith(n, IMPORT_KEY)) {
+                        cands.push(n)
+                    }
                 }
             }
         }

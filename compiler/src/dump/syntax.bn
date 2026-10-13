@@ -397,6 +397,7 @@ def struct Writer() {
                 exprs("arg", args)
                 close()
             }
+            StmtKind.Import(paths) => imports(label, paths)
             StmtKind.Unsafe(b) => {
                 open(label, "Unsafe ${s}")
                 block("", b)

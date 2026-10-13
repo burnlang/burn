@@ -1,0 +1,8 @@
+fun f(): float {
+    if (true) {
+        import "std/math"
+        print(sqrt(4.0))
+    }
+    return sqrt(9.0)
+}
+print(f())

@@ -1,0 +1,9 @@
+fun f() {
+    import "std/memory" as Mem
+}
+
+fun g() {
+    unsafe {
+        Mem.Memory.alloc(1)
+    }
+}
