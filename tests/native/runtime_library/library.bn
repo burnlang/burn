@@ -1,0 +1,14 @@
+var counter = 40
+
+@Extern("lib_bump")
+fun bump(by: int): int {
+    counter += by
+    return counter
+}
+
+@Extern("lib_mean")
+fun mean(a: float, b: float): float {
+    return (a + b) / 2.0
+}
+
+counter += 1

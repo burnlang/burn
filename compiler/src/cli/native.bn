@@ -159,6 +159,26 @@ pub fun buildNative(c: Compiled, opts: NativeOptions): string? {
     return link(asm, opts.output, opts.strip, pathJoin(dir, "libburn_runtime.a"), trim(libsText))
 }
 
+/** Writes the assembly of the runtime library written in Burn to `output`, for `scripts/native-runtime.sh` to assemble. Returns null or the error. */
+pub fun buildRuntimeLibrary(c: Compiled, output: string): string? {
+    var problem = runtimeLibraryProblem(c.checker, c.program)
+    if (problem != null) {
+        return problem
+    }
+    var arch = "x86_64"
+    if (endsWith(targetPlatform(), "aarch64")) {
+        arch = "arm64"
+    }
+    var asmIssue = asmProblem(c.checker, arch)
+    if (asmIssue != null) {
+        return asmIssue
+    }
+    if (!writeFile(output, runtimeLibraryAssembly(c.checker, c.program, targetPlatform()))) {
+        return "cannot write ${output}"
+    }
+    return null
+}
+
 /** The x86-64 assembly of a checked program, as `burn dump --asm` prints it. */
 pub fun nativeAssemblyOf(c: Compiled): string {
     [[int]] libs = []
