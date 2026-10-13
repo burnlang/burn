@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Native executables read and write raw memory without calling the runtime: `Memory.load8`/`16`/`32`/`64`, `loadFloat` and the matching stores compile to single load and store instructions on x86-64 and arm64 (a loop of stores and loads runs about 1.5 times as fast). `alloc`, `resize`, `free`, `copy` and `fill` still go through the runtime.
+
 ## 26.1.0-experimental-6
 
 Modules: import aliases and imports inside functions and blocks.
