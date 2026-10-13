@@ -10,7 +10,7 @@ language server are Burn programs that run on **bvm**, the Burn virtual machine,
 run instantly on bvm during development and compile to small **native executables**, portable bytecode,
 self-contained `.bar` archives or JavaScript for shipping.
 
-Current version: **26.1.0-experimental-4**
+Current version: **26.1.0-experimental-5**
 
 > [!WARNING]
 > Burn is **not** ready for production. Syntax may still change. Please report bugs as issues.
@@ -66,11 +66,14 @@ fun main() {
   longer used, cycles included, with no pauses and nothing to write by hand
 - `async fun` / `await` running on real threads
 - Tiny executables without the standard library: `std = false` in burn.toml or `--no-std`
+- Low-level code when you need it: `unsafe` blocks and functions, inline assembly with a section per target
+  (x86-64, arm64, bvm, JavaScript) and an `else` fallback in Burn, and raw memory with `std/memory`
 - Four ways to ship sharing one type checker and runtime: native x86-64 and arm64 (Apple silicon), bvm bytecode, `.bar` archives, JavaScript
 - Modules with `pub` and `priv`
 - Standard library for dates, times, HTTP, JSON, math, strings, processes and files
 - Projects and packages: `burn init github.com/you/app`, `burn.toml`, `burn.lock` and ash, the package manager
-- A self-hosted compiler: the Burn compiler is written in Burn and builds itself
+- A self-hosted compiler: the Burn compiler is written in Burn and builds itself, starting from a compiled copy kept in
+  the repository, so building Burn only needs Rust
 - bvm, a general-purpose virtual machine with its own assembly language, bytecode format and verifier, which other languages can target too
 - Write once, run everywhere: `.bar` archives bundle an application's bytecode and resources and run wherever bvm runs
 - Mixins: `@Inject`, `@Overwrite` and `@Redirect` rewrite existing bytecode functions when modules are linked

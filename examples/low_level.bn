@@ -1,0 +1,64 @@
+import "std/memory"
+
+/** Counts the bits that are set, with inline assembly where there is some and Burn everywhere else. */
+fun popcount(x: int): int {
+    var n = 0
+    unsafe {
+        asm {
+            x86_64 {
+                mov rax, {x}
+                xor ecx, ecx
+            1:
+                test rax, rax
+                jz 2f
+                lea rdx, [rax - 1]
+                and rax, rdx
+                inc rcx
+                jmp 1b
+            2:
+                mov {n}, rcx
+            }
+            arm64 {
+                ldr x9, {x}
+                mov x10, #0
+            1:
+                cbz x9, 2f
+                sub x11, x9, #1
+                and x9, x9, x11
+                add x10, x10, #1
+                b 1b
+            2:
+                str x10, {n}
+            }
+            else {
+                var v = x
+                while (v != 0) {
+                    v = v & (v - 1)
+                    n += 1
+                }
+            }
+        }
+    }
+    return n
+}
+
+/** Packs RGBA colors into raw memory, 4 bytes each, and reads them back. */
+fun packColors(colors: [[int]]): [int] {
+    [int] out = []
+    unsafe {
+        var block = Memory.alloc(4 * len(colors))
+        for i, c in colors {
+            for j in 0..4 {
+                Memory.store8(block + 4 * i + j, c[j])
+            }
+        }
+        for i in 0..len(colors) {
+            out.push(Memory.load32(block + 4 * i))
+        }
+        Memory.free(block)
+    }
+    return out
+}
+
+print(popcount(255), popcount(1 << 40 | 7))
+print(packColors([[255, 0, 0, 255], [0, 128, 255, 255]]))
