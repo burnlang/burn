@@ -1,0 +1,4 @@
+@Extern("labs")
+fun labs(x: int): int
+
+print(labs(-3))

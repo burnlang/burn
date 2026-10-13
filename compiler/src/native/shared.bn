@@ -317,3 +317,60 @@ pub fun locArgOf(x: HExpr): int {
     }
     return NONE
 }
+
+/** How a C function hands its result back: as it is, in a float register, nothing, or a smaller integer to widen. */
+pub def enum CRet {
+    Plain,
+    Float,
+    Void,
+    Signed(bits: int),
+    Unsigned(bits: int)
+}
+
+/** How a C function of return type `t` hands its result back. */
+pub fun cRet(c: Checker, t: int): CRet {
+    if (t == T_VOID) {
+        return CRet.Void
+    }
+    var k = c.types.kindOf(t)
+    if (k is Ty.Float) {
+        return CRet.Float
+    }
+    if (k is Ty.Bool) {
+        return CRet.Unsigned(8)
+    }
+    if (k is Ty.Num) {
+        return match k.code {
+            0 => CRet.Signed(8)
+            1 => CRet.Unsigned(8)
+            2 => CRet.Signed(16)
+            3 => CRet.Unsigned(16)
+            4 => CRet.Signed(32)
+            5 => CRet.Unsigned(32)
+            else => CRet.Plain
+        }
+    }
+    return CRet.Plain
+}
+
+/** For each parameter of `f`, whether C passes it in a float register. */
+pub fun cFloatParams(c: Checker, f: HFunc): [bool] {
+    [bool] out = []
+    for i in 0..f.params {
+        out.push(i < len(f.locals) && c.types.kindOf(f.locals[i]) is Ty.Float)
+    }
+    return out
+}
+
+/** The C symbol of a function with a body marked `@Extern`, which C code can call, or null. */
+pub fun cExport(f: HFunc): string? {
+    if (f.external != null) {
+        return null
+    }
+    for a in f.annotations {
+        if (a.name == "Extern") {
+            return strArg(a, "name") ?? f.name
+        }
+    }
+    return null
+}

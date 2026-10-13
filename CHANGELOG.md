@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Calling C from native code: `@Extern("strlen") fun strlen(s: int): int`, a function without a body, is the C function `strlen`. Native executables call it with the platform's C calling convention (x86-64 System V and arm64 AAPCS), so Burn can use libc and any C library that is linked in. Parameters and results are numbers and bools: `int`, sized integers (widened from what C returns), `float` (a C `double`) and `bool`, up to 6 integer and 8 float parameters; memory is passed as an `int` address. Calling one needs unsafe code. On bvm and in JavaScript, calling one is a runtime error that names the C function.
+- C calling Burn: a function with a body marked `@Extern("name")` is also visible to C under that symbol, so C code can call it, for example as a `qsort` comparator. It keeps the registers C expects to survive and takes its arguments from C's registers.
 - Native executables read and write raw memory without calling the runtime: `Memory.load8`/`16`/`32`/`64`, `loadFloat` and the matching stores compile to single load and store instructions on x86-64 and arm64 (a loop of stores and loads runs about 1.5 times as fast). `alloc`, `resize`, `free`, `copy` and `fill` still go through the runtime.
 
 ## 26.1.0-experimental-6
