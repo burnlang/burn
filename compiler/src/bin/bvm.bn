@@ -1,5 +1,6 @@
 import "../bvm/binary.bn"
 import "../bvm/files.bn"
+import "../bvm/interp.bn"
 import "../vm/asm.bn"
 import "std/process"
 
@@ -18,6 +19,16 @@ fun main() {
     if (d.error != "") {
         eprint("error: ${a[1]}: ${d.error}")
         exit(1)
+    }
+    if (a[0] == "run") {
+        var p = prepare(d.module, [])
+        if (p.error != "") {
+            eprint("error: ${a[1]}: ${p.error}")
+            exit(1)
+        }
+        setProgramArgs(slice(a, 2, len(a)))
+        runEntry(p)
+        return
     }
     if (a[0] == "dis") {
         write(disassemble(d.module))

@@ -1,0 +1,223 @@
+/**
+ * The type table of a module that runs in the interpreter. The program the interpreter is part of has a type table
+ * of its own, and both kinds of objects live in one runtime, so the module's types are added after the program's:
+ * the built-in types keep their numbers, and every other type of the module gets a new one.
+ */
+import "../vm/module.bn"
+import "binary.bn"
+import "std/memory"
+
+@Extern("burn_rt_meta_blob")
+fun metaBlob(): int
+
+@Extern("burn_rt_meta_len")
+fun metaLen(): int
+
+@Extern("burn_rt_set_meta")
+fun setMeta(blob: int, n: int): int
+
+/** Where a module's types and locations start in the combined type table. */
+pub def type TypeMap {
+    int types
+    int locs
+    int moduleLocs
+    int total
+}
+
+/** The number in the combined table of type `t` of the module. */
+pub fun mapType(tm: TypeMap, t: int): int {
+    if (t < FIRST_USER_TYPE) {
+        return t
+    }
+    return tm.types + t - FIRST_USER_TYPE
+}
+
+/** The number in the combined table of location `l` of the module; locations that do not exist stay as they are. */
+pub fun mapLoc(tm: TypeMap, l: int): int {
+    if (l < 0 || l >= tm.moduleLocs) {
+        return l
+    }
+    return tm.locs + l
+}
+
+priv def struct Bytes() {
+    [int] b = []
+
+    fun u8(v: int) {
+        b.push(v & 255)
+    }
+
+    fun u32(v: int) {
+        u8(v)
+        u8(v >>> 8)
+        u8(v >>> 16)
+        u8(v >>> 24)
+    }
+
+    fun s(text: string) {
+        var bs = bytes(text)
+        u32(len(bs))
+        for x in bs {
+            b.push(x as int)
+        }
+    }
+}
+
+fun encodeDesc(w: Bytes, tm: TypeMap, d: Desc) {
+    if (d is Desc.Error) {
+        w.u8(0)
+    } else if (d is Desc.Void) {
+        w.u8(1)
+    } else if (d is Desc.Null) {
+        w.u8(2)
+    } else if (d is Desc.Int) {
+        w.u8(3)
+    } else if (d is Desc.Float) {
+        w.u8(4)
+    } else if (d is Desc.Bool) {
+        w.u8(5)
+    } else if (d is Desc.Str) {
+        w.u8(6)
+    } else if (d is Desc.Any) {
+        w.u8(7)
+    } else if (d is Desc.Array) {
+        w.u8(8)
+        w.u32(mapType(tm, d.elem))
+    } else if (d is Desc.Map) {
+        w.u8(9)
+        w.u32(mapType(tm, d.key))
+        w.u32(mapType(tm, d.value))
+    } else if (d is Desc.Optional) {
+        w.u8(10)
+        w.u32(mapType(tm, d.inner))
+    } else if (d is Desc.Func) {
+        w.u8(11)
+    } else if (d is Desc.Future) {
+        w.u8(12)
+        w.u32(mapType(tm, d.inner))
+    } else if (d is Desc.Record) {
+        w.u8(13)
+        w.s(d.name)
+        if (d.isClass) {
+            w.u8(1)
+        } else {
+            w.u8(0)
+        }
+        w.u32(len(d.fields))
+        for f in d.fields {
+            w.s(f.name)
+            w.u32(mapType(tm, f.ty))
+        }
+        w.u32(len(d.implements))
+        for t in d.implements {
+            w.u32(mapType(tm, t))
+        }
+    } else if (d is Desc.Interface) {
+        w.u8(14)
+        w.s(d.name)
+    } else if (d is Desc.Num) {
+        w.u8(16)
+        w.u8(d.code + 1)
+    } else if (d is Desc.Enum) {
+        w.u8(15)
+        w.s(d.name)
+        w.u32(len(d.variants))
+        for v in d.variants {
+            w.s(v)
+        }
+    }
+}
+
+unsafe fun u32At(p: int): int {
+    return Memory.load32(p)
+}
+
+/** The number of bytes the type at `p` takes in an encoded type table. */
+unsafe fun descSize(p: int): int {
+    var k = Memory.load8(p)
+    if (k == 8 || k == 10 || k == 12) {
+        return 5
+    }
+    if (k == 9) {
+        return 9
+    }
+    if (k == 16) {
+        return 2
+    }
+    if (k == 13) {
+        var at = p + 1
+        at += 4 + u32At(at)
+        at += 1
+        var nf = u32At(at)
+        at += 4
+        for i in 0..nf {
+            at += 4 + u32At(at)
+            at += 4
+        }
+        var ni = u32At(at)
+        at += 4 + 4 * ni
+        return at - p
+    }
+    if (k == 14) {
+        return 5 + u32At(p + 1)
+    }
+    if (k > 16 || k == 15) {
+        var at = p + 1
+        at += 4 + u32At(at)
+        var nv = u32At(at)
+        at += 4
+        for i in 0..nv {
+            at += 4 + u32At(at)
+        }
+        return at - p
+    }
+    return 1
+}
+
+/** Adds the types and locations of `m` to the type table in use, and says where they went. */
+pub fun installTypes(m: VModule): TypeMap {
+    unsafe {
+        var blob = metaBlob()
+        var count = u32At(blob)
+        var at = blob + 4
+        for i in 0..count {
+            at += descSize(at)
+        }
+        var typesEnd = at - blob
+        var nlocs = u32At(at)
+        var locsAt = at + 4 - blob
+        var blobLen = metaLen()
+        var userTypes = len(m.types) - FIRST_USER_TYPE
+        if (userTypes < 0) {
+            userTypes = 0
+        }
+        var tm = TypeMap { types: count, locs: nlocs, moduleLocs: len(m.locs), total: count + userTypes }
+        var w = new Bytes()
+        for t in FIRST_USER_TYPE..len(m.types) {
+            encodeDesc(w, tm, m.types[t])
+        }
+        var locs = new Bytes()
+        for l in m.locs {
+            locs.s(l)
+        }
+        var size = blobLen + len(w.b) + len(locs.b)
+        var out = Memory.alloc(size + 8)
+        Memory.store32(out, count + userTypes)
+        Memory.copy(out + 4, blob + 4, typesEnd - 4)
+        var p = out + typesEnd
+        for x in w.b {
+            Memory.store8(p, x)
+            p += 1
+        }
+        Memory.store32(p, nlocs + len(m.locs))
+        p += 4
+        Memory.copy(p, blob + locsAt, blobLen - locsAt)
+        p += blobLen - locsAt
+        for x in locs.b {
+            Memory.store8(p, x)
+            p += 1
+        }
+        setMeta(out, p - out)
+        return tm
+    }
+}

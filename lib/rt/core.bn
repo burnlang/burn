@@ -23,6 +23,32 @@ pub unsafe fun rtInit(meta: int, metaLen: int, globals: int, nglobals: int, stac
     return 0
 }
 
+/** The type table in use: the address of its encoded form, for bvm to extend with the types of a module it runs. */
+@Extern("burn_rt_meta_blob")
+pub unsafe fun metaBlob(): int {
+    return ld64(metaCurrent() + M_BLOB)
+}
+
+/** The length in bytes of the encoded type table in use. */
+@Extern("burn_rt_meta_len")
+pub unsafe fun metaLen(): int {
+    return ld64(metaCurrent() + M_LEN)
+}
+
+/** Replaces the type table with the one encoded in the `n` bytes at `blob`, which must stay valid from then on. */
+@Extern("burn_rt_set_meta")
+pub unsafe fun setMeta(blob: int, n: int): int {
+    metaSet(metaDecode(blob, n))
+    return 0
+}
+
+/** Makes the `[string]` array `a` the program's arguments, for a program that bvm runs. */
+@Extern("burn_rt_set_arg_list")
+pub unsafe fun rtSetArgList(a: int): int {
+    setArgList(a)
+    return 0
+}
+
 @Extern("burn_rt_set_args")
 pub unsafe fun rtSetArgs(argc: int, argv: int): int {
     setArgs(argc, argv)

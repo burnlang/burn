@@ -227,6 +227,47 @@ fn the_bvm_written_in_burn_reads_and_writes_bytecode_like_bvm() {
 }
 
 #[test]
+fn the_bvm_written_in_burn_runs_the_test_cases() {
+    if !native_supported() {
+        return;
+    }
+    let root = root();
+    let tmp = temp_dir("bvm-in-burn-run");
+    let exe = tmp.join("bvm");
+    let (out, code) = output(burn().current_dir(&root).arg("build").arg("compiler/src/bin/bvm.bn").arg("-o").arg(&exe));
+    assert_eq!(code, 0, "{}", out);
+    let mut failures = Vec::new();
+    for (file, expected) in cases() {
+        let rel = file.strip_prefix(&root).unwrap();
+        let module = tmp.join(file.file_stem().unwrap()).with_extension("bvmc");
+        let (out, code) = output(burn().current_dir(&root).args(["build", "--target", "bvm"]).arg(rel).arg("-o").arg(&module));
+        if code != 0 {
+            failures.push(format!("{}: build failed\n{}", rel.display(), out));
+            continue;
+        }
+        for threshold in [None, Some("16384")] {
+            let mut cmd = Command::new(&exe);
+            cmd.current_dir(&root).arg("run").arg(&module);
+            if let Some(t) = threshold {
+                cmd.env("BURN_GC_THRESHOLD", t);
+            }
+            let (out, _) = output(&mut cmd);
+            if out != expected {
+                failures.push(format!(
+                    "{} (gc threshold {:?}):\n--- expected\n{}\n--- got\n{}",
+                    rel.display(),
+                    threshold,
+                    expected,
+                    out
+                ));
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
 fn native_matches_vm() {
     if !native_supported() {
         return;
