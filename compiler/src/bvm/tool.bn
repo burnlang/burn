@@ -1,0 +1,600 @@
+/** The `bvm` command line, like `bvm/src/main.rs`: runs, assembles, disassembles, checks, links and packs bytecode. */
+import "../version.bn"
+import "../vm/asm.bn"
+import "../vm/module.bn"
+import "archive.bn"
+import "assemble.bn"
+import "binary.bn"
+import "files.bn"
+import "interp.bn"
+import "link.bn"
+import "rtfns.bn"
+import "verify.bn"
+import "std/fs"
+import "std/process"
+
+const USAGE = "bvm - the Burn Virtual Machine\n\nusage:\n  bvm <file> [args...]                run a module (.bvm, .bvmc) or an archive (.bar)\n  bvm run <file> [args...]            same as above\n  bvm asm <file.bvm> [-o out.bvmc]    assemble text into bytecode\n  bvm dis <file> [-o out.bvm]         disassemble a module or archive into text\n  bvm check <file>...                 verify modules and archives without running them\n  bvm link <files>... [-o out] [--lib]\n                                      link modules into one; --lib allows unresolved externs\n  bvm pack <files>... -o app.bar [options]\n                                      bundle modules and resources into a runnable archive\n      --name <name>                   application name (default: the output file name)\n      --version <version>             application version\n      --main <module>                 the module whose entry runs (default: the first module)\n      --entry <function>              the function that runs (default: the main module's entry)\n      --no-shebang                    leave out the #!/usr/bin/env bvm line\n  bvm list <app.bar>                  show an archive's manifest and contents\n  bvm unpack <app.bar> [-d dir]       extract an archive's modules and resources\n  bvm runtime                         list the runtime functions available to `rt`\n  bvm version                         print the version\n  bvm help                            show this help"
+
+fun usageError(msg: string): int {
+    eprint("error: ${msg}\n\n${USAGE}")
+    return 2
+}
+
+fun failWith(msg: string): int {
+    eprint("error: ${msg}")
+    return 1
+}
+
+/** A module or archive read from a file: its modules by name, or why it could not be read. */
+pub def type Loaded {
+    [string] names
+    [VModule] modules
+    Archive? archive
+    string error
+}
+
+fun loadError(msg: string): Loaded {
+    return Loaded { names: [], modules: [], archive: null, error: msg }
+}
+
+fun bytesToText(b: [int]): string {
+    [uint8] raw = []
+    for x in b {
+        raw.push(x as uint8)
+    }
+    return fromBytes(raw)
+}
+
+fun fileStem(path: string): string {
+    var base = path
+    var slash = len(base) - 1
+    while (slash >= 0 && charAt(base, slash) != "/") {
+        slash -= 1
+    }
+    base = substring(base, slash + 1, len(base))
+    var dot = len(base) - 1
+    while (dot > 0 && charAt(base, dot) != ".") {
+        dot -= 1
+    }
+    if (dot > 0) {
+        return substring(base, 0, dot)
+    }
+    return base
+}
+
+fun fileName(path: string): string {
+    var slash = len(path) - 1
+    while (slash >= 0 && charAt(path, slash) != "/") {
+        slash -= 1
+    }
+    return substring(path, slash + 1, len(path))
+}
+
+fun withExtension(path: string, ext: string): string {
+    var slash = len(path) - 1
+    while (slash >= 0 && charAt(path, slash) != "/") {
+        slash -= 1
+    }
+    var dot = len(path) - 1
+    while (dot > slash + 1 && charAt(path, dot) != ".") {
+        dot -= 1
+    }
+    if (dot > slash + 1) {
+        return substring(path, 0, dot) + "." + ext
+    }
+    return path + "." + ext
+}
+
+/** The modules in the file at `path`: those of an archive, or the one module, named after the file when it has no name. */
+pub fun modulesOf(path: string): Loaded {
+    var bytes = readBytes(path)
+    if (bytes == null) {
+        return loadError("could not read ${path}: ${osErrorText(path)}")
+    }
+    if (isArchive(bytes)) {
+        var d = decodeArchive(bytes)
+        if (d.error != "") {
+            return loadError("${path}: ${d.error}")
+        }
+        [string] names = []
+        [VModule] mods = []
+        for m in d.archive.modules {
+            names.push(m.name)
+            mods.push(m.module)
+        }
+        return Loaded { names: names, modules: mods, archive: d.archive, error: "" }
+    }
+    var p = parseModule(bytes)
+    if (p.error != "") {
+        return loadError("${path}: ${p.error}")
+    }
+    var name = p.modules[0].name
+    if (name == "") {
+        name = fileStem(path)
+    }
+    return Loaded { names: [name], modules: p.modules, archive: null, error: "" }
+}
+
+fun osErrorText(path: string): string {
+    if (!fileExists(path)) {
+        return "No such file or directory (os error 2)"
+    }
+    return "it cannot be read"
+}
+
+/** The module in `bytes`: binary bytecode, an archive (linked), or assembly text, like `bvm::parse`. */
+pub fun parseModule(bytes: [int]): Loaded {
+    if (isArchive(bytes)) {
+        var d = decodeArchive(bytes)
+        if (d.error != "") {
+            return loadError(d.error)
+        }
+        var l = linkArchive(d.archive, false, false)
+        if (l.error != "") {
+            return loadError(l.error)
+        }
+        return Loaded { names: [""], modules: [l.module], archive: d.archive, error: "" }
+    }
+    if (isBinary(bytes)) {
+        var d = decode(bytes)
+        if (d.error != "") {
+            return loadError(d.error)
+        }
+        return Loaded { names: [""], modules: [d.module], archive: null, error: "" }
+    }
+    var a = assemble(bytesToText(bytes))
+    if (a.error != "") {
+        return loadError(asmErrorText(a))
+    }
+    return Loaded { names: [""], modules: [a.module], archive: null, error: "" }
+}
+
+/** Runs the module or archive at `path` with `args`, like `run_file`. Returns the exit code, or -1 after printing an error. */
+pub fun runFile(path: string, args: [string]): int {
+    var bytes = readBytes(path)
+    if (bytes == null) {
+        return failWith("could not read ${path}: ${osErrorText(path)}")
+    }
+    var p = parseModule(bytes)
+    if (p.error != "") {
+        return failWith("${path}: ${p.error}")
+    }
+    var m = p.modules[0]
+    if (m.entry == null) {
+        return failWith("${path} has no entry function (add `entry <name>` or a function called main)")
+    }
+    [HostFn] hosts = []
+    var a = p.archive
+    if (a != null) {
+        hosts = archiveHost(a)
+    }
+    var prog = prepare(m, hosts)
+    if (prog.error != "") {
+        return failWith("${path}: ${prog.error}")
+    }
+    setProgramArgs(args)
+    runEntry(prog)
+    return 0
+}
+
+fun writeOut(out: string, data: [int]): int {
+    if (out == "-") {
+        write(bytesToText(data))
+        return 0
+    }
+    if (!writeBytes(out, data)) {
+        return failWith("could not write ${out}")
+    }
+    return 0
+}
+
+def type OutArgs {
+    [string] files
+    string out
+    string error
+}
+
+fun outputArg(args: [string]): OutArgs {
+    [string] files = []
+    var out = ""
+    var i = 0
+    while (i < len(args)) {
+        if (args[i] == "-o") {
+            i += 1
+            if (i >= len(args)) {
+                return OutArgs { files: [], out: "", error: "-o needs a file name" }
+            }
+            out = args[i]
+        } else {
+            files.push(args[i])
+        }
+        i += 1
+    }
+    return OutArgs { files: files, out: out, error: "" }
+}
+
+fun convert(args: [string], ext: string, toText: bool): int {
+    var o = outputArg(args)
+    if (o.error != "") {
+        return usageError(o.error)
+    }
+    if (len(o.files) != 1) {
+        return usageError("expected exactly one input file")
+    }
+    var input = o.files[0]
+    var data0 = readBytes(input)
+    if (data0 == null) {
+        return failWith("could not read ${input}: ${osErrorText(input)}")
+    }
+    var p = parseModule(data0)
+    if (p.error != "") {
+        return failWith("${input}: ${p.error}")
+    }
+    var m = p.modules[0]
+    var a = analyze(m)
+    if (a.error != "") {
+        return failWith("${input}: ${a.error}")
+    }
+    var out = o.out
+    if (out == "") {
+        out = withExtension(input, ext)
+    }
+    if (toText) {
+        [int] data = []
+        for x in bytes(disassemble(m)) {
+            data.push(x as int)
+        }
+        return writeOut(out, data)
+    }
+    return writeOut(out, encode(m))
+}
+
+fun check(files: [string]): int {
+    if (len(files) == 0) {
+        return usageError("bvm check needs at least one file")
+    }
+    var failed = false
+    for f in files {
+        var bytes = readBytes(f)
+        if (bytes == null) {
+            eprint("error: could not read ${f}: ${osErrorText(f)}")
+            failed = true
+            continue
+        }
+        var p = parseModule(bytes)
+        if (p.error != "") {
+            eprint("error: ${f}: ${p.error}")
+            failed = true
+            continue
+        }
+        var a = analyze(p.modules[0])
+        if (a.error != "") {
+            eprint("error: ${f}: ${a.error}")
+            failed = true
+        }
+    }
+    if (failed) {
+        return 1
+    }
+    return 0
+}
+
+fun linkFiles(args: [string]): int {
+    var lib = contains(args, "--lib")
+    [string] rest = []
+    for x in args {
+        if (x != "--lib") {
+            rest.push(x)
+        }
+    }
+    var o = outputArg(rest)
+    if (o.error != "") {
+        return usageError(o.error)
+    }
+    if (len(o.files) == 0) {
+        return usageError("bvm link needs modules to link")
+    }
+    [VModule] modules = []
+    for f in o.files {
+        var l = modulesOf(f)
+        if (l.error != "") {
+            return failWith(l.error)
+        }
+        for m in l.modules {
+            modules.push(m)
+        }
+    }
+    var linked = link(modules, lib, false)
+    if (linked.error != "") {
+        return failWith(linked.error)
+    }
+    var out = o.out
+    if (out == "") {
+        out = withExtension(o.files[0], "linked.bvmc")
+    }
+    if (endsWith(out, ".bvm")) {
+        [int] data = []
+        for x in bytes(disassemble(linked.module)) {
+            data.push(x as int)
+        }
+        return writeOut(out, data)
+    }
+    return writeOut(out, encode(linked.module))
+}
+
+fun isModuleFile(p: string): bool {
+    return endsWith(p, ".bvm") || endsWith(p, ".bvmc") || endsWith(p, ".bar")
+}
+
+fun pack(args: [string]): int {
+    [string] files = []
+    var out = ""
+    string? name = null
+    var version = ""
+    string? main = null
+    string? entry = null
+    var shebang = true
+    var i = 0
+    while (i < len(args)) {
+        var x = args[i]
+        if (x == "-o" || x == "--name" || x == "--version" || x == "--main" || x == "--entry") {
+            if (i + 1 >= len(args)) {
+                return usageError("${x} needs a value")
+            }
+            var v = args[i + 1]
+            if (x == "-o") {
+                out = v
+            } else if (x == "--name") {
+                name = v
+            } else if (x == "--version") {
+                version = v
+            } else if (x == "--main") {
+                main = v
+            } else {
+                entry = v
+            }
+            i += 2
+            continue
+        }
+        if (x == "--no-shebang") {
+            shebang = false
+        } else if (startsWith(x, "--")) {
+            return usageError("unknown option ${x}")
+        } else {
+            files.push(x)
+        }
+        i += 1
+    }
+    if (out == "") {
+        return usageError("bvm pack needs -o <app.bar>")
+    }
+    if (len(files) == 0) {
+        return usageError("bvm pack needs at least one module")
+    }
+    var a = newArchive(name ?? fileStem(out), VERSION)
+    a.manifest.version = version
+    for f in files {
+        if (isModuleFile(f)) {
+            var l = modulesOf(f)
+            if (l.error != "") {
+                return failWith(l.error)
+            }
+            for k in 0..len(l.modules) {
+                addModule(a, l.names[k], l.modules[k])
+            }
+        } else {
+            var data = readBytes(f)
+            if (data == null) {
+                return failWith("could not read ${f}: ${osErrorText(f)}")
+            }
+            addResource(a, fileName(f), data)
+        }
+    }
+    if (main != null) {
+        var found = false
+        for m in a.modules {
+            if (m.name == main) {
+                found = true
+            }
+        }
+        if (!found) {
+            return failWith("there is no module called ${main} to use as the main module")
+        }
+        a.manifest.main = main
+    }
+    if (entry != null) {
+        a.manifest.entry = entry
+        a.manifest.hasEntry = true
+    }
+    var l = linkArchive(a, false, false)
+    if (l.error != "") {
+        return failWith("the archive does not link: ${l.error}")
+    }
+    var code = writeOut(out, encodeArchive(a, shebang))
+    if (code == 0 && shebang) {
+        makeExecutable(out)
+    }
+    return code
+}
+
+@Extern("chmod")
+fun cChmod(path: int, mode: int): Int32
+
+fun makeExecutable(path: string) {
+    unsafe {
+        var p = path
+        cChmod(__addr(p) + 24, 493)
+    }
+}
+
+fun padRight(s: string, n: int): string {
+    var out = s
+    while (len(out) < n) {
+        out += " "
+    }
+    return out
+}
+
+fun list(args: [string]): int {
+    if (len(args) != 1) {
+        return usageError("bvm list needs one archive")
+    }
+    var bytes = readBytes(args[0])
+    if (bytes == null) {
+        return failWith("could not read ${args[0]}: ${osErrorText(args[0])}")
+    }
+    var d = decodeArchive(bytes)
+    if (d.error != "") {
+        return failWith("${args[0]}: ${d.error}")
+    }
+    var a = d.archive
+    write(manifestText(a.manifest))
+    print("")
+    for m in a.modules {
+        var externs = 0
+        var size = 0
+        for f in m.module.funcs {
+            if (f.external) {
+                externs += 1
+            }
+            size += len(f.code)
+        }
+        var extra = ""
+        if (externs > 0) {
+            extra = ", ${externs} external"
+        }
+        print("module    ${padRight(m.name, 24)} ${len(m.module.funcs) - externs} functions, ${size} instructions${extra}")
+    }
+    for r in a.resources {
+        print("resource  ${padRight(r.name, 24)} ${len(r.data)} bytes")
+    }
+    return 0
+}
+
+fun unpack(args: [string]): int {
+    string? file = null
+    var dir = "."
+    var i = 0
+    while (i < len(args)) {
+        if (args[i] == "-d") {
+            if (i + 1 >= len(args)) {
+                return usageError("-d needs a directory")
+            }
+            dir = args[i + 1]
+            i += 2
+            continue
+        }
+        if (file == null) {
+            file = args[i]
+        } else {
+            return usageError("unexpected argument ${args[i]}")
+        }
+        i += 1
+    }
+    if (file == null) {
+        return usageError("bvm unpack needs an archive")
+    }
+    var data0 = readBytes(file)
+    if (data0 == null) {
+        return failWith("could not read ${file}: ${osErrorText(file)}")
+    }
+    var d = decodeArchive(data0)
+    if (d.error != "") {
+        return failWith("${file}: ${d.error}")
+    }
+    var a = d.archive
+    if (!Files.makeDir(dir)) {
+        return failWith("could not create ${dir}")
+    }
+    [string] paths = []
+    [[int]] datas = []
+    [int] manifest = []
+    for x in bytes(manifestText(a.manifest)) {
+        manifest.push(x as int)
+    }
+    paths.push(joinPath(dir, "MANIFEST"))
+    datas.push(manifest)
+    for m in a.modules {
+        paths.push(joinPath(dir, "${safeName(m.name)}.bvmc"))
+        datas.push(encode(m.module))
+    }
+    for r in a.resources {
+        paths.push(joinPath(dir, safeName(r.name)))
+        datas.push(r.data)
+    }
+    for k in 0..len(paths) {
+        if (!writeBytes(paths[k], datas[k])) {
+            return failWith("could not write ${paths[k]}")
+        }
+        print(paths[k])
+    }
+    return 0
+}
+
+fun joinPath(dir: string, name: string): string {
+    if (endsWith(dir, "/")) {
+        return dir + name
+    }
+    return "${dir}/${name}"
+}
+
+fun safeName(n: string): string {
+    var f = fileName(n)
+    if (f == "" || f == "." || f == "..") {
+        return "unnamed"
+    }
+    return f
+}
+
+/** The bvm command line with `args` (without the program name). Returns the exit code. */
+pub fun bvmMain(args: [string]): int {
+    if (len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help") {
+        print(USAGE)
+        return 0
+    }
+    var cmd = args[0]
+    var rest = slice(args, 1, len(args))
+    if (cmd == "version" || cmd == "-v" || cmd == "--version") {
+        print("bvm ${VERSION} (bytecode format ${FORMAT_VERSION}, archive format ${ARCHIVE_VERSION})")
+        return 0
+    }
+    if (cmd == "run") {
+        if (len(rest) == 0) {
+            return usageError("bvm run needs a file")
+        }
+        return runFile(rest[0], slice(rest, 1, len(rest)))
+    }
+    if (cmd == "asm") {
+        return convert(rest, "bvmc", false)
+    }
+    if (cmd == "dis") {
+        return convert(rest, "bvm", true)
+    }
+    if (cmd == "check") {
+        return check(rest)
+    }
+    if (cmd == "link") {
+        return linkFiles(rest)
+    }
+    if (cmd == "pack") {
+        return pack(rest)
+    }
+    if (cmd == "list") {
+        return list(rest)
+    }
+    if (cmd == "unpack") {
+        return unpack(rest)
+    }
+    if (cmd == "runtime") {
+        for i in 0..len(RT_NAMES) {
+            if (!contains(RESERVED_RT, RT_NAMES[i])) {
+                print("${padRight(RT_SYMBOLS[i], 18)} ${RT_ARGC[i]}")
+            }
+        }
+        return 0
+    }
+    if (!startsWith(cmd, "-")) {
+        return runFile(cmd, rest)
+    }
+    return usageError("unknown option ${cmd}")
+}

@@ -1,0 +1,2 @@
+/** The version of the Burn toolchain. */
+pub const VERSION = "26.1.0-experimental-6"
