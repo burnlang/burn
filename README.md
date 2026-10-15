@@ -6,9 +6,10 @@
 
 Burn is an easy-to-use, statically typed, general-purpose programming language with smart casts.
 Burn is written in **Burn**: the compiler, the command line, the formatter, the documentation generator and the
-language server are Burn programs that run on **bvm**, the Burn virtual machine, which is written in Rust. Programs
-run instantly on bvm during development and compile to small **native executables**, portable bytecode,
-self-contained `.bar` archives or JavaScript for shipping.
+language server are Burn programs compiled to native code, and **bvm**, the Burn virtual machine, is written in Burn
+too. No other language is involved: the toolchain only links the C library, and a C compiler assembles the first
+build. Programs run instantly on bvm during development and compile to small **native executables**, portable bytecode, self-contained
+`.bar` archives or JavaScript for shipping.
 
 Current version: **26.1.0-experimental-6**
 
@@ -72,12 +73,12 @@ fun main() {
 - Modules with `pub` and `priv`, import aliases (`import "std/memory" as Mem`) and imports inside functions and blocks
 - Standard library for dates, times, HTTP, JSON, math, strings, processes and files
 - Projects and packages: `burn init github.com/you/app`, `burn.toml`, `burn.lock` and ash, the package manager
-- A self-hosted compiler: the Burn compiler is written in Burn and builds itself, starting from a compiled copy kept in
-  the repository, so building Burn only needs Rust
+- A self-hosted toolchain: the compiler, the command line, the runtime and bvm are written in Burn, and the compiler
+  builds itself, starting from a copy kept in the repository as assembly, so building Burn only needs a C compiler
 - bvm, a general-purpose virtual machine with its own assembly language, bytecode format and verifier, which other languages can target too
 - Write once, run everywhere: `.bar` archives bundle an application's bytecode and resources and run wherever bvm runs
 - Mixins: `@Inject`, `@Overwrite` and `@Redirect` rewrite existing bytecode functions when modules are linked
-- Native interop: Rust programs embed bvm, call bytecode libraries and give them host functions
+- Native interop: Burn calls C functions and C calls Burn functions (`@Extern`), and runtime libraries written in Burn link into native programs
 - Precise error messages with line, column and suggestions
 - Built-in REPL, formatter and language server, plus a VS Code extension
 
@@ -90,8 +91,7 @@ curl -fsSL https://raw.githubusercontent.com/burnlang/burnup/master/install.sh |
 [burnup](https://github.com/burnlang/burnup), the Burn version manager, puts the toolchain and ash into `~/.burn/bin`
 and adds it to your `PATH`. It installs and switches versions (`burnup install 26.1`, `burnup default master`), and
 a project can pin its version with `burn = "26.1"` in `burn.toml`. It builds from source when no
-prebuilt release is available, which needs Rust 1.85 or newer for bvm (`--install-rust` sets that up for you). Native
-executables need a C toolchain (`cc`) and are built for Linux and macOS on x86-64 and arm64, Apple silicon Macs included.
+prebuilt release is available, which needs a C compiler, tar and xz. Native executables need a C toolchain (`cc`) and are built for Linux and macOS on x86-64 and arm64, Apple silicon Macs included.
 See [installation](https://burnlang.github.io/docs/tooling/installation) for all options, updating and uninstalling.
 
 ## The toolchain
@@ -257,8 +257,9 @@ fun main() {
 ## bvm, the Burn Virtual Machine
 
 bvm runs Burn programs, and it isn't tied to Burn. It has a readable assembly language, a compact bytecode format,
-a verifier, a reference-counted runtime with about 100 built-in functions, host functions, threads and a Rust API
-for generating code. That's everything a new language needs for a backend.
+a verifier, a reference-counted runtime with about 100 built-in functions, host functions and threads, and it is
+written in Burn (`compiler/src/bvm/`): a language written in Burn can build modules with `compiler/src/vm/module.bn`
+and run them, like Ember does. That's everything a new language needs for a backend.
 
 ```bvm
 func main()
@@ -342,10 +343,10 @@ examples are in [`examples/bvm/`](examples/bvm/).
   - `src/native/`, `src/js/`: the x86-64, arm64 and JavaScript backends
   - `src/cli/`, `src/lsp/`, `src/doc/`: the command line, the language server and `burn doc`
   - `src/main.bn` is the compiler on its own, and `src/bin/burn.bn` the command line that toolchains ship
-- `bvm/`: the Burn Virtual Machine, written in Rust: instruction set, assembler, bytecode format, verifier, linker,
-  mixins, archives, interpreter, the host functions of the toolchain, the `bvm` command and the Ember example language
-- `bvm/runtime/`: the runtime core of bvm (memory, values, collections, printing, numbers and the system)
-- `lib/runtime/`: the runtime functions written in Burn, compiled to `bvm/runtime.bvm`, which bvm links into Burn programs
+  - `src/bvm/`: bvm, the Burn Virtual Machine: bytecode format, assembler, verifier, linker, mixins, archives, the
+    interpreter and the `bvm` command
+- `lib/rt/`: the runtime written in Burn (memory, strings, collections, printing, files, processes, JSON, HTTP and
+  tasks), which native executables and bvm link
 - `lib/tools/`: tools written in Burn that programs can also import, such as the formatter (`import "tools/fmt"`), which `burnfmt` is built from
 - `scripts/package.sh`: builds the toolchain into the layout burnup installs and releases ship
 - `scripts/bootstrap.sh`: builds the compiler written in Burn with itself, starting from the seed, and checks that the result is stable

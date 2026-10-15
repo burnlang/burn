@@ -1,4 +1,4 @@
-/** The symbol of each runtime function without `burn_`, by its name in `RtFn`, written by `compiler/src/bin/genrt.bn`. */
+/** The symbol of each runtime function without `burn_`, by its name in bytecode, such as `StrConcat`. */
 pub fun runtimeSymbols(): {string: string} {
     {string: string} out = {}
     out["Init"] = "rt_init"
