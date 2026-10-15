@@ -75,50 +75,33 @@ pub fun runtimeLibraryAssembly(c: Checker, p: HProgram, platform: string, name: 
     return generateX86(np, [], t)
 }
 
-/** The assembly of an executable that runs the bvm module or archive `bundle`, like `launcher_assembly` in `native/mod.rs`. */
+/**
+ * The assembly that holds the bvm module or archive `bundle` for an executable that runs it: the bytes, and the C
+ * functions `burn_bundle_data` and `burn_bundle_size` with which the launcher written in Burn
+ * (`compiler/src/bin/launcher.bn`, linked in as `libburn_launcher.a`) finds them.
+ */
 pub fun launcherAssembly(bundle: [int], platform: string): string {
     var t = asmTarget(platform)
     var p = t.prefix
     if (t.arch == "aarch64") {
-        return launcherArm64(bundle, t)
-    }
-    var plt = "@PLT"
-    if (t.macos) {
-        plt = ""
+        var page = ""
+        var off = ":lo12:"
+        var offEnd = ""
+        if (t.macos) {
+            page = "@PAGE"
+            off = ""
+            offEnd = "@PAGEOFF"
+        }
+        var s = ".text\n.globl ${p}burn_bundle_data\n.p2align 2\n${p}burn_bundle_data:\n"
+        s += "    adrp x0, burn_bundle${page}\n    add x0, x0, ${off}burn_bundle${offEnd}\n    ret\n"
+        s += ".globl ${p}burn_bundle_size\n.p2align 2\n${p}burn_bundle_size:\n"
+        s += "    adrp x0, burn_bundle_len${page}\n    add x0, x0, ${off}burn_bundle_len${offEnd}\n    ldr x0, [x0]\n    ret\n"
+        return s + bundleData(bundle, t.macos)
     }
     var s = ".intel_syntax noprefix\n.text\n"
-    s += ".globl ${p}main\n${p}main:\n"
-    s += "    push rbp\n    mov rbp, rsp\n"
-    s += "    mov rdx, rdi\n    mov rcx, rsi\n"
-    s += "    lea rdi, [rip + burn_bundle]\n"
-    s += "    mov rsi, qword ptr [rip + burn_bundle_len]\n"
-    s += "    call ${p}burn_bvm_main${plt}\n"
-    s += "    pop rbp\n    ret\n"
-    if (t.macos) {
-        s += ".section __TEXT,__const\n"
-    } else {
-        s += ".section .rodata\n"
-    }
-    s += ".p2align 4\n"
-    s += "burn_bundle_len:\n    .quad ${len(bundle)}\n"
-    s += "burn_bundle:\n"
-    var i = 0
-    while (i < len(bundle)) {
-        var end = i + 32
-        if (end > len(bundle)) {
-            end = len(bundle)
-        }
-        [string] parts = []
-        for k in i..end {
-            parts.push(toString(bundle[k]))
-        }
-        s += "    .byte ${join(parts, ",")}\n"
-        i = end
-    }
-    if (!t.macos) {
-        s += ".section .note.GNU-stack,\"\",@progbits\n"
-    }
-    return s
+    s += ".globl ${p}burn_bundle_data\n${p}burn_bundle_data:\n    lea rax, [rip + burn_bundle]\n    ret\n"
+    s += ".globl ${p}burn_bundle_size\n${p}burn_bundle_size:\n    mov rax, qword ptr [rip + burn_bundle_len]\n    ret\n"
+    return s + bundleData(bundle, t.macos)
 }
 
 priv fun bundleData(bundle: [int], macos: bool): string {
@@ -148,24 +131,4 @@ priv fun bundleData(bundle: [int], macos: bool): string {
         s += ".section .note.GNU-stack,\"\",@progbits\n"
     }
     return s
-}
-
-priv fun launcherArm64(bundle: [int], t: AsmTarget): string {
-    var p = t.prefix
-    var page = ""
-    var off = ":lo12:"
-    var offEnd = ""
-    if (t.macos) {
-        page = "@PAGE"
-        off = ""
-        offEnd = "@PAGEOFF"
-    }
-    var s = ".text\n.globl ${p}main\n.p2align 2\n${p}main:\n"
-    s += "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n"
-    s += "    mov x2, x0\n    mov x3, x1\n"
-    s += "    adrp x0, burn_bundle${page}\n    add x0, x0, ${off}burn_bundle${offEnd}\n"
-    s += "    adrp x1, burn_bundle_len${page}\n    add x1, x1, ${off}burn_bundle_len${offEnd}\n    ldr x1, [x1]\n"
-    s += "    bl ${p}burn_bvm_main\n"
-    s += "    ldp x29, x30, [sp], #16\n    ret\n"
-    return s + bundleData(bundle, t.macos)
 }

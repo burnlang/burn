@@ -1,0 +1,25 @@
+import "../bvm/tool.bn"
+import "std/memory"
+import "std/process"
+
+@Extern("burn_bundle_data")
+fun bundleData(): int
+
+@Extern("burn_bundle_size")
+fun bundleSize(): int
+
+/**
+ * The main program of an executable made from a bvm module or archive: it runs the bytecode linked into it. The
+ * toolchain keeps it as `libburn_launcher.a`, and `burn build app.bar -o app` links it with the bytecode.
+ */
+fun main() {
+    [int] data = []
+    unsafe {
+        var p = bundleData()
+        var n = bundleSize()
+        for i in 0..n {
+            data.push(Memory.load8(p + i))
+        }
+    }
+    exit(runBundle(data, args()))
+}

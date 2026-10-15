@@ -346,7 +346,16 @@ priv fun buildOne(file: string, output: string?, target: string, emitAsm: string
         print("built ${out}")
         return 0
     }
-    if (target == "native" || target == "exe" || target == "asm") {
+    if (target == "asm") {
+        var out = output ?? defaultOutput(file, "s")
+        var problem = writeNativeAssembly(c, out)
+        if (problem != null) {
+            return fail(problem, 1)
+        }
+        print("built ${out}")
+        return 0
+    }
+    if (target == "native" || target == "exe") {
         var exe = output ?? defaultOutput(file, "")
         var problem = buildNative(c, NativeOptions { output: exe, emitAsm: emitAsm, strip: opts.strip })
         if (problem != null) {

@@ -149,32 +149,55 @@ pub fun parseModule(bytes: [int]): Loaded {
     return Loaded { names: [""], modules: [a.module], archive: null, error: "" }
 }
 
-/** Runs the module or archive at `path` with `args`, like `run_file`. Returns the exit code, or -1 after printing an error. */
+/** Runs the module or archive at `path` with `args`, like `run_file`. Returns the exit code. */
 pub fun runFile(path: string, args: [string]): int {
-    var bytes = readBytes(path)
-    if (bytes == null) {
+    var data = readBytes(path)
+    if (data == null) {
         return failWith("could not read ${path}: ${osErrorText(path)}")
     }
-    var p = parseModule(bytes)
+    var p = parseModule(data)
     if (p.error != "") {
         return failWith("${path}: ${p.error}")
     }
-    var m = p.modules[0]
-    if (m.entry == null) {
+    if (p.modules[0].entry == null) {
         return failWith("${path} has no entry function (add `entry <name>` or a function called main)")
     }
+    var problem = runLoaded(p, args)
+    if (problem != "") {
+        return failWith("${path}: ${problem}")
+    }
+    return 0
+}
+
+/** Runs the module or archive in `data` with `args`, as an executable made from it does, like `burn_bvm_main`. */
+pub fun runBundle(data: [int], args: [string]): int {
+    var p = parseModule(data)
+    if (p.error != "") {
+        return failWith(p.error)
+    }
+    if (p.modules[0].entry == null) {
+        return failWith("the bundled program has no entry function")
+    }
+    var problem = runLoaded(p, args)
+    if (problem != "") {
+        return failWith(problem)
+    }
+    return 0
+}
+
+fun runLoaded(p: Loaded, args: [string]): string {
     [HostFn] hosts = []
     var a = p.archive
     if (a != null) {
         hosts = archiveHost(a)
     }
-    var prog = prepare(m, hosts)
+    var prog = prepare(p.modules[0], hosts)
     if (prog.error != "") {
-        return failWith("${path}: ${prog.error}")
+        return prog.error
     }
     setProgramArgs(args)
     runEntry(prog)
-    return 0
+    return ""
 }
 
 fun writeOut(out: string, data: [int]): int {

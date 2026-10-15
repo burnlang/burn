@@ -8,11 +8,10 @@ usage() {
 Builds the runtime that native Burn executables link against:
 
   libburn_runtime.a   the runtime written in Burn (lib/rt), for programs built with --target native
-  libburn_bvm.a       bvm and its runtime, for native programs that run bytecode (bytecode
-                      libraries and executables made from .bvm and .bar files)
+  libburn_launcher.a  bvm written in Burn, for executables that run bytecode (made from .bvm and
+                      .bar files, and programs that import bytecode libraries)
   libburn_core.a      the runtime without the standard library, for --no-std programs
   native-libs.txt     the system libraries libburn_runtime.a needs, passed to the linker
-  bvm-libs.txt        the system libraries libburn_bvm.a needs
 
 A toolchain keeps them in share/burn/lib, where \`burn build --target native\` looks for them.
 
@@ -35,6 +34,7 @@ case "${1:-}" in
     -h|--help) usage; exit 0 ;;
     "") usage >&2; exit 2 ;;
 esac
+
 
 OUT="$1"
 RUSTC="${RUSTC:-rustc}"
@@ -68,21 +68,27 @@ case "${TARGET:-}" in
     aarch64-apple-darwin) PLATFORM=macos-aarch64 ;;
     *) echo "native-runtime.sh: no native code for $TARGET" >&2; exit 1 ;;
 esac
-if [ -n "$PLATFORM" ]; then
-    BURN_PLATFORM="$PLATFORM" "$BURN" build --target runtime "$ROOT/lib/rt/runtime.bn" -o "$WORK/runtime.s" >/dev/null
-else
-    "$BURN" build --target runtime "$ROOT/lib/rt/runtime.bn" -o "$WORK/runtime.s" >/dev/null
-fi
-"${BURN_CC:-${CC:-cc}}" -c "$WORK/runtime.s" -o "$WORK/runtime.o"
-rm -f "$OUT/libburn_runtime.a"
-"${AR:-ar}" rcs "$OUT/libburn_runtime.a" "$WORK/runtime.o"
-echo "-lpthread -ldl -lm" >"$OUT/native-libs.txt"
 
-"$RUSTC" --crate-name bvm_runtime --crate-type rlib "$@" -o "$WORK/libbvm_runtime.rlib" "$ROOT/bvm/runtime/src/lib.rs"
-CARGO_PKG_VERSION="$VERSION" "$RUSTC" --crate-name bvm --crate-type staticlib "$@" \
-    --extern "bvm_runtime=$WORK/libbvm_runtime.rlib" -L "$WORK" --print native-static-libs \
-    -o "$OUT/libburn_bvm.a" "$ROOT/bvm/src/lib.rs" 2>"$WORK/rustc.log" || { cat "$WORK/rustc.log" >&2; exit 1; }
-sed -n 's/.*native-static-libs: *//p' "$WORK/rustc.log" | head -n 1 >"$OUT/bvm-libs.txt"
-strip_lib "$OUT/libburn_bvm.a"
+build() {
+    if [ -n "$PLATFORM" ]; then
+        BURN_PLATFORM="$PLATFORM" "$BURN" build "$@" >/dev/null
+    else
+        "$BURN" build "$@" >/dev/null
+    fi
+}
+
+archive() {
+    "${BURN_CC:-${CC:-cc}}" -c "$WORK/$1.s" -o "$WORK/$1.o"
+    rm -f "$OUT/$2"
+    "${AR:-ar}" rcs "$OUT/$2" "$WORK/$1.o"
+}
+
+build --target runtime "$ROOT/lib/rt/runtime.bn" -o "$WORK/runtime.s"
+archive runtime libburn_runtime.a
+build --target asm "$ROOT/compiler/src/bin/launcher.bn" -o "$WORK/launcher.s"
+archive launcher libburn_launcher.a
+echo "-lpthread -ldl -lm" >"$OUT/native-libs.txt"
+rm -f "$OUT/libburn_bvm.a" "$OUT/bvm-libs.txt"
+
 "$RUSTC" --crate-name bvm_runtime --crate-type staticlib --cfg burn_core "$@" -o "$OUT/libburn_core.a" "$ROOT/bvm/runtime/src/lib.rs"
 strip_lib "$OUT/libburn_core.a"

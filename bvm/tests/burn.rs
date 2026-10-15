@@ -218,7 +218,7 @@ fn the_bvm_written_in_burn_reads_and_writes_bytecode_like_bvm() {
             "{} changed when read and written again",
             module.display()
         );
-        let ours = Command::new(&exe).arg("dis").arg(&module).output().unwrap();
+        let ours = Command::new(&exe).arg("dis").arg(&module).arg("-o").arg("-").output().unwrap();
         let theirs = Command::new(bvm_exe()).arg("dis").arg(&module).arg("-o").arg("-").output().unwrap();
         assert!(ours.status.success(), "{}", String::from_utf8_lossy(&ours.stderr));
         assert!(ours.stdout == theirs.stdout, "{} disassembles differently", module.display());
