@@ -1,0 +1,503 @@
+/**
+ * Mixins, like `bvm/src/mixin.rs`: functions annotated with @Inject, @Overwrite or @Redirect change the bytecode of
+ * another function when a module is linked.
+ */
+import "../vm/module.bn"
+import "binary.bn"
+import "rtfns.bn"
+
+/** The annotations that make a function a mixin. */
+pub const MIXIN_KINDS = ["Inject", "Overwrite", "Redirect"]
+
+const K_OVERWRITE = 0
+const K_REDIRECT = 1
+const K_RETURN = 2
+const K_HEAD = 3
+
+def type Mixin {
+    int hook
+    int target
+    int kind
+    bool cancellable
+    int redirectCall
+    string redirectRt
+    int redirectHost
+    int priority
+    int order
+}
+
+def type Found {
+    int func
+    string error
+}
+
+fun findTarget(m: VModule, hook: int, name: string): Found {
+    var hookName = m.funcs[hook].name
+    [int] found = []
+    for i in 0..len(m.funcs) {
+        var f = m.funcs[i]
+        if (f.name == name || (m.name != "" && "${m.name}::${f.name}" == name)) {
+            found.push(i)
+        }
+    }
+    if (len(found) == 1) {
+        var t = found[0]
+        if (m.funcs[t].external) {
+            return Found { func: -1, error: "mixin ${hookName} targets ${name}, which is native or external code; mixins can only change bytecode" }
+        }
+        if (t == hook) {
+            return Found { func: -1, error: "mixin ${hookName} targets itself" }
+        }
+        return Found { func: t, error: "" }
+    }
+    if (len(found) == 0) {
+        for imp in m.imports {
+            if (imp.name == name) {
+                return Found { func: -1, error: "mixin ${hookName} targets ${name}, which is a native host function; mixins can only change bytecode" }
+            }
+        }
+        return Found { func: -1, error: "mixin ${hookName} targets ${name}, but no function has that name" }
+    }
+    return Found { func: -1, error: "mixin ${hookName} targets ${name}, but several functions have that name" }
+}
+
+fun argOf(a: VAnnotation, key: string): Value? {
+    for x in a.args {
+        if (x.key == key) {
+            return x.value
+        }
+    }
+    return null
+}
+
+fun strArgOf(a: VAnnotation, key: string): string? {
+    var v = argOf(a, key)
+    if (v is Value.Str) {
+        return v.text
+    }
+    return null
+}
+
+def type Parsed {
+    [Mixin] mixins
+    string error
+}
+
+fun parseError(msg: string): Parsed {
+    return Parsed { mixins: [], error: msg }
+}
+
+fun parseMixins(m: VModule): Parsed {
+    [Mixin] out = []
+    for order in 0..len(m.annotations) {
+        var a = m.annotations[order]
+        if (!contains(MIXIN_KINDS, a.name)) {
+            continue
+        }
+        var at = a.target
+        if (!(at is Target.Func)) {
+            return parseError("@${a.name} must be attached to a function")
+        }
+        var hook = 0
+        if (at is Target.Func) {
+            hook = at.id
+        }
+        var hookName = m.funcs[hook].name
+        var tname = strArgOf(a, "target") ?? strArgOf(a, "value")
+        if (tname == null) {
+            return parseError("@${a.name} on ${hookName} needs target=\"function\"")
+        }
+        var ft = findTarget(m, hook, tname)
+        if (ft.error != "") {
+            return parseError(ft.error)
+        }
+        var target = ft.func
+        var hp = m.funcs[hook].params
+        var tp = m.funcs[target].params
+        var priority = 1000
+        var pv = argOf(a, "priority")
+        if (pv != null) {
+            if (pv is Value.Int) {
+                priority = pv.value
+            } else {
+                return parseError("@${a.name} on ${hookName}: priority must be an integer")
+            }
+        }
+        var x = Mixin { hook: hook, target: target, kind: K_OVERWRITE, cancellable: false, redirectCall: -1, redirectRt: "", redirectHost: -1, priority: priority, order: order }
+        if (a.name == "Overwrite") {
+            if (hp != tp) {
+                return parseError("@Overwrite: ${hookName} takes ${hp} parameters but ${tname} takes ${tp}")
+            }
+        } else if (a.name == "Inject") {
+            var where = strArgOf(a, "at") ?? "head"
+            if (where == "head" || where == "HEAD") {
+                if (hp != tp) {
+                    return parseError("@Inject at head: ${hookName} takes ${hp} parameters but ${tname} takes ${tp}")
+                }
+                x.kind = K_HEAD
+                var c = argOf(a, "cancellable")
+                if (c is Value.Bool) {
+                    x.cancellable = c.value
+                }
+            } else if (where == "return" || where == "RETURN" || where == "tail" || where == "TAIL") {
+                if (hp != tp && hp != tp + 1) {
+                    return parseError("@Inject at return: ${hookName} must take the ${tp} parameters of ${tname} (and optionally its result)")
+                }
+                x.kind = K_RETURN
+            } else {
+                return parseError("@Inject on ${hookName}: unknown position at=\"${where}\" (use head or return)")
+            }
+        } else {
+            x.kind = K_REDIRECT
+            var call = strArgOf(a, "call")
+            var rt = strArgOf(a, "rt")
+            var host = strArgOf(a, "host")
+            if (call != null) {
+                var fc = findTarget(m, hook, call)
+                var callee = fc.func
+                if (fc.error != "") {
+                    callee = -1
+                    for i in 0..len(m.funcs) {
+                        if (m.funcs[i].name == call) {
+                            callee = i
+                            break
+                        }
+                    }
+                    if (callee < 0) {
+                        return parseError("@Redirect on ${hookName}: no function named ${call}")
+                    }
+                }
+                var cp = m.funcs[callee].params
+                if (cp != hp) {
+                    return parseError("@Redirect: ${hookName} takes ${hp} parameters but ${call} takes ${cp}")
+                }
+                x.redirectCall = callee
+            } else if (rt != null) {
+                var idx = -1
+                for i in 0..len(RT_SYMBOLS) {
+                    if (RT_SYMBOLS[i] == rt) {
+                        idx = i
+                    }
+                }
+                if (idx < 0) {
+                    return parseError("@Redirect on ${hookName}: unknown runtime function ${rt}")
+                }
+                if (RT_ARGC[idx] != hp) {
+                    return parseError("@Redirect: ${hookName} takes ${hp} parameters but rt ${rt} takes ${RT_ARGC[idx]}")
+                }
+                x.redirectRt = RT_NAMES[idx]
+            } else if (host != null) {
+                var idx = -1
+                for i in 0..len(m.imports) {
+                    if (m.imports[i].name == host) {
+                        idx = i
+                        break
+                    }
+                }
+                if (idx < 0) {
+                    return parseError("@Redirect on ${hookName}: no import named ${host}")
+                }
+                if (m.imports[idx].argc != hp) {
+                    return parseError("@Redirect: ${hookName} takes ${hp} parameters but ${host} takes ${m.imports[idx].argc}")
+                }
+                x.redirectHost = idx
+            } else {
+                return parseError("@Redirect on ${hookName} needs call=\"function\", rt=\"name\" or host=\"name\"")
+            }
+        }
+        var problem = checkTypes(m, a, x)
+        if (problem != "") {
+            return parseError(problem)
+        }
+        out.push(x)
+    }
+    return Parsed { mixins: out, error: "" }
+}
+
+fun unboxedType(m: VModule, t: int): bool {
+    if (t < 0 || t >= len(m.types)) {
+        return false
+    }
+    var d = m.types[t]
+    return d is Desc.Int || d is Desc.Float || d is Desc.Bool || d is Desc.Enum || d is Desc.Func || d is Desc.Void
+}
+
+fun sameInts(a: [int], b: [int]): bool {
+    if (len(a) != len(b)) {
+        return false
+    }
+    for i in 0..len(a) {
+        if (a[i] != b[i]) {
+            return false
+        }
+    }
+    return true
+}
+
+fun checkTypes(m: VModule, a: VAnnotation, x: Mixin): string {
+    var hf = m.funcs[x.hook]
+    var hs = hf.sig
+    if (hs == null) {
+        return ""
+    }
+    [int] params = []
+    [int] rets = []
+    var checkRet = true
+    if (x.kind == K_REDIRECT) {
+        if (x.redirectCall < 0) {
+            return ""
+        }
+        var cs = m.funcs[x.redirectCall].sig
+        if (cs == null) {
+            return ""
+        }
+        params = cs.params
+        rets = [cs.ret]
+    } else {
+        var ts = m.funcs[x.target].sig
+        if (ts == null) {
+            return ""
+        }
+        params = ts.params
+        if (x.kind == K_OVERWRITE) {
+            rets = [ts.ret]
+        } else if (x.kind == K_HEAD && x.cancellable) {
+            if (ts.ret == 1) {
+                rets = [5]
+            } else if (unboxedType(m, ts.ret)) {
+                rets = [ts.ret]
+            } else {
+                rets = [ts.ret]
+                for i in 0..len(m.types) {
+                    var d = m.types[i]
+                    if (d is Desc.Optional && d.inner == ts.ret) {
+                        rets.push(i)
+                        break
+                    }
+                }
+            }
+        } else if (x.kind == K_RETURN && hf.params == len(ts.params) + 1) {
+            [int] ps = []
+            for p in ts.params {
+                ps.push(p)
+            }
+            ps.push(ts.ret)
+            params = ps
+            rets = [ts.ret]
+        } else {
+            checkRet = false
+        }
+    }
+    var badRet = checkRet && !contains(rets, hs.ret)
+    if (!sameInts(hs.params, params) || badRet) {
+        return "@${a.name} ${hf.name}: the types of ${hf.name} do not fit ${m.funcs[x.target].name}"
+    }
+    return ""
+}
+
+fun shifted(op: Op, by: int): Op {
+    var t = jumpTarget(op)
+    if (t != null) {
+        return withJumpTarget(op, t + by)
+    }
+    return op
+}
+
+fun argLoads(n: int): [Op] {
+    [Op] out = []
+    for i in 0..n {
+        out.push(Op.Load(i))
+    }
+    return out
+}
+
+/** The sort key of a mixin: by target, then kind, then priority, then the order they were written. */
+fun mixinKey(x: Mixin): [int] {
+    var order = x.order
+    var priority = x.priority
+    if (x.kind == K_HEAD) {
+        order = -order
+        priority = -priority
+    }
+    return [x.target, x.kind, priority, order]
+}
+
+fun keyLess(a: [int], b: [int]): bool {
+    for i in 0..len(a) {
+        if (a[i] != b[i]) {
+            return a[i] < b[i]
+        }
+    }
+    return false
+}
+
+fun sameRt(op: Op, name: string): bool {
+    if (op is Op.Rt) {
+        return op.name == name
+    }
+    return false
+}
+
+/** Changes the functions of `m` as its mixins say, like `apply`. Returns "" or what is wrong. */
+pub fun applyMixins(m: VModule): string {
+    var parsed = parseMixins(m)
+    if (parsed.error != "") {
+        return parsed.error
+    }
+    var mixins = parsed.mixins
+    if (len(mixins) == 0) {
+        return ""
+    }
+    for i in 1..len(mixins) {
+        var j = i
+        while (j > 0 && keyLess(mixinKey(mixins[j]), mixinKey(mixins[j - 1]))) {
+            var tmp = mixins[j]
+            mixins[j] = mixins[j - 1]
+            mixins[j - 1] = tmp
+            j -= 1
+        }
+    }
+    [int] overwritten = []
+    for x in mixins {
+        var hookName = m.funcs[x.hook].name
+        var t = m.funcs[x.target]
+        var tname = t.name
+        var p = t.params
+        var what = ""
+        if (x.kind == K_OVERWRITE) {
+            if (contains(overwritten, x.target)) {
+                return "${tname} is overwritten by more than one mixin"
+            }
+            overwritten.push(x.target)
+            var code = argLoads(p)
+            code.push(Op.Call(x.hook))
+            code.push(Op.Ret)
+            t.code = code
+            what = "Overwrite"
+        } else if (x.kind == K_HEAD) {
+            var pro = argLoads(p)
+            pro.push(Op.Call(x.hook))
+            if (x.cancellable) {
+                var base = len(pro)
+                pro.push(Op.Dup)
+                pro.push(Op.Jz(base + 3))
+                pro.push(Op.Ret)
+                pro.push(Op.Pop)
+            } else {
+                pro.push(Op.Pop)
+            }
+            var by = len(pro)
+            for op in t.code {
+                pro.push(shifted(op, by))
+            }
+            t.code = pro
+            what = "Inject at head"
+        } else if (x.kind == K_RETURN) {
+            var withResult = m.funcs[x.hook].params == p + 1
+            var tmp = t.locals
+            t.locals += 1
+            if (len(t.names) > 0) {
+                t.names.push("mixin${tmp}")
+            }
+            [int] starts = []
+            [[Op]] parts = []
+            var pos = 0
+            for op in t.code {
+                starts.push(pos)
+                [Op] part = []
+                if (op is Op.Ret || op is Op.RetVoid) {
+                    if (op is Op.RetVoid) {
+                        part.push(Op.Const(0))
+                    }
+                    part.push(Op.Store(tmp))
+                    for a in argLoads(p) {
+                        part.push(a)
+                    }
+                    if (withResult) {
+                        part.push(Op.Load(tmp))
+                        part.push(Op.Call(x.hook))
+                        part.push(Op.Ret)
+                    } else {
+                        part.push(Op.Call(x.hook))
+                        part.push(Op.Pop)
+                        part.push(Op.Load(tmp))
+                        part.push(Op.Ret)
+                    }
+                } else {
+                    part.push(op)
+                }
+                pos += len(part)
+                parts.push(part)
+            }
+            starts.push(pos)
+            [Op] code = []
+            for i in 0..len(parts) {
+                var single = len(parts[i]) == 1 && !(t.code[i] is Op.Ret || t.code[i] is Op.RetVoid)
+                for op in parts[i] {
+                    var target = jumpTarget(op)
+                    if (target != null && single) {
+                        code.push(withJumpTarget(op, starts[target]))
+                    } else {
+                        code.push(op)
+                    }
+                }
+            }
+            t.code = code
+            what = "Inject at return"
+        } else {
+            var n = 0
+            for i in 0..len(t.code) {
+                var op = t.code[i]
+                var hit = false
+                if (x.redirectCall >= 0) {
+                    hit = op is Op.Call && op.func == x.redirectCall
+                } else if (x.redirectRt != "") {
+                    hit = sameRt(op, x.redirectRt)
+                } else if (op is Op.Host) {
+                    hit = op.id == x.redirectHost
+                }
+                if (hit) {
+                    t.code[i] = Op.Call(x.hook)
+                    n += 1
+                }
+            }
+            if (n == 0) {
+                if (x.redirectCall >= 0) {
+                    return "@Redirect ${hookName} found no call to ${m.funcs[x.redirectCall].name} in ${tname}"
+                }
+                if (x.redirectRt != "") {
+                    return "@Redirect ${hookName} found no matching rt call in ${tname}"
+                }
+                return "@Redirect ${hookName} found no matching host call in ${tname}"
+            }
+            what = "Redirect"
+        }
+        m.annotations.push(VAnnotation { target: Target.Func(x.target), name: "Mixed", args: [ValueArg { key: "by", value: Value.Str(hookName) }, ValueArg { key: "kind", value: Value.Str(what) }] })
+    }
+    for x in mixins {
+        [VAnnotation] kept = []
+        for a in m.annotations {
+            var t = a.target
+            var onHook = t is Target.Func && t.id == x.hook
+            if (!(contains(MIXIN_KINDS, a.name) && onHook)) {
+                kept.push(a)
+            }
+        }
+        m.annotations = kept
+        var tname = m.funcs[x.target].name
+        var already = false
+        for a in m.annotations {
+            var t = a.target
+            if (a.name == "Applied" && t is Target.Func && t.id == x.hook) {
+                var v = argOf(a, "target")
+                if (v is Value.Str && v.text == tname) {
+                    already = true
+                }
+            }
+        }
+        if (!already) {
+            m.annotations.push(VAnnotation { target: Target.Func(x.hook), name: "Applied", args: [ValueArg { key: "target", value: Value.Str(tname) }] })
+        }
+    }
+    return ""
+}

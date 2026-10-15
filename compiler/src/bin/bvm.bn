@@ -1,41 +1,89 @@
 import "../bvm/binary.bn"
 import "../bvm/files.bn"
 import "../bvm/interp.bn"
+import "../bvm/link.bn"
 import "../vm/asm.bn"
+import "../vm/module.bn"
 import "std/process"
+
+fun fail(msg: string) {
+    eprint("error: ${msg}")
+    exit(1)
+}
+
+fun readModule(path: string): VModule {
+    var bytes = readBytes(path)
+    if (bytes == null) {
+        fail("could not read ${path}")
+        return emptyModule()
+    }
+    var d = decode(bytes)
+    if (d.error != "") {
+        fail("${path}: ${d.error}")
+    }
+    return d.module
+}
+
+fun linkCommand(rest: [string]) {
+    [string] files = []
+    var out = ""
+    var lib = false
+    var i = 0
+    while (i < len(rest)) {
+        if (rest[i] == "-o" && i + 1 < len(rest)) {
+            out = rest[i + 1]
+            i += 2
+            continue
+        }
+        if (rest[i] == "--lib") {
+            lib = true
+        } else {
+            files.push(rest[i])
+        }
+        i += 1
+    }
+    if (len(files) == 0 || out == "") {
+        eprint("usage: bvm link <files>... -o <out> [--lib]")
+        exit(2)
+    }
+    [VModule] modules = []
+    for f in files {
+        modules.push(readModule(f))
+    }
+    var linked = link(modules, lib, false)
+    if (linked.error != "") {
+        fail(linked.error)
+    }
+    if (!writeBytes(out, encode(linked.module))) {
+        fail("could not write ${out}")
+    }
+}
 
 fun main() {
     var a = args()
     if (len(a) < 2) {
-        eprint("usage: bvm dis <file> | bvm copy <in> <out>")
+        eprint("usage: bvm run <file> [args...] | bvm dis <file> | bvm copy <in> <out> | bvm link <files>... -o <out> [--lib]")
         exit(2)
     }
-    var bytes = readBytes(a[1])
-    if (bytes == null) {
-        eprint("error: could not read ${a[1]}")
-        exit(1)
+    if (a[0] == "link") {
+        linkCommand(slice(a, 1, len(a)))
+        return
     }
-    var d = decode(bytes)
-    if (d.error != "") {
-        eprint("error: ${a[1]}: ${d.error}")
-        exit(1)
-    }
+    var m = readModule(a[1])
     if (a[0] == "run") {
-        var p = prepare(d.module, [])
+        var p = prepare(m, [])
         if (p.error != "") {
-            eprint("error: ${a[1]}: ${p.error}")
-            exit(1)
+            fail("${a[1]}: ${p.error}")
         }
         setProgramArgs(slice(a, 2, len(a)))
         runEntry(p)
         return
     }
     if (a[0] == "dis") {
-        write(disassemble(d.module))
+        write(disassemble(m))
     } else if (a[0] == "copy") {
-        if (!writeBytes(a[2], encode(d.module))) {
-            eprint("error: could not write ${a[2]}")
-            exit(1)
+        if (!writeBytes(a[2], encode(m))) {
+            fail("could not write ${a[2]}")
         }
     }
 }

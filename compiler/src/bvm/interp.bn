@@ -7,6 +7,7 @@
 import "../vm/module.bn"
 import "../check/hir.bn"
 import "rtfns.bn"
+import "link.bn"
 import "types.bn"
 import "verify.bn"
 import "std/memory"
@@ -218,7 +219,19 @@ fun hostError(name: string): string {
 }
 
 /** Prepares module `m` to run, with `hosts` for the functions it imports, like `load`. */
-pub fun prepare(m: VModule, hosts: [HostFn]): Program {
+pub fun prepare(module: VModule, hosts: [HostFn]): Program {
+    var m = module
+    if (needsLink(m)) {
+        var pre = analyze(m)
+        if (pre.error != "") {
+            return Program { block: 0, names: [], entry: null, error: pre.error }
+        }
+        var linked = link([m], false, false)
+        if (linked.error != "") {
+            return Program { block: 0, names: [], entry: null, error: linked.error }
+        }
+        m = linked.module
+    }
     var a = analyze(m)
     if (a.error != "") {
         return Program { block: 0, names: [], entry: null, error: a.error }

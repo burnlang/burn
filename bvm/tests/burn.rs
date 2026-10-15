@@ -268,6 +268,45 @@ fn the_bvm_written_in_burn_runs_the_test_cases() {
 }
 
 #[test]
+fn the_bvm_written_in_burn_links_modules_and_applies_mixins_like_bvm() {
+    if !native_supported() {
+        return;
+    }
+    let root = root();
+    let tmp = temp_dir("bvm-in-burn-link");
+    let exe = tmp.join("bvm");
+    let (out, code) = output(burn().current_dir(&root).arg("build").arg("compiler/src/bin/bvm.bn").arg("-o").arg(&exe));
+    assert_eq!(code, 0, "{}", out);
+    let text = tmp.join("mixins.bvm");
+    let (out, code) = output(
+        Command::new(bvm_exe())
+            .current_dir(&root)
+            .arg(toolchain().join("compiler.bvm"))
+            .args(["build", "tests/mixins/mixins.bn", "-o"])
+            .arg(&text),
+    );
+    assert_eq!(code, 0, "{}", out);
+    let module = tmp.join("mixins.bvmc");
+    let (out, code) = output(Command::new(bvm_exe()).arg("asm").arg(&text).arg("-o").arg(&module));
+    assert_eq!(code, 0, "{}", out);
+    let (out, _, code) = stdout_of(Command::new(&exe).arg("run").arg(&module));
+    assert_eq!(code, 0);
+    assert_eq!(out, std::fs::read_to_string(root.join("tests/mixins/mixins.out")).unwrap());
+    let fib = tmp.join("fib.bvmc");
+    let (out, code) = output(burn().current_dir(&root).args(["build", "--target", "bvm", "examples/fib.bn", "-o"]).arg(&fib));
+    assert_eq!(code, 0, "{}", out);
+    let ours = tmp.join("ours.bvmc");
+    let theirs = tmp.join("theirs.bvmc");
+    let (out, code) = output(Command::new(&exe).arg("link").arg(&module).arg(&fib).arg("-o").arg(&ours));
+    assert_eq!(code, 0, "{}", out);
+    let (out, code) = output(Command::new(bvm_exe()).arg("link").arg(&module).arg(&fib).arg("-o").arg(&theirs));
+    assert_eq!(code, 0, "{}", out);
+    let dis = |p: &Path| Command::new(bvm_exe()).arg("dis").arg(p).arg("-o").arg("-").output().unwrap().stdout;
+    assert!(dis(&ours) == dis(&theirs), "the linked modules differ");
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn native_matches_vm() {
     if !native_supported() {
         return;
