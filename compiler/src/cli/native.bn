@@ -148,13 +148,6 @@ pub fun buildNative(c: Compiled, opts: NativeOptions): string? {
         return unsupported
     }
     var dir = runtimeDir()
-    if (c.program.noStd) {
-        var core = pathJoin(dir, "libburn_core.a")
-        if (!Files.isFile(core)) {
-            return "this toolchain has no no-std runtime library (${core})"
-        }
-        return link(asm, opts.output, opts.strip, core, "-lm")
-    }
     if (len(libs) > 0) {
         return bytecodeExecutable(c, opts)
     }
