@@ -597,8 +597,9 @@ pub unsafe fun umul(a: int, b: int, loc: int): int {
     var y = b
     asm {
         x86_64 {
+            mov rcx, {y}
             mov rax, {x}
-            mul qword ptr {y}
+            mul rcx
             mov {lo}, rax
             mov {hi}, rdx
         }
@@ -624,9 +625,10 @@ unsafe fun udivRaw(a: int, b: int, rem: bool): int {
     var r = 0
     asm {
         x86_64 {
+            mov rcx, {y}
             mov rax, {x}
             xor edx, edx
-            div qword ptr {y}
+            div rcx
             mov {q}, rax
             mov {r}, rdx
         }
