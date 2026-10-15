@@ -1,0 +1,1789 @@
+/**
+ * The bvm assembler, like `assemble` in `bvm/src/asm.rs`: turns bvm assembly text into a module. Directives declare
+ * the module, its types, functions, globals, imports, dispatch tables, strings and locations; a function's body lists
+ * one instruction per line, with labels before them.
+ */
+import "../check/hir.bn"
+import "../vm/bits.bn"
+import "../vm/module.bn"
+import "binary.bn"
+import "link.bn"
+import "rtfns.bn"
+
+const NO_LOC = 4294967295
+const U32_MAX = 4294967295
+const NUM_NAMES = ["int8", "uint8", "int16", "uint16", "int32", "uint32", "uint64", "float32"]
+const BUILTIN_TYPE_NAMES = ["error", "void", "null", "int", "float", "bool", "string", "any"]
+const TYPE_KEYWORDS = ["fun", "map", "future", "record", "struct", "class", "interface", "enum", "implements"]
+const SIMPLE = ["pop", "dup", "swap", "iadd", "isub", "imul", "ineg", "and", "or", "xor", "shl", "shr", "ushr", "fadd", "fsub", "fmul", "fdiv", "frem", "fneg", "not", "i2f", "f2i", "ret", "retv", "len", "unbox"]
+
+/** A token of bvm assembly. A number keeps its magnitude as 64 bits, whether it is negative, and whether it is larger than 64 bits allow. */
+def enum Tok {
+    Ident(text: string),
+    Int(mag: int, neg: bool, big: bool, text: string),
+    Float(value: float),
+    Str(text: string),
+    Hash(n: int),
+    At(n: int),
+    Annot(name: string),
+    P(c: string)
+}
+
+fun tokText(t: Tok): string {
+    return match t {
+        Tok.Ident(text) => text
+        Tok.Int(mag, neg, big, text) => text
+        Tok.Float(value) => "${value}"
+        Tok.Str(text) => "\"${escape(text)}\""
+        Tok.Hash(n) => "#${n}"
+        Tok.At(n) => "@${n}"
+        Tok.Annot(name) => "@${name}"
+        Tok.P(c) => c
+    }
+}
+
+/** `s` with the escapes bvm assembly uses in strings. */
+fun escape(s: string): string {
+    var o = ""
+    for c in chars(s) {
+        if (c == "\"") {
+            o += "\\\""
+        } else if (c == "\\") {
+            o += "\\\\"
+        } else if (c == "\n") {
+            o += "\\n"
+        } else if (c == "\t") {
+            o += "\\t"
+        } else if (c == "\r") {
+            o += "\\r"
+        } else if (charCode(c) < 32 || charCode(c) == 127) {
+            o += "\\u{${toStringRadix(charCode(c), 16)}}"
+        } else {
+            o += c
+        }
+    }
+    return o
+}
+
+fun toStringRadix(v: int, radix: int): string {
+    var digits = "0123456789abcdef"
+    if (v == 0) {
+        return "0"
+    }
+    var out = ""
+    var x = v
+    while (x > 0) {
+        out = charAt(digits, x % radix) + out
+        x = x / radix
+    }
+    return out
+}
+
+fun isLetter(c: string): bool {
+    return (c >= "a" && c <= "z") || (c >= "A" && c <= "Z")
+}
+
+fun isDigitChar(c: string): bool {
+    return c >= "0" && c <= "9"
+}
+
+fun isHexChar(c: string): bool {
+    return isDigitChar(c) || (c >= "a" && c <= "f") || (c >= "A" && c <= "F")
+}
+
+fun identStart(c: string): bool {
+    return isLetter(c) || c == "_" || c == "$"
+}
+
+fun identChar(c: string): bool {
+    return isLetter(c) || isDigitChar(c) || c == "_" || c == "$" || c == "."
+}
+
+fun isIdentText(s: string): bool {
+    var cs = chars(s)
+    if (len(cs) == 0 || !identStart(cs[0]) || endsWith(s, ".")) {
+        return false
+    }
+    for c in cs {
+        if (!identChar(c)) {
+            return false
+        }
+    }
+    return true
+}
+
+fun isTypeIdent(s: string): bool {
+    return isIdentText(s) && !contains(BUILTIN_TYPE_NAMES, s) && !contains(TYPE_KEYWORDS, s)
+}
+
+fun hexValue(c: string): int {
+    if (isDigitChar(c)) {
+        return charCode(c) - 48
+    }
+    if (c >= "a" && c <= "f") {
+        return charCode(c) - 87
+    }
+    return charCode(c) - 55
+}
+
+/** The digits `ds` in base `radix` as 64 bits, and whether they need more than 64 bits. */
+def type Mag {
+    int value
+    bool big
+}
+
+fun magnitude(ds: [string], radix: int): Mag {
+    var v = 0
+    var big = false
+    for d in ds {
+        var x = hexValue(d)
+        var hi = (v >>> 32) * radix
+        var lo = (v & 4294967295) * radix + x
+        if ((hi >>> 32) != 0) {
+            big = true
+        }
+        v = wrappingAdd(hi << 32, lo)
+        if (((hi & 4294967295) + (lo >>> 32)) >>> 32 != 0) {
+            big = true
+        }
+    }
+    return Mag { value: v, big: big }
+}
+
+/** The text of a 64-bit magnitude read as unsigned. */
+fun unsignedDecimal(v: int): string {
+    if (v >= 0) {
+        return "${v}"
+    }
+    var high = (v >>> 1) / 5
+    var low = wrappingSub(v, wrappingMul(high, 10))
+    return "${high}${low}"
+}
+
+def type Lexed {
+    [Tok] toks
+    string error
+}
+
+fun lexError(msg: string): Lexed {
+    return Lexed { toks: [], error: msg }
+}
+
+fun lexLine(line: string): Lexed {
+    var cs = chars(line)
+    var n = len(cs)
+    var i = 0
+    [Tok] out = []
+    while (i < n) {
+        var c = cs[i]
+        if (c == " " || c == "\t" || c == "\r" || c == "\n") {
+            i += 1
+        } else if (c == ";") {
+            break
+        } else if (c == "\"") {
+            i += 1
+            var s = ""
+            while (true) {
+                if (i >= n) {
+                    return lexError("unterminated string")
+                }
+                var ch = cs[i]
+                if (ch == "\"") {
+                    i += 1
+                    break
+                }
+                if (ch == "\\") {
+                    i += 1
+                    if (i >= n) {
+                        return lexError("unterminated string")
+                    }
+                    var e = cs[i]
+                    i += 1
+                    if (e == "n") {
+                        s += "\n"
+                    } else if (e == "t") {
+                        s += "\t"
+                    } else if (e == "r") {
+                        s += "\r"
+                    } else if (e == "0") {
+                        s += fromCharCode(0)
+                    } else if (e == "\\") {
+                        s += "\\"
+                    } else if (e == "\"") {
+                        s += "\""
+                    } else if (e == "u") {
+                        if (i >= n || cs[i] != "{") {
+                            return lexError("expected { after \\u")
+                        }
+                        var start = i + 1
+                        var end = start
+                        while (end < n && cs[end] != "}") {
+                            end += 1
+                        }
+                        if (end >= n) {
+                            return lexError("unterminated \\u{...} escape")
+                        }
+                        var hex = join(slice(cs, start, end), "")
+                        var ok = len(hex) > 0
+                        for h in chars(hex) {
+                            if (!isHexChar(h)) {
+                                ok = false
+                            }
+                        }
+                        var mag = magnitude(chars(hex), 16)
+                        if (!ok || mag.big || mag.value < 0 || mag.value > U32_MAX) {
+                            return lexError("bad escape \\u{${hex}}")
+                        }
+                        var v = mag.value
+                        if (v > 1114111 || (v >= 55296 && v <= 57343)) {
+                            return lexError("\\u{${hex}} is not a character")
+                        }
+                        s += fromCharCode(v)
+                        i = end + 1
+                    } else {
+                        return lexError("unknown escape \\${e}")
+                    }
+                } else {
+                    s += ch
+                    i += 1
+                }
+            }
+            out.push(Tok.Str(s))
+        } else if (c == "@" && i + 1 < n && identStart(cs[i + 1])) {
+            var start = i + 1
+            i = start
+            while (i < n && identChar(cs[i])) {
+                i += 1
+            }
+            out.push(Tok.Annot(join(slice(cs, start, i), "")))
+        } else if (c == "#" || c == "@") {
+            var start = i + 1
+            var j = start
+            while (j < n && isDigitChar(cs[j])) {
+                j += 1
+            }
+            if (j == start) {
+                return lexError("expected a number after ${c}")
+            }
+            var text = join(slice(cs, start, j), "")
+            var mag = magnitude(chars(text), 10)
+            if (mag.big || mag.value < 0 || mag.value > U32_MAX) {
+                return lexError("${c}${text} is too large")
+            }
+            if (c == "#") {
+                out.push(Tok.Hash(mag.value))
+            } else {
+                out.push(Tok.At(mag.value))
+            }
+            i = j
+        } else if (isDigitChar(c) || (c == "-" && i + 1 < n && isDigitChar(cs[i + 1]))) {
+            var start = i
+            i += 1
+            var hexAt = -1
+            if (c == "0" && i < n && (cs[i] == "x" || cs[i] == "X")) {
+                hexAt = i + 1
+            } else if (c == "-" && i + 1 < n && cs[i] == "0" && (cs[i + 1] == "x" || cs[i + 1] == "X")) {
+                hexAt = i + 2
+            }
+            if (hexAt >= 0) {
+                var neg = c == "-"
+                i = hexAt
+                [string] ds = []
+                while (i < n && (isHexChar(cs[i]) || cs[i] == "_")) {
+                    if (cs[i] != "_") {
+                        ds.push(cs[i])
+                    }
+                    i += 1
+                }
+                if (len(ds) == 0) {
+                    return lexError("bad hex number 0x")
+                }
+                var mag = magnitude(ds, 16)
+                var text = unsignedDecimal(mag.value)
+                if (neg) {
+                    text = "-" + text
+                }
+                out.push(Tok.Int(mag.value, neg, mag.big, text))
+                continue
+            }
+            var isFloat = false
+            while (i < n) {
+                var d = cs[i]
+                if (isDigitChar(d) || d == "_") {
+                    i += 1
+                } else if (d == "." && i + 1 < n && isDigitChar(cs[i + 1])) {
+                    isFloat = true
+                    i += 1
+                } else if ((d == "e" || d == "E") && i + 1 < n && (isDigitChar(cs[i + 1]) || ((cs[i + 1] == "+" || cs[i + 1] == "-") && i + 2 < n && isDigitChar(cs[i + 2])))) {
+                    isFloat = true
+                    i += 2
+                } else {
+                    break
+                }
+            }
+            var text = ""
+            for k in start..i {
+                if (cs[k] != "_") {
+                    text += cs[k]
+                }
+            }
+            if (isFloat) {
+                if (!isNumber(text)) {
+                    return lexError("bad number ${text}")
+                }
+                out.push(Tok.Float(parseFloat(text)))
+            } else {
+                var neg = startsWith(text, "-")
+                var digits = text
+                if (neg) {
+                    digits = substring(text, 1, len(text))
+                }
+                var mag = magnitude(chars(digits), 10)
+                out.push(Tok.Int(mag.value, neg, mag.big, text))
+            }
+        } else if (identStart(c)) {
+            var start = i
+            while (i < n && identChar(cs[i])) {
+                i += 1
+            }
+            while (i > start + 1 && cs[i - 1] == ".") {
+                i -= 1
+            }
+            out.push(Tok.Ident(join(slice(cs, start, i), "")))
+        } else if (contains(["(", ")", "{", "}", "[", "]", "<", ">", ",", ":", "=", "?", "-"], c)) {
+            out.push(Tok.P(c))
+            i += 1
+        } else {
+            return lexError("unexpected character '${c}'")
+        }
+    }
+    return Lexed { toks: out, error: "" }
+}
+
+def type TyRef {
+    int tid
+    Desc? desc
+}
+
+def type Line {
+    int no
+    [Tok] toks
+}
+
+/** The result of `assemble`: the module, or the line and message of the first error. */
+pub def type Assembled {
+    VModule module
+    int line
+    string error
+}
+
+fun asmError(line: int, msg: string): Assembled {
+    return Assembled { module: emptyModule(), line: line, error: msg }
+}
+
+/** The text of an error from `assemble`, like `AsmError`'s. */
+pub fun asmErrorText(a: Assembled): string {
+    return "line ${a.line}: ${a.error}"
+}
+
+priv def struct Cur(t: [Tok]) {
+    int i = 0
+    string err = ""
+
+    fun failed(): bool {
+        return err != ""
+    }
+
+    fun fail(msg: string) {
+        if (err == "") {
+            err = msg
+        }
+    }
+
+    fun atEnd(): bool {
+        return i >= len(t)
+    }
+
+    fun peekIs(c: string): bool {
+        if (i >= len(t)) {
+            return false
+        }
+        var x = t[i]
+        if (x is Tok.P) {
+            return x.c == c
+        }
+        return false
+    }
+
+    fun next(): Tok {
+        if (i >= len(t)) {
+            fail("unexpected end of line")
+            return Tok.P("")
+        }
+        i += 1
+        return t[i - 1]
+    }
+
+    fun eat(c: string): bool {
+        if (peekIs(c)) {
+            i += 1
+            return true
+        }
+        return false
+    }
+
+    fun expect(c: string) {
+        var x = next()
+        if (failed()) {
+            return
+        }
+        if (x is Tok.P && x.c == c) {
+            return
+        }
+        fail("expected ${c} but found ${tokText(x)}")
+    }
+
+    fun eatWord(w: string): bool {
+        if (i < len(t)) {
+            var x = t[i]
+            if (x is Tok.Ident && x.text == w) {
+                i += 1
+                return true
+            }
+        }
+        return false
+    }
+
+    fun name(): string {
+        var x = next()
+        if (failed()) {
+            return ""
+        }
+        if (x is Tok.Ident) {
+            return x.text
+        }
+        if (x is Tok.Str) {
+            return x.text
+        }
+        fail("expected a name but found ${tokText(x)}")
+        return ""
+    }
+
+    fun uint(): int {
+        var x = next()
+        if (failed()) {
+            return 0
+        }
+        if (x is Tok.Int && !x.neg && !x.big && x.mag >= 0 && x.mag <= U32_MAX) {
+            return x.mag
+        }
+        if (x is Tok.Int && x.neg && !x.big && x.mag == 0) {
+            return 0
+        }
+        fail("expected a count but found ${tokText(x)}")
+        return 0
+    }
+
+    fun done() {
+        if (!failed() && i < len(t)) {
+            fail("unexpected ${tokText(t[i])} at the end of the line")
+        }
+    }
+}
+
+priv def struct Asm(m: VModule) {
+    {string: int} typeNames = {}
+    {string: [int]} funcNames = {}
+    {string: [int]} globalNames = {}
+    {string: [int]} tableNames = {}
+    {string: int} typeIds = {}
+    {string: int} stringIds = {}
+
+    fun setup() {
+        for i in 0..len(m.types) {
+            var k = descKey(m.types[i])
+            if (typeIds[k] == null) {
+                typeIds[k] = i
+            }
+        }
+    }
+
+    fun internType(d: Desc): int {
+        var k = descKey(d)
+        var at = typeIds[k]
+        if (at != null) {
+            return at
+        }
+        m.types.push(d)
+        typeIds[k] = len(m.types) - 1
+        return len(m.types) - 1
+    }
+
+    fun replaceType(tid: int, d: Desc) {
+        m.types[tid] = d
+        var k = descKey(d)
+        var at = typeIds[k]
+        if (at == null || at > tid) {
+            typeIds[k] = tid
+        }
+    }
+
+    fun internString(s: string): int {
+        var at = stringIds[s]
+        if (at != null) {
+            return at
+        }
+        for k in 0..len(m.strings) {
+            if (stringIds[m.strings[k]] == null) {
+                stringIds[m.strings[k]] = k
+            }
+        }
+        var again = stringIds[s]
+        if (again != null) {
+            return again
+        }
+        m.strings.push(s)
+        stringIds[s] = len(m.strings) - 1
+        return len(m.strings) - 1
+    }
+
+    fun ty(c: Cur): int {
+        var r = tyRef(c)
+        return internRef(r)
+    }
+
+    fun internRef(r: TyRef): int {
+        var d = r.desc
+        if (d != null) {
+            return internType(d)
+        }
+        return r.tid
+    }
+
+    fun tyRef(c: Cur): TyRef {
+        var x = c.next()
+        if (c.failed()) {
+            return TyRef { tid: 0, desc: null }
+        }
+        var r = TyRef { tid: 0, desc: null }
+        if (x is Tok.P && x.c == "[") {
+            var e = ty(c)
+            c.expect("]")
+            r = TyRef { tid: 0, desc: Desc.Array(e) }
+        } else if (x is Tok.Hash) {
+            r = TyRef { tid: x.n, desc: null }
+        } else if (x is Tok.Str) {
+            var t = typeNames[x.text]
+            if (t == null) {
+                c.fail("unknown type \"${escape(x.text)}\"")
+                return r
+            }
+            r = TyRef { tid: t, desc: null }
+        } else if (x is Tok.Ident) {
+            var s = x.text
+            var num = -1
+            for k in 0..len(NUM_NAMES) {
+                if (NUM_NAMES[k] == s) {
+                    num = k
+                }
+            }
+            var builtin = -1
+            for k in 0..len(BUILTIN_TYPE_NAMES) {
+                if (BUILTIN_TYPE_NAMES[k] == s) {
+                    builtin = k
+                }
+            }
+            if (builtin >= 0) {
+                r = TyRef { tid: 0, desc: [Desc.Error, Desc.Void, Desc.Null, Desc.Int, Desc.Float, Desc.Bool, Desc.Str, Desc.Any][builtin] }
+            } else if (s == "fun") {
+                r = TyRef { tid: 0, desc: Desc.Func }
+            } else if (num >= 0) {
+                r = TyRef { tid: 0, desc: Desc.Num(num) }
+            } else if (s == "map") {
+                c.expect("<")
+                var k = ty(c)
+                c.expect(",")
+                var v = ty(c)
+                c.expect(">")
+                r = TyRef { tid: 0, desc: Desc.Map(k, v) }
+            } else if (s == "future") {
+                c.expect("<")
+                var inner = ty(c)
+                c.expect(">")
+                r = TyRef { tid: 0, desc: Desc.Future(inner) }
+            } else if (s == "record" || s == "struct" || s == "class" || s == "interface" || s == "enum") {
+                c.i -= 1
+                r = TyRef { tid: 0, desc: typeDef(c, "") }
+            } else {
+                var t = typeNames[s]
+                if (t == null) {
+                    c.fail("unknown type ${s}")
+                    return r
+                }
+                r = TyRef { tid: t, desc: null }
+            }
+        } else {
+            c.fail("expected a type but found ${tokText(x)}")
+            return r
+        }
+        while (c.eat("?")) {
+            var inner = internRef(r)
+            r = TyRef { tid: 0, desc: Desc.Optional(inner) }
+        }
+        return r
+    }
+
+    fun typeDef(c: Cur, decl: string): Desc {
+        var kind = ""
+        if (!c.atEnd()) {
+            var x = c.t[c.i]
+            if (x is Tok.Ident && contains(["record", "struct", "class", "interface", "enum"], x.text)) {
+                kind = x.text
+            }
+        }
+        if (kind == "") {
+            var r = tyRef(c)
+            if (c.failed()) {
+                return Desc.Error
+            }
+            var d = r.desc
+            if (d != null) {
+                return d
+            }
+            if (r.tid >= len(m.types)) {
+                c.fail("type #${r.tid} does not exist")
+                return Desc.Error
+            }
+            return m.types[r.tid]
+        }
+        c.i += 1
+        var name = decl
+        if (!c.atEnd()) {
+            var x = c.t[c.i]
+            if (x is Tok.Str) {
+                c.i += 1
+                name = x.text
+            }
+        }
+        if (kind == "interface") {
+            return Desc.Interface(name)
+        }
+        if (kind == "enum") {
+            c.expect("{")
+            [string] variants = []
+            while (!c.failed() && !c.eat("}")) {
+                variants.push(c.name())
+                if (!c.eat(",")) {
+                    c.expect("}")
+                    break
+                }
+            }
+            return Desc.Enum(name, variants)
+        }
+        c.expect("{")
+        [DescField] fields = []
+        while (!c.failed() && !c.eat("}")) {
+            var f = c.name()
+            c.expect(":")
+            var t = ty(c)
+            fields.push(DescField { name: f, ty: t })
+            if (!c.eat(",")) {
+                c.expect("}")
+                break
+            }
+        }
+        [int] impls = []
+        if (c.eatWord("implements")) {
+            while (!c.failed()) {
+                impls.push(ty(c))
+                if (!c.eat(",")) {
+                    break
+                }
+            }
+        }
+        return Desc.Record(name, fields, kind == "class" || kind == "struct", impls)
+    }
+
+    fun pick(map: {string: [int]}, what: string, name: string, c: Cur): int {
+        var list = map[name]
+        if (list == null || len(list) == 0) {
+            c.fail("unknown ${what} ${name}")
+            return 0
+        }
+        if (len(list) > 1) {
+            c.fail("${what} ${name} is ambiguous; refer to it by @index")
+            return 0
+        }
+        return list[0]
+    }
+
+    fun funcRef(c: Cur): int {
+        var x = c.next()
+        if (c.failed()) {
+            return 0
+        }
+        if (x is Tok.At) {
+            return x.n
+        }
+        if (x is Tok.Ident) {
+            return pick(funcNames, "function", x.text, c)
+        }
+        if (x is Tok.Str) {
+            return pick(funcNames, "function", x.text, c)
+        }
+        c.fail("expected a function but found ${tokText(x)}")
+        return 0
+    }
+
+    fun globalRef(c: Cur): int {
+        var x = c.next()
+        if (c.failed()) {
+            return 0
+        }
+        if (x is Tok.At) {
+            return x.n
+        }
+        if (x is Tok.Int && !x.neg && !x.big && x.mag >= 0 && x.mag <= U32_MAX) {
+            return x.mag
+        }
+        if (x is Tok.Ident) {
+            return pick(globalNames, "global", x.text, c)
+        }
+        if (x is Tok.Str) {
+            return pick(globalNames, "global", x.text, c)
+        }
+        c.fail("expected a global but found ${tokText(x)}")
+        return 0
+    }
+
+    fun tableRef(c: Cur): int {
+        var x = c.next()
+        if (c.failed()) {
+            return 0
+        }
+        if (x is Tok.At) {
+            return x.n
+        }
+        if (x is Tok.Ident) {
+            return pick(tableNames, "table", x.text, c)
+        }
+        if (x is Tok.Str) {
+            return pick(tableNames, "table", x.text, c)
+        }
+        c.fail("expected a table but found ${tokText(x)}")
+        return 0
+    }
+
+    fun importRef(c: Cur): int {
+        var x = c.next()
+        if (c.failed()) {
+            return 0
+        }
+        if (x is Tok.At) {
+            return x.n
+        }
+        var s = ""
+        if (x is Tok.Ident) {
+            s = x.text
+        } else if (x is Tok.Str) {
+            s = x.text
+        } else {
+            c.fail("expected an import but found ${tokText(x)}")
+            return 0
+        }
+        for k in 0..len(m.imports) {
+            if (m.imports[k].name == s) {
+                return k
+            }
+        }
+        c.fail("unknown import ${s}; declare it with: import ${s} <argc>")
+        return 0
+    }
+}
+
+fun locOperand(c: Cur): int {
+    if (c.atEnd()) {
+        return NO_LOC
+    }
+    return c.uint()
+}
+
+fun constOperand(c: Cur): int {
+    var neg = c.eat("-")
+    var x = c.next()
+    if (c.failed()) {
+        return 0
+    }
+    if (x is Tok.Int) {
+        var isNeg = x.neg != neg
+        if (x.big) {
+            c.fail("${tokText(x)} does not fit in 64 bits")
+            return 0
+        }
+        if (isNeg) {
+            if (x.mag < 0 && x.mag != -9223372036854775807 - 1) {
+                c.fail("-${unsignedDecimal(x.mag)} does not fit in 64 bits")
+                return 0
+            }
+            return wrappingSub(0, x.mag)
+        }
+        return x.mag
+    }
+    if (x is Tok.Float) {
+        if (neg) {
+            return floatToBits(-x.value)
+        }
+        return floatToBits(x.value)
+    }
+    if (x is Tok.Ident) {
+        if (x.text == "true") {
+            return 1
+        }
+        if (x.text == "false" || x.text == "null") {
+            return 0
+        }
+        if (x.text == "inf") {
+            if (neg) {
+                return floatToBits(-1.0 / 0.0)
+            }
+            return floatToBits(1.0 / 0.0)
+        }
+        if (x.text == "nan") {
+            return 9221120237041090560
+        }
+        c.fail("expected a number but found ${x.text}")
+        return 0
+    }
+    c.fail("expected a number but found ${tokText(x)}")
+    return 0
+}
+
+fun splitLines(src: string): [string] {
+    var parts = split(src, "\n")
+    if (endsWith(src, "\n")) {
+        parts.pop()
+    }
+    [string] out = []
+    for p in parts {
+        if (endsWith(p, "\r")) {
+            out.push(substring(p, 0, len(p) - 1))
+        } else {
+            out.push(p)
+        }
+    }
+    return out
+}
+
+def type LinesResult {
+    [Line] lines
+    int line
+    string error
+}
+
+fun logicalLines(src: string): LinesResult {
+    [Line] out = []
+    var raw = splitLines(src)
+    var depth = 0
+    var pendingNo = -1
+    [Tok] pending = []
+    for i in 0..len(raw) {
+        var lx = lexLine(raw[i])
+        if (lx.error != "") {
+            return LinesResult { lines: [], line: i + 1, error: lx.error }
+        }
+        if (len(lx.toks) == 0) {
+            continue
+        }
+        for t in lx.toks {
+            if (t is Tok.P) {
+                if (t.c == "{") {
+                    depth += 1
+                } else if (t.c == "}") {
+                    depth -= 1
+                }
+            }
+        }
+        if (pendingNo < 0) {
+            pendingNo = i + 1
+            pending = lx.toks
+        } else {
+            for t in lx.toks {
+                pending.push(t)
+            }
+        }
+        if (depth <= 0) {
+            depth = 0
+            out.push(Line { no: pendingNo, toks: pending })
+            pendingNo = -1
+            pending = []
+        }
+    }
+    if (pendingNo >= 0) {
+        return LinesResult { lines: [], line: pendingNo, error: "unclosed {" }
+    }
+    return LinesResult { lines: out, line: 0, error: "" }
+}
+
+fun firstWord(l: Line): string {
+    if (len(l.toks) == 0) {
+        return ""
+    }
+    var t = l.toks[0]
+    if (t is Tok.Ident) {
+        return t.text
+    }
+    return ""
+}
+
+def type Header {
+    string name
+    int params
+    [string] names
+    Sig? sig
+}
+
+fun skipType(c: Cur, stopAtClose: bool) {
+    var depth = 0
+    var start = c.i
+    while (!c.atEnd()) {
+        var t = c.t[c.i]
+        if (t is Tok.P) {
+            var p = t.c
+            if (p == "(" || p == "[" || p == "{" || p == "<") {
+                depth += 1
+            } else if (p == ")" && depth == 0 && stopAtClose) {
+                break
+            } else if (p == "," && depth == 0 && stopAtClose) {
+                break
+            } else if (p == ")" || p == "]" || p == "}" || p == ">") {
+                depth -= 1
+            }
+        }
+        c.i += 1
+    }
+    if (c.i == start) {
+        c.fail("expected a type")
+    }
+}
+
+fun header(a: Asm, c: Cur, resolve: bool): Header {
+    var name = c.name()
+    c.expect("(")
+    [string] names = []
+    [int] types = []
+    [bool] typed = []
+    var counted = false
+    if (!c.atEnd()) {
+        var x = c.t[c.i]
+        if (x is Tok.Int) {
+            counted = true
+            if (x.neg || x.big || x.mag < 0 || x.mag > U32_MAX) {
+                c.fail("bad parameter count")
+            } else {
+                c.i += 1
+                c.expect(")")
+                for k in 0..x.mag {
+                    types.push(0)
+                    typed.push(false)
+                }
+            }
+        }
+    }
+    if (!counted) {
+        while (!c.failed() && !c.eat(")")) {
+            var x = c.next()
+            if (x is Tok.Ident) {
+                names.push(x.text)
+            } else {
+                c.fail("expected a parameter name but found ${tokText(x)}")
+                break
+            }
+            if (c.eat(":")) {
+                if (resolve) {
+                    types.push(a.ty(c))
+                } else {
+                    skipType(c, true)
+                    types.push(0)
+                }
+                typed.push(true)
+            } else {
+                types.push(0)
+                typed.push(false)
+            }
+            if (!c.eat(",")) {
+                c.expect(")")
+                break
+            }
+        }
+    }
+    var hasRet = false
+    var ret = 1
+    if (c.eat(":")) {
+        hasRet = true
+        if (resolve) {
+            ret = a.ty(c)
+        } else {
+            skipType(c, false)
+            ret = 0
+        }
+    }
+    c.done()
+    var params = len(types)
+    var allBlank = true
+    for n in names {
+        if (n != "_") {
+            allBlank = false
+        }
+    }
+    if (allBlank) {
+        names = []
+    } else {
+        for i in 0..len(names) {
+            if (names[i] == "_") {
+                names[i] = "v${i}"
+            }
+        }
+    }
+    var anyTyped = hasRet
+    var allTyped = true
+    for t in typed {
+        if (t) {
+            anyTyped = true
+        } else {
+            allTyped = false
+        }
+    }
+    Sig? sig = null
+    if (anyTyped) {
+        if (!allTyped) {
+            c.fail("give every parameter a type, or none of them")
+        }
+        sig = Sig { params: types, ret: ret }
+    }
+    return Header { name: name, params: params, names: names, sig: sig }
+}
+
+fun annotationValue(c: Cur): Value {
+    var neg = c.eat("-")
+    var x = c.next()
+    if (c.failed()) {
+        return Value.Int(0)
+    }
+    if (x is Tok.Str && !neg) {
+        return Value.Str(x.text)
+    }
+    if (x is Tok.Int) {
+        var isNeg = x.neg != neg
+        if (x.big || (!isNeg && x.mag < 0) || (isNeg && x.mag < 0 && x.mag != -9223372036854775807 - 1)) {
+            var t = unsignedDecimal(x.mag)
+            if (isNeg) {
+                t = "-" + t
+            }
+            c.fail("${t} does not fit in 64 bits")
+            return Value.Int(0)
+        }
+        if (isNeg) {
+            return Value.Int(wrappingSub(0, x.mag))
+        }
+        return Value.Int(x.mag)
+    }
+    if (x is Tok.Float) {
+        if (neg) {
+            return Value.Float(-x.value)
+        }
+        return Value.Float(x.value)
+    }
+    if (x is Tok.Ident && !neg) {
+        if (x.text == "true") {
+            return Value.Bool(true)
+        }
+        if (x.text == "false") {
+            return Value.Bool(false)
+        }
+    }
+    c.fail("expected a string, number or bool but found ${tokText(x)}")
+    return Value.Int(0)
+}
+
+fun annotationArgs(c: Cur): [ValueArg] {
+    [ValueArg] out = []
+    while (!c.atEnd() && !c.failed()) {
+        var keyed = false
+        if (c.i + 1 < len(c.t)) {
+            var nx = c.t[c.i + 1]
+            keyed = nx is Tok.P && nx.c == "="
+        }
+        if (keyed) {
+            var key = c.name()
+            c.expect("=")
+            out.push(ValueArg { key: key, value: annotationValue(c) })
+        } else {
+            if (len(out) > 0) {
+                c.fail("write the remaining annotation arguments as key=value")
+                break
+            }
+            out.push(ValueArg { key: "value", value: annotationValue(c) })
+        }
+    }
+    return out
+}
+
+def type PendingAnnotation {
+    string name
+    [ValueArg] args
+}
+
+fun attach(m: VModule, pending: [PendingAnnotation], target: Target) {
+    for p in pending {
+        m.annotations.push(VAnnotation { target: target, name: p.name, args: p.args })
+    }
+    pending.clear()
+}
+
+/** Turns bvm assembly into a module, like `assemble`. */
+pub fun assemble(src: string): Assembled {
+    var ll = logicalLines(src)
+    if (ll.error != "") {
+        return asmError(ll.line, ll.error)
+    }
+    var lines = ll.lines
+    var a = new Asm(emptyModule())
+    a.setup()
+    [int] bodyFunc = []
+    [int] bodyStart = []
+    [int] bodyEnd = []
+    [int] headerLine = []
+    [int] headerFunc = []
+    [PendingAnnotation] pending = []
+    var i = 0
+    while (i < len(lines)) {
+        var l = lines[i]
+        var c = new Cur(l.toks)
+        var first = c.next()
+        var word = ""
+        if (first is Tok.Ident) {
+            word = first.text
+        } else if (first is Tok.Annot) {
+            var args = annotationArgs(c)
+            if (c.failed()) {
+                return asmError(l.no, c.err)
+            }
+            pending.push(PendingAnnotation { name: first.name, args: args })
+            i += 1
+            continue
+        } else {
+            return asmError(l.no, "expected a directive but found ${tokText(first)}")
+        }
+        if (len(pending) > 0 && !contains(["func", "extern", "type", "global", "module"], word)) {
+            return asmError(l.no, "an annotation must come right before func, extern, type, global or module")
+        }
+        if (word == "module") {
+            a.m.name = c.name()
+            c.done()
+            if (c.failed()) {
+                return asmError(l.no, c.err)
+            }
+            attach(a.m, pending, Target.Module)
+        } else if (word == "type") {
+            var tid = len(a.m.types)
+            var x = c.next()
+            if (x is Tok.Hash) {
+                if (x.n != tid) {
+                    return asmError(l.no, "type #${x.n} is declared where #${tid} comes next")
+                }
+            } else if (x is Tok.Ident && isTypeIdent(x.text)) {
+                if (a.typeNames[x.text] != null) {
+                    return asmError(l.no, "type ${x.text} is declared twice")
+                }
+                a.typeNames[x.text] = tid
+            } else {
+                return asmError(l.no, "expected a type name but found ${tokText(x)}")
+            }
+            a.m.types.push(Desc.Error)
+            attach(a.m, pending, Target.Type(tid))
+        } else if (word == "func" || word == "extern") {
+            if (word == "extern" && !c.eatWord("func")) {
+                return asmError(l.no, "write extern func name(params)")
+            }
+            var h = header(a, c, false)
+            if (c.failed()) {
+                return asmError(l.no, c.err)
+            }
+            var id = len(a.m.funcs)
+            var list = a.funcNames[h.name]
+            if (list == null) {
+                a.funcNames[h.name] = [id]
+            } else {
+                list.push(id)
+            }
+            a.m.funcs.push(VFunc { name: h.name, params: h.params, locals: h.params, names: h.names, code: [], external: word == "extern", sig: null })
+            headerLine.push(i)
+            headerFunc.push(id)
+            attach(a.m, pending, Target.Func(id))
+            if (word == "extern") {
+                i += 1
+                continue
+            }
+            var start = i + 1
+            var j = start
+            while (j < len(lines)) {
+                var lt = lines[j].toks
+                if (len(lt) == 1) {
+                    var only = lt[0]
+                    if (only is Tok.Ident && only.text == "end") {
+                        break
+                    }
+                }
+                if (firstWord(lines[j]) == "func") {
+                    return asmError(lines[j].no, "func inside a function; close the previous one with end")
+                }
+                j += 1
+            }
+            if (j == len(lines)) {
+                return asmError(l.no, "function ${h.name} has no end")
+            }
+            bodyFunc.push(id)
+            bodyStart.push(start)
+            bodyEnd.push(j)
+            i = j
+        } else if (word == "global") {
+            var name = c.name()
+            c.done()
+            if (c.failed()) {
+                return asmError(l.no, c.err)
+            }
+            var g = len(a.m.globals)
+            var list = a.globalNames[name]
+            if (list == null) {
+                a.globalNames[name] = [g]
+            } else {
+                list.push(g)
+            }
+            a.m.globals.push(name)
+            attach(a.m, pending, Target.Global(g))
+        } else if (word == "import") {
+            var name = c.name()
+            var argc = c.uint()
+            c.done()
+            if (c.failed()) {
+                return asmError(l.no, c.err)
+            }
+            for imp in a.m.imports {
+                if (imp.name == name) {
+                    return asmError(l.no, "import ${name} is declared twice")
+                }
+            }
+            a.m.imports.push(Import { name: name, argc: argc })
+        } else if (word == "table") {
+            var name = c.name()
+            var argc = c.uint()
+            if (c.failed()) {
+                return asmError(l.no, c.err)
+            }
+            var list = a.tableNames[name]
+            if (list == null) {
+                a.tableNames[name] = [len(a.m.tables)]
+            } else {
+                list.push(len(a.m.tables))
+            }
+            a.m.tables.push(Table { name: name, argc: argc, entries: [] })
+        } else if (word == "string" || word == "loc") {
+            var x = c.next()
+            if (x is Tok.Str) {
+                if (word == "string") {
+                    a.m.strings.push(x.text)
+                } else {
+                    a.m.locs.push(x.text)
+                }
+            } else {
+                return asmError(l.no, "expected a string but found ${tokText(x)}")
+            }
+            c.done()
+            if (c.failed()) {
+                return asmError(l.no, c.err)
+            }
+        } else if (word == "entry") {
+            i += 1
+            continue
+        } else if (word == "end") {
+            return asmError(l.no, "end without a matching func")
+        } else {
+            return asmError(l.no, "unknown directive ${word}")
+        }
+        i += 1
+    }
+    var nextType = FIRST_USER_TYPE
+    var nextTable = 0
+    for l in lines {
+        var c = new Cur(l.toks)
+        var w = firstWord(l)
+        if (w == "type") {
+            var decl = ""
+            if (len(l.toks) > 1) {
+                var t1 = l.toks[1]
+                if (t1 is Tok.Ident) {
+                    decl = t1.text
+                }
+            }
+            c.i = 2
+            c.expect("=")
+            var d = a.typeDef(c, decl)
+            c.done()
+            if (c.failed()) {
+                return asmError(l.no, c.err)
+            }
+            a.replaceType(nextType, d)
+            nextType += 1
+        } else if (w == "table") {
+            c.i = 3
+            c.expect("{")
+            [TableEntry] entries = []
+            while (!c.failed() && !c.eat("}")) {
+                var t = a.ty(c)
+                c.expect(":")
+                var f = a.funcRef(c)
+                entries.push(TableEntry { ty: t, func: f })
+                if (!c.eat(",")) {
+                    c.expect("}")
+                    break
+                }
+            }
+            c.done()
+            if (c.failed()) {
+                return asmError(l.no, c.err)
+            }
+            a.m.tables[nextTable].entries = entries
+            nextTable += 1
+        } else if (w == "entry") {
+            c.i = 1
+            var f = a.funcRef(c)
+            c.done()
+            if (c.failed()) {
+                return asmError(l.no, c.err)
+            }
+            a.m.entry = f
+        }
+    }
+    if (len(pending) > 0) {
+        var last = 0
+        if (len(lines) > 0) {
+            last = lines[len(lines) - 1].no
+        }
+        return asmError(last, "an annotation at the end of the file has nothing to attach to")
+    }
+    for k in 0..len(headerLine) {
+        var l = lines[headerLine[k]]
+        var c = new Cur(l.toks)
+        c.i = 1
+        if (firstWord(l) == "extern") {
+            c.i = 2
+        }
+        var h = header(a, c, true)
+        if (c.failed()) {
+            return asmError(l.no, c.err)
+        }
+        a.m.funcs[headerFunc[k]].sig = h.sig
+    }
+    for k in 0..len(bodyFunc) {
+        var problem = body(a, bodyFunc[k], slice(lines, bodyStart[k], bodyEnd[k]))
+        if (problem.error != "") {
+            return problem
+        }
+    }
+    if (a.m.entry == null) {
+        var mains = a.funcNames["main"]
+        if (mains != null && len(mains) > 0) {
+            a.m.entry = mains[0]
+        }
+    }
+    return Assembled { module: a.m, line: 0, error: "" }
+}
+
+fun labelPrefix(toks: [Tok]): int {
+    var k = 0
+    while (k + 1 < len(toks)) {
+        var a = toks[k]
+        var b = toks[k + 1]
+        if (a is Tok.Ident && b is Tok.P && b.c == ":") {
+            k += 2
+        } else {
+            break
+        }
+    }
+    return k
+}
+
+fun body(a: Asm, id: int, lines: [Line]): Assembled {
+    var f = a.m.funcs[id]
+    [string] names = []
+    for n in f.names {
+        names.push(n)
+    }
+    var locals = f.params
+    {string: int} labels = {}
+    var count = 0
+    for l in lines {
+        var k = 0
+        while (k + 1 < len(l.toks)) {
+            var t0 = l.toks[k]
+            var t1 = l.toks[k + 1]
+            if (t0 is Tok.Ident && t1 is Tok.P && t1.c == ":") {
+                if (labels[t0.text] != null) {
+                    return asmError(l.no, "label ${t0.text} is defined twice")
+                }
+                labels[t0.text] = count
+                k += 2
+            } else {
+                break
+            }
+        }
+        if (k < len(l.toks)) {
+            var t = l.toks[k]
+            if (!(t is Tok.Ident && (t.text == "local" || t.text == "locals"))) {
+                count += 1
+            }
+        }
+    }
+    [Op] code = []
+    for l in lines {
+        var k = labelPrefix(l.toks)
+        if (k >= len(l.toks)) {
+            continue
+        }
+        var c = new Cur(slice(l.toks, k, len(l.toks)))
+        var first = c.next()
+        var mn = ""
+        if (first is Tok.Ident) {
+            mn = first.text
+        } else {
+            return asmError(l.no, "expected an instruction but found ${tokText(first)}")
+        }
+        if (mn == "local") {
+            var n = c.name()
+            while (len(names) < locals) {
+                names.push("v${len(names)}")
+            }
+            names.push(n)
+            locals += 1
+            c.done()
+            if (c.failed()) {
+                return asmError(l.no, c.err)
+            }
+            continue
+        }
+        if (mn == "locals") {
+            var n = c.uint()
+            locals += n
+            if (len(names) > 0) {
+                while (len(names) < locals) {
+                    names.push("v${len(names)}")
+                }
+            }
+            c.done()
+            if (c.failed()) {
+                return asmError(l.no, c.err)
+            }
+            continue
+        }
+        var op = instr(a, mn, c, names, labels)
+        c.done()
+        if (c.failed()) {
+            return asmError(l.no, c.err)
+        }
+        code.push(op)
+    }
+    f.locals = locals
+    f.names = names
+    f.code = code
+    return Assembled { module: a.m, line: 0, error: "" }
+}
+
+fun simpleOp(name: string): Op? {
+    if (!contains(SIMPLE, name)) {
+        if (len(name) == 3) {
+            var kind = substring(name, 0, 1)
+            var suffix = substring(name, 1, 3)
+            [string] suffixes = ["eq", "ne", "lt", "le", "gt", "ge"]
+            [Cmp] cmps = [Cmp.Eq, Cmp.Ne, Cmp.Lt, Cmp.Le, Cmp.Gt, Cmp.Ge]
+            for k in 0..6 {
+                if (suffixes[k] == suffix) {
+                    if (kind == "i") {
+                        return Op.ICmp(cmps[k])
+                    }
+                    if (kind == "u") {
+                        return Op.UCmp(cmps[k])
+                    }
+                    if (kind == "f") {
+                        return Op.FCmp(cmps[k])
+                    }
+                }
+            }
+        }
+        return null
+    }
+    return match name {
+        "pop" => Op.Pop
+        "dup" => Op.Dup
+        "swap" => Op.Swap
+        "iadd" => Op.IAdd
+        "isub" => Op.ISub
+        "imul" => Op.IMul
+        "ineg" => Op.INeg
+        "and" => Op.And
+        "or" => Op.Or
+        "xor" => Op.Xor
+        "shl" => Op.Shl
+        "shr" => Op.Shr
+        "ushr" => Op.UShr
+        "fadd" => Op.FAdd
+        "fsub" => Op.FSub
+        "fmul" => Op.FMul
+        "fdiv" => Op.FDiv
+        "frem" => Op.FRem
+        "fneg" => Op.FNeg
+        "not" => Op.Not
+        "i2f" => Op.I2F
+        "f2i" => Op.F2I
+        "ret" => Op.Ret
+        "retv" => Op.RetVoid
+        "len" => Op.Len
+        else => Op.Unbox
+    }
+}
+
+fun localOperand(c: Cur, names: [string]): int {
+    var x = c.next()
+    if (c.failed()) {
+        return 0
+    }
+    if (x is Tok.Int && !x.neg && !x.big && x.mag >= 0 && x.mag <= U32_MAX) {
+        return x.mag
+    }
+    if (x is Tok.Ident) {
+        var k = len(names) - 1
+        while (k >= 0) {
+            if (names[k] == x.text) {
+                return k
+            }
+            k -= 1
+        }
+        c.fail("unknown local ${x.text}")
+        return 0
+    }
+    c.fail("expected a local but found ${tokText(x)}")
+    return 0
+}
+
+fun labelOperand(c: Cur, labels: {string: int}): int {
+    var x = c.next()
+    if (c.failed()) {
+        return 0
+    }
+    if (x is Tok.Ident) {
+        var at = labels[x.text]
+        if (at == null) {
+            c.fail("unknown label ${x.text}")
+            return 0
+        }
+        return at
+    }
+    if (x is Tok.Int && !x.neg && !x.big && x.mag >= 0 && x.mag <= U32_MAX) {
+        return x.mag
+    }
+    c.fail("expected a label but found ${tokText(x)}")
+    return 0
+}
+
+fun fieldIndex(a: Asm, s: string, c: Cur): int {
+    var dot = len(s) - 1
+    while (dot >= 0 && charAt(s, dot) != ".") {
+        dot -= 1
+    }
+    if (dot < 0) {
+        c.fail("write the field as Type.field, not ${s}")
+        return 0
+    }
+    var ty = substring(s, 0, dot)
+    var field = substring(s, dot + 1, len(s))
+    var tid = a.typeNames[ty]
+    if (tid == null) {
+        c.fail("unknown type ${ty}")
+        return 0
+    }
+    var d = a.m.types[tid]
+    if (d is Desc.Record) {
+        for k in 0..len(d.fields) {
+            if (d.fields[k].name == field) {
+                return k
+            }
+        }
+        c.fail("${ty} has no field ${field}")
+        return 0
+    }
+    c.fail("${ty} is not a record type")
+    return 0
+}
+
+fun instr(a: Asm, mn: string, c: Cur, names: [string], labels: {string: int}): Op {
+    var simple = simpleOp(mn)
+    if (simple != null) {
+        return simple
+    }
+    if (mn == "const") {
+        return Op.Const(constOperand(c))
+    }
+    if (mn == "tconst") {
+        return Op.TypeConst(a.ty(c))
+    }
+    if (mn == "lconst") {
+        return Op.LocConst(c.uint())
+    }
+    if (mn == "str") {
+        var x = c.next()
+        if (x is Tok.Str) {
+            return Op.Str(a.internString(x.text))
+        }
+        if (x is Tok.At) {
+            return Op.Str(x.n)
+        }
+        c.fail("expected a string but found ${tokText(x)}")
+        return Op.Pop
+    }
+    if (mn == "fref") {
+        return Op.FuncRef(a.funcRef(c))
+    }
+    if (mn == "load") {
+        return Op.Load(localOperand(c, names))
+    }
+    if (mn == "store") {
+        return Op.Store(localOperand(c, names))
+    }
+    if (mn == "tee") {
+        return Op.Tee(localOperand(c, names))
+    }
+    if (mn == "gload") {
+        return Op.GLoad(a.globalRef(c))
+    }
+    if (mn == "gstore") {
+        return Op.GStore(a.globalRef(c))
+    }
+    if (mn == "gtee") {
+        return Op.GTee(a.globalRef(c))
+    }
+    if (mn == "idiv") {
+        return Op.IDiv(locOperand(c))
+    }
+    if (mn == "iadd.ovf") {
+        return Op.IAddOv(locOperand(c))
+    }
+    if (mn == "isub.ovf") {
+        return Op.ISubOv(locOperand(c))
+    }
+    if (mn == "imul.ovf") {
+        return Op.IMulOv(locOperand(c))
+    }
+    if (mn == "ineg.ovf") {
+        return Op.INegOv(locOperand(c))
+    }
+    if (mn == "irem") {
+        return Op.IRem(locOperand(c))
+    }
+    if (mn == "index") {
+        return Op.Index(locOperand(c))
+    }
+    if (mn == "setindex") {
+        return Op.SetIndex(locOperand(c))
+    }
+    if (mn == "jmp") {
+        return Op.Jmp(labelOperand(c, labels))
+    }
+    if (mn == "jz") {
+        return Op.Jz(labelOperand(c, labels))
+    }
+    if (mn == "jnz") {
+        return Op.Jnz(labelOperand(c, labels))
+    }
+    if (mn == "jzk") {
+        return Op.JzKeep(labelOperand(c, labels))
+    }
+    if (mn == "jnzk") {
+        return Op.JnzKeep(labelOperand(c, labels))
+    }
+    if (mn == "call") {
+        return Op.Call(a.funcRef(c))
+    }
+    if (mn == "calli") {
+        return Op.CallInd(c.uint())
+    }
+    if (mn == "dispatch") {
+        var t = a.tableRef(c)
+        if (c.failed()) {
+            return Op.Pop
+        }
+        if (t >= len(a.m.tables)) {
+            c.fail("table @${t} does not exist")
+            return Op.Pop
+        }
+        return Op.Dispatch(t, a.m.tables[t].argc)
+    }
+    if (mn == "rt") {
+        var n = c.name()
+        for k in 0..len(RT_SYMBOLS) {
+            if (RT_SYMBOLS[k] == n) {
+                return Op.Rt(RT_NAMES[k])
+            }
+        }
+        c.fail("unknown runtime function ${n}; run `bvm runtime` for the list")
+        return Op.Pop
+    }
+    if (mn == "host") {
+        return Op.Host(a.importRef(c))
+    }
+    if (mn == "spawn") {
+        var f = a.funcRef(c)
+        var t = a.ty(c)
+        if (c.failed()) {
+            return Op.Pop
+        }
+        if (f >= len(a.m.funcs)) {
+            c.fail("function @${f} does not exist")
+            return Op.Pop
+        }
+        return Op.Spawn(f, a.m.funcs[f].params, t)
+    }
+    if (mn == "new") {
+        var t = a.ty(c)
+        if (c.failed()) {
+            return Op.Pop
+        }
+        if (t < len(a.m.types)) {
+            var d = a.m.types[t]
+            if (d is Desc.Record) {
+                return Op.NewRecord(t, len(d.fields))
+            }
+        }
+        c.fail("new needs a record type, not #${t}")
+        return Op.Pop
+    }
+    if (mn == "newarr") {
+        var t = a.ty(c)
+        return Op.NewArray(t, c.uint())
+    }
+    if (mn == "getf" || mn == "setf") {
+        var x = c.next()
+        var idx = 0
+        if (x is Tok.Int && !x.neg && !x.big && x.mag >= 0 && x.mag <= U32_MAX) {
+            idx = x.mag
+        } else if (x is Tok.Ident) {
+            idx = fieldIndex(a, x.text, c)
+        } else {
+            c.fail("expected a field but found ${tokText(x)}")
+        }
+        if (mn == "getf") {
+            return Op.GetField(idx)
+        }
+        return Op.SetField(idx)
+    }
+    c.fail("unknown instruction ${mn}")
+    return Op.Pop
+}
