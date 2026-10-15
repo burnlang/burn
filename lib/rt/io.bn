@@ -133,8 +133,189 @@ pub unsafe fun writeErrText(s: string) {
 /** Stops the program with the runtime error `msg` at the source location with index `loc` (-1 for none). */
 pub unsafe fun fatalError(msg: string, loc: int) {
     flush()
-    writeErrText(formatError(msg, loc) + "\n")
+    var text = formatError(msg, loc)
+    throwCaught(1, text, 1)
+    writeErrText(text + "\n")
     cExit(1)
+}
+
+@Extern("pthread_key_create")
+fun cKeyCreate(key: int, dtor: int): Int32
+
+@Extern("pthread_getspecific")
+fun cGetSpecific(key: int): int
+
+@Extern("pthread_setspecific")
+fun cSetSpecific(key: int, v: int): Int32
+
+var panicMode = false
+var catchKey = 0
+var caughtPtr = 0
+var caughtLen = 0
+var caughtCode = 0
+
+/**
+ * Turns panic mode on or off. In panic mode a runtime error or `exit` inside `burn_rt_try` returns from it instead of
+ * stopping the program, and an async task that fails gives its default value; the REPL and the language server use it.
+ */
+@Extern("burn_rt_set_panic_mode")
+pub unsafe fun setPanicMode(on: int): int {
+    if (catchKey == 0) {
+        var k = zalloc(8)
+        cKeyCreate(k, 0)
+        catchKey = k
+    }
+    panicMode = on != 0
+    return 0
+}
+
+/** Whether panic mode is on. */
+pub unsafe fun inPanicMode(): bool {
+    return panicMode
+}
+
+/** Returns to the innermost `burn_rt_try` of this thread with `kind` (1 for an error, 2 for exit), when there is one. */
+pub unsafe fun throwCaught(kind: int, text: string, code: int) {
+    if (!panicMode) {
+        return
+    }
+    var buf = cGetSpecific(ld64(catchKey))
+    if (buf == 0) {
+        return
+    }
+    var t = text
+    var n = ld64(__addr(t) + STR_LEN)
+    if (caughtPtr != 0) {
+        cFree(caughtPtr)
+    }
+    caughtPtr = cString(__addr(t) + STR_BYTES, n)
+    caughtLen = n
+    caughtCode = code
+    jumpTo(buf, kind)
+}
+
+/** Resumes the `burn_rt_try` that saved its registers in `buf`, which then gives `kind`. */
+unsafe fun jumpTo(buf: int, kind: int) {
+    var b = buf
+    var k = kind
+    asm {
+        x86_64 {
+            mov rcx, {b}
+            mov rax, {k}
+            mov rbx, qword ptr [rcx]
+            mov rbp, qword ptr [rcx + 8]
+            mov r12, qword ptr [rcx + 16]
+            mov r13, qword ptr [rcx + 24]
+            mov r14, qword ptr [rcx + 32]
+            mov r15, qword ptr [rcx + 40]
+            mov rsp, qword ptr [rcx + 48]
+            jmp qword ptr [rcx + 56]
+        }
+        arm64 {
+            ldr x9, {b}
+            ldr x0, {k}
+            ldp x19, x20, [x9]
+            ldp x21, x22, [x9, #16]
+            ldp x23, x24, [x9, #32]
+            ldp x25, x26, [x9, #48]
+            ldp x27, x28, [x9, #64]
+            ldp x29, x30, [x9, #80]
+            ldp d8, d9, [x9, #112]
+            ldp d10, d11, [x9, #128]
+            ldp d12, d13, [x9, #144]
+            ldp d14, d15, [x9, #160]
+            ldr x10, [x9, #96]
+            mov sp, x10
+            ldr x10, [x9, #104]
+            br x10
+        }
+    }
+}
+
+/**
+ * Calls the C function `f` with `arg` and writes its result to `out`. Gives 0, or in panic mode 1 when a runtime error
+ * stopped it and 2 when it called `exit`; `burn_rt_caught` then tells the error or the exit code.
+ */
+@Extern("burn_rt_try")
+pub unsafe fun rtTry(f: int, arg: int, out: int): int {
+    var buf = zalloc(1024)
+    var key = ld64(catchKey)
+    var prev = cGetSpecific(key)
+    cSetSpecific(key, buf)
+    var r = 0
+    asm {
+        x86_64 {
+            mov rax, {buf}
+            mov qword ptr [rax], rbx
+            mov qword ptr [rax + 8], rbp
+            mov qword ptr [rax + 16], r12
+            mov qword ptr [rax + 24], r13
+            mov qword ptr [rax + 32], r14
+            mov qword ptr [rax + 40], r15
+            mov qword ptr [rax + 48], rsp
+            lea rcx, [rip + burn_rt_try_resume]
+            mov qword ptr [rax + 56], rcx
+            xor eax, eax
+        burn_rt_try_resume:
+            mov {r}, rax
+        }
+        arm64 {
+            ldr x9, {buf}
+            stp x19, x20, [x9]
+            stp x21, x22, [x9, #16]
+            stp x23, x24, [x9, #32]
+            stp x25, x26, [x9, #48]
+            stp x27, x28, [x9, #64]
+            stp x29, x30, [x9, #80]
+            stp d8, d9, [x9, #112]
+            stp d10, d11, [x9, #128]
+            stp d12, d13, [x9, #144]
+            stp d14, d15, [x9, #160]
+            mov x10, sp
+            str x10, [x9, #96]
+            adr x10, burn_rt_try_resume
+            str x10, [x9, #104]
+            mov x0, #0
+        burn_rt_try_resume:
+            str x0, {r}
+        }
+    }
+    if (r == 0) {
+        st64(out, callC3(f, arg, 0, 0))
+    }
+    cSetSpecific(key, prev)
+    cFree(buf)
+    return r
+}
+
+/** The message of the runtime error the last `burn_rt_try` caught, or the exit code when it caught `exit`. */
+@Extern("burn_rt_caught")
+pub unsafe fun rtCaught(): int {
+    return strNew(caughtPtr, caughtLen)
+}
+
+/** The exit code the last `burn_rt_try` caught. */
+@Extern("burn_rt_caught_code")
+pub unsafe fun rtCaughtCode(): int {
+    return caughtCode
+}
+
+var programPath = 0
+
+/** The path the program was started with (`argv[0]`), or `""`. */
+@Extern("burn_rt_program")
+pub unsafe fun rtProgram(): int {
+    if (programPath == 0) {
+        return strNew(0, 0)
+    }
+    return strNew(programPath, cStrlen(programPath))
+}
+
+/** Writes out what the program printed so far. */
+@Extern("burn_flush")
+pub unsafe fun flushOutput(): int {
+    flush()
+    return 0
 }
 
 /** The number after `key` in `msg`, like `number_after`, or -1. */
@@ -403,6 +584,9 @@ pub unsafe fun environment(): int {
 pub unsafe fun setArgs(argc: int, argv: int) {
     if (argv != 0) {
         envBlock = argv + 8 * (argc + 1)
+        if (argc > 0) {
+            programPath = ld64(argv)
+        }
     }
     var a = stringArray()
     for i in 1..argc {

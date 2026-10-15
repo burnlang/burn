@@ -1,112 +1,1006 @@
-/** The name the toolchain was started as: `burn`, `burni`, `burnc` or `burn-lsp`. */
-@Native("burn.tool")
-pub fun toolName(): string
+/**
+ * What the command line needs from the system: the toolchain's paths and platform, files, other programs, the
+ * terminal, and bytecode, which it links, writes and runs with the bvm written in Burn.
+ */
+import "../bvm/archive.bn"
+import "../bvm/binary.bn"
+import "../bvm/files.bn"
+import "../bvm/interp.bn"
+import "../bvm/link.bn"
+import "../bvm/tool.bn"
+import "../bvm/verify.bn"
+import "../version.bn"
+import "../vm/asm.bn"
+import "../vm/module.bn"
+import "std/fs"
+import "std/memory"
+import "std/process"
+
+/** The names the toolchain can be started as; started under any other name, it is bvm. */
+pub const TOOLS = ["burn", "burni", "burnc", "burn-lsp"]
+
+@Extern("burn_rt_program")
+priv fun rtProgram(): int
+
+@Extern("burn_rt_platform")
+priv fun rtPlatform(): int
+
+@Extern("burn_rt_mtime")
+priv fun rtMtime(path: int): int
+
+@Extern("burn_rt_lossy_text")
+priv fun rtLossyText(p: int, n: int): int
+
+@Extern("burn_rt_set_panic_mode")
+priv fun rtSetPanicMode(on: int): int
+
+@Extern("burn_rt_try")
+priv fun rtTry(f: int, arg: int, out: int): int
+
+@Extern("burn_rt_caught")
+priv fun rtCaught(): int
+
+@Extern("burn_rt_caught_code")
+priv fun rtCaughtCode(): int
+
+@Extern("burn_flush")
+priv fun rtFlush(): int
+
+@Extern("burn_release")
+priv fun rtRelease(p: int): int
+
+@Extern("isatty")
+priv fun cIsatty(fd: int): Int32
+
+@Extern("realpath")
+priv fun cRealpath(path: int, out: int): int
+
+@Extern("readlink")
+priv fun cReadlink(path: int, buf: int, n: int): int
+
+@Extern("chmod")
+priv fun cChmod(path: int, mode: int): Int32
+
+@Extern("read")
+priv fun cReadFd(fd: int, buf: int, n: int): int
+
+@Extern("dlsym")
+priv fun cDlsym(handle: int, name: int): int
+
+@Extern("getrlimit")
+priv fun cGetrlimit(resource: int, out: int): Int32
+
+@Extern("setrlimit")
+priv fun cSetrlimit(resource: int, limit: int): Int32
+
+/** The string object at `p`, which the caller owned and gives up, or null when `p` is 0. */
+priv unsafe fun owned(p: int): string? {
+    if (p == 0) {
+        return null
+    }
+    var s = __str(p)
+    rtRelease(p)
+    return s
+}
+
+/** The address of the zero-terminated bytes of `s`, for C. */
+priv unsafe fun cText(s: string): int {
+    return __addr(s) + 24
+}
+
+priv unsafe fun cTextAt(p: int): string {
+    var n = 0
+    while (Memory.load8(p + n) != 0) {
+        n += 1
+    }
+    return owned(rtLossyText(p, n)) ?? ""
+}
+
+priv fun baseName(path: string): string {
+    var i = len(path) - 1
+    while (i >= 0 && charAt(path, i) != "/") {
+        i -= 1
+    }
+    return substring(path, i + 1, len(path))
+}
+
+priv fun dirName(path: string): string? {
+    var i = len(path) - 1
+    while (i > 0 && charAt(path, i) != "/") {
+        i -= 1
+    }
+    if (i < 0 || charAt(path, i) != "/") {
+        return null
+    }
+    if (i == 0) {
+        return "/"
+    }
+    return substring(path, 0, i)
+}
+
+priv fun stemOf(path: string): string {
+    var base = baseName(path)
+    var dot = len(base) - 1
+    while (dot > 0 && charAt(base, dot) != ".") {
+        dot -= 1
+    }
+    if (dot > 0) {
+        return substring(base, 0, dot)
+    }
+    return base
+}
+
+/** The path the toolchain was started with. */
+priv fun programPath(): string {
+    unsafe {
+        return owned(rtProgram()) ?? ""
+    }
+}
+
+/** The name the toolchain was started as: `burn`, `burni`, `burnc` or `burn-lsp`, or `""` when it runs as bvm. */
+pub fun toolName(): string {
+    var stem = lower(stemOf(programPath()))
+    if (contains(TOOLS, stem)) {
+        return stem
+    }
+    return ""
+}
 
 /** The version of the toolchain. */
-@Native("burn.version")
-pub fun toolchainVersion(): string
+pub fun toolchainVersion(): string {
+    return VERSION
+}
 
 /** Whether errors are printed in colour: stderr is a terminal and `NO_COLOR` is not set. */
-@Native("burn.colorErrors")
-pub fun colorErrors(): bool
+pub fun colorErrors(): bool {
+    unsafe {
+        return env("NO_COLOR") == "" && cIsatty(2) != 0
+    }
+}
 
-/** Runs a module given in bvm assembly, linked with the bytecode libraries in `libs`, then exits with its exit code. */
-@Native("burn.runModule")
-pub fun runModule(module: string, libs: [string], args: [string]): int
+/** The bytecode modules in a library file: those of an archive, or the one module. */
+priv def type LibraryModules {
+    [VModule] modules
+    Archive? archive
+    string error
+}
+
+priv fun libraryModules(bytes: [int]): LibraryModules {
+    if (isArchive(bytes)) {
+        var d = decodeArchive(bytes)
+        if (d.error != "") {
+            return LibraryModules { modules: [], archive: null, error: d.error }
+        }
+        return LibraryModules { modules: orderedModules(d.archive), archive: d.archive, error: "" }
+    }
+    var p = parseModule(bytes)
+    if (p.error != "") {
+        return LibraryModules { modules: [], archive: null, error: p.error }
+    }
+    return LibraryModules { modules: p.modules, archive: null, error: "" }
+}
+
+priv fun readError(path: string): string {
+    if (!fileExists(path)) {
+        return "cannot read ${path}: No such file or directory (os error 2)"
+    }
+    return "cannot read ${path}: it cannot be read"
+}
+
+/** A module linked with its bytecode libraries, the host functions the libraries give it, or why that failed. */
+priv def type LinkedProgram {
+    VModule module
+    [HostFn] hosts
+    string failure
+}
+
+priv const INTERNAL = "70\tinternal error: the compiler produced an invalid bvm module: "
+
+priv fun linkFailure(msg: string): LinkedProgram {
+    return LinkedProgram { module: emptyModule(), hosts: [], failure: "1\terror: ${msg}" }
+}
+
+priv fun linkedWith(m: VModule, libs: [string]): LinkedProgram {
+    if (len(libs) == 0) {
+        return LinkedProgram { module: m, hosts: [], failure: "" }
+    }
+    [VModule] mods = [m]
+    [HostFn] hosts = []
+    for path in libs {
+        var bytes = readBytes(path)
+        if (bytes == null) {
+            return linkFailure(readError(path))
+        }
+        var l = libraryModules(bytes)
+        if (l.error != "") {
+            return linkFailure("${path}: ${l.error}")
+        }
+        for x in l.modules {
+            mods.push(x)
+        }
+        var a = l.archive
+        if (a != null) {
+            for h in archiveHost(a) {
+                hosts.push(h)
+            }
+        }
+    }
+    var linked = link(mods, false, false)
+    if (linked.error != "") {
+        return linkFailure(linked.error)
+    }
+    return LinkedProgram { module: linked.module, hosts: hosts, failure: "" }
+}
+
+/** Whether a load error is the program's fault rather than the compiler's, like the link errors of `LoadError`. */
+priv fun userLoadError(e: string): bool {
+    return startsWith(e, "the module imports ") || endsWith(e, " is external; link the module that defines it")
+}
+
+priv fun loadFailure(e: string): string {
+    if (userLoadError(e)) {
+        return "1\terror: ${e}"
+    }
+    return INTERNAL + e
+}
+
+/** Prints the error of a failure (`<code>\t<message>`) and gives its exit code. */
+priv fun report(failure: string): int {
+    var tab = indexOf(failure, "\t")
+    eprint(substring(failure, tab + 1, len(failure)))
+    return toInt(substring(failure, 0, tab))
+}
+
+/** Runs module `module`, linked with the bytecode libraries in `libs`, then exits with its exit code. */
+pub fun runModule(module: VModule, libs: [string], args: [string]): int {
+    var l = linkedWith(module, libs)
+    if (l.failure != "") {
+        exit(report(l.failure))
+    }
+    var prog = prepare(l.module, l.hosts)
+    if (prog.error != "") {
+        exit(report(loadFailure(prog.error)))
+    }
+    setProgramArgs(args)
+    runEntry(prog)
+    exit(0)
+}
 
 /** Runs a bvm module or archive file with `args`, then exits with its exit code. */
-@Native("burn.runFile")
-pub fun runFile(path: string, args: [string]): int
+pub fun runFile(path: string, args: [string]): int {
+    exit(runPath(path, args))
+}
 
 /**
- * Links a module given in bvm assembly with the bytecode libraries in `libs`, checks it and writes it as bytecode to
- * `path`, and its assembly to `asmPath` unless that is `""`. Returns `""`, or the exit code and the error, split by a tab.
+ * Links `module` with the bytecode libraries in `libs`, checks it and writes it as bytecode to `path`, and its
+ * assembly to `asmPath` unless that is `""`. Returns `""`, or the exit code and the error, split by a tab.
  */
-@Native("burn.writeBytecode")
-pub fun writeBytecode(module: string, libs: [string], path: string, asmPath: string): string
+pub fun writeBytecode(module: VModule, libs: [string], path: string, asmPath: string): string {
+    var l = linkedWith(module, libs)
+    if (l.failure != "") {
+        return l.failure
+    }
+    var a = analyze(l.module)
+    if (a.error != "") {
+        return INTERNAL + a.error
+    }
+    if (asmPath != "" && !writeFile(asmPath, disassemble(l.module))) {
+        return "1\terror: cannot write ${asmPath}"
+    }
+    if (!writeBytes(path, encode(l.module))) {
+        return "1\terror: cannot write ${path}"
+    }
+    return ""
+}
 
 /** Writes a runnable archive named `name` holding the module and the libraries to `path`, like `writeBytecode`. */
-@Native("burn.writeArchive")
-pub fun writeArchive(module: string, name: string, libs: [string], path: string): string
+pub fun writeArchive(module: VModule, name: string, libs: [string], path: string): string {
+    var a = newArchive(name, VERSION)
+    addModule(a, name, module)
+    for lib in libs {
+        var bytes = readBytes(lib)
+        if (bytes == null) {
+            return "1\terror: ${readError(lib)}"
+        }
+        var stem = stemOf(lib)
+        var parts = libraryModules(bytes)
+        if (parts.error != "") {
+            return "1\terror: ${lib}: ${parts.error}"
+        }
+        for k in 0..len(parts.modules) {
+            var m = parts.modules[k]
+            var part = m.name
+            if (part == "") {
+                part = stem
+                if (k > 0) {
+                    part = "${stem}.${k}"
+                }
+            }
+            addModule(a, part, m)
+        }
+        var la = parts.archive
+        if (la != null) {
+            for r in la.resources {
+                addResource(a, r.name, r.data)
+            }
+        }
+    }
+    var linked = linkArchive(a, false, false)
+    if (linked.error != "") {
+        return "1\terror: ${linked.error}"
+    }
+    if (!writeBytes(path, encodeArchive(a, true))) {
+        return "1\terror: cannot write ${path}"
+    }
+    unsafe {
+        var p = path
+        cChmod(cText(p), 493)
+    }
+    return ""
+}
 
 /** How to start this toolchain's `burn` again, for running each test in its own process. */
-@Native("burn.launcher")
-pub fun launcher(): string
+pub fun launcher(): string {
+    var first = programPath()
+    if (first == "") {
+        return "burn"
+    }
+    if (indexOf(first, "/") > 0) {
+        return pathJoinCwd(first)
+    }
+    return first
+}
+
+priv fun pathJoinCwd(path: string): string {
+    var cwd = Process.cwd()
+    if (endsWith(cwd, "/")) {
+        return cwd + path
+    }
+    return "${cwd}/${path}"
+}
+
+priv fun ownedAnnotation(m: VModule): bool {
+    for a in m.annotations {
+        if (a.target is Target.Module && a.name == "RefCounted") {
+            return true
+        }
+    }
+    return false
+}
+
+priv fun describeType(d: Desc): string {
+    if (d is Desc.Error) {
+        return "error"
+    }
+    if (d is Desc.Void) {
+        return "void"
+    }
+    if (d is Desc.Null) {
+        return "null"
+    }
+    if (d is Desc.Int) {
+        return "int"
+    }
+    if (d is Desc.Float) {
+        return "float"
+    }
+    if (d is Desc.Bool) {
+        return "bool"
+    }
+    if (d is Desc.Str) {
+        return "str"
+    }
+    if (d is Desc.Any) {
+        return "any"
+    }
+    if (d is Desc.Num) {
+        return "num\t${d.code + 1}"
+    }
+    if (d is Desc.Func) {
+        return "func"
+    }
+    if (d is Desc.Array) {
+        return "array\t${d.elem}"
+    }
+    if (d is Desc.Map) {
+        return "map\t${d.key}\t${d.value}"
+    }
+    if (d is Desc.Optional) {
+        return "optional\t${d.inner}"
+    }
+    if (d is Desc.Future) {
+        return "future\t${d.inner}"
+    }
+    if (d is Desc.Record) {
+        var cls = 0
+        if (d.isClass) {
+            cls = 1
+        }
+        var s = "record\t${d.name}\t${cls}\t${len(d.fields)}"
+        for f in d.fields {
+            s += "\t${f.name}\t${f.ty}"
+        }
+        return s
+    }
+    if (d is Desc.Interface) {
+        return "interface\t${d.name}"
+    }
+    if (d is Desc.Enum) {
+        return "enum\t${d.name}\t${len(d.variants)}\t${join(d.variants, "\t")}"
+    }
+    return "error"
+}
 
 /** The exported functions and types of the bytecode library at `path`, as the checker reads them. */
-@Native("burn.library")
-pub fun libraryInfo(path: string): string
+pub fun libraryInfo(path: string): string {
+    var bytes = readBytes(path)
+    if (bytes == null) {
+        return "error\tNo such file or directory (os error 2)"
+    }
+    var parts = libraryModules(bytes)
+    if (parts.error == "") {
+        for m in parts.modules {
+            if (!ownedAnnotation(m)) {
+                return "old"
+            }
+        }
+    }
+    var m = emptyModule()
+    if (isArchive(bytes)) {
+        var d = decodeArchive(bytes)
+        if (d.error != "") {
+            return "error\t${d.error}"
+        }
+        var l = linkArchive(d.archive, true, false)
+        if (l.error != "") {
+            return "error\t${l.error}"
+        }
+        m = l.module
+    } else {
+        var p = parseModule(bytes)
+        if (p.error != "") {
+            return "error\t${p.error}"
+        }
+        m = p.modules[0]
+    }
+    var out = ""
+    for d in m.types {
+        out += "type\t${describeType(d)}\n"
+    }
+    for i in 0..len(m.funcs) {
+        var f = m.funcs[i]
+        if (f.external) {
+            continue
+        }
+        var name = exportName(m, i)
+        if (name == "") {
+            continue
+        }
+        var sig = f.sig
+        if (sig == null) {
+            out += "func\t${name}\tnone\n"
+        } else {
+            out += "func\t${name}\t${sig.ret}\t${len(sig.params)}"
+            for k in 0..len(sig.params) {
+                var p = "arg${k}"
+                if (k < len(f.names)) {
+                    p = f.names[k]
+                }
+                out += "\t${sig.params[k]}\t${p}"
+            }
+            out += "\n"
+        }
+    }
+    return out
+}
+
+priv fun newestSource(dir: string, newest: int): int {
+    var best = newest
+    for name in Files.list(dir) {
+        if (startsWith(name, ".") || name == "build" || name == "target") {
+            continue
+        }
+        var path = "${dir}/${name}"
+        if (Files.isDir(path)) {
+            best = newestSource(path, best)
+        } else if (endsWith(name, ".bn") || name == "burn.toml" || endsWith(name, ".bvmc")) {
+            var t = modTime(path)
+            if (t > best) {
+                best = t
+            }
+        }
+    }
+    return best
+}
+
+priv fun modTime(path: string): int {
+    unsafe {
+        var p = path
+        return rtMtime(__addr(p))
+    }
+}
 
 /** Whether the bytecode `out` of the package in `dir` is missing, older than its sources, or from an older Burn. */
-@Native("burn.stale")
-pub fun isStale(dir: string, out: string): bool
+pub fun isStale(dir: string, out: string): bool {
+    var built = modTime(out)
+    if (built < 0) {
+        return true
+    }
+    if (newestSource(dir, 0) > built) {
+        return true
+    }
+    var bytes = readBytes(out)
+    if (bytes == null) {
+        return true
+    }
+    var parts = libraryModules(bytes)
+    if (parts.error != "") {
+        return true
+    }
+    for m in parts.modules {
+        if (!ownedAnnotation(m)) {
+            return true
+        }
+    }
+    return false
+}
+
+priv var replSaved: {string: int} = {}
+priv var replInited: {string: bool} = {}
+priv var replProgram: Program? = null
+priv var replFunc = 0
 
 /** Starts a REPL session: runtime errors stop only the current input, and globals are kept between inputs. */
-@Native("burn.replStart")
-pub fun replStart(): int
+pub fun replStart(): int {
+    unsafe {
+        rtSetPanicMode(1)
+    }
+    return replReset()
+}
 
 /** Forgets the globals and initialized modules of the REPL session. */
-@Native("burn.replReset")
-pub fun replReset(): int
+pub fun replReset(): int {
+    replSaved = {}
+    replInited = {}
+    return 0
+}
+
+@Extern("burn_cli_repl_step")
+priv fun replStep(arg: int): int {
+    var p = replProgram
+    if (p != null) {
+        call(p, replFunc, [])
+    }
+    return 0
+}
 
 /**
  * Runs the module initializers `funcs` (named `inits`) of a REPL input with the globals saved from earlier inputs,
  * and saves them again. Returns `""`, `"error\t<message>"` for a runtime error or `"exit\t<code>"`.
  */
-@Native("burn.replEval")
-pub fun replEval(module: string, libs: [string], globals: [string], inits: [string], funcs: [int]): string
+pub fun replEval(module: VModule, libs: [string], globals: [string], inits: [string], funcs: [int]): string {
+    var l = linkedWith(module, libs)
+    if (l.failure != "") {
+        exit(report(l.failure))
+    }
+    var prog = prepare(l.module, l.hosts)
+    if (prog.error != "") {
+        exit(report(loadFailure(prog.error)))
+    }
+    [int] values = []
+    for g in globals {
+        values.push(replSaved[g] ?? 0)
+    }
+    setProgramGlobals(prog, values)
+    replProgram = prog
+    var root = ""
+    if (len(inits) > 0) {
+        root = inits[len(inits) - 1]
+    }
+    var result = ""
+    for i in 0..len(inits) {
+        var key = inits[i]
+        if (key != root && (replInited[key] ?? false)) {
+            continue
+        }
+        replFunc = funcs[i]
+        var status = 0
+        unsafe {
+            var out = Memory.alloc(8)
+            status = rtTry(__cfun(replStep), 0, out)
+            Memory.free(out)
+            rtFlush()
+            if (status == 1) {
+                result = "error\t" + (owned(rtCaught()) ?? "")
+            } else if (status == 2) {
+                result = "exit\t${rtCaughtCode()}"
+            }
+        }
+        if (status != 0) {
+            break
+        }
+        if (key != root) {
+            replInited[key] = true
+        }
+    }
+    replProgram = null
+    var after = programGlobals(prog)
+    for i in 0..len(globals) {
+        if (i < len(after)) {
+            replSaved[globals[i]] = after[i]
+        }
+    }
+    return result
+}
+
+/** Reads one line from stdin without its line break, or null at the end of the input. */
+priv fun readStdinLine(): string? {
+    unsafe {
+        var cap = 256
+        var buf = Memory.alloc(cap)
+        var one = Memory.alloc(8)
+        var n = 0
+        var any = false
+        while (true) {
+            var r = cReadFd(0, one, 1)
+            if (r <= 0) {
+                break
+            }
+            any = true
+            var b = Memory.load8(one)
+            if (b == 10) {
+                break
+            }
+            if (n == cap) {
+                var bigger = Memory.alloc(cap * 2)
+                Memory.copy(bigger, buf, n)
+                Memory.free(buf)
+                buf = bigger
+                cap *= 2
+            }
+            Memory.store8(buf + n, b)
+            n += 1
+        }
+        Memory.free(one)
+        if (!any) {
+            Memory.free(buf)
+            return null
+        }
+        if (n > 0 && Memory.load8(buf + n - 1) == 13) {
+            n -= 1
+        }
+        var s = owned(rtLossyText(buf, n))
+        Memory.free(buf)
+        return s
+    }
+}
 
 /** Prints `prompt` and reads a line from stdin without its line break, or null at the end of the input. */
-@Native("burn.readLine")
-pub fun readLine(prompt: string): string?
+pub fun readLine(prompt: string): string? {
+    write(prompt)
+    unsafe {
+        rtFlush()
+    }
+    return readStdinLine()
+}
 
 /** Starts the language server: caps its memory, and runtime errors stop only the request that raised them. */
-@Native("burn.lspStart")
-pub fun lspStart(): int
+pub fun lspStart(): int {
+    capMemory()
+    return replStart()
+}
+
+priv fun capMemory() {
+    if (!startsWith(platform(), "linux")) {
+        return
+    }
+    var mb = 4096
+    var v = trim(env("BURN_LSP_MEMORY_MB"))
+    if (v != "" && isInt(v)) {
+        mb = toInt(v)
+    }
+    if (mb <= 0) {
+        return
+    }
+    var want = mb * 1048576
+    unsafe {
+        var cur = Memory.alloc(16)
+        if (cGetrlimit(9, cur) == 0) {
+            var now = Memory.load64(cur)
+            if (now < 0 || now > want) {
+                Memory.store64(cur, want)
+                cSetrlimit(9, cur)
+            }
+        }
+        Memory.free(cur)
+    }
+}
 
 /** Reads one language server message from stdin (a `Content-Length` header, then the body), or null at the end of the input. */
-@Native("burn.readMessage")
-pub fun readMessage(): string?
+pub fun readMessage(): string? {
+    var size = -1
+    while (true) {
+        var line = readStdinLine()
+        if (line == null) {
+            return null
+        }
+        var t = trim(line)
+        if (t == "") {
+            break
+        }
+        if (startsWith(t, "Content-Length:")) {
+            var v = trim(substring(t, 15, len(t)))
+            if (isInt(v)) {
+                size = toInt(v)
+            }
+        }
+    }
+    if (size < 0) {
+        return null
+    }
+    unsafe {
+        var buf = Memory.alloc(size + 1)
+        var n = 0
+        while (n < size) {
+            var r = cReadFd(0, buf + n, size - n)
+            if (r <= 0) {
+                Memory.free(buf)
+                return null
+            }
+            n += r
+        }
+        var s = owned(rtLossyText(buf, size))
+        Memory.free(buf)
+        return s
+    }
+}
 
 /** Writes one language server message to stdout with its `Content-Length` header. */
-@Native("burn.send")
-pub fun sendMessage(body: string): int
+pub fun sendMessage(body: string): int {
+    unsafe {
+        var b = body
+        var n = Memory.load64(__addr(b) + 16)
+        write("Content-Length: ${n}\r\n\r\n")
+        write(body)
+        rtFlush()
+    }
+    return 0
+}
 
 /** The absolute path of `path` with every symbolic link resolved, or null when it does not exist. */
-@Native("burn.realPath")
-pub fun realPath(path: string): string?
+pub fun realPath(path: string): string? {
+    unsafe {
+        var p = path
+        var buf = Memory.alloc(4097)
+        var r = cRealpath(cText(p), buf)
+        if (r == 0) {
+            Memory.free(buf)
+            return null
+        }
+        var s = cTextAt(buf)
+        Memory.free(buf)
+        return s
+    }
+}
 
 /** Writes `content` to `path` unless it already holds it, creating its folders, and makes the file read-only. */
-@Native("burn.writeReadOnly")
-pub fun writeReadOnly(path: string, content: string): bool
+pub fun writeReadOnly(path: string, content: string): bool {
+    if (fileExists(path) && readFile(path) == content) {
+        return true
+    }
+    var dir = dirName(path)
+    if (dir != null && !Files.makeDir(dir)) {
+        return false
+    }
+    unsafe {
+        var p = path
+        if (fileExists(path)) {
+            cChmod(cText(p), 420)
+        }
+        if (!writeFile(path, content)) {
+            return false
+        }
+        cChmod(cText(p), 292)
+    }
+    return true
+}
+
+/** The path of the running executable, or null when it is unknown. */
+priv fun exePath(): string? {
+    unsafe {
+        if (startsWith(platform(), "macos")) {
+            var name = "_NSGetExecutablePath"
+            var f = cDlsym(-2, cText(name))
+            if (f == 0) {
+                return null
+            }
+            var buf = Memory.alloc(4096)
+            var size = Memory.alloc(8)
+            Memory.store64(size, 4096)
+            var r = callC2(f, buf, size)
+            var s: string? = null
+            if ((r & 4294967295) == 0) {
+                s = cTextAt(buf)
+            }
+            Memory.free(buf)
+            Memory.free(size)
+            if (s == null) {
+                return null
+            }
+            return realPath(s) ?? s
+        }
+        var link = "/proc/self/exe"
+        var buf = Memory.alloc(4097)
+        var n = cReadlink(cText(link), buf, 4096)
+        if (n <= 0) {
+            Memory.free(buf)
+            return null
+        }
+        var s = owned(rtLossyText(buf, n))
+        Memory.free(buf)
+        return s
+    }
+}
+
+priv unsafe fun callC2(f: int, a: int, b: int): int {
+    var fp = f
+    var x = a
+    var y = b
+    var r = 0
+    asm {
+        x86_64 {
+            push r12
+            mov rax, {fp}
+            mov rdi, {x}
+            mov rsi, {y}
+            mov r12, rsp
+            and rsp, -16
+            call rax
+            mov rsp, r12
+            pop r12
+            mov {r}, rax
+        }
+        arm64 {
+            ldr x9, {fp}
+            ldr x0, {x}
+            ldr x1, {y}
+            blr x9
+            str x0, {r}
+        }
+    }
+    return r
+}
 
 /** The folder of the running executable, or null when it is unknown. */
-@Native("burn.exeDir")
-pub fun exeDir(): string?
+pub fun exeDir(): string? {
+    var p = exePath()
+    if (p == null) {
+        return null
+    }
+    return dirName(p)
+}
 
 /**
  * Runs `program` with `args` in the folder `dir`, with `NO_COLOR` set and no input. Returns `"ok"` or `"failed"` and its
  * output, or `"error"` and why it could not start, split by a tab.
  */
-@Native("burn.runIn")
-pub fun runIn(program: string, args: [string], dir: string): string
+pub fun runIn(program: string, args: [string], dir: string): string {
+    [string] all = ["-c", "cd \"$1\" || exit 126; shift; NO_COLOR=1 exec \"$@\" </dev/null", "sh", dir, program]
+    for a in args {
+        all.push(a)
+    }
+    var r = Process.output("/bin/sh", all)
+    if (r.code < 0) {
+        return "error\t${r.err}"
+    }
+    if ((r.code == 126 || r.code == 127) && r.out == "") {
+        return "error\t${trim(r.err)}"
+    }
+    if (r.code == 0) {
+        return "ok\t${r.out}${r.err}"
+    }
+    return "failed\t${r.out}${r.err}"
+}
 
 /** The operating system and processor this toolchain runs on, such as `linux-x86_64` or `macos-aarch64`. */
-@Native("burn.platform")
-pub fun platform(): string
+pub fun platform(): string {
+    unsafe {
+        return owned(rtPlatform()) ?? ""
+    }
+}
 
-/** The folder that holds the command line module, `share/burn` in a toolchain, or null when it is unknown. */
-@Native("burn.shareDir")
-pub fun shareDir(): string?
+/** The folder with the toolchain's runtime, tools and examples, `share/burn` in a toolchain, or null when it is unknown. */
+pub fun shareDir(): string? {
+    [string] exes = []
+    var first = programPath()
+    if (indexOf(first, "/") >= 0) {
+        exes.push(first)
+    }
+    var exe = exePath()
+    if (exe != null) {
+        exes.push(realPath(exe) ?? exe)
+    }
+    for e in exes {
+        var bin = dirName(e)
+        if (bin == null) {
+            continue
+        }
+        var root = dirName(bin)
+        if (root == null) {
+            continue
+        }
+        var share = "${root}/share/burn"
+        if (Files.isDir(share)) {
+            return share
+        }
+    }
+    return null
+}
 
 /** The bytes of the file at `path`, or null when it cannot be read. */
-@Native("burn.fileBytes")
-pub fun fileBytes(path: string): [int]?
+pub fun fileBytes(path: string): [int]? {
+    return readBytes(path)
+}
 
 /** The names the functions of the bytecode library at `path` can be targeted by, one per line, or `"error"` and why, split by a tab. */
-@Native("burn.libraryFunctions")
-pub fun libraryFunctions(path: string): string
+pub fun libraryFunctions(path: string): string {
+    var bytes = readBytes(path)
+    if (bytes == null) {
+        return "error\t${path}: No such file or directory (os error 2)"
+    }
+    var parts = libraryModules(bytes)
+    if (parts.error != "") {
+        return "error\t${path}: ${parts.error}"
+    }
+    [string] out = []
+    for m in parts.modules {
+        for i in 0..len(m.funcs) {
+            var f = m.funcs[i]
+            if (f.external) {
+                continue
+            }
+            out.push(f.name)
+            var e = exportName(m, i)
+            if (e != "") {
+                out.push(e)
+            }
+            if (m.name != "") {
+                out.push("${m.name}::${f.name}")
+            }
+        }
+    }
+    return join(out, "\n")
+}
 
 /** Checks that the bvm module or archive at `path` loads and has an entry, and writes it as bytecode to `out`. Returns `""` or the error. */
-@Native("burn.bundle")
-pub fun bundleFile(path: string, out: string): string
+pub fun bundleFile(path: string, out: string): string {
+    var bytes = readBytes(path)
+    if (bytes == null) {
+        return readError(path)
+    }
+    var data = bytes
+    var p = parseModule(bytes)
+    if (p.error != "") {
+        return "${path}: ${p.error}"
+    }
+    if (!isArchive(bytes) && !isBinary(bytes)) {
+        data = encode(p.modules[0])
+    }
+    var m = p.modules[0]
+    if (m.entry == null) {
+        return "${path} has no entry function"
+    }
+    [HostFn] hosts = []
+    var a = p.archive
+    if (a != null) {
+        hosts = archiveHost(a)
+    }
+    var prog = prepare(m, hosts)
+    if (prog.error != "") {
+        return "${path}: ${prog.error}"
+    }
+    if (!writeBytes(out, data)) {
+        return "cannot write ${out}"
+    }
+    return ""
+}

@@ -1,3 +1,4 @@
+import "../build.bn"
 import "../dump/checked.bn"
 import "../dump/declarations.bn"
 import "../dump/index.bn"
@@ -9,6 +10,7 @@ import "../lsp/sources.bn"
 import "../project/loader.bn"
 import "../project/paths.bn"
 import "../project/project.bn"
+import "../vm/asm.bn"
 import "compile.bn"
 import "doc.bn"
 import "host.bn"
@@ -677,7 +679,7 @@ priv fun cmdDump(rest: [string], opts: Options): int {
         if (c == null) {
             return 1
         }
-        write(moduleOf(c))
+        write(disassemble(moduleOf(c)))
         return 0
     }
     if (len(rest) == 2 && rest[0] == "--asm") {

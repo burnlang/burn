@@ -282,7 +282,10 @@ pub fun prepare(module: VModule, hosts: [HostFn]): Program {
         for s in m.strings {
             var t = s
             var obj = __addr(t)
-            Memory.store8(obj + 2, Memory.load8(obj + 2) | 1)
+            var flags = Memory.load8(obj + 2)
+            if ((flags & 1) == 0) {
+                Memory.store8(obj + 2, flags | 1)
+            }
             strings.push(obj)
         }
         var tables = Memory.alloc(8 * len(m.tables) + 8)
@@ -1215,4 +1218,29 @@ pub fun runEntry(p: Program): int {
         rtExit(0)
     }
     return 0
+}
+
+/** The values of the globals of a prepared program. */
+pub fun programGlobals(p: Program): [int] {
+    [int] out = []
+    unsafe {
+        var g = Memory.load64(p.block + P_GLOBALS)
+        for i in 0..Memory.load64(p.block + P_NGLOBALS) {
+            out.push(Memory.load64(g + 8 * i))
+        }
+    }
+    return out
+}
+
+/** Sets the first globals of a prepared program to `values`. */
+pub fun setProgramGlobals(p: Program, values: [int]) {
+    unsafe {
+        var g = Memory.load64(p.block + P_GLOBALS)
+        var n = Memory.load64(p.block + P_NGLOBALS)
+        for i in 0..len(values) {
+            if (i < n) {
+                Memory.store64(g + 8 * i, values[i])
+            }
+        }
+    }
 }

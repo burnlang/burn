@@ -10,16 +10,15 @@ usage() {
     cat <<EOF2
 Builds the Burn toolchain and lays it out in a directory:
 
-  <prefix>/bin/burn, burni, burnc, burn-lsp, burnfmt, bvm
-  <prefix>/share/burn/compiler.bvm, burn.bvm, lib, tools, examples, LICENSE
+  <prefix>/bin/burn, burni, burnc, burn-lsp, bvm, burnfmt
+  <prefix>/share/burn/lib, tools, examples, LICENSE
 
-bin/burn is bvm, the Burn virtual machine. Started as burn, burni, burnc or burn-lsp,
-it runs share/burn/burn.bvm, the command line written in Burn. compiler.bvm is the
-compiler written in Burn, built by itself (scripts/bootstrap.sh) starting from the
-boot compiler in compiler/boot, and it builds burn.bvm. Only Rust is needed: cargo builds
-bvm, and bvm runs the compiler written in Burn. lib holds the runtime that native
-executables link against (scripts/native-runtime.sh); it needs rustc, and native
-executables are built on x86_64 and arm64 (Apple silicon) macOS and Linux.
+bin/burn is the Burn toolchain written in Burn, a native executable: started as burn, burni,
+burnc or burn-lsp it is the command line, and started as bvm it is the Burn virtual machine.
+It is built by the compiler written in Burn, which builds itself first (scripts/bootstrap.sh)
+starting from the boot compiler in compiler/boot; cargo builds the bvm that runs those first
+stages. lib holds the runtime that native executables link against (scripts/native-runtime.sh).
+The toolchain runs on x86_64 and arm64 (Apple silicon) macOS and Linux.
 
 This is what release archives contain. To install Burn, use burnup:
   curl -fsSL https://raw.githubusercontent.com/burnlang/burnup/master/install.sh | sh
@@ -94,31 +93,31 @@ else
     sh "$ROOT/scripts/bootstrap.sh" --bvm "$ROOT/target/release/bvm" --out "$boot"
 fi
 
+case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64 | Darwin-x86_64 | Linux-aarch64 | Darwin-arm64) ;;
+    *)
+        echo "error: the Burn toolchain runs on x86_64 and arm64 macOS and Linux, not $(uname -s)-$(uname -m)" >&2
+        exit 1
+        ;;
+esac
+
+say "==> Building the toolchain written in Burn with the compiler"
+work="$(mktemp -d)"
+(cd "$ROOT" && "$ROOT/target/release/bvm" "$boot/stage2.bvm" build --target runtime lib/rt/runtime.bn -o "$work/runtime.s" >/dev/null)
+(cd "$ROOT" && "$ROOT/target/release/bvm" "$boot/stage2.bvm" build --target asm compiler/src/bin/burn.bn -o "$work/burn.s" >/dev/null)
 mkdir -p "$BIN" "$SHARE"
-for exe in burn bvm; do
-    cp -f "$ROOT/target/release/bvm" "$BIN/$exe.new"
-    mv -f "$BIN/$exe.new" "$BIN/$exe"
-done
-for tool in burni burnc burn-lsp; do
+"${BURN_CC:-${CC:-cc}}" "$work/burn.s" "$work/runtime.s" -lpthread -ldl -lm -o "$BIN/burn.new"
+mv -f "$BIN/burn.new" "$BIN/burn"
+rm -rf "$work" "$boot"
+for tool in burni burnc burn-lsp bvm; do
     rm -f "$BIN/$tool"
     ln -s burn "$BIN/$tool" 2>/dev/null || cp -f "$BIN/burn" "$BIN/$tool"
 done
-cp -f "$boot/stage2.bvm" "$SHARE/compiler.bvm"
-rm -rf "$boot"
+rm -f "$SHARE/compiler.bvm" "$SHARE/burn.bvm"
 
-say "==> Building the command line written in Burn"
-cli="$(mktemp)"
-(cd "$ROOT" && "$BIN/bvm" "$SHARE/compiler.bvm" build compiler/src/bin/burn.bn -o "$cli.bvm" >/dev/null)
-"$BIN/bvm" asm "$cli.bvm" -o "$SHARE/burn.bvm" >/dev/null
-rm -f "$cli" "$cli.bvm"
-
+say "==> Building the runtime for native executables"
 rm -rf "$SHARE/lib"
-case "$(uname -s)-$(uname -m)" in
-    Linux-x86_64 | Darwin-x86_64 | Linux-aarch64 | Darwin-arm64)
-        say "==> Building the runtime for native executables"
-        sh "$ROOT/scripts/native-runtime.sh" "$SHARE/lib"
-        ;;
-esac
+BURN="$BIN/burn" sh "$ROOT/scripts/native-runtime.sh" "$SHARE/lib"
 
 rm -rf "$SHARE/tools" "$SHARE/examples"
 cp -R "$ROOT/lib/tools" "$SHARE/tools"

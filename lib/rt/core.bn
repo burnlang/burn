@@ -64,6 +64,10 @@ pub unsafe fun rtExit(code: int): int {
 
 @Extern("burn_exit_now")
 pub unsafe fun exitNow(code: int): int {
+    if (inPanicMode()) {
+        flush()
+        throwCaught(2, "", code)
+    }
     waitAll()
     flush()
     cExit(code)

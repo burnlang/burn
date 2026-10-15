@@ -115,7 +115,7 @@ priv def struct Session() {
             keys.push(i.key)
             funcs.push(i.func)
         }
-        var result = replEval(moduleText(r.checker, p), r.checker.libPaths, globals, keys, funcs)
+        var result = replEval(moduleValue(r.checker, p), r.checker.libPaths, globals, keys, funcs)
         source = trimEnd(candidate)
         var warnings = ""
         for d in all {

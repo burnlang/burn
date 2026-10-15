@@ -130,10 +130,14 @@ pub unsafe fun futureFree(p: int) {
 @Extern("burn_rt_task_main")
 unsafe fun taskMain(job: int): int {
     var v = 0
-    if (ld64(job + 16) < 0) {
-        v = callC3(ld64(job), ld64(job + 8), 0, 0)
+    if (inPanicMode()) {
+        var out = zalloc(8)
+        if (rtTry(__cfun(taskRun), job, out) == 0) {
+            v = ld64(out)
+        }
+        cFree(out)
     } else {
-        v = callBurn(ld64(job), ld64(job + 8), ld64(job + 16))
+        v = taskRun(job)
     }
     futureResolve(ld64(job + 24), v)
     release(ld64(job + 24))
@@ -147,6 +151,15 @@ unsafe fun taskMain(job: int): int {
     cCondBroadcast(b + 128)
     cMutexUnlock(b)
     return 0
+}
+
+/** Calls the function of task `job` and gives its result. */
+@Extern("burn_rt_task_run")
+unsafe fun taskRun(job: int): int {
+    if (ld64(job + 16) < 0) {
+        return callC3(ld64(job), ld64(job + 8), 0, 0)
+    }
+    return callBurn(ld64(job), ld64(job + 8), ld64(job + 16))
 }
 
 @Extern("burn_spawn")

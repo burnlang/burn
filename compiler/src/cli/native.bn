@@ -184,31 +184,6 @@ priv fun bytecodeExecutable(c: Compiled, opts: NativeOptions): string? {
     return problem
 }
 
-/** `file`'s name without folders and extension, with every character that cannot be in a C symbol replaced by `_`. */
-pub fun libraryName(file: string): string {
-    var base = file
-    var slash = len(base) - 1
-    while (slash >= 0 && charAt(base, slash) != "/") {
-        slash -= 1
-    }
-    base = substring(base, slash + 1, len(base))
-    if (endsWith(base, ".bn")) {
-        base = substring(base, 0, len(base) - 3)
-    }
-    var out = ""
-    for ch in chars(base) {
-        if (ch >= "a" && ch <= "z" || ch >= "A" && ch <= "Z" || ch >= "0" && ch <= "9" || ch == "_") {
-            out += ch
-        } else {
-            out += "_"
-        }
-    }
-    if (out == "") {
-        return "lib"
-    }
-    return out
-}
-
 /** Writes the assembly of the runtime library `name` written in Burn to `output`, for `scripts/native-runtime.sh` to assemble. Returns null or the error. */
 pub fun buildRuntimeLibrary(c: Compiled, output: string, name: string): string? {
     var problem = runtimeLibraryProblem(c.checker, c.program)

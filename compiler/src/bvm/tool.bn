@@ -150,7 +150,7 @@ pub fun parseModule(bytes: [int]): Loaded {
 }
 
 /** Runs the module or archive at `path` with `args`, like `run_file`. Returns the exit code. */
-pub fun runFile(path: string, args: [string]): int {
+pub fun runPath(path: string, args: [string]): int {
     var data = readBytes(path)
     if (data == null) {
         return failWith("could not read ${path}: ${osErrorText(path)}")
@@ -585,7 +585,7 @@ pub fun bvmMain(args: [string]): int {
         if (len(rest) == 0) {
             return usageError("bvm run needs a file")
         }
-        return runFile(rest[0], slice(rest, 1, len(rest)))
+        return runPath(rest[0], slice(rest, 1, len(rest)))
     }
     if (cmd == "asm") {
         return convert(rest, "bvmc", false)
@@ -617,7 +617,7 @@ pub fun bvmMain(args: [string]): int {
         return 0
     }
     if (!startsWith(cmd, "-")) {
-        return runFile(cmd, rest)
+        return runPath(cmd, rest)
     }
     return usageError("unknown option ${cmd}")
 }

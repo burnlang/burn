@@ -5,6 +5,7 @@ import "../diag/diag.bn"
 import "../project/loader.bn"
 import "../project/paths.bn"
 import "../project/project.bn"
+import "../vm/module.bn"
 import "host.bn"
 import "std/fs"
 
@@ -152,7 +153,7 @@ priv fun buildPackage(name: string, dir: string, project: Project, out: string):
     if (parent != null && parent != "") {
         Files.makeDir(parent)
     }
-    var problem = writeBytecode(moduleText(r.checker, p), r.checker.libPaths, out, "")
+    var problem = writeBytecode(moduleValue(r.checker, p), r.checker.libPaths, out, "")
     if (problem == "") {
         return ""
     }
@@ -225,7 +226,7 @@ pub fun compileSource(name: string, src: string, opts: Options): Compiled? {
     return checked(loader.finish(root), opts)
 }
 
-/** The program in bvm assembly. */
-pub fun moduleOf(c: Compiled): string {
-    return moduleText(c.checker, c.program)
+/** The bvm module of the program. */
+pub fun moduleOf(c: Compiled): VModule {
+    return moduleValue(c.checker, c.program)
 }
