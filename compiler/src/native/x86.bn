@@ -80,6 +80,11 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
         return ".L${label}"
     }
 
+    /** Adds `text` to the assembly. */
+    fun put(text: string) {
+        out += text
+    }
+
     fun e(s: string) {
         out += "    "
         out += s
@@ -117,7 +122,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
             for k in i..end {
                 parts.push(toString(b[k]))
             }
-            out += "    .byte ${join(parts, ",")}\n"
+            put("    .byte ${join(parts, ",")}\n")
             i = end
         }
     }
@@ -165,8 +170,8 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
         if (p.library) {
             out += ".intel_syntax noprefix\n.text\n"
         } else {
-            out += replace(replace(replace(ENTRY, "{P}", t.prefix), "{PLT}", plt()), "{PRE_ENTRY}", preEntry(exps))
-            out += ".set burn_entry, bf_${p.entry}\n"
+            put(replace(replace(replace(ENTRY, "{P}", t.prefix), "{PLT}", plt()), "{PRE_ENTRY}", preEntry(exps)))
+            put(".set burn_entry, bf_${p.entry}\n")
         }
         var globSym = sym(globalsName(p))
         for i in 0..len(p.funcs) {
@@ -189,27 +194,27 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
         }
         out += ".p2align 4\n"
         if (!p.library) {
-            out += "burn_meta_len:\n    .quad ${len(meta)}\n"
-            out += "burn_nglobals:\n    .quad ${p.globals}\n"
+            put("burn_meta_len:\n    .quad ${len(meta)}\n")
+            put("burn_nglobals:\n    .quad ${p.globals}\n")
             out += "burn_meta:\n"
             byteLines(meta)
         }
         for i in 0..len(p.libs) {
             out += ".p2align 4\n"
-            out += "burn_lib_${i}_len:\n    .quad ${len(p.libs[i])}\n"
-            out += "burn_lib_${i}:\n"
+            put("burn_lib_${i}_len:\n    .quad ${len(p.libs[i])}\n")
+            put("burn_lib_${i}:\n")
             byteLines(p.libs[i])
         }
         for i in 0..len(p.funcs) {
             var ext = p.funcs[i].external
             if (ext is External.Lib) {
-                out += "burn_libfn_${i}:\n"
+                put("burn_libfn_${i}:\n")
                 textBytes(ext.name)
             }
         }
         if (len(p.libs) > 0) {
             for k in 0..len(exps) {
-                out += "burn_export_name_${k}:\n"
+                put("burn_export_name_${k}:\n")
                 textBytes(exps[k].name)
             }
             out += "burn_mixins:\n"
@@ -224,11 +229,11 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
                 flags = 3
             }
             out += ".p2align 4\n"
-            out += "bs_${i}:\n"
-            out += "    .byte 1, 0, ${flags}, 0\n"
+            put("bs_${i}:\n")
+            put("    .byte 1, 0, ${flags}, 0\n")
             out += "    .long 6\n"
-            out += "    .long ${24 + n + 1}, 0\n"
-            out += "    .quad ${n}\n"
+            put("    .long ${24 + n + 1}, 0\n")
+            put("    .quad ${n}\n")
             textBytes(s)
         }
         if (t.macos) {
@@ -239,7 +244,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
         if (len(p.libs) > 0) {
             out += ".p2align 3\nburn_exports:\n"
             for k in 0..len(exps) {
-                out += "    .quad burn_export_name_${k}, bf_${exps[k].func}, ${exps[k].argc}\n"
+                put("    .quad burn_export_name_${k}, bf_${exps[k].func}, ${exps[k].argc}\n")
             }
             if (len(exps) == 0) {
                 out += "    .quad 0\n"
@@ -256,14 +261,14 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
                 table[im.ty] = "bf_${im.func}"
             }
             out += ".p2align 3\n"
-            out += "bi_${i}:\n"
+            put("bi_${i}:\n")
             var at = 0
             while (at < len(table)) {
                 var end = at + 8
                 if (end > len(table)) {
                     end = len(table)
                 }
-                out += "    .quad ${join(slice(table, at, end), ", ")}\n"
+                put("    .quad ${join(slice(table, at, end), ", ")}\n")
                 at = end
             }
         }
@@ -273,7 +278,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
             out += ".bss\n"
         }
         out += ".p2align 4\n"
-        out += globalsData(p, globSym, t.prefix)
+        put(globalsData(p, globSym, t.prefix))
         if (!t.macos) {
             out += ".section .note.GNU-stack,\"\",@progbits\n"
         }
@@ -281,8 +286,8 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
 
     fun func(f: HFunc) {
         out += ".p2align 4\n"
-        out += "bf_${fid}:\n"
-        out += debugLabel(f, fid)
+        put("bf_${fid}:\n")
+        put(debugLabel(f, fid))
         var ext = f.external
         if (ext is External.Lib) {
             e("push rbp")
@@ -378,9 +383,9 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
 
     /** A function C can call under `name`: it keeps the registers C expects to survive, and passes the arguments on the stack like Burn does. */
     fun cExportThunk(i: int, f: HFunc, name: string) {
-        out += ".globl ${sym(name)}\n"
+        put(".globl ${sym(name)}\n")
         out += ".p2align 4\n"
-        out += "${sym(name)}:\n"
+        put("${sym(name)}:\n")
         e("push rbp")
         e("mov rbp, rsp")
         e("push rbx")
@@ -690,7 +695,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
         }
         var ov = l()
         e("jo ${ov}")
-        cold += "${ov}:\n    mov edi, ${loc}\n    and rsp, -16\n    ${callTarget(rtSym("ErrOverflow"))}\n    ud2\n"
+        addCold("${ov}:\n    mov edi, ${loc}\n    and rsp, -16\n    ${callTarget(rtSym("ErrOverflow"))}\n    ud2\n")
     }
 
     fun div(isMod: bool, loc: int): void {
@@ -715,7 +720,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
             e("mov rax, rdx")
         }
         lbl(done)
-        cold += "${dz}:\n    mov edi, ${loc}\n    and rsp, -16\n    ${callTarget(rtSym("ErrDivZero"))}\n    ud2\n"
+        addCold("${dz}:\n    mov edi, ${loc}\n    and rsp, -16\n    ${callTarget(rtSym("ErrDivZero"))}\n    ud2\n")
     }
 
     fun shift(op: HBinOp, loc: int): void {
@@ -723,7 +728,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
             var bad = l()
             e("cmp rcx, 63")
             e("ja ${bad}")
-            cold += "${bad}:\n    mov rsi, rcx\n    mov edi, ${loc}\n    and rsp, -16\n    ${callTarget(rtSym("ErrShift"))}\n    ud2\n"
+            addCold("${bad}:\n    mov rsi, rcx\n    mov edi, ${loc}\n    and rsp, -16\n    ${callTarget(rtSym("ErrShift"))}\n    ud2\n")
         }
         if (op is HBinOp.Shl) {
             e("shl rax, cl")
@@ -1055,7 +1060,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
         e("jne ${slow}")
         e("inc dword ptr [rax + 12]")
         lbl(done)
-        cold += "${slow}:\n    mov rdi, rax\n${coldCall(rtSym("Retain"))}    jmp ${done}\n"
+        addCold("${slow}:\n    mov rdi, rax\n${coldCall(rtSym("Retain"))}    jmp ${done}\n")
     }
 
     fun release(value: HExpr): void {
@@ -1076,17 +1081,22 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
         e("test byte ptr [rax + 2], 4")
         e("jnz ${root}")
         lbl(done)
-        cold += "${mtL}:\n    mov rdi, rax\n${coldCall(rtSym("Release"))}    jmp ${done}\n"
-        cold += "${zero}:\n    mov rdi, rax\n${coldCall(rtSym("ReleaseZero"))}    jmp ${done}\n"
-        cold += "${root}:\n    mov rdi, rax\n${coldCall(rtSym("PossibleRoot"))}    jmp ${done}\n"
+        addCold("${mtL}:\n    mov rdi, rax\n${coldCall(rtSym("Release"))}    jmp ${done}\n")
+        addCold("${zero}:\n    mov rdi, rax\n${coldCall(rtSym("ReleaseZero"))}    jmp ${done}\n")
+        addCold("${root}:\n    mov rdi, rax\n${coldCall(rtSym("PossibleRoot"))}    jmp ${done}\n")
     }
 
     fun packedElem(arr: int): int {
         return packedElemOf(p.checker, arr)
     }
 
+    /** Adds `text` to the code that runs only on slow paths, after the function. */
+    fun addCold(text: string) {
+        cold += text
+    }
+
     fun rtCold(name: string, setup: string, f: string) {
-        cold += "${name}:\n${setup}    and rsp, -16\n    ${callTarget(rtSym(f))}\n    ud2\n"
+        addCold("${name}:\n${setup}    and rsp, -16\n    ${callTarget(rtSym(f))}\n    ud2\n")
     }
 
     fun codeArg(x: HExpr): int {
@@ -1262,7 +1272,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
     }
 
     fun indexCold(name: string, arr: string, loc: int) {
-        cold += "${name}:\n    mov rsi, rcx\n    mov rdx, qword ptr [${arr} + 16]\n    mov edi, ${loc}\n    and rsp, -16\n    ${callTarget(rtSym("ErrIndex"))}\n    ud2\n"
+        addCold("${name}:\n    mov rsi, rcx\n    mov rdx, qword ptr [${arr} + 16]\n    mov edi, ${loc}\n    and rsp, -16\n    ${callTarget(rtSym("ErrIndex"))}\n    ud2\n")
     }
 }
 

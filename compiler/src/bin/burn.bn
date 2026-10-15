@@ -1,7 +1,12 @@
+import "../bvm/tool.bn"
 import "../cli/cli.bn"
+import "../cli/host.bn"
 import "std/process"
 
-/** The `burn` command line, which bvm runs when it is started as `burn`, `burni`, `burnc` or `burn-lsp`. */
+/** The Burn toolchain: the `burn` command line when started as `burn`, `burni`, `burnc` or `burn-lsp`, and bvm otherwise. */
 fun main() {
+    if (toolName() == "") {
+        exit(bvmMain(args()))
+    }
     exit(cliMain(args()))
 }

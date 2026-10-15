@@ -69,6 +69,8 @@ priv fun area(n: int): int {
 priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
     string out = ""
     string cold = ""
+    int emitted = 0
+    int coldSince = 0
     int label = 0
     [bool] finals = finalRecords(p.checker)
     int fid = 0
@@ -89,7 +91,13 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
         return ".L${label}"
     }
 
+    /** Adds `text` to the assembly. */
+    fun put(text: string) {
+        out += text
+    }
+
     fun e(s: string) {
+        emitted += 1
         out += "    "
         out += s
         out += "\n"
@@ -109,7 +117,7 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
     }
 
     fun adr(reg: string, target: string) {
-        out += adrText(reg, target)
+        put(adrText(reg, target))
     }
 
     /** The lines that put the 64-bit value `v` into `reg`. */
@@ -135,7 +143,7 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
     }
 
     fun imm(reg: string, v: int) {
-        out += immText(reg, v)
+        put(immText(reg, v))
     }
 
     /** `op reg, [base, #off]` for a load or store of 8 bytes, through x17 when the offset is too large. */
@@ -222,7 +230,7 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
             for k in i..end {
                 parts.push(toString(b[k]))
             }
-            out += "    .byte ${join(parts, ",")}\n"
+            put("    .byte ${join(parts, ",")}\n")
             i = end
         }
     }
@@ -277,7 +285,7 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
     fun emitAll(meta: [int]) {
         var exps = exportsOf(p)
         if (!p.library) {
-            out += entryText(exps)
+            put(entryText(exps))
         }
         for i in 0..len(p.funcs) {
             fid = i
@@ -299,27 +307,27 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
         }
         out += ".p2align 4\n"
         if (!p.library) {
-            out += "burn_meta_len:\n    .quad ${len(meta)}\n"
-            out += "burn_nglobals:\n    .quad ${p.globals}\n"
+            put("burn_meta_len:\n    .quad ${len(meta)}\n")
+            put("burn_nglobals:\n    .quad ${p.globals}\n")
             out += "burn_meta:\n"
             byteLines(meta)
         }
         for i in 0..len(p.libs) {
             out += ".p2align 4\n"
-            out += "burn_lib_${i}_len:\n    .quad ${len(p.libs[i])}\n"
-            out += "burn_lib_${i}:\n"
+            put("burn_lib_${i}_len:\n    .quad ${len(p.libs[i])}\n")
+            put("burn_lib_${i}:\n")
             byteLines(p.libs[i])
         }
         for i in 0..len(p.funcs) {
             var ext = p.funcs[i].external
             if (ext is External.Lib) {
-                out += "burn_libfn_${i}:\n"
+                put("burn_libfn_${i}:\n")
                 textBytes(ext.name)
             }
         }
         if (len(p.libs) > 0) {
             for k in 0..len(exps) {
-                out += "burn_export_name_${k}:\n"
+                put("burn_export_name_${k}:\n")
                 textBytes(exps[k].name)
             }
             out += "burn_mixins:\n"
@@ -334,11 +342,11 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
                 flags = 3
             }
             out += ".p2align 4\n"
-            out += "bs_${i}:\n"
-            out += "    .byte 1, 0, ${flags}, 0\n"
+            put("bs_${i}:\n")
+            put("    .byte 1, 0, ${flags}, 0\n")
             out += "    .long 6\n"
-            out += "    .long ${24 + n + 1}, 0\n"
-            out += "    .quad ${n}\n"
+            put("    .long ${24 + n + 1}, 0\n")
+            put("    .quad ${n}\n")
             textBytes(s)
         }
         if (t.macos) {
@@ -349,7 +357,7 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
         if (len(p.libs) > 0) {
             out += ".p2align 3\nburn_exports:\n"
             for k in 0..len(exps) {
-                out += "    .quad burn_export_name_${k}, bf_${exps[k].func}, ${exps[k].argc}\n"
+                put("    .quad burn_export_name_${k}, bf_${exps[k].func}, ${exps[k].argc}\n")
             }
             if (len(exps) == 0) {
                 out += "    .quad 0\n"
@@ -366,14 +374,14 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
                 table[im.ty] = "bf_${im.func}"
             }
             out += ".p2align 3\n"
-            out += "bi_${i}:\n"
+            put("bi_${i}:\n")
             var at = 0
             while (at < len(table)) {
                 var end = at + 8
                 if (end > len(table)) {
                     end = len(table)
                 }
-                out += "    .quad ${join(slice(table, at, end), ", ")}\n"
+                put("    .quad ${join(slice(table, at, end), ", ")}\n")
                 at = end
             }
         }
@@ -383,7 +391,7 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
             out += ".bss\n"
         }
         out += ".p2align 4\n"
-        out += globalsData(p, sym(globalsName(p)), t.prefix)
+        put(globalsData(p, sym(globalsName(p)), t.prefix))
         if (!t.macos) {
             out += ".section .note.GNU-stack,\"\",@progbits\n"
         }
@@ -401,8 +409,8 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
 
     fun func(f: HFunc) {
         out += ".text\n.p2align 2\n"
-        out += "bf_${fid}:\n"
-        out += debugLabel(f, fid)
+        put("bf_${fid}:\n")
+        put(debugLabel(f, fid))
         var ext = f.external
         if (ext is External.Lib) {
             e("stp x29, x30, [sp, #-16]!")
@@ -493,8 +501,8 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
 
     /** A function C can call under `name`: it keeps the registers C expects to survive, and passes the arguments on the stack like Burn does. */
     fun cExportThunk(i: int, f: HFunc, name: string) {
-        out += ".text\n.globl ${sym(name)}\n.p2align 2\n"
-        out += "${sym(name)}:\n"
+        put(".text\n.globl ${sym(name)}\n.p2align 2\n")
+        put("${sym(name)}:\n")
         e("stp x29, x30, [sp, #-16]!")
         e("mov x29, sp")
         for pair in ["x19, x20", "x21, x22", "x23, x24", "x25, x26", "x27, x28", "d8, d9", "d10, d11", "d12, d13", "d14, d15"] {
@@ -535,6 +543,7 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
     }
 
     fun stmt(s: HStmt): void {
+        coldIsland()
         if (s is HStmt.Eval) {
             expr(s.value)
         } else if (s is HStmt.If) {
@@ -757,8 +766,31 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
         return size
     }
 
+    /** Adds `text` to the code that runs only on slow paths, after the function. */
+    fun addCold(text: string) {
+        if (cold == "") {
+            coldSince = emitted
+        }
+        cold += text
+    }
+
+    /**
+     * Places the slow paths collected so far here, behind a branch over them, once the oldest has waited for many
+     * instructions: conditional branches reach only 1 MB, so in a long function they could not reach its end.
+     */
+    fun coldIsland() {
+        if (cold == "" || emitted - coldSince < 30000) {
+            return
+        }
+        var skip = l()
+        e("b ${skip}")
+        out += cold
+        cold = ""
+        lbl(skip)
+    }
+
     fun coldTrap(name: string, setup: string, f: string) {
-        cold += "${name}:\n${setup}    bl ${sym(rtSym(f))}\n    brk #1\n"
+        addCold("${name}:\n${setup}    bl ${sym(rtSym(f))}\n    brk #1\n")
     }
 
     fun overflow(loc: int) {
@@ -1054,7 +1086,7 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
     }
 
     fun indexCold(name: string, arr: string, loc: int) {
-        cold += "${name}:\n    ldr x2, [${arr}, #16]\n${immText("x0", loc)}    bl ${sym(rtSym("ErrIndex"))}\n    brk #1\n"
+        addCold("${name}:\n    ldr x2, [${arr}, #16]\n${immText("x0", loc)}    bl ${sym(rtSym("ErrIndex"))}\n    brk #1\n")
     }
 
     fun index(obj: HExpr, idx: HExpr, loc: int): void {
@@ -1119,7 +1151,7 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
 
     /** A cold path that calls a runtime function on the object in x0 and keeps x0. */
     fun coldKeep(name: string, f: string, back: string) {
-        cold += "${name}:\n    str x0, [sp, #-16]!\n    bl ${sym(rtSym(f))}\n    ldr x0, [sp], #16\n    b ${back}\n"
+        addCold("${name}:\n    str x0, [sp, #-16]!\n    bl ${sym(rtSym(f))}\n    ldr x0, [sp], #16\n    b ${back}\n")
     }
 
     fun rcFlags(done: string, slow: string) {
@@ -1155,7 +1187,8 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
         e("str w9, [x0, #12]")
         e("b.eq ${zero}")
         e("ldrb w9, [x0, #2]")
-        e("tbnz w9, #2, ${root}")
+        e("tst w9, #4")
+        e("b.ne ${root}")
         lbl(done)
         coldKeep(mt, "Release", done)
         coldKeep(zero, "ReleaseZero", done)

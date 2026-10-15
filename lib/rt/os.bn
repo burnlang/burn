@@ -696,3 +696,40 @@ pub unsafe fun exec(program: int, args: int, capture: int): int {
     processFree(res)
     return out
 }
+
+/** The modification time of the file at string object `path`, in nanoseconds since 1970, or -1 when it does not exist. */
+@Extern("burn_rt_mtime")
+pub unsafe fun rtMtime(path: int): int {
+    var buf = zalloc(256)
+    var t = -1
+    if (statCall(cPath(path), buf, false) == 0) {
+        var at = 88
+        if (isMacos()) {
+            at = 48
+        }
+        t = ld64(buf + at) * 1000000000 + ld64(buf + at + 8)
+    }
+    cFree(buf)
+    return t
+}
+
+/** The operating system and processor the program runs on, such as `linux-x86_64` or `macos-aarch64`. */
+@Extern("burn_rt_platform")
+pub unsafe fun rtPlatform(): int {
+    var os = "linux"
+    if (isMacos()) {
+        os = "macos"
+    }
+    var arch = "x86_64"
+    if (isArm64()) {
+        arch = "aarch64"
+    }
+    var s = "${os}-${arch}"
+    return retain(__addr(s))
+}
+
+/** A string with the `n` bytes at `p`, with invalid UTF-8 replaced. */
+@Extern("burn_rt_lossy_text")
+pub unsafe fun rtLossyText(p: int, n: int): int {
+    return lossyText(p, n)
+}

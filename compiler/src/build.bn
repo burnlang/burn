@@ -1,12 +1,15 @@
+import "check/asm.bn"
 import "check/body.bn"
 import "check/check.bn"
 import "check/types.bn"
 import "diag/diag.bn"
 import "lower/own.bn"
+import "native/native.bn"
 import "project/loader.bn"
 import "project/project.bn"
 import "vm/asm.bn"
 import "vm/compile.bn"
+import "vm/module.bn"
 
 /** What building a program produced: its rendered errors and warnings, and the module unless there were errors. */
 pub def type Built {
@@ -14,8 +17,8 @@ pub def type Built {
     string? module
 }
 
-/** The bvm module of a checked program in bvm assembly, after the ownership pass. */
-pub fun moduleText(c: Checker, p: HProgram): string {
+/** The bvm module of a checked program, after the ownership pass. */
+pub fun moduleValue(c: Checker, p: HProgram): VModule {
     [string] globals = []
     for g in p.globals {
         if (g.module == "") {
@@ -24,7 +27,12 @@ pub fun moduleText(c: Checker, p: HProgram): string {
             globals.push("${g.module}.${g.name}")
         }
     }
-    return disassemble(compileModule(c, p.name, lowerOwnership(c.types, p.funcs), globals, p.entry))
+    return compileModule(c, p.name, lowerOwnership(c.types, p.funcs), globals, p.entry)
+}
+
+/** The bvm assembly of checked program `p`. */
+pub fun moduleText(c: Checker, p: HProgram): string {
+    return disassemble(moduleValue(c, p))
 }
 
 /** Loads, checks and compiles a program to bvm assembly, the text form that `burn <file.bvm>` runs. */
@@ -49,4 +57,77 @@ pub fun buildBvm(file: string): Built {
         return Built { diagnostics: joinWith(out, ""), module: null }
     }
     return Built { diagnostics: joinWith(out, ""), module: moduleText(r.checker, p) }
+}
+
+/** `file`'s name without folders and extension, with every character that cannot be in a C symbol replaced by `_`. */
+pub fun libraryName(file: string): string {
+    var base = file
+    var slash = len(base) - 1
+    while (slash >= 0 && charAt(base, slash) != "/") {
+        slash -= 1
+    }
+    base = substring(base, slash + 1, len(base))
+    if (endsWith(base, ".bn")) {
+        base = substring(base, 0, len(base) - 3)
+    }
+    var out = ""
+    for ch in chars(base) {
+        if (ch >= "a" && ch <= "z" || ch >= "A" && ch <= "Z" || ch >= "0" && ch <= "9" || ch == "_") {
+            out += ch
+        } else {
+            out += "_"
+        }
+    }
+    if (out == "") {
+        return "lib"
+    }
+    return out
+}
+
+/**
+ * Loads and checks a program and compiles it to native assembly for `platform`: a program (`target` `asm`) or the
+ * runtime library written in Burn (`target` `runtime`), like `burn build --target asm` and `--target runtime`.
+ */
+pub fun buildAssembly(file: string, target: string, platform: string): Built {
+    var loader = new Loader()
+    var err = new Problem()
+    var root = loader.loadFile(file, err)
+    if (root < 0) {
+        return Built { diagnostics: "error: ${err.message}\n", module: null }
+    }
+    var loaded = loader.finish(root)
+    var r = checkProgram(loaded)
+    [string] out = []
+    for d in loaded.diags {
+        out.push(render(loaded.files[d.file], d.diag))
+    }
+    for d in r.diags {
+        out.push(render(loaded.files[d.file], d.diag))
+    }
+    var p = r.program
+    if (p == null) {
+        return Built { diagnostics: joinWith(out, ""), module: null }
+    }
+    var arch = "x86_64"
+    if (endsWith(platform, "aarch64")) {
+        arch = "arm64"
+    }
+    var problem = asmProblem(r.checker, arch)
+    if (problem == null) {
+        if (target == "runtime") {
+            problem = runtimeLibraryProblem(r.checker, p)
+        } else if (len(r.checker.libPaths) > 0) {
+            problem = "a program that imports bytecode libraries cannot be written as assembly"
+        } else {
+            problem = nativeProblem(p, [])
+        }
+    }
+    if (problem != null) {
+        out.push("error: ${problem}\n")
+        return Built { diagnostics: joinWith(out, ""), module: null }
+    }
+    if (target == "runtime") {
+        return Built { diagnostics: joinWith(out, ""), module: runtimeLibraryAssembly(r.checker, p, platform, libraryName(file)) }
+    }
+    return Built { diagnostics: joinWith(out, ""), module: nativeAssembly(r.checker, p, [], platform) }
 }

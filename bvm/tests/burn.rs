@@ -28,24 +28,41 @@ fn toolchain() -> &'static Path {
                 .arg(&compiler),
         );
         assert_eq!(code, 0, "the boot compiler cannot build compiler/src:\n{}", out);
-        let cli = dir.join("cli.bvm");
-        let (out, code) = output(
-            Command::new(bvm_exe())
-                .current_dir(root())
-                .arg(&compiler)
-                .args(["build", "compiler/src/bin/burn.bn", "-o"])
-                .arg(&cli),
+        assert!(
+            native_supported(),
+            "the Burn toolchain is a native executable, which this platform cannot build"
         );
-        assert_eq!(code, 0, "the compiler cannot build the command line:\n{}", out);
-        let (out, code) = output(Command::new(bvm_exe()).arg("asm").arg(&cli).arg("-o").arg(dir.join("share/burn/burn.bvm")));
+        let work = dir.join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        for (target, file, out) in [("runtime", "lib/rt/runtime.bn", "runtime.s"), ("asm", "compiler/src/bin/burn.bn", "burn.s")] {
+            let (log, code) = output(
+                Command::new(bvm_exe())
+                    .current_dir(root())
+                    .arg(&compiler)
+                    .args(["build", "--target", target, file, "-o"])
+                    .arg(work.join(out)),
+            );
+            assert_eq!(code, 0, "the compiler cannot build {}:\n{}", file, log);
+        }
+        let (out, code) = output(
+            Command::new("cc")
+                .arg(work.join("burn.s"))
+                .arg(work.join("runtime.s"))
+                .args(["-lpthread", "-ldl", "-lm", "-o"])
+                .arg(dir.join("bin/burn")),
+        );
         assert_eq!(code, 0, "{}", out);
-        for tool in ["burn", "burni", "burnc", "burn-lsp"] {
-            std::os::unix::fs::symlink(bvm_exe(), dir.join("bin").join(tool)).unwrap();
+        for tool in ["burni", "burnc", "burn-lsp"] {
+            std::os::unix::fs::symlink("burn", dir.join("bin").join(tool)).unwrap();
         }
-        if native_supported() {
-            let (out, code) = output(Command::new("sh").arg(root().join("scripts/native-runtime.sh")).arg(dir.join("share/burn/lib")));
-            assert_eq!(code, 0, "{}", out);
-        }
+        let (out, code) = output(
+            Command::new("sh")
+                .arg(root().join("scripts/native-runtime.sh"))
+                .arg(dir.join("share/burn/lib"))
+                .env("BURN", dir.join("bin/burn")),
+        );
+        assert_eq!(code, 0, "{}", out);
+        let _ = std::fs::remove_dir_all(&work);
         dir
     })
 }
@@ -1023,43 +1040,6 @@ fn doc_generates_pages_for_programs_the_standard_library_and_builtins() {
     assert!(builtins.contains("println") && builtins.contains("id=\"sqrt\""));
     assert!(read("search-index.js").contains("\"Animal.describe\""));
     let _ = std::fs::remove_dir_all(&out);
-}
-
-#[test]
-fn optimizing_everything_while_running_changes_no_output() {
-    let root = root();
-    let mut failures = Vec::new();
-    for (file, expected) in cases() {
-        let rel = file.strip_prefix(&root).unwrap();
-        let (out, _) = output(burn().current_dir(&root).env("BVM_HOT", "1").arg(rel));
-        if out != expected {
-            failures.push(format!("{}:\n--- expected\n{}\n--- got\n{}", rel.display(), expected, out));
-        }
-    }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
-}
-
-#[test]
-fn hot_code_is_optimized_while_running() {
-    let tmp = std::env::temp_dir().join(format!("burn-hot-{}.bn", std::process::id()));
-    std::fs::write(
-        &tmp,
-        "def struct P(x: int) {\n    fun get(): int {\n        return x\n    }\n}\nfun sq(n: int): int {\n    return n * n\n}\nfun unused(): int {\n    return 1\n}\nfun main() {\n    var p = new P(3)\n    var t = 0\n    var i = 0\n    while (i < 200000) {\n        t += sq(p.get()) + 2 * 3\n        i += 1\n    }\n    print(t)\n}\n",
-    )
-    .unwrap();
-    let (out, code) = output(burn().env("BVM_STATS", "1").arg(&tmp));
-    let _ = std::fs::remove_file(&tmp);
-    assert_eq!(code, 0, "{}", out);
-    assert!(out.starts_with("3000000\n"), "{}", out);
-    assert!(out.contains("never loaded"), "{}", out);
-    let inlined: u32 = out
-        .split(" calls inlined")
-        .next()
-        .and_then(|s| s.rsplit(' ').next())
-        .and_then(|n| n.parse().ok())
-        .unwrap_or(0);
-    assert!(inlined >= 2, "{}", out);
-    assert!(out.contains("1 loops switched to optimized code"), "{}", out);
 }
 
 #[test]
