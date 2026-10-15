@@ -1,0 +1,391 @@
+/**
+ * bvm archives (`.bar` files), like `bvm/src/archive.rs`: a manifest, modules and resources in one file, which may
+ * start with a `#!` line so it runs as a program. The modules are linked when the archive runs, main module first.
+ */
+import "../vm/module.bn"
+import "binary.bn"
+import "interp.bn"
+import "link.bn"
+
+/** The archive format this bvm reads and writes. */
+pub const ARCHIVE_VERSION = 1
+
+/** The first line of an archive that runs as a program. */
+pub const SHEBANG = "#!/usr/bin/env bvm\n"
+
+/** What an archive says about itself. */
+pub def type Manifest {
+    string name
+    string version
+    string main
+    string entry
+    bool hasEntry
+    string createdBy
+    [string] extraKeys
+    [string] extraValues
+}
+
+/** A module of an archive and its name. */
+pub def type ArchiveModule {
+    string name
+    VModule module
+}
+
+/** A resource of an archive: a name and bytes. */
+pub def type Resource {
+    string name
+    [int] data
+}
+
+/** An archive, like `Archive`. */
+pub def type Archive {
+    Manifest manifest
+    [ArchiveModule] modules
+    [Resource] resources
+}
+
+/** The text of a manifest, one `Key: value` line for each value that is set. */
+pub fun manifestText(m: Manifest): string {
+    var s = ""
+    [string] keys = ["Name", "Version", "Main-Module", "Entry", "Created-By"]
+    [string] values = [m.name, m.version, m.main, m.entry, m.createdBy]
+    for i in 0..len(m.extraKeys) {
+        keys.push(m.extraKeys[i])
+        values.push(m.extraValues[i])
+    }
+    for i in 0..len(keys) {
+        if (values[i] != "") {
+            s += "${keys[i]}: ${values[i]}\n"
+        }
+    }
+    return s
+}
+
+/** The manifest written in `text`. */
+pub fun parseManifest(text: string): Manifest {
+    var m = Manifest { name: "", version: "", main: "", entry: "", hasEntry: false, createdBy: "", extraKeys: [], extraValues: [] }
+    for raw in split(text, "\n") {
+        var l = raw
+        if (endsWith(l, "\r")) {
+            l = substring(l, 0, len(l) - 1)
+        }
+        var colon = indexOf(l, ":")
+        if (colon < 0) {
+            continue
+        }
+        var k = trim(substring(l, 0, colon))
+        var v = trim(substring(l, colon + 1, len(l)))
+        if (k == "Name") {
+            m.name = v
+        } else if (k == "Version") {
+            m.version = v
+        } else if (k == "Main-Module") {
+            m.main = v
+        } else if (k == "Entry") {
+            m.entry = v
+            m.hasEntry = true
+        } else if (k == "Created-By") {
+            m.createdBy = v
+        } else {
+            m.extraKeys.push(k)
+            m.extraValues.push(v)
+        }
+    }
+    return m
+}
+
+/** A new, empty archive named `name`, made by bvm `version`. */
+pub fun newArchive(name: string, version: string): Archive {
+    var m = Manifest { name: name, version: "", main: "", entry: "", hasEntry: false, createdBy: "bvm ${version}", extraKeys: [], extraValues: [] }
+    return Archive { manifest: m, modules: [], resources: [] }
+}
+
+/** Adds module `m` as `name`, replacing one with the same name; the first module becomes the main one. */
+pub fun addModule(a: Archive, name: string, m: VModule) {
+    if (a.manifest.main == "") {
+        a.manifest.main = name
+    }
+    [ArchiveModule] kept = []
+    for x in a.modules {
+        if (x.name != name) {
+            kept.push(x)
+        }
+    }
+    kept.push(ArchiveModule { name: name, module: m })
+    a.modules = kept
+}
+
+/** Adds resource `name` with `data`, replacing one with the same name. */
+pub fun addResource(a: Archive, name: string, data: [int]) {
+    [Resource] kept = []
+    for x in a.resources {
+        if (x.name != name) {
+            kept.push(x)
+        }
+    }
+    kept.push(Resource { name: name, data: data })
+    a.resources = kept
+}
+
+/** Where the archive starts in `bytes`, after a `#!` line, or -1 when they are not an archive. */
+pub fun payloadStart(bytes: [int]): int {
+    if (hasMagic(bytes, 0)) {
+        return 0
+    }
+    if (len(bytes) >= 2 && bytes[0] == 35 && bytes[1] == 33) {
+        for i in 0..len(bytes) {
+            if (bytes[i] == 10) {
+                if (hasMagic(bytes, i + 1)) {
+                    return i + 1
+                }
+                return -1
+            }
+        }
+    }
+    return -1
+}
+
+fun hasMagic(b: [int], at: int): bool {
+    return len(b) >= at + 4 && b[at] == 66 && b[at + 1] == 65 && b[at + 2] == 82 && b[at + 3] == 0
+}
+
+/** Whether `bytes` are a bvm archive. */
+pub fun isArchive(bytes: [int]): bool {
+    return payloadStart(bytes) >= 0
+}
+
+fun checksum(b: [int], from: int): int {
+    var h = -3750763034362895579
+    for i in from..len(b) {
+        h = h ^ b[i]
+        h = wrappingMul(h, 1099511628211)
+    }
+    return h
+}
+
+fun putU32(b: [int], v: int) {
+    b.push(v & 255)
+    b.push((v >>> 8) & 255)
+    b.push((v >>> 16) & 255)
+    b.push((v >>> 24) & 255)
+}
+
+fun putData(b: [int], data: [int]) {
+    putU32(b, len(data))
+    for x in data {
+        b.push(x)
+    }
+}
+
+fun textBytes(s: string): [int] {
+    [int] out = []
+    for x in bytes(s) {
+        out.push(x as int)
+    }
+    return out
+}
+
+/** Archive `a` as bytes, with the `#!` line when `shebang` is true. */
+pub fun encodeArchive(a: Archive, shebang: bool): [int] {
+    [int] body = []
+    putData(body, textBytes(manifestText(a.manifest)))
+    putU32(body, len(a.modules) + len(a.resources))
+    for m in a.modules {
+        putData(body, textBytes(m.name))
+        body.push(0)
+        putData(body, encode(m.module))
+    }
+    for r in a.resources {
+        putData(body, textBytes(r.name))
+        body.push(1)
+        putData(body, r.data)
+    }
+    [int] out = []
+    if (shebang) {
+        for x in textBytes(SHEBANG) {
+            out.push(x)
+        }
+    }
+    out.push(66)
+    out.push(65)
+    out.push(82)
+    out.push(0)
+    out.push(ARCHIVE_VERSION & 255)
+    out.push(ARCHIVE_VERSION >>> 8)
+    out.push(0)
+    out.push(0)
+    var sum = checksum(body, 0)
+    for k in 0..8 {
+        out.push((sum >>> (8 * k)) & 255)
+    }
+    for x in body {
+        out.push(x)
+    }
+    return out
+}
+
+/** The result of `decodeArchive`. */
+pub def type DecodedArchive {
+    Archive archive
+    string error
+}
+
+fun archiveError(msg: string): DecodedArchive {
+    return DecodedArchive { archive: newArchive("", ""), error: msg }
+}
+
+fun u32At(b: [int], i: int): int {
+    return b[i] | (b[i + 1] << 8) | (b[i + 2] << 16) | (b[i + 3] << 24)
+}
+
+fun bytesText(b: [int], from: int, to: int): string {
+    [uint8] raw = []
+    for i in from..to {
+        raw.push(b[i] as uint8)
+    }
+    return fromBytes(raw)
+}
+
+/** The archive in `bytes`, like `Archive::decode`. */
+pub fun decodeArchive(bytes: [int]): DecodedArchive {
+    var start = payloadStart(bytes)
+    if (start < 0) {
+        return archiveError("not a bvm archive (it does not start with BAR\\0)")
+    }
+    var n = len(bytes)
+    var i = start + 4
+    if (n - i < 12) {
+        return archiveError("the archive ends early")
+    }
+    var version = bytes[i] | (bytes[i + 1] << 8)
+    if (version != ARCHIVE_VERSION) {
+        return archiveError("the archive uses format ${version}, but this bvm reads format ${ARCHIVE_VERSION}")
+    }
+    i += 4
+    var sum = 0
+    for k in 0..8 {
+        sum = sum | (bytes[i + k] << (8 * k))
+    }
+    i += 8
+    if (checksum(bytes, i) != sum) {
+        return archiveError("the archive is damaged (its checksum does not match)")
+    }
+    if (n - i < 4 || n - i - 4 < u32At(bytes, i)) {
+        return archiveError("the archive ends early")
+    }
+    var ml = u32At(bytes, i)
+    var a = newArchive("", "")
+    a.manifest = parseManifest(bytesText(bytes, i + 4, i + 4 + ml))
+    i += 4 + ml
+    if (n - i < 4) {
+        return archiveError("the archive ends early")
+    }
+    var count = u32At(bytes, i)
+    i += 4
+    for e in 0..count {
+        if (n - i < 4 || n - i - 4 < u32At(bytes, i)) {
+            return archiveError("the archive ends early")
+        }
+        var nl = u32At(bytes, i)
+        var name = bytesText(bytes, i + 4, i + 4 + nl)
+        i += 4 + nl
+        if (n - i < 5) {
+            return archiveError("the archive ends early")
+        }
+        var kind = bytes[i]
+        i += 1
+        var dl = u32At(bytes, i)
+        if (n - i - 4 < dl) {
+            return archiveError("the archive ends early")
+        }
+        var data = slice(bytes, i + 4, i + 4 + dl)
+        i += 4 + dl
+        if (kind == 0) {
+            var d = decode(data)
+            if (d.error != "") {
+                return archiveError("module ${name}: ${d.error}")
+            }
+            a.modules.push(ArchiveModule { name: name, module: d.module })
+        } else if (kind == 1) {
+            a.resources.push(Resource { name: name, data: data })
+        } else {
+            return archiveError("unknown archive entry kind ${kind}")
+        }
+    }
+    if (i != n) {
+        return archiveError("unexpected bytes at the end of the archive")
+    }
+    return DecodedArchive { archive: a, error: "" }
+}
+
+/** The modules of `a`, the main one first. */
+pub fun orderedModules(a: Archive): [VModule] {
+    [VModule] out = []
+    for m in a.modules {
+        if (m.name == a.manifest.main) {
+            out.push(m.module)
+        }
+    }
+    for m in a.modules {
+        if (m.name != a.manifest.main) {
+            out.push(m.module)
+        }
+    }
+    return out
+}
+
+/** The modules of `a` linked into one, with the entry the manifest names, like `Archive::link_with`. */
+pub fun linkArchive(a: Archive, allowUnresolved: bool, skipMixins: bool): Linked {
+    var mods = orderedModules(a)
+    if (len(mods) == 0) {
+        return Linked { module: emptyModule(), error: "the archive contains no modules" }
+    }
+    var linked = link(mods, allowUnresolved, skipMixins)
+    if (linked.error != "" || !a.manifest.hasEntry) {
+        return linked
+    }
+    var e = a.manifest.entry
+    var m = linked.module
+    for f in 0..len(m.funcs) {
+        if (m.funcs[f].name == e) {
+            if (m.funcs[f].params != 0) {
+                return Linked { module: m, error: "entry function ${e} must not take parameters" }
+            }
+            m.entry = f
+            return linked
+        }
+    }
+    return Linked { module: m, error: "the manifest names entry function ${e}, which does not exist" }
+}
+
+/** The host functions an archive gives its modules: `resource(name)` returns a resource as a string, or null. */
+pub fun archiveHost(a: Archive): [HostFn] {
+    var resources = a.resources
+    var call = fun(args: [int]): int {
+        unsafe {
+            var name = __str(args[0])
+            for r in resources {
+                if (r.name == name) {
+                    [uint8] raw = []
+                    for x in r.data {
+                        raw.push(x as uint8)
+                    }
+                    var text = fromBytes(raw)
+                    return rtRetainText(text)
+                }
+            }
+            return 0
+        }
+    }
+    return [HostFn { name: "resource", argc: 1, call: call }]
+}
+
+unsafe fun rtRetainText(s: string): int {
+    var t = s
+    var p = __addr(t)
+    retainObject(p)
+    return p
+}
+
+@Extern("burn_retain")
+fun retainObject(p: int): int

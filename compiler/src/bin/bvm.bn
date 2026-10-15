@@ -1,111 +1,23 @@
-import "../bvm/assemble.bn"
 import "../bvm/binary.bn"
 import "../bvm/files.bn"
-import "../bvm/interp.bn"
-import "../bvm/link.bn"
-import "../vm/asm.bn"
-import "../vm/module.bn"
+import "../bvm/tool.bn"
 import "std/process"
 
-fun fail(msg: string) {
-    eprint("error: ${msg}")
-    exit(1)
-}
-
-fun readModule(path: string): VModule {
-    var bytes = readBytes(path)
-    if (bytes == null) {
-        fail("could not read ${path}")
-        return emptyModule()
-    }
-    if (!isBinary(bytes)) {
-        [uint8] raw = []
-        for b in bytes {
-            raw.push(b as uint8)
-        }
-        var a = assemble(fromBytes(raw))
-        if (a.error != "") {
-            fail("${path}: ${asmErrorText(a)}")
-        }
-        return a.module
-    }
-    var d = decode(bytes)
-    if (d.error != "") {
-        fail("${path}: ${d.error}")
-    }
-    return d.module
-}
-
-fun linkCommand(rest: [string]) {
-    [string] files = []
-    var out = ""
-    var lib = false
-    var i = 0
-    while (i < len(rest)) {
-        if (rest[i] == "-o" && i + 1 < len(rest)) {
-            out = rest[i + 1]
-            i += 2
-            continue
-        }
-        if (rest[i] == "--lib") {
-            lib = true
-        } else {
-            files.push(rest[i])
-        }
-        i += 1
-    }
-    if (len(files) == 0 || out == "") {
-        eprint("usage: bvm link <files>... -o <out> [--lib]")
-        exit(2)
-    }
-    [VModule] modules = []
-    for f in files {
-        modules.push(readModule(f))
-    }
-    var linked = link(modules, lib, false)
-    if (linked.error != "") {
-        fail(linked.error)
-    }
-    if (!writeBytes(out, encode(linked.module))) {
-        fail("could not write ${out}")
-    }
-}
-
+/** bvm written in Burn. `copy <in> <out>` sends a module through the decoder and the encoder. */
 fun main() {
     var a = args()
-    if (len(a) < 2) {
-        eprint("usage: bvm run <file> [args...] | bvm dis <file> | bvm copy <in> <out> | bvm link <files>... -o <out> [--lib]")
-        exit(2)
-    }
-    if (a[0] == "link") {
-        linkCommand(slice(a, 1, len(a)))
-        return
-    }
-    var m = readModule(a[1])
-    if (a[0] == "run") {
-        var p = prepare(m, [])
-        if (p.error != "") {
-            fail("${a[1]}: ${p.error}")
+    if (len(a) == 3 && a[0] == "copy") {
+        var bytes = readBytes(a[1])
+        if (bytes == null) {
+            eprint("error: could not read ${a[1]}")
+            exit(1)
         }
-        setProgramArgs(slice(a, 2, len(a)))
-        runEntry(p)
-        return
-    }
-    if (a[0] == "asm") {
-        if (len(a) < 4 || a[2] != "-o") {
-            eprint("usage: bvm asm <file.bvm> -o <out.bvmc>")
-            exit(2)
-        }
-        if (!writeBytes(a[3], encode(m))) {
-            fail("could not write ${a[3]}")
+        var d = decode(bytes)
+        if (d.error != "" || !writeBytes(a[2], encode(d.module))) {
+            eprint("error: ${a[1]}: ${d.error}")
+            exit(1)
         }
         return
     }
-    if (a[0] == "dis") {
-        write(disassemble(m))
-    } else if (a[0] == "copy") {
-        if (!writeBytes(a[2], encode(m))) {
-            fail("could not write ${a[2]}")
-        }
-    }
+    exit(bvmMain(a))
 }

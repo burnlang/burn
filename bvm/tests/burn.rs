@@ -336,6 +336,67 @@ fn the_bvm_written_in_burn_assembles_text_like_bvm() {
 }
 
 #[test]
+fn the_bvm_written_in_burn_packs_and_runs_archives_like_bvm() {
+    if !native_supported() {
+        return;
+    }
+    let root = root();
+    let tmp = temp_dir("bvm-in-burn-bar");
+    let exe = tmp.join("bvm");
+    let (out, code) = output(burn().current_dir(&root).arg("build").arg("compiler/src/bin/bvm.bn").arg("-o").arg(&exe));
+    assert_eq!(code, 0, "{}", out);
+    let fib = tmp.join("basics.bvmc");
+    let (out, code) = output(
+        burn()
+            .current_dir(&root)
+            .args(["build", "--target", "bvm", "tests/cases/basics.bn", "-o"])
+            .arg(&fib),
+    );
+    assert_eq!(code, 0, "{}", out);
+    let note = tmp.join("note.txt");
+    std::fs::write(&note, "a resource\n").unwrap();
+    for dir in ["ours", "theirs"] {
+        std::fs::create_dir_all(tmp.join(dir)).unwrap();
+    }
+    let ours = tmp.join("ours/app.bar");
+    let theirs = tmp.join("theirs/app.bar");
+    let (out, code) = output(
+        Command::new(&exe)
+            .arg("pack")
+            .arg(&fib)
+            .arg(&note)
+            .arg("--version")
+            .arg("1.0")
+            .arg("-o")
+            .arg(&ours),
+    );
+    assert_eq!(code, 0, "{}", out);
+    let (out, code) = output(
+        Command::new(bvm_exe())
+            .arg("pack")
+            .arg(&fib)
+            .arg(&note)
+            .arg("--version")
+            .arg("1.0")
+            .arg("-o")
+            .arg(&theirs),
+    );
+    assert_eq!(code, 0, "{}", out);
+    assert!(std::fs::read(&ours).unwrap() == std::fs::read(&theirs).unwrap(), "the archives differ");
+    for args in [vec!["list"], vec!["run"], vec!["check"]] {
+        let (a, _) = output(Command::new(&exe).args(&args).arg(&ours));
+        let (b, _) = output(Command::new(bvm_exe()).args(&args).arg(&ours));
+        assert_eq!(a, b, "bvm {:?} differs", args);
+    }
+    for args in [vec!["version"], vec!["runtime"], vec!["help"]] {
+        let (a, _) = output(Command::new(&exe).args(&args));
+        let (b, _) = output(Command::new(bvm_exe()).args(&args));
+        assert_eq!(a, b, "bvm {:?} differs", args);
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn native_matches_vm() {
     if !native_supported() {
         return;
