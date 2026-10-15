@@ -10,7 +10,6 @@ Builds the runtime that native Burn executables link against:
   libburn_runtime.a   the runtime written in Burn (lib/rt), for programs built with --target native
   libburn_launcher.a  bvm written in Burn, for executables that run bytecode (made from .bvm and
                       .bar files, and programs that import bytecode libraries)
-  libburn_core.a      the runtime without the standard library, for --no-std programs
   native-libs.txt     the system libraries libburn_runtime.a needs, passed to the linker
 
 A toolchain keeps them in share/burn/lib, where \`burn build --target native\` looks for them.
@@ -23,10 +22,8 @@ Environment:
            <dir> is in, then burn)
   BURN_CC  the C compiler that assembles it (default: $CC, then cc)
   AR       the archiver (default: ar)
-  RUSTC    the Rust compiler (default: rustc)
-  TARGET   the Rust target triple (default: the host), such as aarch64-apple-darwin
-           or aarch64-unknown-linux-gnu to build the runtime for another platform
-  STRIP    the strip program (default: strip; it is skipped when it cannot read the libraries)
+  TARGET   the platform to build for (default: this one), as a target triple such as
+           aarch64-apple-darwin or aarch64-unknown-linux-gnu
 EOF2
 }
 
@@ -37,7 +34,6 @@ esac
 
 
 OUT="$1"
-RUSTC="${RUSTC:-rustc}"
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
 if [ -z "${BURN:-}" ]; then
@@ -46,19 +42,6 @@ if [ -z "${BURN:-}" ]; then
 fi
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-
-VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -n 1)"
-set -- --edition 2021 -C opt-level=3 -C panic=abort -C debuginfo=0 -C codegen-units=1 -C strip=debuginfo
-if [ -n "${TARGET:-}" ]; then
-    set -- "$@" --target "$TARGET"
-fi
-
-strip_lib() {
-    case "$(uname -s)" in
-        Darwin) "${STRIP:-strip}" -S "$1" 2>/dev/null || true ;;
-        *) "${STRIP:-strip}" --strip-debug "$1" 2>/dev/null || true ;;
-    esac
-}
 
 case "${TARGET:-}" in
     "") PLATFORM="" ;;
@@ -88,7 +71,4 @@ archive runtime libburn_runtime.a
 build --target asm "$ROOT/compiler/src/bin/launcher.bn" -o "$WORK/launcher.s"
 archive launcher libburn_launcher.a
 echo "-lpthread -ldl -lm" >"$OUT/native-libs.txt"
-rm -f "$OUT/libburn_bvm.a" "$OUT/bvm-libs.txt"
-
-"$RUSTC" --crate-name bvm_runtime --crate-type staticlib --cfg burn_core "$@" -o "$OUT/libburn_core.a" "$ROOT/bvm/runtime/src/lib.rs"
-strip_lib "$OUT/libburn_core.a"
+rm -f "$OUT/libburn_bvm.a" "$OUT/bvm-libs.txt" "$OUT/libburn_core.a"

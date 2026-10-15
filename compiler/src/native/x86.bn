@@ -80,6 +80,15 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
         return ".L${label}"
     }
 
+    /** Starts the code of `name`: in a section of its own on Linux, so that the linker can leave it out when nothing uses it. */
+    fun textSection(name: string) {
+        if (t.macos) {
+            out += ".text\n"
+        } else {
+            put(".section .text.${name},\"ax\",@progbits\n")
+        }
+    }
+
     /** Adds `text` to the assembly. */
     fun put(text: string) {
         out += text
@@ -285,6 +294,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
     }
 
     fun func(f: HFunc) {
+        textSection("bf_${fid}")
         out += ".p2align 4\n"
         put("bf_${fid}:\n")
         put(debugLabel(f, fid))
@@ -383,6 +393,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
 
     /** A function C can call under `name`: it keeps the registers C expects to survive, and passes the arguments on the stack like Burn does. */
     fun cExportThunk(i: int, f: HFunc, name: string) {
+        textSection(sym(name))
         put(".globl ${sym(name)}\n")
         out += ".p2align 4\n"
         put("${sym(name)}:\n")
