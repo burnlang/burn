@@ -1,0 +1,398 @@
+/**
+ * Checks that a bvm module is well formed before it runs, like `bvm/src/verify.rs`: every reference points at
+ * something that exists, and every instruction finds the values it needs on the operand stack, with the same stack
+ * height on every path. It also finds how high each function's operand stack can grow.
+ */
+import "../vm/module.bn"
+import "rtfns.bn"
+
+/** The largest operand stack a function may need. */
+pub const MAX_STACK = 65536
+
+/** The runtime functions only native code may call. */
+pub const RESERVED_RT = ["Init", "SetArgs", "Spawn"]
+
+/** The result of `analyze`: the highest operand stack of each function, or what is wrong with the module. */
+pub def type Analysis {
+    [int] maxStack
+    string error
+}
+
+/** How many arguments each runtime function takes, by its name. */
+pub fun runtimeArgc(): {string: int} {
+    {string: int} out = {}
+    for i in 0..len(RT_NAMES) {
+        out[RT_NAMES[i]] = RT_ARGC[i]
+    }
+    return out
+}
+
+fun fail(msg: string): Analysis {
+    return Analysis { maxStack: [], error: msg }
+}
+
+fun typeRefs(d: Desc): [int] {
+    if (d is Desc.Array) {
+        return [d.elem]
+    }
+    if (d is Desc.Optional) {
+        return [d.inner]
+    }
+    if (d is Desc.Future) {
+        return [d.inner]
+    }
+    if (d is Desc.Map) {
+        return [d.key, d.value]
+    }
+    if (d is Desc.Record) {
+        [int] out = []
+        for f in d.fields {
+            out.push(f.ty)
+        }
+        for t in d.implements {
+            out.push(t)
+        }
+        return out
+    }
+    return []
+}
+
+/** Checks module `m` and finds the highest operand stack of each function, like `analyze`. */
+pub fun analyze(m: VModule): Analysis {
+    var nt = len(m.types)
+    for i in 0..nt {
+        for t in typeRefs(m.types[i]) {
+            if (t >= nt) {
+                return fail("type #${i} refers to type #${t}, which does not exist")
+            }
+        }
+    }
+    var nf = len(m.funcs)
+    var e = m.entry
+    if (e != null) {
+        if (e >= nf) {
+            return fail("entry function @${e} does not exist")
+        }
+        if (m.funcs[e].params != 0) {
+            return fail("entry function ${m.funcs[e].name} must not take parameters")
+        }
+        if (m.funcs[e].external) {
+            return fail("entry function ${m.funcs[e].name} is external")
+        }
+    }
+    for t in m.tables {
+        for entry in t.entries {
+            if (entry.ty >= nt) {
+                return fail("table ${t.name} refers to type #${entry.ty}, which does not exist")
+            }
+            if (entry.func >= nf) {
+                return fail("table ${t.name} refers to function @${entry.func}, which does not exist")
+            }
+            var func = m.funcs[entry.func]
+            if (func.params != t.argc) {
+                return fail("table ${t.name} takes ${t.argc} arguments but function ${func.name} takes ${func.params}")
+            }
+        }
+        if (t.argc == 0) {
+            return fail("table ${t.name} must take at least the receiver as an argument")
+        }
+    }
+    for a in m.annotations {
+        var t = a.target
+        var ok = true
+        if (t is Target.Func) {
+            ok = t.id < nf
+        } else if (t is Target.Type) {
+            ok = t.id < nt
+        } else if (t is Target.Global) {
+            ok = t.id < len(m.globals)
+        }
+        if (!ok) {
+            return fail("annotation @${a.name} is attached to something that does not exist")
+        }
+    }
+    var argc = runtimeArgc()
+    [int] maxes = []
+    for f in m.funcs {
+        var r = verifyFunc(m, f, argc)
+        if (r.error != "") {
+            return r
+        }
+        maxes.push(r.maxStack[0])
+    }
+    return Analysis { maxStack: maxes, error: "" }
+}
+
+fun funcError(f: VFunc, at: int, msg: string): Analysis {
+    if (at < 0) {
+        return fail("in function ${f.name}: ${msg}")
+    }
+    return fail("in function ${f.name} at instruction ${at}: ${msg}")
+}
+
+fun verifyFunc(m: VModule, f: VFunc, argc: {string: int}): Analysis {
+    var nt = len(m.types)
+    var sig = f.sig
+    if (sig != null) {
+        if (len(sig.params) != f.params) {
+            return funcError(f, -1, "its signature lists ${len(sig.params)} parameters but it takes ${f.params}")
+        }
+        for t in sig.params {
+            if (t >= nt) {
+                return funcError(f, -1, "its signature refers to type #${t}, which does not exist")
+            }
+        }
+        if (sig.ret >= nt) {
+            return funcError(f, -1, "its signature refers to type #${sig.ret}, which does not exist")
+        }
+    }
+    if (f.external) {
+        if (len(f.code) > 0) {
+            return funcError(f, -1, "is external but has code")
+        }
+        return Analysis { maxStack: [0], error: "" }
+    }
+    if (f.locals < f.params) {
+        return funcError(f, -1, "has ${f.locals} locals but ${f.params} parameters")
+    }
+    var n = len(f.code)
+    if (n == 0) {
+        return funcError(f, -1, "has no code")
+    }
+    for i in 0..n {
+        var op = f.code[i]
+        var problem = checkOperands(m, f, op, argc)
+        if (problem != "") {
+            return funcError(f, i, problem)
+        }
+        var t = jumpTarget(op)
+        if (t != null && t >= n) {
+            return funcError(f, i, "jumps to ${t}, past the end of the function")
+        }
+    }
+    [int] height = []
+    for i in 0..n {
+        height.push(-1)
+    }
+    var max = 0
+    [int] work = [0, 0]
+    while (len(work) > 0) {
+        var h = work.pop()
+        var pc = work.pop()
+        var old = height[pc]
+        if (old == h) {
+            continue
+        }
+        if (old >= 0) {
+            return funcError(f, pc, "the stack holds ${old} values on one path here and ${h} on another")
+        }
+        height[pc] = h
+        var op = f.code[pc]
+        var need = 0
+        var push = 0
+        var eff = effect(m, op, argc)
+        need = eff[0]
+        push = eff[1]
+        if (h < need) {
+            return funcError(f, pc, "${mnemonic(op)} needs ${need} values on the stack but there are only ${h}")
+        }
+        var next = h - need + push
+        if (next > max) {
+            max = next
+        }
+        if (h > max) {
+            max = h
+        }
+        if (next > MAX_STACK) {
+            return funcError(f, pc, "the operand stack grows without bound")
+        }
+        var t = jumpTarget(op)
+        if (t != null) {
+            work.push(t)
+            work.push(next)
+        }
+        if (!isTerminator(op)) {
+            if (pc + 1 >= n) {
+                return funcError(f, pc, "execution can run past the last instruction; end with ret, retv or jmp")
+            }
+            work.push(pc + 1)
+            work.push(next)
+        }
+    }
+    return Analysis { maxStack: [max], error: "" }
+}
+
+/** How many values `op` takes from the operand stack and how many it leaves, like `effect`. */
+pub fun effect(m: VModule, op: Op, argc: {string: int}): [int] {
+    return match op {
+        Op.Const(value) => [0, 1]
+        Op.TypeConst(ty) => [0, 1]
+        Op.LocConst(loc) => [0, 1]
+        Op.Str(id) => [0, 1]
+        Op.FuncRef(func) => [0, 1]
+        Op.Load(slot) => [0, 1]
+        Op.GLoad(id) => [0, 1]
+        Op.Store(slot) => [1, 0]
+        Op.GStore(id) => [1, 0]
+        Op.Pop => [1, 0]
+        Op.Tee(slot) => [1, 1]
+        Op.GTee(id) => [1, 1]
+        Op.Dup => [1, 2]
+        Op.Swap => [2, 2]
+        Op.IAdd => [2, 1]
+        Op.ISub => [2, 1]
+        Op.IMul => [2, 1]
+        Op.IDiv(loc) => [2, 1]
+        Op.IAddOv(loc) => [2, 1]
+        Op.ISubOv(loc) => [2, 1]
+        Op.IMulOv(loc) => [2, 1]
+        Op.IRem(loc) => [2, 1]
+        Op.And => [2, 1]
+        Op.Or => [2, 1]
+        Op.Xor => [2, 1]
+        Op.Shl => [2, 1]
+        Op.Shr => [2, 1]
+        Op.UShr => [2, 1]
+        Op.FAdd => [2, 1]
+        Op.FSub => [2, 1]
+        Op.FMul => [2, 1]
+        Op.FDiv => [2, 1]
+        Op.FRem => [2, 1]
+        Op.ICmp(cmp) => [2, 1]
+        Op.UCmp(cmp) => [2, 1]
+        Op.FCmp(cmp) => [2, 1]
+        Op.INeg => [1, 1]
+        Op.INegOv(loc) => [1, 1]
+        Op.FNeg => [1, 1]
+        Op.Not => [1, 1]
+        Op.I2F => [1, 1]
+        Op.F2I => [1, 1]
+        Op.Len => [1, 1]
+        Op.Unbox => [1, 1]
+        Op.GetField(index) => [1, 1]
+        Op.Jmp(target) => [0, 0]
+        Op.Jz(target) => [1, 0]
+        Op.Jnz(target) => [1, 0]
+        Op.JzKeep(target) => [1, 1]
+        Op.JnzKeep(target) => [1, 1]
+        Op.Call(func) => [m.funcs[func].params, 1]
+        Op.CallInd(n) => [n + 1, 1]
+        Op.Dispatch(table, n) => [n, 1]
+        Op.Ret => [1, 0]
+        Op.RetVoid => [0, 0]
+        Op.Rt(name) => [argc[name] ?? 0, 1]
+        Op.Host(id) => [m.imports[id].argc, 1]
+        Op.Spawn(func, n, ty) => [n, 1]
+        Op.NewRecord(ty, n) => [n, 1]
+        Op.NewArray(ty, n) => [n, 1]
+        Op.SetField(index) => [2, 1]
+        Op.Index(loc) => [2, 1]
+        Op.SetIndex(loc) => [3, 1]
+    }
+}
+
+fun checkOperands(m: VModule, f: VFunc, op: Op, argc: {string: int}): string {
+    var nf = len(m.funcs)
+    var nt = len(m.types)
+    if (op is Op.Str) {
+        if (op.id >= len(m.strings)) {
+            return "string @${op.id} does not exist"
+        }
+    } else if (op is Op.FuncRef) {
+        if (op.func >= nf) {
+            return "function @${op.func} does not exist"
+        }
+    } else if (op is Op.Call) {
+        if (op.func >= nf) {
+            return "function @${op.func} does not exist"
+        }
+    } else if (op is Op.TypeConst) {
+        if (op.ty >= nt) {
+            return "type #${op.ty} does not exist"
+        }
+    } else if (op is Op.Load || op is Op.Store || op is Op.Tee) {
+        var s = 0
+        if (op is Op.Load) {
+            s = op.slot
+        } else if (op is Op.Store) {
+            s = op.slot
+        } else if (op is Op.Tee) {
+            s = op.slot
+        }
+        if (s >= f.locals) {
+            return "local ${s} does not exist (the function has ${f.locals})"
+        }
+    } else if (op is Op.GLoad || op is Op.GStore || op is Op.GTee) {
+        var g = 0
+        if (op is Op.GLoad) {
+            g = op.id
+        } else if (op is Op.GStore) {
+            g = op.id
+        } else if (op is Op.GTee) {
+            g = op.id
+        }
+        if (g >= len(m.globals)) {
+            return "global @${g} does not exist"
+        }
+    } else if (op is Op.Dispatch) {
+        if (op.table >= len(m.tables)) {
+            return "table @${op.table} does not exist"
+        }
+        var tab = m.tables[op.table]
+        if (tab.argc != op.argc) {
+            return "table ${tab.name} takes ${tab.argc} arguments, not ${op.argc}"
+        }
+    } else if (op is Op.Rt) {
+        if (contains(RESERVED_RT, op.name)) {
+            return "runtime function ${symbolOf(op.name)} is reserved for native code"
+        }
+        if (argc[op.name] == null) {
+            return "runtime function ${op.name} does not exist"
+        }
+    } else if (op is Op.Host) {
+        if (op.id >= len(m.imports)) {
+            return "import @${op.id} does not exist"
+        }
+    } else if (op is Op.Spawn) {
+        if (op.func >= nf) {
+            return "function @${op.func} does not exist"
+        }
+        if (op.ty >= nt) {
+            return "type #${op.ty} does not exist"
+        }
+        var p = m.funcs[op.func].params
+        if (p != op.argc) {
+            return "spawn passes ${op.argc} arguments but ${m.funcs[op.func].name} takes ${p}"
+        }
+    } else if (op is Op.NewRecord) {
+        if (op.ty >= nt) {
+            return "type #${op.ty} does not exist"
+        }
+        var d = m.types[op.ty]
+        if (d is Desc.Record) {
+            if (len(d.fields) != op.argc) {
+                return "new passes ${op.argc} fields but the record has ${len(d.fields)}"
+            }
+        } else {
+            return "new needs a record type, not #${op.ty}"
+        }
+    } else if (op is Op.NewArray) {
+        if (op.ty >= nt) {
+            return "type #${op.ty} does not exist"
+        }
+        if (!(m.types[op.ty] is Desc.Array)) {
+            return "newarr needs an array type, not #${op.ty}"
+        }
+    }
+    return ""
+}
+
+/** The symbol of the runtime function called `name` without `burn_`, as bvm assembly writes it. */
+pub fun symbolOf(name: string): string {
+    for i in 0..len(RT_NAMES) {
+        if (RT_NAMES[i] == name) {
+            return RT_SYMBOLS[i]
+        }
+    }
+    return name
+}

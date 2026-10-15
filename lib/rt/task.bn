@@ -129,10 +129,17 @@ pub unsafe fun futureFree(p: int) {
 /** The body of a task's thread: runs the Burn function and hands its result to the future. */
 @Extern("burn_rt_task_main")
 unsafe fun taskMain(job: int): int {
-    var v = callBurn(ld64(job), ld64(job + 8), ld64(job + 16))
+    var v = 0
+    if (ld64(job + 16) < 0) {
+        v = callC3(ld64(job), ld64(job + 8), 0, 0)
+    } else {
+        v = callBurn(ld64(job), ld64(job + 8), ld64(job + 16))
+    }
     futureResolve(ld64(job + 24), v)
     release(ld64(job + 24))
-    cFree(ld64(job + 8))
+    if (ld64(job + 16) >= 0) {
+        cFree(ld64(job + 8))
+    }
     cFree(job)
     var b = doneBlock()
     cMutexLock(b)
@@ -144,13 +151,23 @@ unsafe fun taskMain(job: int): int {
 
 @Extern("burn_spawn")
 pub unsafe fun spawn(f: int, argc: int, args: int, t: int): int {
+    var copy = zalloc(8 * argc + 8)
+    cMemcpy(copy, args, 8 * argc)
+    return startTask(f, copy, argc, t)
+}
+
+/** Runs the C function `f` with the argument `arg` in a new task, like `burn_spawn` for Burn functions; bvm runs bytecode tasks this way. */
+@Extern("burn_spawn_c")
+pub unsafe fun spawnC(f: int, arg: int, t: int): int {
+    return startTask(f, arg, -1, t)
+}
+
+unsafe fun startTask(f: int, args: int, argc: int, t: int): int {
     taskStarted()
     var fut = futureNew(t)
     var job = zalloc(32)
-    var copy = zalloc(8 * argc + 8)
-    cMemcpy(copy, args, 8 * argc)
     st64(job, f)
-    st64(job + 8, copy)
+    st64(job + 8, args)
     st64(job + 16, argc)
     st64(job + 24, retain(fut))
     var attr = zalloc(128)

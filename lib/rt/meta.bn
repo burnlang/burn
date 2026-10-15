@@ -47,8 +47,8 @@ pub const NUM_U32 = 6
 pub const NUM_U64 = 7
 pub const NUM_F32 = 8
 
-priv const M_BLOB = 0
-priv const M_LEN = 8
+pub const M_BLOB = 0
+pub const M_LEN = 8
 priv const M_COUNT = 16
 priv const M_KIND = 24
 priv const M_A = 32

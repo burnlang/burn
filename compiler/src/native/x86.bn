@@ -55,6 +55,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
     string out = ""
     string cold = ""
     int label = 0
+    [bool] finals = finalRecords(p.checker)
     int fid = 0
     [LoopLabels] loops = []
     {string: string} symbols = runtimeSymbols()
@@ -281,6 +282,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
     fun func(f: HFunc) {
         out += ".p2align 4\n"
         out += "bf_${fid}:\n"
+        out += debugLabel(f, fid)
         var ext = f.external
         if (ext is External.Lib) {
             e("push rbp")
@@ -1097,6 +1099,26 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
 
     /** Loads and stores of raw memory (`Memory.load8` … `Memory.storeFloat`) as single instructions, without calling the runtime. */
     fun inlineMem(f: string, args: [HExpr]): bool {
+        if (f == "IsType") {
+            var to = simpleIs(p.checker, finals, args)
+            if (len(to) == 0) {
+                return false
+            }
+            var no = l()
+            var done = l()
+            expr(args[0])
+            e("test rax, rax")
+            e("jz ${no}")
+            e("mov eax, dword ptr [rax + 4]")
+            e("cmp eax, ${to[0]}")
+            e("sete al")
+            e("movzx eax, al")
+            e("jmp ${done}")
+            lbl(no)
+            e("xor eax, eax")
+            lbl(done)
+            return true
+        }
         if (f == "CFun") {
             var k0 = args[0].kind
             var name = ""

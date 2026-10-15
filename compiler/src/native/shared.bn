@@ -3,6 +3,9 @@ import "../check/hir.bn"
 import "../check/types.bn"
 import "../vm/asm.bn"
 import "../vm/bits.bn"
+import "../vm/compile.bn"
+import "../vm/module.bn"
+import "std/process"
 
 /** The annotations that change the bytecode of a library. */
 pub const MIXINS = ["Inject", "Overwrite", "Redirect"]
@@ -392,6 +395,74 @@ pub fun cExport(f: HFunc): string? {
         }
     }
     return null
+}
+
+/**
+ * For each type, whether it is a record that no other record implements, such as an enum variant: a value has
+ * such a type exactly when its object carries that type's number, so `is` needs no call to the runtime.
+ */
+pub fun finalRecords(c: Checker): [bool] {
+    var n = c.types.count()
+    [bool] out = []
+    for t in 0..n {
+        out.push(c.types.kindOf(t) is Ty.Record)
+    }
+    for t in 0..n {
+        var d = descOf(c.types, t)
+        if (d is Desc.Record) {
+            for i in d.implements {
+                if (i >= 0 && i < n) {
+                    out[i] = false
+                }
+            }
+        }
+    }
+    return out
+}
+
+/** Whether a value of static type `from` is null or an object whose type number `is` can compare directly. */
+pub fun objectTyped(c: Checker, from: int): bool {
+    var k = c.types.kindOf(from)
+    return k is Ty.Record || k is Ty.Interface || k is Ty.Any
+}
+
+/** The type numbers of `x is T`, when it can be a plain comparison of type numbers, or []. */
+pub fun simpleIs(c: Checker, finals: [bool], args: [HExpr]): [int] {
+    if (len(args) != 3) {
+        return []
+    }
+    var from = args[1].kind
+    var to = args[2].kind
+    if (from is HKind.TypeId && to is HKind.TypeId) {
+        if (to.id >= 0 && to.id < len(finals) && finals[to.id] && objectTyped(c, from.id)) {
+            return [to.id]
+        }
+    }
+    return []
+}
+
+var symbolsWanted = -1
+
+/** With `BURN_SYMBOLS=1` in the environment, a label named after function `f` for debuggers and profilers; otherwise "". */
+pub fun debugLabel(f: HFunc, fid: int): string {
+    if (symbolsWanted < 0) {
+        symbolsWanted = 0
+        if (env("BURN_SYMBOLS") == "1") {
+            symbolsWanted = 1
+        }
+    }
+    if (symbolsWanted == 0) {
+        return ""
+    }
+    var out = "burn.${fid}."
+    for c in chars(f.name) {
+        if (c >= "a" && c <= "z" || c >= "A" && c <= "Z" || c >= "0" && c <= "9" || c == "_") {
+            out += c
+        } else {
+            out += "_"
+        }
+    }
+    return out + ":\n"
 }
 
 /** The C symbol of `f` for `__cfun`: the name it exports to C, or the C function it imports, or null. */

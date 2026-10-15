@@ -1,0 +1,1205 @@
+/**
+ * The bvm interpreter, like `bvm/src/exec.rs`. A module is prepared once: every function's instructions become
+ * fixed-size records in raw memory, with jump targets, called functions, strings and runtime functions resolved to
+ * addresses, and common sequences fused into single instructions. Values are 64-bit words on an operand stack that
+ * also holds each call's locals; calls keep their return address on a separate stack of frames.
+ */
+import "../vm/module.bn"
+import "../check/hir.bn"
+import "rtfns.bn"
+import "types.bn"
+import "verify.bn"
+import "std/memory"
+
+const OP_LOAD = 0
+const OP_CONST = 1
+const OP_STORE = 2
+const OP_LOAD2 = 3
+const OP_LOADK = 4
+const OP_JZ = 5
+const OP_JMP = 6
+const OP_CALL = 7
+const OP_RET = 8
+const OP_RETV = 9
+const OP_RT = 10
+const OP_LOADFIELD = 11
+const OP_GETFIELD = 12
+const OP_INC = 13
+const OP_JNZ = 14
+const OP_TEE = 15
+const OP_JLL = 16
+const OP_JLC = 22
+const OP_ICMP = 28
+const OP_IADD = 34
+const OP_ISUB = 35
+const OP_IMUL = 36
+const OP_IADDOV = 37
+const OP_ISUBOV = 38
+const OP_IMULOV = 39
+const OP_INCOV = 40
+const OP_POP = 41
+const OP_GLOAD = 42
+const OP_GSTORE = 43
+const OP_GTEE = 44
+const OP_NOT = 45
+const OP_JZK = 46
+const OP_JNZK = 47
+const OP_DUP = 48
+const OP_SWAP = 49
+const OP_IDIV = 50
+const OP_IREM = 51
+const OP_INEG = 52
+const OP_INEGOV = 53
+const OP_AND = 54
+const OP_OR = 55
+const OP_XOR = 56
+const OP_SHL = 57
+const OP_SHR = 58
+const OP_USHR = 59
+const OP_FADD = 60
+const OP_FSUB = 61
+const OP_FMUL = 62
+const OP_FDIV = 63
+const OP_FREM = 64
+const OP_FNEG = 65
+const OP_UCMP = 66
+const OP_FCMP = 67
+const OP_I2F = 68
+const OP_F2I = 69
+const OP_CALLIND = 70
+const OP_DISPATCH = 71
+const OP_HOST = 72
+const OP_SPAWN = 73
+const OP_NEWRECORD = 74
+const OP_SETFIELD = 75
+const OP_NEWARRAY = 76
+const OP_INDEX = 77
+const OP_SETINDEX = 78
+const OP_LEN = 79
+const OP_UNBOX = 80
+const OP_RETAIN = 81
+const OP_RELEASE = 82
+
+const OP_SIZE = 32
+const FUNC_SIZE = 64
+const FRAME_SIZE = 32
+const NO_LOC = 4294967295
+const INT_MIN = -9223372036854775807 - 1
+
+const F_CODE = 0
+const F_NOPS = 8
+const F_PARAMS = 16
+const F_LOCALS = 24
+const F_FRAME = 32
+const F_INDEX = 40
+
+const P_NFUNCS = 0
+const P_FUNCS = 8
+const P_GLOBALS = 16
+const P_NGLOBALS = 24
+const P_NTYPES = 32
+
+const VM_STACK = 0
+const VM_STACK_END = 8
+const VM_SP = 16
+const VM_FRAMES = 24
+const VM_FRAMES_END = 32
+const VM_FSP = 40
+const VM_PROG = 48
+
+/** A function the program that runs the interpreter provides to bytecode, which calls it with `host`. */
+pub def type HostFn {
+    string name
+    int argc
+    fun([int]): int call
+}
+
+/** A prepared module: the raw program block, the names of its functions, and why it could not be prepared. */
+pub def type Program {
+    int block
+    [string] names
+    int? entry
+    string error
+}
+
+var hostCalls: [fun([int]): int] = []
+var programNames: [string] = []
+
+fun cmpIndex(c: Cmp): int {
+    return match c {
+        Cmp.Eq => 0
+        Cmp.Ne => 1
+        Cmp.Lt => 2
+        Cmp.Le => 3
+        Cmp.Gt => 4
+        Cmp.Ge => 5
+    }
+}
+
+/** Calls the C function at `f` with up to six arguments read from `args`. */
+unsafe fun callC(f: int, args: int): int {
+    var fp = f
+    var ap = args
+    var r = 0
+    asm {
+        x86_64 {
+            push r12
+            mov rax, {ap}
+            mov rdi, qword ptr [rax]
+            mov rsi, qword ptr [rax + 8]
+            mov rdx, qword ptr [rax + 16]
+            mov rcx, qword ptr [rax + 24]
+            mov r8, qword ptr [rax + 32]
+            mov r9, qword ptr [rax + 40]
+            mov rax, {fp}
+            mov r12, rsp
+            and rsp, -16
+            call rax
+            mov rsp, r12
+            pop r12
+            mov {r}, rax
+        }
+        arm64 {
+            ldr x9, {ap}
+            ldp x0, x1, [x9]
+            ldp x2, x3, [x9, #16]
+            ldp x4, x5, [x9, #32]
+            ldr x9, {fp}
+            blr x9
+            str x0, {r}
+        }
+    }
+    return r
+}
+
+/** Whether the 64-bit product of `a` and `b` overflows. */
+unsafe fun mulOverflows(a: int, b: int): bool {
+    var x = a
+    var y = b
+    var o = 0
+    asm {
+        x86_64 {
+            mov rax, {x}
+            imul rax, {y}
+            seto al
+            movzx rax, al
+            mov {o}, rax
+        }
+        arm64 {
+            ldr x9, {x}
+            ldr x10, {y}
+            mul x11, x9, x10
+            smulh x12, x9, x10
+            cmp x12, x11, asr #63
+            cset x13, ne
+            str x13, {o}
+        }
+    }
+    return o != 0
+}
+
+/** A float converted to an int like Rust's `as`, but NaN and numbers out of range become the smallest int. */
+unsafe fun floatToInt(bits: int): int {
+    var cell = Memory.alloc(8)
+    Memory.store64(cell, bits)
+    var x = Memory.loadFloat(cell)
+    Memory.free(cell)
+    if (x != x || x >= 9223372036854775807.0 || x < -9223372036854775807.0) {
+        if (x == -9223372036854775807.0 - 1.0) {
+            return INT_MIN
+        }
+        return INT_MIN
+    }
+    return toInt(x)
+}
+
+fun hostError(name: string): string {
+    return "the module imports ${name}, but the host does not provide it"
+}
+
+/** Prepares module `m` to run, with `hosts` for the functions it imports, like `load`. */
+pub fun prepare(m: VModule, hosts: [HostFn]): Program {
+    var a = analyze(m)
+    if (a.error != "") {
+        return Program { block: 0, names: [], entry: null, error: a.error }
+    }
+    for f in m.funcs {
+        if (f.external) {
+            return Program { block: 0, names: [], entry: null, error: "function ${f.name} is external; link the module that defines it" }
+        }
+    }
+    [fun([int]): int] calls = []
+    for imp in m.imports {
+        var found = false
+        for h in hosts {
+            if (h.name == imp.name) {
+                if (h.argc != imp.argc) {
+                    return Program { block: 0, names: [], entry: null, error: "the module imports ${imp.name} with ${imp.argc} arguments, but the host function takes ${h.argc}" }
+                }
+                calls.push(h.call)
+                found = true
+                break
+            }
+        }
+        if (!found) {
+            return Program { block: 0, names: [], entry: null, error: hostError(imp.name) }
+        }
+    }
+    hostCalls = calls
+    var tm = installTypes(m)
+    [string] names = []
+    for f in m.funcs {
+        names.push(f.name)
+    }
+    programNames = names
+    unsafe {
+        var nf = len(m.funcs)
+        var block = Memory.alloc(64)
+        var funcs = Memory.alloc(FUNC_SIZE * nf + FUNC_SIZE)
+        Memory.store64(block + P_NFUNCS, nf)
+        Memory.store64(block + P_FUNCS, funcs)
+        var ng = len(m.globals)
+        if (ng < 1) {
+            ng = 1
+        }
+        Memory.store64(block + P_GLOBALS, Memory.alloc(8 * ng))
+        Memory.store64(block + P_NGLOBALS, ng)
+        Memory.store64(block + P_NTYPES, tm.total)
+        [int] strings = []
+        for s in m.strings {
+            var t = s
+            var obj = __addr(t)
+            Memory.store8(obj + 2, Memory.load8(obj + 2) | 1)
+            strings.push(obj)
+        }
+        var tables = Memory.alloc(8 * len(m.tables) + 8)
+        for i in 0..len(m.tables) {
+            var t = Memory.alloc(8 * tm.total + 8)
+            for e in m.tables[i].entries {
+                Memory.store64(t + 8 * mapType(tm, e.ty), funcs + FUNC_SIZE * e.func)
+            }
+            Memory.store64(tables + 8 * i, t)
+        }
+        var addrs = runtimeAddresses()
+        {string: int} rtIndex = {}
+        for i in 0..len(RT_NAMES) {
+            rtIndex[RT_NAMES[i]] = i
+        }
+        for i in 0..nf {
+            var f = m.funcs[i]
+            var fi = funcs + FUNC_SIZE * i
+            var n = len(f.code)
+            var code = Memory.alloc(OP_SIZE * n + OP_SIZE)
+            Memory.store64(fi + F_CODE, code)
+            Memory.store64(fi + F_NOPS, n)
+            Memory.store64(fi + F_PARAMS, f.params)
+            Memory.store64(fi + F_LOCALS, f.locals)
+            Memory.store64(fi + F_FRAME, f.locals + a.maxStack[i] + 1)
+            Memory.store64(fi + F_INDEX, i)
+            for k in 0..n {
+                encodeOp(code + OP_SIZE * k, code, f.code[k], m, tm, funcs, strings, tables, addrs, rtIndex)
+            }
+            fuse(code, f.code)
+        }
+        return Program { block: block, names: names, entry: m.entry, error: "" }
+    }
+}
+
+unsafe fun put(at: int, op: int, a: int, b: int, c: int) {
+    Memory.store64(at, op)
+    Memory.store64(at + 8, a)
+    Memory.store64(at + 16, b)
+    Memory.store64(at + 24, c)
+}
+
+unsafe fun encodeOp(at: int, code: int, op: Op, m: VModule, tm: TypeMap, funcs: int, strings: [int], tables: int, addrs: [int], rtIndex: {string: int}) {
+    if (op is Op.Const) {
+        put(at, OP_CONST, op.value, 0, 0)
+    } else if (op is Op.TypeConst) {
+        put(at, OP_CONST, mapType(tm, op.ty), 0, 0)
+    } else if (op is Op.LocConst) {
+        put(at, OP_CONST, mapLoc(tm, op.loc), 0, 0)
+    } else if (op is Op.Str) {
+        put(at, OP_CONST, strings[op.id], 0, 0)
+    } else if (op is Op.FuncRef) {
+        put(at, OP_CONST, op.func, 0, 0)
+    } else if (op is Op.Load) {
+        put(at, OP_LOAD, op.slot, 0, 0)
+    } else if (op is Op.Store) {
+        put(at, OP_STORE, op.slot, 0, 0)
+    } else if (op is Op.Tee) {
+        put(at, OP_TEE, op.slot, 0, 0)
+    } else if (op is Op.GLoad) {
+        put(at, OP_GLOAD, op.id, 0, 0)
+    } else if (op is Op.GStore) {
+        put(at, OP_GSTORE, op.id, 0, 0)
+    } else if (op is Op.GTee) {
+        put(at, OP_GTEE, op.id, 0, 0)
+    } else if (op is Op.Pop) {
+        put(at, OP_POP, 0, 0, 0)
+    } else if (op is Op.Dup) {
+        put(at, OP_DUP, 0, 0, 0)
+    } else if (op is Op.Swap) {
+        put(at, OP_SWAP, 0, 0, 0)
+    } else if (op is Op.IAdd) {
+        put(at, OP_IADD, 0, 0, 0)
+    } else if (op is Op.ISub) {
+        put(at, OP_ISUB, 0, 0, 0)
+    } else if (op is Op.IMul) {
+        put(at, OP_IMUL, 0, 0, 0)
+    } else if (op is Op.IDiv) {
+        put(at, OP_IDIV, mapLoc(tm, op.loc), 0, 0)
+    } else if (op is Op.IAddOv) {
+        put(at, OP_IADDOV, mapLoc(tm, op.loc), 0, 0)
+    } else if (op is Op.ISubOv) {
+        put(at, OP_ISUBOV, mapLoc(tm, op.loc), 0, 0)
+    } else if (op is Op.IMulOv) {
+        put(at, OP_IMULOV, mapLoc(tm, op.loc), 0, 0)
+    } else if (op is Op.INegOv) {
+        put(at, OP_INEGOV, mapLoc(tm, op.loc), 0, 0)
+    } else if (op is Op.IRem) {
+        put(at, OP_IREM, mapLoc(tm, op.loc), 0, 0)
+    } else if (op is Op.INeg) {
+        put(at, OP_INEG, 0, 0, 0)
+    } else if (op is Op.And) {
+        put(at, OP_AND, 0, 0, 0)
+    } else if (op is Op.Or) {
+        put(at, OP_OR, 0, 0, 0)
+    } else if (op is Op.Xor) {
+        put(at, OP_XOR, 0, 0, 0)
+    } else if (op is Op.Shl) {
+        put(at, OP_SHL, 0, 0, 0)
+    } else if (op is Op.Shr) {
+        put(at, OP_SHR, 0, 0, 0)
+    } else if (op is Op.UShr) {
+        put(at, OP_USHR, 0, 0, 0)
+    } else if (op is Op.FAdd) {
+        put(at, OP_FADD, 0, 0, 0)
+    } else if (op is Op.FSub) {
+        put(at, OP_FSUB, 0, 0, 0)
+    } else if (op is Op.FMul) {
+        put(at, OP_FMUL, 0, 0, 0)
+    } else if (op is Op.FDiv) {
+        put(at, OP_FDIV, 0, 0, 0)
+    } else if (op is Op.FRem) {
+        put(at, OP_FREM, 0, 0, 0)
+    } else if (op is Op.FNeg) {
+        put(at, OP_FNEG, 0, 0, 0)
+    } else if (op is Op.ICmp) {
+        put(at, OP_ICMP + cmpIndex(op.cmp), 0, 0, 0)
+    } else if (op is Op.UCmp) {
+        put(at, OP_UCMP, cmpIndex(op.cmp), 0, 0)
+    } else if (op is Op.FCmp) {
+        put(at, OP_FCMP, cmpIndex(op.cmp), 0, 0)
+    } else if (op is Op.Not) {
+        put(at, OP_NOT, 0, 0, 0)
+    } else if (op is Op.I2F) {
+        put(at, OP_I2F, 0, 0, 0)
+    } else if (op is Op.F2I) {
+        put(at, OP_F2I, 0, 0, 0)
+    } else if (op is Op.Jmp) {
+        put(at, OP_JMP, code + OP_SIZE * op.target, 0, 0)
+    } else if (op is Op.Jz) {
+        put(at, OP_JZ, code + OP_SIZE * op.target, 0, 0)
+    } else if (op is Op.Jnz) {
+        put(at, OP_JNZ, code + OP_SIZE * op.target, 0, 0)
+    } else if (op is Op.JzKeep) {
+        put(at, OP_JZK, code + OP_SIZE * op.target, 0, 0)
+    } else if (op is Op.JnzKeep) {
+        put(at, OP_JNZK, code + OP_SIZE * op.target, 0, 0)
+    } else if (op is Op.Call) {
+        put(at, OP_CALL, funcs + FUNC_SIZE * op.func, 0, 0)
+    } else if (op is Op.CallInd) {
+        put(at, OP_CALLIND, op.argc, 0, 0)
+    } else if (op is Op.Dispatch) {
+        put(at, OP_DISPATCH, Memory.load64(tables + 8 * op.table), op.argc, 0)
+    } else if (op is Op.Ret) {
+        put(at, OP_RET, 0, 0, 0)
+    } else if (op is Op.RetVoid) {
+        put(at, OP_RETV, 0, 0, 0)
+    } else if (op is Op.Rt) {
+        var i = rtIndex[op.name] ?? 0
+        if (op.name == "Retain") {
+            put(at, OP_RETAIN, 0, 0, 0)
+        } else if (op.name == "Release") {
+            put(at, OP_RELEASE, 0, 0, 0)
+        } else {
+            put(at, OP_RT, addrs[i], RT_ARGC[i], 0)
+        }
+    } else if (op is Op.Host) {
+        put(at, OP_HOST, op.id, m.imports[op.id].argc, 0)
+    } else if (op is Op.Spawn) {
+        put(at, OP_SPAWN, funcs + FUNC_SIZE * op.func, op.argc, mapType(tm, op.ty))
+    } else if (op is Op.NewRecord) {
+        put(at, OP_NEWRECORD, mapType(tm, op.ty), op.argc, 0)
+    } else if (op is Op.GetField) {
+        put(at, OP_GETFIELD, op.index, 0, 0)
+    } else if (op is Op.SetField) {
+        put(at, OP_SETFIELD, op.index, 0, 0)
+    } else if (op is Op.NewArray) {
+        put(at, OP_NEWARRAY, mapType(tm, op.ty), op.count, 0)
+    } else if (op is Op.Index) {
+        put(at, OP_INDEX, mapLoc(tm, op.loc), 0, 0)
+    } else if (op is Op.SetIndex) {
+        put(at, OP_SETINDEX, mapLoc(tm, op.loc), 0, 0)
+    } else if (op is Op.Len) {
+        put(at, OP_LEN, 0, 0, 0)
+    } else if (op is Op.Unbox) {
+        put(at, OP_UNBOX, 0, 0, 0)
+    }
+}
+
+fun small(k: int): bool {
+    return k >= -2147483648 && k <= 2147483647
+}
+
+/** Fuses common sequences of instructions into one, like `fuse`; the instructions after a fused one stay, unused. */
+unsafe fun fuse(code: int, ops: [Op]) {
+    var n = len(ops)
+    [bool] targets = []
+    for i in 0..n + 1 {
+        targets.push(false)
+    }
+    for op in ops {
+        var t = jumpTarget(op)
+        if (t != null) {
+            targets[t] = true
+        }
+    }
+    var i = 0
+    while (i + 1 < n) {
+        var free2 = !targets[i + 1]
+        var free4 = i + 3 < n && free2 && !targets[i + 2] && !targets[i + 3]
+        var a = ops[i]
+        var b = ops[i + 1]
+        var at = code + OP_SIZE * i
+        if (free4 && a is Op.Load) {
+            var c = ops[i + 2]
+            var d = ops[i + 3]
+            if (b is Op.Load && c is Op.ICmp && d is Op.Jz) {
+                put(at, OP_JLL + cmpIndex(c.cmp), a.slot, b.slot, code + OP_SIZE * d.target)
+                i += 4
+                continue
+            }
+            if (b is Op.Const && c is Op.ICmp && d is Op.Jz && small(b.value)) {
+                put(at, OP_JLC + cmpIndex(c.cmp), a.slot, b.value, code + OP_SIZE * d.target)
+                i += 4
+                continue
+            }
+            if (b is Op.Const && c is Op.IAdd && d is Op.Store && d.slot == a.slot && small(b.value)) {
+                put(at, OP_INC, a.slot, b.value, 0)
+                i += 4
+                continue
+            }
+            if (b is Op.Const && c is Op.IAddOv && d is Op.Store && d.slot == a.slot && small(b.value)) {
+                put(at, OP_INCOV, a.slot, b.value, Memory.load64(code + OP_SIZE * (i + 2) + 8))
+                i += 4
+                continue
+            }
+        }
+        if (free2 && a is Op.Load) {
+            if (b is Op.GetField) {
+                put(at, OP_LOADFIELD, a.slot, b.index, 0)
+                i += 2
+                continue
+            }
+            if (b is Op.Load) {
+                put(at, OP_LOAD2, a.slot, b.slot, 0)
+                i += 2
+                continue
+            }
+            if (b is Op.Const && small(b.value)) {
+                put(at, OP_LOADK, a.slot, b.value, 0)
+                i += 2
+                continue
+            }
+        }
+        i += 1
+    }
+}
+
+/** A new interpreter state for program `block`, with room for `words` values and `frames` calls. */
+unsafe fun newVm(block: int, words: int, frames: int): int {
+    var vm = Memory.alloc(64)
+    var stack = Memory.alloc(8 * words + 64)
+    Memory.store64(vm + VM_STACK, stack)
+    Memory.store64(vm + VM_STACK_END, stack + 8 * words)
+    Memory.store64(vm + VM_SP, stack)
+    var fr = Memory.alloc(FRAME_SIZE * frames + FRAME_SIZE)
+    Memory.store64(vm + VM_FRAMES, fr)
+    Memory.store64(vm + VM_FRAMES_END, fr + FRAME_SIZE * frames)
+    Memory.store64(vm + VM_FSP, fr)
+    Memory.store64(vm + VM_PROG, block)
+    return vm
+}
+
+unsafe fun freeVm(vm: int) {
+    Memory.free(Memory.load64(vm + VM_STACK))
+    Memory.free(Memory.load64(vm + VM_FRAMES))
+    Memory.free(vm)
+}
+
+fun overflow() {
+    __fail("stack overflow (recursion is too deep)", -1)
+}
+
+unsafe fun badRecord(o: int, i: int) {
+    if (o == 0) {
+        rtErrNull(NO_LOC)
+    }
+    if (Memory.load8(o) == 7) {
+        __fail("this object was destroyed and can no longer be used", -1)
+    }
+    __fail("field ${i} does not exist on a value of type ${typeNameOf(o)}", -1)
+}
+
+unsafe fun typeNameOf(o: int): string {
+    var s = rtTypeName(o, 7)
+    var out = __str(s)
+    rtRelease(s)
+    return out
+}
+
+unsafe fun badArray(a: int, loc: int) {
+    if (a == 0) {
+        rtErrNull(loc)
+    }
+    __fail("a value of type ${typeNameOf(a)} is not an array", loc)
+}
+
+unsafe fun recordOk(o: int, i: int): bool {
+    if (o == 0 || Memory.load8(o) != 3) {
+        return false
+    }
+    return i < (Memory.load32(o + 8) - 16) / 8
+}
+
+unsafe fun loadF(p: int): float {
+    return Memory.loadFloat(p)
+}
+
+/** Runs function `fi` of the program with its arguments already on the operand stack of `vm`, and gives its result. */
+unsafe fun execute(vm: int, fi: int): int {
+    var prog = Memory.load64(vm + VM_PROG)
+    var globals = Memory.load64(prog + P_GLOBALS)
+    var funcs = Memory.load64(prog + P_FUNCS)
+    var nfuncs = Memory.load64(prog + P_NFUNCS)
+    var ntypes = Memory.load64(prog + P_NTYPES)
+    var stackEnd = Memory.load64(vm + VM_STACK_END)
+    var framesEnd = Memory.load64(vm + VM_FRAMES_END)
+    var stop = Memory.load64(vm + VM_FSP)
+    var fsp = stop
+    var sp = Memory.load64(vm + VM_SP)
+    var f = fi
+    var params = Memory.load64(f + F_PARAMS)
+    var locals = Memory.load64(f + F_LOCALS)
+    var bp = sp - 8 * params
+    if (bp + 8 * Memory.load64(f + F_FRAME) > stackEnd) {
+        overflow()
+    }
+    if (locals > params) {
+        Memory.fill(bp + 8 * params, 0, 8 * (locals - params))
+    }
+    sp = bp + 8 * locals
+    var pc = Memory.load64(f + F_CODE)
+    var callee = 0
+    while (true) {
+        var op = Memory.load64(pc)
+        if (op < 16) {
+            if (op == OP_LOAD) {
+                Memory.store64(sp, Memory.load64(bp + 8 * Memory.load64(pc + 8)))
+                sp += 8
+                pc += OP_SIZE
+                continue
+            }
+            if (op == OP_CONST) {
+                Memory.store64(sp, Memory.load64(pc + 8))
+                sp += 8
+                pc += OP_SIZE
+                continue
+            }
+            if (op == OP_STORE) {
+                sp -= 8
+                Memory.store64(bp + 8 * Memory.load64(pc + 8), Memory.load64(sp))
+                pc += OP_SIZE
+                continue
+            }
+            if (op == OP_LOAD2) {
+                Memory.store64(sp, Memory.load64(bp + 8 * Memory.load64(pc + 8)))
+                Memory.store64(sp + 8, Memory.load64(bp + 8 * Memory.load64(pc + 16)))
+                sp += 16
+                pc += 2 * OP_SIZE
+                continue
+            }
+            if (op == OP_LOADK) {
+                Memory.store64(sp, Memory.load64(bp + 8 * Memory.load64(pc + 8)))
+                Memory.store64(sp + 8, Memory.load64(pc + 16))
+                sp += 16
+                pc += 2 * OP_SIZE
+                continue
+            }
+            if (op == OP_JZ) {
+                sp -= 8
+                if (Memory.load64(sp) == 0) {
+                    pc = Memory.load64(pc + 8)
+                } else {
+                    pc += OP_SIZE
+                }
+                continue
+            }
+            if (op == OP_JMP) {
+                pc = Memory.load64(pc + 8)
+                continue
+            }
+            if (op == OP_CALL) {
+                callee = Memory.load64(pc + 8)
+            } else if (op == OP_RET || op == OP_RETV) {
+                var v = 0
+                if (op == OP_RET) {
+                    v = Memory.load64(sp - 8)
+                }
+                sp = bp
+                if (fsp == stop) {
+                    Memory.store64(vm + VM_SP, sp)
+                    return v
+                }
+                fsp -= FRAME_SIZE
+                pc = Memory.load64(fsp)
+                bp = Memory.load64(fsp + 8)
+                f = Memory.load64(fsp + 16)
+                Memory.store64(sp, v)
+                sp += 8
+                continue
+            } else if (op == OP_RT) {
+                var n = Memory.load64(pc + 16)
+                var at = sp - 8 * n
+                Memory.store64(vm + VM_SP, sp)
+                var r = callC(Memory.load64(pc + 8), at)
+                sp = at
+                Memory.store64(sp, r)
+                sp += 8
+                pc += OP_SIZE
+                continue
+            } else if (op == OP_LOADFIELD) {
+                var o = Memory.load64(bp + 8 * Memory.load64(pc + 8))
+                var i = Memory.load64(pc + 16)
+                if (!recordOk(o, i)) {
+                    badRecord(o, i)
+                }
+                Memory.store64(sp, Memory.load64(o + 16 + 8 * i))
+                sp += 8
+                pc += 2 * OP_SIZE
+                continue
+            } else if (op == OP_GETFIELD) {
+                var o = Memory.load64(sp - 8)
+                var i = Memory.load64(pc + 8)
+                if (!recordOk(o, i)) {
+                    badRecord(o, i)
+                }
+                Memory.store64(sp - 8, Memory.load64(o + 16 + 8 * i))
+                pc += OP_SIZE
+                continue
+            } else if (op == OP_INC) {
+                var slot = bp + 8 * Memory.load64(pc + 8)
+                Memory.store64(slot, wrappingAdd(Memory.load64(slot), Memory.load64(pc + 16)))
+                pc += 4 * OP_SIZE
+                continue
+            } else if (op == OP_JNZ) {
+                sp -= 8
+                if (Memory.load64(sp) != 0) {
+                    pc = Memory.load64(pc + 8)
+                } else {
+                    pc += OP_SIZE
+                }
+                continue
+            } else if (op == OP_TEE) {
+                Memory.store64(bp + 8 * Memory.load64(pc + 8), Memory.load64(sp - 8))
+                pc += OP_SIZE
+                continue
+            }
+        } else if (op < 48) {
+            if (op < OP_ICMP) {
+                var a = Memory.load64(bp + 8 * Memory.load64(pc + 8))
+                var b = Memory.load64(pc + 16)
+                var c = op - OP_JLC
+                if (op < OP_JLC) {
+                    b = Memory.load64(bp + 8 * b)
+                    c = op - OP_JLL
+                }
+                var yes = false
+                if (c == 2) {
+                    yes = a < b
+                } else if (c == 0) {
+                    yes = a == b
+                } else if (c == 1) {
+                    yes = a != b
+                } else if (c == 3) {
+                    yes = a <= b
+                } else if (c == 4) {
+                    yes = a > b
+                } else {
+                    yes = a >= b
+                }
+                if (yes) {
+                    pc += 4 * OP_SIZE
+                } else {
+                    pc = Memory.load64(pc + 24)
+                }
+                continue
+            }
+            if (op < OP_IADD) {
+                var b = Memory.load64(sp - 8)
+                var a = Memory.load64(sp - 16)
+                var c = op - OP_ICMP
+                var yes = false
+                if (c == 0) {
+                    yes = a == b
+                } else if (c == 1) {
+                    yes = a != b
+                } else if (c == 2) {
+                    yes = a < b
+                } else if (c == 3) {
+                    yes = a <= b
+                } else if (c == 4) {
+                    yes = a > b
+                } else {
+                    yes = a >= b
+                }
+                sp -= 8
+                if (yes) {
+                    Memory.store64(sp - 8, 1)
+                } else {
+                    Memory.store64(sp - 8, 0)
+                }
+                pc += OP_SIZE
+                continue
+            }
+            if (op == OP_IADD) {
+                sp -= 8
+                Memory.store64(sp - 8, wrappingAdd(Memory.load64(sp - 8), Memory.load64(sp)))
+            } else if (op == OP_ISUB) {
+                sp -= 8
+                Memory.store64(sp - 8, wrappingSub(Memory.load64(sp - 8), Memory.load64(sp)))
+            } else if (op == OP_IMUL) {
+                sp -= 8
+                Memory.store64(sp - 8, wrappingMul(Memory.load64(sp - 8), Memory.load64(sp)))
+            } else if (op == OP_IADDOV || op == OP_ISUBOV || op == OP_IMULOV) {
+                sp -= 8
+                var b = Memory.load64(sp)
+                var a = Memory.load64(sp - 8)
+                var r = 0
+                var bad = false
+                if (op == OP_IADDOV) {
+                    r = wrappingAdd(a, b)
+                    bad = ((a ^ r) & (b ^ r)) < 0
+                } else if (op == OP_ISUBOV) {
+                    r = wrappingSub(a, b)
+                    bad = ((a ^ b) & (a ^ r)) < 0
+                } else {
+                    bad = mulOverflows(a, b)
+                    r = wrappingMul(a, b)
+                }
+                if (bad) {
+                    Memory.store64(vm + VM_SP, sp)
+                    rtErrOverflow(Memory.load64(pc + 8))
+                }
+                Memory.store64(sp - 8, r)
+            } else if (op == OP_INCOV) {
+                var slot = bp + 8 * Memory.load64(pc + 8)
+                var a = Memory.load64(slot)
+                var b = Memory.load64(pc + 16)
+                var r = wrappingAdd(a, b)
+                if (((a ^ r) & (b ^ r)) < 0) {
+                    rtErrOverflow(Memory.load64(pc + 24))
+                }
+                Memory.store64(slot, r)
+                pc += 4 * OP_SIZE
+                continue
+            } else if (op == OP_POP) {
+                sp -= 8
+            } else if (op == OP_GLOAD) {
+                Memory.store64(sp, Memory.load64(globals + 8 * Memory.load64(pc + 8)))
+                sp += 8
+            } else if (op == OP_GSTORE) {
+                sp -= 8
+                Memory.store64(globals + 8 * Memory.load64(pc + 8), Memory.load64(sp))
+            } else if (op == OP_GTEE) {
+                Memory.store64(globals + 8 * Memory.load64(pc + 8), Memory.load64(sp - 8))
+            } else if (op == OP_NOT) {
+                if (Memory.load64(sp - 8) == 0) {
+                    Memory.store64(sp - 8, 1)
+                } else {
+                    Memory.store64(sp - 8, 0)
+                }
+            } else if (op == OP_JZK) {
+                if (Memory.load64(sp - 8) == 0) {
+                    pc = Memory.load64(pc + 8)
+                    continue
+                }
+            } else if (op == OP_JNZK) {
+                if (Memory.load64(sp - 8) != 0) {
+                    pc = Memory.load64(pc + 8)
+                    continue
+                }
+            }
+            pc += OP_SIZE
+            continue
+        } else {
+            if (op == OP_RETAIN) {
+                rtRetain(Memory.load64(sp - 8))
+            } else if (op == OP_RELEASE) {
+                Memory.store64(vm + VM_SP, sp)
+                Memory.store64(sp - 8, rtRelease(Memory.load64(sp - 8)))
+            } else if (op == OP_DUP) {
+                Memory.store64(sp, Memory.load64(sp - 8))
+                sp += 8
+            } else if (op == OP_SWAP) {
+                var t = Memory.load64(sp - 8)
+                Memory.store64(sp - 8, Memory.load64(sp - 16))
+                Memory.store64(sp - 16, t)
+            } else if (op == OP_IDIV || op == OP_IREM) {
+                sp -= 8
+                var b = Memory.load64(sp)
+                var a = Memory.load64(sp - 8)
+                var loc = Memory.load64(pc + 8)
+                if (b == 0) {
+                    Memory.store64(vm + VM_SP, sp)
+                    rtErrDivZero(loc)
+                }
+                if (b == -1) {
+                    if (op == OP_IDIV) {
+                        if (a == INT_MIN) {
+                            rtErrOverflow(loc)
+                        }
+                        Memory.store64(sp - 8, -a)
+                    } else {
+                        Memory.store64(sp - 8, 0)
+                    }
+                } else if (op == OP_IDIV) {
+                    Memory.store64(sp - 8, a / b)
+                } else {
+                    Memory.store64(sp - 8, a % b)
+                }
+            } else if (op == OP_INEG) {
+                Memory.store64(sp - 8, wrappingSub(0, Memory.load64(sp - 8)))
+            } else if (op == OP_INEGOV) {
+                var a = Memory.load64(sp - 8)
+                if (a == INT_MIN) {
+                    rtErrOverflow(Memory.load64(pc + 8))
+                }
+                Memory.store64(sp - 8, -a)
+            } else if (op == OP_AND) {
+                sp -= 8
+                Memory.store64(sp - 8, Memory.load64(sp - 8) & Memory.load64(sp))
+            } else if (op == OP_OR) {
+                sp -= 8
+                Memory.store64(sp - 8, Memory.load64(sp - 8) | Memory.load64(sp))
+            } else if (op == OP_XOR) {
+                sp -= 8
+                Memory.store64(sp - 8, Memory.load64(sp - 8) ^ Memory.load64(sp))
+            } else if (op == OP_SHL) {
+                sp -= 8
+                Memory.store64(sp - 8, Memory.load64(sp - 8) << (Memory.load64(sp) & 63))
+            } else if (op == OP_SHR) {
+                sp -= 8
+                Memory.store64(sp - 8, Memory.load64(sp - 8) >> (Memory.load64(sp) & 63))
+            } else if (op == OP_USHR) {
+                sp -= 8
+                Memory.store64(sp - 8, Memory.load64(sp - 8) >>> (Memory.load64(sp) & 63))
+            } else if (op >= OP_FADD && op <= OP_FDIV) {
+                sp -= 8
+                var a = loadF(sp - 8)
+                var b = loadF(sp)
+                var r = 0.0
+                if (op == OP_FADD) {
+                    r = a + b
+                } else if (op == OP_FSUB) {
+                    r = a - b
+                } else if (op == OP_FMUL) {
+                    r = a * b
+                } else {
+                    r = a / b
+                }
+                Memory.storeFloat(sp - 8, r)
+            } else if (op == OP_FREM) {
+                sp -= 8
+                Memory.store64(sp - 8, rtFMod(Memory.load64(sp - 8), Memory.load64(sp)))
+            } else if (op == OP_FNEG) {
+                Memory.storeFloat(sp - 8, -loadF(sp - 8))
+            } else if (op == OP_UCMP) {
+                sp -= 8
+                var a = Memory.load64(sp - 8) ^ INT_MIN
+                var b = Memory.load64(sp) ^ INT_MIN
+                var c = Memory.load64(pc + 8)
+                var yes = false
+                if (c == 0) {
+                    yes = a == b
+                } else if (c == 1) {
+                    yes = a != b
+                } else if (c == 2) {
+                    yes = a < b
+                } else if (c == 3) {
+                    yes = a <= b
+                } else if (c == 4) {
+                    yes = a > b
+                } else {
+                    yes = a >= b
+                }
+                if (yes) {
+                    Memory.store64(sp - 8, 1)
+                } else {
+                    Memory.store64(sp - 8, 0)
+                }
+            } else if (op == OP_FCMP) {
+                sp -= 8
+                var a = loadF(sp - 8)
+                var b = loadF(sp)
+                var c = Memory.load64(pc + 8)
+                var yes = false
+                if (c == 0) {
+                    yes = a == b
+                } else if (c == 1) {
+                    yes = a != b
+                } else if (c == 2) {
+                    yes = a < b
+                } else if (c == 3) {
+                    yes = a <= b
+                } else if (c == 4) {
+                    yes = a > b
+                } else {
+                    yes = a >= b
+                }
+                if (yes) {
+                    Memory.store64(sp - 8, 1)
+                } else {
+                    Memory.store64(sp - 8, 0)
+                }
+            } else if (op == OP_I2F) {
+                Memory.storeFloat(sp - 8, toFloat(Memory.load64(sp - 8)))
+            } else if (op == OP_F2I) {
+                Memory.store64(sp - 8, floatToInt(Memory.load64(sp - 8)))
+            } else if (op == OP_CALLIND) {
+                var argc = Memory.load64(pc + 8)
+                sp -= 8
+                var func = Memory.load64(sp)
+                if (func < 0 || func >= nfuncs) {
+                    Memory.store64(vm + VM_SP, sp)
+                    __fail("${func} is not a function", -1)
+                }
+                callee = funcs + FUNC_SIZE * func
+                if (Memory.load64(callee + F_PARAMS) != argc) {
+                    __fail("${programNames[func]} takes ${Memory.load64(callee + F_PARAMS)} arguments but was called with ${argc}", -1)
+                }
+            } else if (op == OP_DISPATCH) {
+                var argc = Memory.load64(pc + 16)
+                var recv = Memory.load64(sp - 8 * argc)
+                if (recv == 0) {
+                    Memory.store64(vm + VM_SP, sp)
+                    rtErrNull(NO_LOC)
+                }
+                var tid = Memory.load32(recv + 4)
+                callee = 0
+                if (tid < ntypes) {
+                    callee = Memory.load64(Memory.load64(pc + 8) + 8 * tid)
+                }
+                if (callee == 0) {
+                    __fail("value of type ${typeNameOf(recv)} does not implement this interface", -1)
+                }
+            } else if (op == OP_HOST) {
+                var n = Memory.load64(pc + 16)
+                [int] hargs = []
+                for k in 0..n {
+                    hargs.push(Memory.load64(sp - 8 * n + 8 * k))
+                }
+                Memory.store64(vm + VM_SP, sp)
+                var r = hostCalls[Memory.load64(pc + 8)](hargs)
+                sp -= 8 * n
+                Memory.store64(sp, r)
+                sp += 8
+            } else if (op == OP_SPAWN) {
+                var n = Memory.load64(pc + 16)
+                var block = Memory.alloc(8 * n + 8)
+                Memory.copy(block, sp - 8 * n, 8 * n)
+                sp -= 8 * n
+                var job = Memory.alloc(24)
+                Memory.store64(job, prog)
+                Memory.store64(job + 8, Memory.load64(pc + 8))
+                Memory.store64(job + 16, block)
+                Memory.store64(vm + VM_SP, sp)
+                var fut = spawnC(__cfun(taskMain), job, Memory.load64(pc + 24))
+                Memory.store64(sp, fut)
+                sp += 8
+            } else if (op == OP_NEWRECORD) {
+                var n = Memory.load64(pc + 16)
+                Memory.store64(vm + VM_SP, sp)
+                var p = rtStructNew(Memory.load64(pc + 8), n)
+                sp -= 8 * n
+                Memory.copy(p + 16, sp, 8 * n)
+                Memory.store64(sp, p)
+                sp += 8
+            } else if (op == OP_SETFIELD) {
+                sp -= 8
+                var v = Memory.load64(sp)
+                var o = Memory.load64(sp - 8)
+                var i = Memory.load64(pc + 8)
+                if (!recordOk(o, i)) {
+                    badRecord(o, i)
+                }
+                Memory.store64(o + 16 + 8 * i, v)
+                Memory.store64(sp - 8, v)
+            } else if (op == OP_NEWARRAY) {
+                var n = Memory.load64(pc + 16)
+                Memory.store64(vm + VM_SP, sp)
+                var arr = rtArrNew(Memory.load64(pc + 8), n)
+                sp -= 8 * n
+                if (Memory.load8(arr + 3) == 0) {
+                    Memory.copy(Memory.load64(arr + 32), sp, 8 * n)
+                } else {
+                    for k in 0..n {
+                        rtArrSet(arr, k, Memory.load64(sp + 8 * k), NO_LOC)
+                    }
+                }
+                Memory.store64(sp, arr)
+                sp += 8
+            } else if (op == OP_INDEX) {
+                sp -= 8
+                var i = Memory.load64(sp)
+                var arr = Memory.load64(sp - 8)
+                var loc = Memory.load64(pc + 8)
+                if (arr == 0 || Memory.load8(arr) != 2) {
+                    Memory.store64(vm + VM_SP, sp)
+                    badArray(arr, loc)
+                }
+                var n = Memory.load64(arr + 16)
+                if (i < 0 || i >= n) {
+                    Memory.store64(vm + VM_SP, sp)
+                    rtErrIndex(loc, i, n)
+                }
+                if (Memory.load8(arr + 3) == 0) {
+                    Memory.store64(sp - 8, Memory.load64(Memory.load64(arr + 32) + 8 * i))
+                } else {
+                    Memory.store64(sp - 8, rtArrGet(arr, i, loc))
+                }
+            } else if (op == OP_SETINDEX) {
+                sp -= 16
+                var v = Memory.load64(sp + 8)
+                var i = Memory.load64(sp)
+                var arr = Memory.load64(sp - 8)
+                var loc = Memory.load64(pc + 8)
+                if (arr == 0 || Memory.load8(arr) != 2) {
+                    Memory.store64(vm + VM_SP, sp)
+                    badArray(arr, loc)
+                }
+                var n = Memory.load64(arr + 16)
+                if (i < 0 || i >= n) {
+                    Memory.store64(vm + VM_SP, sp)
+                    rtErrIndex(loc, i, n)
+                }
+                if (Memory.load8(arr + 3) == 0) {
+                    Memory.store64(Memory.load64(arr + 32) + 8 * i, v)
+                } else {
+                    rtArrSet(arr, i, v, loc)
+                }
+                Memory.store64(sp - 8, v)
+            } else if (op == OP_LEN) {
+                var arr = Memory.load64(sp - 8)
+                if (arr == 0 || Memory.load8(arr) != 2) {
+                    Memory.store64(vm + VM_SP, sp)
+                    badArray(arr, NO_LOC)
+                }
+                Memory.store64(sp - 8, Memory.load64(arr + 16))
+            } else if (op == OP_UNBOX) {
+                var b = Memory.load64(sp - 8)
+                if (b == 0) {
+                    Memory.store64(vm + VM_SP, sp)
+                    rtErrNull(NO_LOC)
+                }
+                Memory.store64(sp - 8, Memory.load64(b + 16))
+            }
+            if (callee == 0) {
+                pc += OP_SIZE
+                continue
+            }
+        }
+        if (fsp >= framesEnd) {
+            overflow()
+        }
+        Memory.store64(fsp, pc + OP_SIZE)
+        Memory.store64(fsp + 8, bp)
+        Memory.store64(fsp + 16, f)
+        fsp += FRAME_SIZE
+        f = callee
+        callee = 0
+        params = Memory.load64(f + F_PARAMS)
+        locals = Memory.load64(f + F_LOCALS)
+        bp = sp - 8 * params
+        if (bp + 8 * Memory.load64(f + F_FRAME) > stackEnd) {
+            overflow()
+        }
+        if (locals > params) {
+            Memory.fill(bp + 8 * params, 0, 8 * (locals - params))
+        }
+        sp = bp + 8 * locals
+        pc = Memory.load64(f + F_CODE)
+    }
+}
+
+@Extern("burn_rt_set_arg_list")
+fun setArgList(a: int): int
+
+/** Makes `args` what `args()` gives the program that runs. */
+pub fun setProgramArgs(args: [string]) {
+    unsafe {
+        setArgList(__addr(args))
+    }
+}
+
+@Extern("burn_spawn_c")
+fun spawnC(f: int, arg: int, t: int): int
+
+/** The body of an async task: runs a function of the program in an interpreter of its own. */
+@Extern("burn_bvm_task")
+fun taskMain(job: int): int {
+    unsafe {
+        var prog = Memory.load64(job)
+        var fi = Memory.load64(job + 8)
+        var block = Memory.load64(job + 16)
+        var n = Memory.load64(fi + F_PARAMS)
+        var vm = newVm(prog, 1048576, 65536)
+        var sp = Memory.load64(vm + VM_SP)
+        Memory.copy(sp, block, 8 * n)
+        Memory.store64(vm + VM_SP, sp + 8 * n)
+        var r = execute(vm, fi)
+        freeVm(vm)
+        Memory.free(block)
+        Memory.free(job)
+        return r
+    }
+}
+
+/** Calls function `func` of a prepared program with `args`, on the calling thread, and gives its result. */
+pub fun call(p: Program, func: int, args: [int]): int {
+    unsafe {
+        var vm = newVm(p.block, 16777216, 1048576)
+        var sp = Memory.load64(vm + VM_SP)
+        for i in 0..len(args) {
+            Memory.store64(sp + 8 * i, args[i])
+        }
+        Memory.store64(vm + VM_SP, sp + 8 * len(args))
+        var r = execute(vm, Memory.load64(p.block + P_FUNCS) + FUNC_SIZE * func)
+        freeVm(vm)
+        return r
+    }
+}
+
+/** Runs the entry of a prepared program, waits for its tasks and writes out what it printed, like `run`. */
+pub fun runEntry(p: Program): int {
+    var e = p.entry
+    if (e != null) {
+        call(p, e, [])
+    }
+    unsafe {
+        rtExit(0)
+    }
+    return 0
+}

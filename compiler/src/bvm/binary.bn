@@ -242,8 +242,29 @@ fun writeDesc(w: Writer, d: Desc) {
 
 fun readDesc(r: Reader): Desc {
     var k = r.u8()
-    if (k <= 7) {
-        return [Desc.Error, Desc.Void, Desc.Null, Desc.Int, Desc.Float, Desc.Bool, Desc.Str, Desc.Any][k]
+    if (k == 0) {
+        return Desc.Error
+    }
+    if (k == 1) {
+        return Desc.Void
+    }
+    if (k == 2) {
+        return Desc.Null
+    }
+    if (k == 3) {
+        return Desc.Int
+    }
+    if (k == 4) {
+        return Desc.Float
+    }
+    if (k == 5) {
+        return Desc.Bool
+    }
+    if (k == 6) {
+        return Desc.Str
+    }
+    if (k == 7) {
+        return Desc.Any
     }
     if (k == 8) {
         return Desc.Array(r.u32())
@@ -446,15 +467,70 @@ fun writeOp(w: Writer, op: Op, symbols: {string: string}, rt: {string: int}, rtL
 
 fun readOp(r: Reader, rt: [string]): Op {
     var code = r.u8()
+    if (code == 3) {
+        return Op.Load(r.u32())
+    }
     if (code == 0) {
         return Op.Const(r.u64())
     }
-    if (code <= 8) {
-        var x = r.u32()
-        return [Op.Str(x), Op.FuncRef(x), Op.Load(x), Op.Store(x), Op.Tee(x), Op.GLoad(x), Op.GStore(x), Op.GTee(x)][code - 1]
+    if (code == 4) {
+        return Op.Store(r.u32())
     }
-    if (code <= 14) {
-        return [Op.Pop, Op.Dup, Op.Swap, Op.IAdd, Op.ISub, Op.IMul][code - 9]
+    if (code == 46) {
+        var i = r.u32()
+        if (i >= len(rt)) {
+            r.fail("runtime function reference ${i} is out of range")
+            return Op.Ret
+        }
+        return Op.Rt(rt[i])
+    }
+    if (code == 41) {
+        return Op.Call(r.u32())
+    }
+    if (code == 37) {
+        return Op.Jz(r.u32())
+    }
+    if (code == 36) {
+        return Op.Jmp(r.u32())
+    }
+    if (code == 50) {
+        return Op.GetField(r.u32())
+    }
+    if (code == 1) {
+        return Op.Str(r.u32())
+    }
+    if (code == 2) {
+        return Op.FuncRef(r.u32())
+    }
+    if (code == 5) {
+        return Op.Tee(r.u32())
+    }
+    if (code == 6) {
+        return Op.GLoad(r.u32())
+    }
+    if (code == 7) {
+        return Op.GStore(r.u32())
+    }
+    if (code == 8) {
+        return Op.GTee(r.u32())
+    }
+    if (code == 9) {
+        return Op.Pop
+    }
+    if (code == 10) {
+        return Op.Dup
+    }
+    if (code == 11) {
+        return Op.Swap
+    }
+    if (code == 12) {
+        return Op.IAdd
+    }
+    if (code == 13) {
+        return Op.ISub
+    }
+    if (code == 14) {
+        return Op.IMul
     }
     if (code == 15) {
         return Op.IDiv(r.u32())
@@ -462,8 +538,44 @@ fun readOp(r: Reader, rt: [string]): Op {
     if (code == 16) {
         return Op.IRem(r.u32())
     }
-    if (code <= 29) {
-        return [Op.INeg, Op.And, Op.Or, Op.Xor, Op.Shl, Op.Shr, Op.UShr, Op.FAdd, Op.FSub, Op.FMul, Op.FDiv, Op.FRem, Op.FNeg][code - 17]
+    if (code == 17) {
+        return Op.INeg
+    }
+    if (code == 18) {
+        return Op.And
+    }
+    if (code == 19) {
+        return Op.Or
+    }
+    if (code == 20) {
+        return Op.Xor
+    }
+    if (code == 21) {
+        return Op.Shl
+    }
+    if (code == 22) {
+        return Op.Shr
+    }
+    if (code == 23) {
+        return Op.UShr
+    }
+    if (code == 24) {
+        return Op.FAdd
+    }
+    if (code == 25) {
+        return Op.FSub
+    }
+    if (code == 26) {
+        return Op.FMul
+    }
+    if (code == 27) {
+        return Op.FDiv
+    }
+    if (code == 28) {
+        return Op.FRem
+    }
+    if (code == 29) {
+        return Op.FNeg
     }
     if (code == 30) {
         return Op.ICmp(cmpOf(r, r.u8()))
@@ -474,12 +586,26 @@ fun readOp(r: Reader, rt: [string]): Op {
     if (code == 32) {
         return Op.FCmp(cmpOf(r, r.u8()))
     }
-    if (code <= 35) {
-        return [Op.Not, Op.I2F, Op.F2I][code - 33]
+    if (code == 33) {
+        return Op.Not
     }
-    if (code <= 42) {
-        var x = r.u32()
-        return [Op.Jmp(x), Op.Jz(x), Op.Jnz(x), Op.JzKeep(x), Op.JnzKeep(x), Op.Call(x), Op.CallInd(x)][code - 36]
+    if (code == 34) {
+        return Op.I2F
+    }
+    if (code == 35) {
+        return Op.F2I
+    }
+    if (code == 38) {
+        return Op.Jnz(r.u32())
+    }
+    if (code == 39) {
+        return Op.JzKeep(r.u32())
+    }
+    if (code == 40) {
+        return Op.JnzKeep(r.u32())
+    }
+    if (code == 42) {
+        return Op.CallInd(r.u32())
     }
     if (code == 43) {
         var a = r.u32()
@@ -490,14 +616,6 @@ fun readOp(r: Reader, rt: [string]): Op {
     }
     if (code == 45) {
         return Op.RetVoid
-    }
-    if (code == 46) {
-        var i = r.u32()
-        if (i >= len(rt)) {
-            r.fail("runtime function reference ${i} is out of range")
-            return Op.Ret
-        }
-        return Op.Rt(rt[i])
     }
     if (code == 47) {
         return Op.Host(r.u32())
@@ -510,9 +628,6 @@ fun readOp(r: Reader, rt: [string]): Op {
     if (code == 49) {
         var a = r.u32()
         return Op.NewRecord(a, r.u32())
-    }
-    if (code == 50) {
-        return Op.GetField(r.u32())
     }
     if (code == 51) {
         return Op.SetField(r.u32())
@@ -533,9 +648,23 @@ fun readOp(r: Reader, rt: [string]): Op {
     if (code == 56) {
         return Op.Unbox
     }
-    if (code <= 62) {
-        var x = r.u32()
-        return [Op.TypeConst(x), Op.LocConst(x), Op.IAddOv(x), Op.ISubOv(x), Op.IMulOv(x), Op.INegOv(x)][code - 57]
+    if (code == 57) {
+        return Op.TypeConst(r.u32())
+    }
+    if (code == 58) {
+        return Op.LocConst(r.u32())
+    }
+    if (code == 59) {
+        return Op.IAddOv(r.u32())
+    }
+    if (code == 60) {
+        return Op.ISubOv(r.u32())
+    }
+    if (code == 61) {
+        return Op.IMulOv(r.u32())
+    }
+    if (code == 62) {
+        return Op.INegOv(r.u32())
     }
     r.fail("unknown opcode ${code} at byte ${r.i - 1}")
     return Op.Ret

@@ -70,6 +70,7 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
     string out = ""
     string cold = ""
     int label = 0
+    [bool] finals = finalRecords(p.checker)
     int fid = 0
     int frame = 0
     [LoopLabels] loops = []
@@ -401,6 +402,7 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
     fun func(f: HFunc) {
         out += ".text\n.p2align 2\n"
         out += "bf_${fid}:\n"
+        out += debugLabel(f, fid)
         var ext = f.external
         if (ext is External.Lib) {
             e("stp x29, x30, [sp, #-16]!")
@@ -1162,6 +1164,21 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
 
     /** Loads and stores of raw memory (`Memory.load8` … `Memory.storeFloat`) as single instructions, without calling the runtime. */
     fun inlineMem(f: string, args: [HExpr]): bool {
+        if (f == "IsType") {
+            var to = simpleIs(p.checker, finals, args)
+            if (len(to) == 0) {
+                return false
+            }
+            var done = l()
+            expr(args[0])
+            e("cbz x0, ${done}")
+            e("ldr w0, [x0, #4]")
+            imm("x1", to[0])
+            e("cmp x0, x1")
+            e("cset x0, eq")
+            lbl(done)
+            return true
+        }
         if (f == "CFun") {
             var k0 = args[0].kind
             var name = ""

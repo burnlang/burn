@@ -1,0 +1,575 @@
+/**
+ * The runtime functions that bytecode calls with `rt`: their names, symbols and argument counts, and the C functions
+ * of the runtime written in Burn that the interpreter calls for them.
+ */
+
+/** The name of each runtime function in bytecode the compiler builds, such as `StrConcat`. */
+pub const RT_NAMES = ["Init", "SetArgs", "Exit", "StrConcat", "StrEq", "StrCmp", "StrLen", "StrIndex", "StrSub", "StrFind", "StrContains", "StrReplace", "StrSplit", "StrTrim", "StrUpper", "StrLower", "StrStarts", "StrEnds", "StrRepeat", "StrChars", "StrCode", "CharClass", "StrFromCode", "StrToBytes", "StrFromBytes", "ToStr", "ParseInt", "ParseFloat", "IsIntStr", "IsFloatStr", "Print", "PrintRaw", "Input", "PrintErr", "ReadStdin", "ArrNew", "ArrLen", "ArrGet", "ArrSet", "ArrPush", "ArrPop", "ArrInsert", "ArrRemove", "ArrConcat", "ArrSlice", "ArrCopy", "ArrIndexOf", "ArrContains", "ArrJoin", "ArrReverse", "ArrSort", "ArrClear", "MapNew", "MapSet", "MapGet", "MapGetOr", "MapFind", "MapHas", "MapRemove", "MapKeys", "MapValues", "MapLen", "StructNew", "Box", "IsType", "Cast", "Unwrap", "Destroy", "Alive", "Eq", "Cmp", "TypeName", "AnyIndex", "AnyLen", "FMath", "FPow", "FAtan2", "FMod", "IPow", "IAbs", "IMin", "IMax", "FMin", "FMax", "Random", "RandomInt", "Seed", "NowMs", "NowSec", "ClockNs", "Sleep", "LocalTime", "HttpRequest", "JsonParse", "JsonStringify", "ReadFile", "WriteFile", "AppendFile", "FileExists", "Env", "Args", "Exec", "FsOp", "ListDir", "Cwd", "ExitNow", "Panic", "Assert", "ErrIndex", "ErrDivZero", "ShiftCheck", "ErrShift", "ErrOverflow", "NumFit", "NumConv", "NumWrap", "UAdd", "USub", "UMul", "UDiv", "UMod", "U2F", "F2Num", "F32Round", "ErrNull", "ErrReturn", "Spawn", "Await", "GcCollect", "Retain", "Release", "ReleaseZero", "PossibleRoot", "StrAppend", "ParseIntRadix", "IsIntRadix", "IntToStrRadix", "Fail", "Mem"]
+
+/** The symbol of each runtime function without `burn_`, such as `str_concat`, as bvm assembly and bytecode files name them. */
+pub const RT_SYMBOLS = ["rt_init", "rt_set_args", "rt_exit", "str_concat", "str_eq", "str_cmp", "str_len", "str_index", "str_sub", "str_find", "str_contains", "str_replace", "str_split", "str_trim", "str_upper", "str_lower", "str_starts", "str_ends", "str_repeat", "str_chars", "str_code", "char_class", "str_from_code", "str_to_bytes", "str_from_bytes", "to_str", "parse_int", "parse_float", "is_int_str", "is_float_str", "print", "print_raw", "input", "print_err", "read_stdin", "arr_new", "arr_len", "arr_get", "arr_set", "arr_push", "arr_pop", "arr_insert", "arr_remove", "arr_concat", "arr_slice", "arr_copy", "arr_index_of", "arr_contains", "arr_join", "arr_reverse", "arr_sort", "arr_clear", "map_new", "map_set", "map_get", "map_get_or", "map_find", "map_has", "map_remove", "map_keys", "map_values", "map_len", "struct_new", "box", "is_type", "cast", "unwrap", "destroy", "alive", "eq", "cmp", "type_name", "any_index", "any_len", "fmath", "fpow", "fatan2", "fmod", "ipow", "iabs", "imin", "imax", "fmin", "fmax", "random", "random_int", "seed", "now_ms", "now_sec", "clock_ns", "sleep", "local_time", "http_request", "json_parse", "json_stringify", "read_file", "write_file", "append_file", "file_exists", "env", "args", "exec", "fs_op", "list_dir", "cwd", "exit_now", "panic", "assert", "err_index", "err_divzero", "shift_check", "err_shift", "err_overflow", "num_fit", "num_conv", "num_wrap", "uadd", "usub", "umul", "udiv", "umod", "u2f", "f2num", "f32_round", "err_null", "err_return", "spawn", "await", "gc_collect", "retain", "release", "release_zero", "possible_root", "str_append", "parse_int_radix", "is_int_radix", "int_to_str_radix", "fail", "mem"]
+
+/** How many arguments each runtime function takes. */
+pub const RT_ARGC = [6, 2, 1, 2, 2, 2, 1, 3, 3, 2, 2, 3, 2, 1, 1, 1, 2, 2, 2, 1, 1, 2, 1, 2, 1, 2, 2, 2, 1, 1, 1, 1, 1, 1, 0, 2, 1, 3, 4, 2, 2, 4, 3, 2, 3, 1, 3, 3, 3, 1, 2, 1, 1, 3, 3, 3, 3, 2, 2, 2, 2, 1, 2, 2, 3, 4, 3, 2, 2, 3, 3, 2, 4, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 0, 2, 1, 0, 0, 0, 1, 0, 4, 2, 2, 2, 2, 2, 1, 1, 0, 3, 3, 1, 0, 1, 2, 3, 3, 1, 2, 2, 1, 3, 3, 2, 3, 3, 3, 3, 3, 1, 3, 1, 1, 1, 4, 1, 0, 1, 1, 1, 1, 2, 3, 3, 3, 2, 4]
+
+@Extern("burn_rt_init")
+pub fun rtInit(a: int, b: int, c: int, d: int, e: int, f: int): int
+
+@Extern("burn_rt_set_args")
+pub fun rtSetArgs(a: int, b: int): int
+
+@Extern("burn_rt_exit")
+pub fun rtExit(a: int): int
+
+@Extern("burn_str_concat")
+pub fun rtStrConcat(a: int, b: int): int
+
+@Extern("burn_str_eq")
+pub fun rtStrEq(a: int, b: int): int
+
+@Extern("burn_str_cmp")
+pub fun rtStrCmp(a: int, b: int): int
+
+@Extern("burn_str_len")
+pub fun rtStrLen(a: int): int
+
+@Extern("burn_str_index")
+pub fun rtStrIndex(a: int, b: int, c: int): int
+
+@Extern("burn_str_sub")
+pub fun rtStrSub(a: int, b: int, c: int): int
+
+@Extern("burn_str_find")
+pub fun rtStrFind(a: int, b: int): int
+
+@Extern("burn_str_contains")
+pub fun rtStrContains(a: int, b: int): int
+
+@Extern("burn_str_replace")
+pub fun rtStrReplace(a: int, b: int, c: int): int
+
+@Extern("burn_str_split")
+pub fun rtStrSplit(a: int, b: int): int
+
+@Extern("burn_str_trim")
+pub fun rtStrTrim(a: int): int
+
+@Extern("burn_str_upper")
+pub fun rtStrUpper(a: int): int
+
+@Extern("burn_str_lower")
+pub fun rtStrLower(a: int): int
+
+@Extern("burn_str_starts")
+pub fun rtStrStarts(a: int, b: int): int
+
+@Extern("burn_str_ends")
+pub fun rtStrEnds(a: int, b: int): int
+
+@Extern("burn_str_repeat")
+pub fun rtStrRepeat(a: int, b: int): int
+
+@Extern("burn_str_chars")
+pub fun rtStrChars(a: int): int
+
+@Extern("burn_str_code")
+pub fun rtStrCode(a: int): int
+
+@Extern("burn_char_class")
+pub fun rtCharClass(a: int, b: int): int
+
+@Extern("burn_str_from_code")
+pub fun rtStrFromCode(a: int): int
+
+@Extern("burn_str_to_bytes")
+pub fun rtStrToBytes(a: int, b: int): int
+
+@Extern("burn_str_from_bytes")
+pub fun rtStrFromBytes(a: int): int
+
+@Extern("burn_to_str")
+pub fun rtToStr(a: int, b: int): int
+
+@Extern("burn_parse_int")
+pub fun rtParseInt(a: int, b: int): int
+
+@Extern("burn_parse_float")
+pub fun rtParseFloat(a: int, b: int): int
+
+@Extern("burn_is_int_str")
+pub fun rtIsIntStr(a: int): int
+
+@Extern("burn_is_float_str")
+pub fun rtIsFloatStr(a: int): int
+
+@Extern("burn_print")
+pub fun rtPrint(a: int): int
+
+@Extern("burn_print_raw")
+pub fun rtPrintRaw(a: int): int
+
+@Extern("burn_input")
+pub fun rtInput(a: int): int
+
+@Extern("burn_print_err")
+pub fun rtPrintErr(a: int): int
+
+@Extern("burn_read_stdin")
+pub fun rtReadStdin(): int
+
+@Extern("burn_arr_new")
+pub fun rtArrNew(a: int, b: int): int
+
+@Extern("burn_arr_len")
+pub fun rtArrLen(a: int): int
+
+@Extern("burn_arr_get")
+pub fun rtArrGet(a: int, b: int, c: int): int
+
+@Extern("burn_arr_set")
+pub fun rtArrSet(a: int, b: int, c: int, d: int): int
+
+@Extern("burn_arr_push")
+pub fun rtArrPush(a: int, b: int): int
+
+@Extern("burn_arr_pop")
+pub fun rtArrPop(a: int, b: int): int
+
+@Extern("burn_arr_insert")
+pub fun rtArrInsert(a: int, b: int, c: int, d: int): int
+
+@Extern("burn_arr_remove")
+pub fun rtArrRemove(a: int, b: int, c: int): int
+
+@Extern("burn_arr_concat")
+pub fun rtArrConcat(a: int, b: int): int
+
+@Extern("burn_arr_slice")
+pub fun rtArrSlice(a: int, b: int, c: int): int
+
+@Extern("burn_arr_copy")
+pub fun rtArrCopy(a: int): int
+
+@Extern("burn_arr_index_of")
+pub fun rtArrIndexOf(a: int, b: int, c: int): int
+
+@Extern("burn_arr_contains")
+pub fun rtArrContains(a: int, b: int, c: int): int
+
+@Extern("burn_arr_join")
+pub fun rtArrJoin(a: int, b: int, c: int): int
+
+@Extern("burn_arr_reverse")
+pub fun rtArrReverse(a: int): int
+
+@Extern("burn_arr_sort")
+pub fun rtArrSort(a: int, b: int): int
+
+@Extern("burn_arr_clear")
+pub fun rtArrClear(a: int): int
+
+@Extern("burn_map_new")
+pub fun rtMapNew(a: int): int
+
+@Extern("burn_map_set")
+pub fun rtMapSet(a: int, b: int, c: int): int
+
+@Extern("burn_map_get")
+pub fun rtMapGet(a: int, b: int, c: int): int
+
+@Extern("burn_map_get_or")
+pub fun rtMapGetOr(a: int, b: int, c: int): int
+
+@Extern("burn_map_find")
+pub fun rtMapFind(a: int, b: int, c: int): int
+
+@Extern("burn_map_has")
+pub fun rtMapHas(a: int, b: int): int
+
+@Extern("burn_map_remove")
+pub fun rtMapRemove(a: int, b: int): int
+
+@Extern("burn_map_keys")
+pub fun rtMapKeys(a: int, b: int): int
+
+@Extern("burn_map_values")
+pub fun rtMapValues(a: int, b: int): int
+
+@Extern("burn_map_len")
+pub fun rtMapLen(a: int): int
+
+@Extern("burn_struct_new")
+pub fun rtStructNew(a: int, b: int): int
+
+@Extern("burn_box")
+pub fun rtBox(a: int, b: int): int
+
+@Extern("burn_is_type")
+pub fun rtIsType(a: int, b: int, c: int): int
+
+@Extern("burn_cast")
+pub fun rtCast(a: int, b: int, c: int, d: int): int
+
+@Extern("burn_unwrap")
+pub fun rtUnwrap(a: int, b: int, c: int): int
+
+@Extern("burn_destroy")
+pub fun rtDestroy(a: int, b: int): int
+
+@Extern("burn_alive")
+pub fun rtAlive(a: int, b: int): int
+
+@Extern("burn_eq")
+pub fun rtEq(a: int, b: int, c: int): int
+
+@Extern("burn_cmp")
+pub fun rtCmp(a: int, b: int, c: int): int
+
+@Extern("burn_type_name")
+pub fun rtTypeName(a: int, b: int): int
+
+@Extern("burn_any_index")
+pub fun rtAnyIndex(a: int, b: int, c: int, d: int): int
+
+@Extern("burn_any_len")
+pub fun rtAnyLen(a: int, b: int): int
+
+@Extern("burn_fmath")
+pub fun rtFMath(a: int, b: int): int
+
+@Extern("burn_fpow")
+pub fun rtFPow(a: int, b: int): int
+
+@Extern("burn_fatan2")
+pub fun rtFAtan2(a: int, b: int): int
+
+@Extern("burn_fmod")
+pub fun rtFMod(a: int, b: int): int
+
+@Extern("burn_ipow")
+pub fun rtIPow(a: int, b: int): int
+
+@Extern("burn_iabs")
+pub fun rtIAbs(a: int): int
+
+@Extern("burn_imin")
+pub fun rtIMin(a: int, b: int): int
+
+@Extern("burn_imax")
+pub fun rtIMax(a: int, b: int): int
+
+@Extern("burn_fmin")
+pub fun rtFMin(a: int, b: int): int
+
+@Extern("burn_fmax")
+pub fun rtFMax(a: int, b: int): int
+
+@Extern("burn_random")
+pub fun rtRandom(): int
+
+@Extern("burn_random_int")
+pub fun rtRandomInt(a: int, b: int): int
+
+@Extern("burn_seed")
+pub fun rtSeed(a: int): int
+
+@Extern("burn_now_ms")
+pub fun rtNowMs(): int
+
+@Extern("burn_now_sec")
+pub fun rtNowSec(): int
+
+@Extern("burn_clock_ns")
+pub fun rtClockNs(): int
+
+@Extern("burn_sleep")
+pub fun rtSleep(a: int): int
+
+@Extern("burn_local_time")
+pub fun rtLocalTime(): int
+
+@Extern("burn_http_request")
+pub fun rtHttpRequest(a: int, b: int, c: int, d: int): int
+
+@Extern("burn_json_parse")
+pub fun rtJsonParse(a: int, b: int): int
+
+@Extern("burn_json_stringify")
+pub fun rtJsonStringify(a: int, b: int): int
+
+@Extern("burn_read_file")
+pub fun rtReadFile(a: int, b: int): int
+
+@Extern("burn_write_file")
+pub fun rtWriteFile(a: int, b: int): int
+
+@Extern("burn_append_file")
+pub fun rtAppendFile(a: int, b: int): int
+
+@Extern("burn_file_exists")
+pub fun rtFileExists(a: int): int
+
+@Extern("burn_env")
+pub fun rtEnv(a: int): int
+
+@Extern("burn_args")
+pub fun rtArgs(): int
+
+@Extern("burn_exec")
+pub fun rtExec(a: int, b: int, c: int): int
+
+@Extern("burn_fs_op")
+pub fun rtFsOp(a: int, b: int, c: int): int
+
+@Extern("burn_list_dir")
+pub fun rtListDir(a: int): int
+
+@Extern("burn_cwd")
+pub fun rtCwd(): int
+
+@Extern("burn_exit_now")
+pub fun rtExitNow(a: int): int
+
+@Extern("burn_panic")
+pub fun rtPanic(a: int, b: int): int
+
+@Extern("burn_assert")
+pub fun rtAssert(a: int, b: int, c: int): int
+
+@Extern("burn_err_index")
+pub fun rtErrIndex(a: int, b: int, c: int): int
+
+@Extern("burn_err_divzero")
+pub fun rtErrDivZero(a: int): int
+
+@Extern("burn_shift_check")
+pub fun rtShiftCheck(a: int, b: int): int
+
+@Extern("burn_err_shift")
+pub fun rtErrShift(a: int, b: int): int
+
+@Extern("burn_err_overflow")
+pub fun rtErrOverflow(a: int): int
+
+@Extern("burn_num_fit")
+pub fun rtNumFit(a: int, b: int, c: int): int
+
+@Extern("burn_num_conv")
+pub fun rtNumConv(a: int, b: int, c: int): int
+
+@Extern("burn_num_wrap")
+pub fun rtNumWrap(a: int, b: int): int
+
+@Extern("burn_uadd")
+pub fun rtUAdd(a: int, b: int, c: int): int
+
+@Extern("burn_usub")
+pub fun rtUSub(a: int, b: int, c: int): int
+
+@Extern("burn_umul")
+pub fun rtUMul(a: int, b: int, c: int): int
+
+@Extern("burn_udiv")
+pub fun rtUDiv(a: int, b: int, c: int): int
+
+@Extern("burn_umod")
+pub fun rtUMod(a: int, b: int, c: int): int
+
+@Extern("burn_u2f")
+pub fun rtU2F(a: int): int
+
+@Extern("burn_f2num")
+pub fun rtF2Num(a: int, b: int, c: int): int
+
+@Extern("burn_f32_round")
+pub fun rtF32Round(a: int): int
+
+@Extern("burn_err_null")
+pub fun rtErrNull(a: int): int
+
+@Extern("burn_err_return")
+pub fun rtErrReturn(a: int): int
+
+@Extern("burn_spawn")
+pub fun rtSpawn(a: int, b: int, c: int, d: int): int
+
+@Extern("burn_await")
+pub fun rtAwait(a: int): int
+
+@Extern("burn_gc_collect")
+pub fun rtGcCollect(): int
+
+@Extern("burn_retain")
+pub fun rtRetain(a: int): int
+
+@Extern("burn_release")
+pub fun rtRelease(a: int): int
+
+@Extern("burn_release_zero")
+pub fun rtReleaseZero(a: int): int
+
+@Extern("burn_possible_root")
+pub fun rtPossibleRoot(a: int): int
+
+@Extern("burn_str_append")
+pub fun rtStrAppend(a: int, b: int): int
+
+@Extern("burn_parse_int_radix")
+pub fun rtParseIntRadix(a: int, b: int, c: int): int
+
+@Extern("burn_is_int_radix")
+pub fun rtIsIntRadix(a: int, b: int, c: int): int
+
+@Extern("burn_int_to_str_radix")
+pub fun rtIntToStrRadix(a: int, b: int, c: int): int
+
+@Extern("burn_fail")
+pub fun rtFail(a: int, b: int): int
+
+@Extern("burn_mem")
+pub fun rtMem(a: int, b: int, c: int, d: int): int
+
+/** The address of each runtime function, in the order of `RT_NAMES`. */
+pub unsafe fun runtimeAddresses(): [int] {
+    return [
+        __cfun(rtInit),
+        __cfun(rtSetArgs),
+        __cfun(rtExit),
+        __cfun(rtStrConcat),
+        __cfun(rtStrEq),
+        __cfun(rtStrCmp),
+        __cfun(rtStrLen),
+        __cfun(rtStrIndex),
+        __cfun(rtStrSub),
+        __cfun(rtStrFind),
+        __cfun(rtStrContains),
+        __cfun(rtStrReplace),
+        __cfun(rtStrSplit),
+        __cfun(rtStrTrim),
+        __cfun(rtStrUpper),
+        __cfun(rtStrLower),
+        __cfun(rtStrStarts),
+        __cfun(rtStrEnds),
+        __cfun(rtStrRepeat),
+        __cfun(rtStrChars),
+        __cfun(rtStrCode),
+        __cfun(rtCharClass),
+        __cfun(rtStrFromCode),
+        __cfun(rtStrToBytes),
+        __cfun(rtStrFromBytes),
+        __cfun(rtToStr),
+        __cfun(rtParseInt),
+        __cfun(rtParseFloat),
+        __cfun(rtIsIntStr),
+        __cfun(rtIsFloatStr),
+        __cfun(rtPrint),
+        __cfun(rtPrintRaw),
+        __cfun(rtInput),
+        __cfun(rtPrintErr),
+        __cfun(rtReadStdin),
+        __cfun(rtArrNew),
+        __cfun(rtArrLen),
+        __cfun(rtArrGet),
+        __cfun(rtArrSet),
+        __cfun(rtArrPush),
+        __cfun(rtArrPop),
+        __cfun(rtArrInsert),
+        __cfun(rtArrRemove),
+        __cfun(rtArrConcat),
+        __cfun(rtArrSlice),
+        __cfun(rtArrCopy),
+        __cfun(rtArrIndexOf),
+        __cfun(rtArrContains),
+        __cfun(rtArrJoin),
+        __cfun(rtArrReverse),
+        __cfun(rtArrSort),
+        __cfun(rtArrClear),
+        __cfun(rtMapNew),
+        __cfun(rtMapSet),
+        __cfun(rtMapGet),
+        __cfun(rtMapGetOr),
+        __cfun(rtMapFind),
+        __cfun(rtMapHas),
+        __cfun(rtMapRemove),
+        __cfun(rtMapKeys),
+        __cfun(rtMapValues),
+        __cfun(rtMapLen),
+        __cfun(rtStructNew),
+        __cfun(rtBox),
+        __cfun(rtIsType),
+        __cfun(rtCast),
+        __cfun(rtUnwrap),
+        __cfun(rtDestroy),
+        __cfun(rtAlive),
+        __cfun(rtEq),
+        __cfun(rtCmp),
+        __cfun(rtTypeName),
+        __cfun(rtAnyIndex),
+        __cfun(rtAnyLen),
+        __cfun(rtFMath),
+        __cfun(rtFPow),
+        __cfun(rtFAtan2),
+        __cfun(rtFMod),
+        __cfun(rtIPow),
+        __cfun(rtIAbs),
+        __cfun(rtIMin),
+        __cfun(rtIMax),
+        __cfun(rtFMin),
+        __cfun(rtFMax),
+        __cfun(rtRandom),
+        __cfun(rtRandomInt),
+        __cfun(rtSeed),
+        __cfun(rtNowMs),
+        __cfun(rtNowSec),
+        __cfun(rtClockNs),
+        __cfun(rtSleep),
+        __cfun(rtLocalTime),
+        __cfun(rtHttpRequest),
+        __cfun(rtJsonParse),
+        __cfun(rtJsonStringify),
+        __cfun(rtReadFile),
+        __cfun(rtWriteFile),
+        __cfun(rtAppendFile),
+        __cfun(rtFileExists),
+        __cfun(rtEnv),
+        __cfun(rtArgs),
+        __cfun(rtExec),
+        __cfun(rtFsOp),
+        __cfun(rtListDir),
+        __cfun(rtCwd),
+        __cfun(rtExitNow),
+        __cfun(rtPanic),
+        __cfun(rtAssert),
+        __cfun(rtErrIndex),
+        __cfun(rtErrDivZero),
+        __cfun(rtShiftCheck),
+        __cfun(rtErrShift),
+        __cfun(rtErrOverflow),
+        __cfun(rtNumFit),
+        __cfun(rtNumConv),
+        __cfun(rtNumWrap),
+        __cfun(rtUAdd),
+        __cfun(rtUSub),
+        __cfun(rtUMul),
+        __cfun(rtUDiv),
+        __cfun(rtUMod),
+        __cfun(rtU2F),
+        __cfun(rtF2Num),
+        __cfun(rtF32Round),
+        __cfun(rtErrNull),
+        __cfun(rtErrReturn),
+        __cfun(rtSpawn),
+        __cfun(rtAwait),
+        __cfun(rtGcCollect),
+        __cfun(rtRetain),
+        __cfun(rtRelease),
+        __cfun(rtReleaseZero),
+        __cfun(rtPossibleRoot),
+        __cfun(rtStrAppend),
+        __cfun(rtParseIntRadix),
+        __cfun(rtIsIntRadix),
+        __cfun(rtIntToStrRadix),
+        __cfun(rtFail),
+        __cfun(rtMem)
+    ]
+}
