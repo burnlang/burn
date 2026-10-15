@@ -362,6 +362,7 @@ unsafe fun safePoint() {
     var l = live()
     var max = maxHeap()
     if (l > max) {
+        maxHeapBytes = 9223372036854775807
         fatalError("out of memory: the program keeps ${l >> 20} MB of data alive, more than its limit of ${max >> 20} MB", -1)
     }
 }

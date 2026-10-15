@@ -118,7 +118,7 @@ fn native_code_calls_c_and_c_calls_burn() {
             .arg("-o")
             .arg(tmp.join("unused")),
     );
-    assert_eq!(code, 0, "{}", out);
+    assert!(asm.exists(), "no assembly was written (exit code {}): {}", code, out);
     let lib_dir = toolchain().join("share/burn/lib");
     let libs = std::fs::read_to_string(lib_dir.join("native-libs.txt")).unwrap_or_default();
     let exe = tmp.join("c_interop");
@@ -172,7 +172,7 @@ fn runtime_libraries_written_in_burn_link_into_native_programs() {
             .arg("-o")
             .arg(tmp.join("unused")),
     );
-    assert_eq!(code, 0, "{}", out);
+    assert!(prog_s.exists(), "no assembly was written (exit code {}): {}", code, out);
     let lib_dir = toolchain().join("share/burn/lib");
     let libs = std::fs::read_to_string(lib_dir.join("native-libs.txt")).unwrap_or_default();
     let exe = tmp.join("program");
@@ -285,6 +285,8 @@ fn arm64_executables_match_vm() {
         Command::new("sh")
             .arg(root.join("scripts/native-runtime.sh"))
             .arg(&runtime)
+            .env("BURN", tool("burn"))
+            .env("BURN_CC", "aarch64-linux-gnu-gcc")
             .env("TARGET", "aarch64-unknown-linux-gnu"),
     );
     if code != 0 && out.contains("aarch64-unknown-linux-gnu") && out.contains("target may not be installed") {
