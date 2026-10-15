@@ -307,6 +307,35 @@ fn the_bvm_written_in_burn_links_modules_and_applies_mixins_like_bvm() {
 }
 
 #[test]
+fn the_bvm_written_in_burn_assembles_text_like_bvm() {
+    if !native_supported() {
+        return;
+    }
+    let root = root();
+    let tmp = temp_dir("bvm-in-burn-asm");
+    let exe = tmp.join("bvm");
+    let (out, code) = output(burn().current_dir(&root).arg("build").arg("compiler/src/bin/bvm.bn").arg("-o").arg(&exe));
+    assert_eq!(code, 0, "{}", out);
+    for case in ["examples/fib.bn", "tests/cases/structs.bn", "tests/cases/async.bn"] {
+        let module = tmp.join("m.bvmc");
+        let (out, code) = output(burn().current_dir(&root).args(["build", "--target", "bvm", case, "-o"]).arg(&module));
+        assert_eq!(code, 0, "{}", out);
+        let text = tmp.join("m.bvm");
+        let (out, code) = output(Command::new(bvm_exe()).arg("dis").arg(&module).arg("-o").arg(&text));
+        assert_eq!(code, 0, "{}", out);
+        let again = tmp.join("again.bvmc");
+        let (out, code) = output(Command::new(&exe).arg("asm").arg(&text).arg("-o").arg(&again));
+        assert_eq!(code, 0, "{}", out);
+        assert!(
+            std::fs::read(&module).unwrap() == std::fs::read(&again).unwrap(),
+            "{} assembles differently",
+            case
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn native_matches_vm() {
     if !native_supported() {
         return;

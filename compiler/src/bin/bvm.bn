@@ -1,3 +1,4 @@
+import "../bvm/assemble.bn"
 import "../bvm/binary.bn"
 import "../bvm/files.bn"
 import "../bvm/interp.bn"
@@ -16,6 +17,17 @@ fun readModule(path: string): VModule {
     if (bytes == null) {
         fail("could not read ${path}")
         return emptyModule()
+    }
+    if (!isBinary(bytes)) {
+        [uint8] raw = []
+        for b in bytes {
+            raw.push(b as uint8)
+        }
+        var a = assemble(fromBytes(raw))
+        if (a.error != "") {
+            fail("${path}: ${asmErrorText(a)}")
+        }
+        return a.module
     }
     var d = decode(bytes)
     if (d.error != "") {
@@ -77,6 +89,16 @@ fun main() {
         }
         setProgramArgs(slice(a, 2, len(a)))
         runEntry(p)
+        return
+    }
+    if (a[0] == "asm") {
+        if (len(a) < 4 || a[2] != "-o") {
+            eprint("usage: bvm asm <file.bvm> -o <out.bvmc>")
+            exit(2)
+        }
+        if (!writeBytes(a[3], encode(m))) {
+            fail("could not write ${a[3]}")
+        }
         return
     }
     if (a[0] == "dis") {
