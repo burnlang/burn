@@ -3,7 +3,6 @@ set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PREFIX="$ROOT/dist/burn"
-BUILD=1
 QUIET=0
 
 usage() {
@@ -16,19 +15,19 @@ Builds the Burn toolchain and lays it out in a directory:
 bin/burn is the Burn toolchain written in Burn, a native executable: started as burn, burni,
 burnc or burn-lsp it is the command line, and started as bvm it is the Burn virtual machine.
 It is built by the compiler written in Burn, which builds itself first (scripts/bootstrap.sh)
-starting from the boot compiler in compiler/boot; cargo builds the bvm that runs those first
-stages. lib holds the runtime that native executables link against (scripts/native-runtime.sh).
-The toolchain runs on x86_64 and arm64 (Apple silicon) macOS and Linux.
+starting from the seed in compiler/boot, the compiler as assembly for this platform. Only a C
+compiler, tar and xz are needed. lib holds the runtime that native executables link against
+(scripts/native-runtime.sh). The toolchain runs on x86_64 and arm64 (Apple silicon) macOS and
+Linux.
 
 This is what release archives contain. To install Burn, use burnup:
   curl -fsSL https://raw.githubusercontent.com/burnlang/burnup/master/install.sh | sh
 
 Usage:
-  scripts/package.sh [--prefix <dir>] [--no-build] [-q]
+  scripts/package.sh [--prefix <dir>] [-q]
 
 Options:
   --prefix <dir>    where to put the toolchain (default: dist/burn)
-  --no-build        use the bvm already in target/release
   -q, --quiet       only print errors
 EOF2
 }
@@ -42,10 +41,6 @@ while [ $# -gt 0 ]; do
             ;;
         --prefix=*)
             PREFIX="${1#--prefix=}"
-            shift
-            ;;
-        --no-build)
-            BUILD=0
             shift
             ;;
         -q | --quiet)
@@ -76,35 +71,18 @@ say() {
     fi
 }
 
-if [ "$BUILD" -eq 1 ]; then
-    say "==> Building bvm"
-    if [ "$QUIET" -eq 1 ]; then
-        (cd "$ROOT" && cargo build --release --locked --quiet -p bvm)
-    else
-        (cd "$ROOT" && cargo build --release --locked -p bvm)
-    fi
-fi
-
-say "==> Building the compiler written in Burn with itself, starting from compiler/boot"
+say "==> Building the compiler written in Burn with itself, starting from the seed in compiler/boot"
 boot="$(mktemp -d)"
 if [ "$QUIET" -eq 1 ]; then
-    sh "$ROOT/scripts/bootstrap.sh" --bvm "$ROOT/target/release/bvm" --out "$boot" >/dev/null
+    sh "$ROOT/scripts/bootstrap.sh" --out "$boot" >/dev/null
 else
-    sh "$ROOT/scripts/bootstrap.sh" --bvm "$ROOT/target/release/bvm" --out "$boot"
+    sh "$ROOT/scripts/bootstrap.sh" --out "$boot"
 fi
-
-case "$(uname -s)-$(uname -m)" in
-    Linux-x86_64 | Darwin-x86_64 | Linux-aarch64 | Darwin-arm64) ;;
-    *)
-        echo "error: the Burn toolchain runs on x86_64 and arm64 macOS and Linux, not $(uname -s)-$(uname -m)" >&2
-        exit 1
-        ;;
-esac
 
 say "==> Building the toolchain written in Burn with the compiler"
 work="$(mktemp -d)"
-(cd "$ROOT" && "$ROOT/target/release/bvm" "$boot/stage2.bvm" build --target runtime lib/rt/runtime.bn -o "$work/runtime.s" >/dev/null)
-(cd "$ROOT" && "$ROOT/target/release/bvm" "$boot/stage2.bvm" build --target asm compiler/src/bin/burn.bn -o "$work/burn.s" >/dev/null)
+(cd "$ROOT" && "$boot/compiler" build --target runtime lib/rt/runtime.bn -o "$work/runtime.s" >/dev/null)
+(cd "$ROOT" && "$boot/compiler" build --target asm compiler/src/bin/burn.bn -o "$work/burn.s" >/dev/null)
 mkdir -p "$BIN" "$SHARE"
 "${BURN_CC:-${CC:-cc}}" "$work/burn.s" "$work/runtime.s" -lpthread -ldl -lm -o "$BIN/burn.new"
 mv -f "$BIN/burn.new" "$BIN/burn"

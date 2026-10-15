@@ -348,8 +348,8 @@ examples are in [`examples/bvm/`](examples/bvm/).
 - `lib/runtime/`: the runtime functions written in Burn, compiled to `bvm/runtime.bvm`, which bvm links into Burn programs
 - `lib/tools/`: tools written in Burn that programs can also import, such as the formatter (`import "tools/fmt"`), which `burnfmt` is built from
 - `scripts/package.sh`: builds the toolchain into the layout burnup installs and releases ship
-- `scripts/bootstrap.sh`: builds the compiler written in Burn with itself, starting from the boot compiler, and checks that the result is stable
-- `compiler/boot/compiler.bvmc`: the boot compiler, a compiled copy of the compiler that bvm runs to build `compiler/src` the first time
+- `scripts/bootstrap.sh`: builds the compiler written in Burn with itself, starting from the seed, and checks that the result is stable
+- `compiler/boot/`: the seeds, the compiler and its runtime as assembly for each platform, which a C compiler assembles to build `compiler/src` the first time
 - `install.sh`: forwards to [burnup](https://github.com/burnlang/burnup), the installer
 - `assets/`: the logo
 - `lib/std/`: the standard library, written in Burn
@@ -368,10 +368,10 @@ cargo test            # builds bvm, builds the toolchain from the boot compiler 
 cargo clippy --all-targets
 ```
 
-Building only needs Rust. Cargo builds bvm, and bvm runs the boot compiler in `compiler/boot/compiler.bvmc`, a
-compiled copy of the compiler written in Burn, which builds `compiler/src`; from then on the compiler builds itself.
-`sh scripts/bootstrap.sh --update` replaces the boot compiler with the one built from `compiler/src`, so the compiler's
-own sources can use new language features.
+Building the toolchain only needs a C compiler, tar and xz. The C compiler assembles the seed in `compiler/boot`, the
+compiler written in Burn as assembly for this platform, which builds `compiler/src`; from then on the compiler builds
+itself. `sh scripts/bootstrap.sh --update` replaces the seeds with the compiler built from `compiler/src`, so the
+compiler's own sources can use new language features.
 ```
 
 ## Contributing

@@ -20,21 +20,24 @@ fun outputFor(file: string, target: string): string {
 
 const BUILD_USAGE = "usage: main.bn build [--target bvm|asm|runtime] <file.bn> [-o <out>]"
 
-/** The platform native assembly is written for: `BURN_PLATFORM`, or the one `uname` reports. */
+@Extern("burn_rt_platform")
+fun rtPlatform(): int
+
+@Extern("burn_release")
+fun rtRelease(p: int): int
+
+/** The platform native assembly is written for: `BURN_PLATFORM`, or the one the compiler runs on. */
 fun hostPlatform(): string {
     var p = env("BURN_PLATFORM")
     if (p != "") {
         return p
     }
-    var os = trim(Process.output("uname", ["-s"]).out)
-    var arch = trim(Process.output("uname", ["-m"]).out)
-    if (arch == "arm64") {
-        arch = "aarch64"
+    unsafe {
+        var s = rtPlatform()
+        var out = __str(s)
+        rtRelease(s)
+        return out
     }
-    if (os == "Darwin") {
-        return "macos-${arch}"
-    }
-    return "${lower(os)}-${arch}"
 }
 
 fun compileFor(file: string, target: string): Built {
