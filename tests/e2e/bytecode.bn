@@ -1,0 +1,304 @@
+/** bvm: modules, assembly, linking, mixins, archives, bytecode libraries and calling C from native code. */
+import "std/fs"
+import "cases.bn"
+import "harness.bn"
+import "std/process"
+
+/** bvm written in Burn reads and writes bytecode without changing it, and its text assembles back to the same bytes. */
+pub fun bvmReadsAndWritesBytecode() {
+    if (!nativeSupported()) {
+        return
+    }
+    var tmp = tempDir("bvm-io")
+    var exe = "${tmp}/bvm"
+    var b = burn(".", ["build", "compiler/src/bin/bvm.bn", "-o", exe])
+    if (b.code != 0) {
+        fail(both(b))
+        return
+    }
+    var fib = "${tmp}/fib.bvmc"
+    var big = "${tmp}/compiler.bvmc"
+    check(burn(".", ["build", "--target", "bvm", "examples/fib.bn", "-o", fib]).code == 0, "examples/fib.bn does not build")
+    check(burn(".", ["build", "--target", "bvm", "compiler/src/main.bn", "-o", big]).code == 0, "compiler/src/main.bn does not build")
+    for module in [big, fib] {
+        var copy = "${tmp}/copy.bvmc"
+        var c = run(".", exe, ["copy", module, copy])
+        check(c.code == 0 && sameFile(module, copy), "${module} changed when read and written again\n${both(c)}")
+        var text = "${tmp}/m.bvm"
+        var again = "${tmp}/again.bvmc"
+        var d = run(".", tool("bvm"), ["dis", module, "-o", text])
+        var a = run(".", tool("bvm"), ["asm", text, "-o", again])
+        check(d.code == 0 && a.code == 0 && sameFile(module, again), "${module} does not assemble back from its text\n${both(d)}${both(a)}")
+    }
+    Files.remove(tmp)
+}
+
+/** bvm links modules, applying their mixins, and the linked module runs. */
+pub fun bvmLinksModulesAndAppliesMixins() {
+    var tmp = tempDir("bvm-link")
+    var module = "${tmp}/mixins.bvmc"
+    var b = burn(".", ["build", "--target", "bvm", "tests/mixins/mixins.bn", "-o", module])
+    if (b.code != 0) {
+        fail(both(b))
+        return
+    }
+    var r = run(".", tool("bvm"), ["run", module])
+    same(r.out, readFile("tests/mixins/mixins.out"), "tests/mixins/mixins.bn on bvm")
+    var lib = "${tmp}/greetlib.bvmc"
+    var app = "${tmp}/app.bvmc"
+    var mods = "${tmp}/mods.bvmc"
+    for pair in [["examples/bvm/mixins/greetlib.bvm", lib], ["examples/bvm/mixins/app.bvm", app], ["examples/bvm/mixins/mods.bvm", mods]] {
+        var a = run(".", tool("bvm"), ["asm", pair[0], "-o", pair[1]])
+        check(a.code == 0, both(a))
+    }
+    var linked = "${tmp}/linked.bvmc"
+    var l = run(".", tool("bvm"), ["link", app, lib, mods, "-o", linked])
+    check(l.code == 0, both(l))
+    var direct = run(".", tool("bvm"), ["run", linked])
+    var packed = "${tmp}/app.bar"
+    var p = run(".", tool("bvm"), ["pack", app, lib, mods, "-o", packed])
+    check(p.code == 0, both(p))
+    same(both(direct), both(run(".", tool("bvm"), [packed])), "the linked modules and the archive of them")
+    check(direct.code == 0 && direct.out != "", "the linked modules print nothing\n${both(direct)}")
+    var c = run(".", tool("bvm"), ["check", linked])
+    check(c.code == 0, both(c))
+    Files.remove(tmp)
+}
+
+/** bvm packs modules and resources into archives that list, check, run and unpack. */
+pub fun bvmPacksAndRunsArchives() {
+    var tmp = tempDir("bvm-bar")
+    var basics = "${tmp}/basics.bvmc"
+    check(burn(".", ["build", "--target", "bvm", "tests/cases/basics.bn", "-o", basics]).code == 0, "tests/cases/basics.bn does not build")
+    var note = "${tmp}/note.txt"
+    put(note, "a resource\n")
+    var bar = "${tmp}/app.bar"
+    var p = run(".", tool("bvm"), ["pack", basics, note, "--version", "1.0", "-o", bar])
+    check(p.code == 0, both(p))
+    var l = both(run(".", tool("bvm"), ["list", bar]))
+    for want in ["Name: app\n", "Version: 1.0\n", "Main-Module: basics\n", "Created-By: bvm ", "module    basics ", "resource  note.txt                 11 bytes"] {
+        check(contains(l, want), "bvm list is missing `${want}`:\n${l}")
+    }
+    same(both(run(".", tool("bvm"), ["run", bar])), expected("basics"), "the archive")
+    var c = run(".", tool("bvm"), ["check", bar])
+    check(c.code == 0, "bvm check\n${both(c)}")
+    var out = "${tmp}/out"
+    var u = run(".", tool("bvm"), ["unpack", bar, "-d", out])
+    check(u.code == 0 && sameFile("${out}/basics.bvmc", basics) && readFile("${out}/note.txt") == "a resource\n", "bvm unpack\n${both(u)}")
+    same(both(run(".", tool("bvm"), ["help"])), readFile("tests/bvm/help.out"), "bvm help")
+    same(both(run(".", tool("bvm"), ["runtime"])), readFile("tests/bvm/runtime.out"), "bvm runtime")
+    check(startsWith(both(run(".", tool("bvm"), ["version"])), "bvm "), "bvm version")
+    Files.remove(tmp)
+}
+
+/** Mixins change bytecode on bvm and in archives, and are refused for native code and JavaScript. */
+pub fun mixinsRewriteBytecodeAndAreRejectedForNativeCodeAndJavascript() {
+    var want = readFile("tests/mixins/mixins.out")
+    var r = burn(".", ["tests/mixins/mixins.bn"])
+    check(r.code == 0, r.err)
+    same(r.out, want, "tests/mixins/mixins.bn")
+    check(contains(r.err, "`oldGreet` is deprecated: use greet"), r.err)
+    var tmp = tempDir("mixins")
+    var bar = "${tmp}/m.bar"
+    var b = burn(".", ["build", "--target", "bar", "tests/mixins/mixins.bn", "-o", bar])
+    check(b.code == 0, b.err)
+    same(burn(".", [bar]).out, want, "the archive of tests/mixins/mixins.bn")
+    if (nativeSupported()) {
+        var n = burn(".", ["build", "tests/mixins/mixins.bn", "-o", "${tmp}/m"])
+        check(n.code != 0 && contains(n.err, "compiled to native code; mixins can only change bvm bytecode"), n.err)
+    }
+    var j = burn(".", ["build", "--target", "js", "tests/mixins/mixins.bn", "-o", "${tmp}/m.js"])
+    check(j.code != 0 && contains(j.err, "mixin"), j.err)
+    Files.remove(tmp)
+}
+
+/** A program that imports a bytecode library runs on bvm, as an archive, as bytecode and natively. */
+pub fun bytecodeLibrariesRunOnBvmInArchivesAndInNativeExecutables() {
+    var want = readFile("tests/libs/app.out")
+    var tmp = tempDir("libs")
+    put("${tmp}/app.bn", readFile("tests/libs/app.bn"))
+    var b = burn(".", ["build", "--target", "bvm", "tests/libs/geometry.bn", "-o", "${tmp}/geometry.bvmc"])
+    check(b.code == 0, b.err)
+    var app = "${tmp}/app.bn"
+    var r = burn(".", [app])
+    same(r.out, want, "bvm: ${r.err}")
+    check(burn(".", ["build", "--target", "bar", app, "-o", "${tmp}/app.bar"]).code == 0, "the archive does not build")
+    r = burn(".", ["${tmp}/app.bar"])
+    same(r.out, want, "bar: ${r.err}")
+    check(burn(".", ["build", "--target", "bvm", app, "-o", "${tmp}/static.bvmc"]).code == 0, "the bytecode does not build")
+    r = burn(".", ["${tmp}/static.bvmc"])
+    same(r.out, want, "static bvmc: ${r.err}")
+    if (nativeSupported()) {
+        r = burn(".", ["run", "--native", app])
+        same(r.out, want, "native: ${r.err}")
+        var exe = "${tmp}/bundled"
+        var e = burn(".", ["build", "${tmp}/app.bar", "-o", exe])
+        check(e.code == 0, e.err)
+        r = run(".", exe, [])
+        same(r.out, want, "bundled bar: ${r.err}")
+        r = runWith(".", ["BURN_GC_THRESHOLD=4096"], exe, [], null)
+        same(r.out, want, "bundled bar with a small GC threshold: ${r.err}")
+    }
+    var j = burn(".", ["build", "--target", "js", app, "-o", "${tmp}/app.js"])
+    check(j.code != 0 && contains(j.err, "bytecode library"), j.err)
+    Files.remove(tmp)
+}
+
+/** An app is imported as bytecode by another project, which changes it with a mixin, and is rebuilt when it changes. */
+pub fun appsCanBeImportedAsBytecodeAndChangedWithMixins() {
+    var dir = tempDir("app-bytecode")
+    var vars = ["BURN_HOME=${dir}/home"]
+    var r = burnWith(dir, vars, ["init", "example.com/ada/game", "--no-git"])
+    check(r.code == 0, both(r))
+    var game = "${dir}/game/src/main.bn"
+    put(game, "pub fun score(points: int): int {\n    return points * 10\n}\n\nfun main() {\n    print(\"score\", score(3))\n}\n")
+    r = burnWith(dir, vars, ["init", "example.com/ada/mod", "--no-git"])
+    check(r.code == 0, both(r))
+    var m = "${dir}/mod"
+    var toml = readFile("${m}/burn.toml")
+    put("${m}/burn.toml", replace(toml, "[dependencies]\n", "[dependencies]\n\"example.com/ada/game\" = { path = \"../game\" }\n"))
+    put("${m}/src/main.bn", "import \"example.com/ada/game.bvmc\"\n\n@Inject(target: \"score\", at: \"return\")\nfun doubled(points: int, result: int): int {\n    return result * 2\n}\n")
+    r = burnWith(m, vars, ["run"])
+    same(both(r), "score 60\n", "the mod")
+    check(r.code == 0, "the mod fails")
+    check(Files.isFile("${dir}/game/build/game.bvmc"), "the game's bytecode was not built")
+    if (nativeSupported()) {
+        r = burnWith(m, vars, ["run", "--native"])
+        same(both(r), "score 60\n", "the mod, native")
+    }
+    run(".", "sleep", ["1.1"])
+    put(game, "pub fun score(points: int): int {\n    return points * 100\n}\n\nfun main() {\n    print(\"score\", score(3))\n}\n")
+    same(both(burnWith(m, vars, ["run"])), "score 600\n", "the mod after the game changed")
+    put("${m}/src/self.bn", "import \"example.com/ada/mod.bvmc\"\n")
+    r = burnWith(m, vars, ["check", "src/self.bn"])
+    check(r.code == 1 && contains(both(r), "cannot import its own bytecode"), both(r))
+    Files.remove(dir)
+}
+
+/** Native code calls C, and C calls Burn, in a program linked with C by hand; on bvm the C function does not exist. */
+pub fun nativeCodeCallsCAndCCallsBurn() {
+    if (!nativeSupported()) {
+        return
+    }
+    var tmp = tempDir("c-interop")
+    var asm = "${tmp}/c_interop.s"
+    var b = burn(".", ["build", "tests/native/c_interop.bn", "-S", asm, "-o", "${tmp}/unused"])
+    if (!Files.isFile(asm)) {
+        fail("no assembly was written (exit code ${b.code}): ${both(b)}")
+        return
+    }
+    var lib = "${toolchain()}/share/burn/lib"
+    var exe = "${tmp}/c_interop"
+    [string] args = [asm, "tests/native/c_interop.c", "${lib}/libburn_runtime.a"]
+    for l in split(trim(readFile("${lib}/native-libs.txt")), " ") {
+        args.push(l)
+    }
+    args.push("-o")
+    args.push(exe)
+    var c = run(".", cc(), args)
+    check(c.code == 0, both(c))
+    var r = run(".", exe, [])
+    check(r.code == 0, both(r))
+    same(both(r), readFile("tests/native/c_interop.out"), "tests/native/c_interop.bn")
+    var vm = both(burn(".", ["tests/native/c_interop.bn"]))
+    check(contains(vm, "only exists in native executables"), vm)
+    Files.remove(tmp)
+}
+
+/** The C compiler: `$CC`, or `cc`. */
+fun cc(): string {
+    var c = env("CC")
+    if (c == "") {
+        return "cc"
+    }
+    return c
+}
+
+/** A runtime library written in Burn links into a native program; it may only use the built-in types. */
+pub fun runtimeLibrariesWrittenInBurnLinkIntoNativePrograms() {
+    if (!nativeSupported()) {
+        return
+    }
+    var dir = "tests/native/runtime_library"
+    var tmp = tempDir("runtime-library")
+    var libS = "${tmp}/library.s"
+    var b = burn(".", ["build", "--target", "runtime", "${dir}/library.bn", "-o", libS])
+    check(b.code == 0, both(b))
+    var text = readFile(libS)
+    check(contains(text, "lib_flag:"), "the @Extern global has no symbol")
+    check(!contains(text, "burn_meta"), "a runtime library has no type table")
+    var progS = "${tmp}/program.s"
+    b = burn(".", ["build", "${dir}/program.bn", "-S", progS, "-o", "${tmp}/unused"])
+    if (!Files.isFile(progS)) {
+        fail("no assembly was written (exit code ${b.code}): ${both(b)}")
+        return
+    }
+    var lib = "${toolchain()}/share/burn/lib"
+    var exe = "${tmp}/program"
+    [string] args = [progS, libS, "${lib}/libburn_runtime.a"]
+    for l in split(trim(readFile("${lib}/native-libs.txt")), " ") {
+        args.push(l)
+    }
+    args.push("-o")
+    args.push(exe)
+    var c = run(".", cc(), args)
+    check(c.code == 0, both(c))
+    var r = run(".", exe, [])
+    check(r.code == 0, both(r))
+    same(both(r), readFile("${dir}/program.out"), "${dir}/program.bn")
+    var bad = "${tmp}/typed.bn"
+    put(bad, "def type P {\n    int x\n}\n")
+    var t = burn(".", ["build", "--target", "runtime", bad, "-o", "${tmp}/typed.s"])
+    check(t.code != 0 && contains(both(t), "can only use the built-in types"), both(t))
+    Files.remove(tmp)
+}
+
+/** `uint64` uses all 64 bits on bvm and natively, and overflows the same way. */
+pub fun uint64UsesAll64BitsOnBvmAndNatively() {
+    var dir = tempDir("uint64")
+    var src = "${dir}/hash.bn"
+    put(src, "fun fnv(text: string): uint64 {\n    uint64 h = 14695981039346656037\n    for b in text.bytes() {\n        h = (h ^ b).wrappingMul(1099511628211)\n    }\n    return h\n}\n\nfun main() {\n    uint64 top = 18446744073709551615\n    print(fnv(\"hello\"), top, top - 1, top > 9223372036854775807, top >> 63, top / 3, 0xFFFFFFFFFFFFFFFF as uint64 == top)\n    print(top + 1)\n}\n")
+    var want = "11831194018420276491 18446744073709551615 18446744073709551614 true 1 6148914691236517205 true\n"
+    var r = burn(".", [src])
+    var out = both(r)
+    check(r.code == 1, out)
+    check(startsWith(out, want), out)
+    check(contains(out, "integer overflow: 18446744073709551615 + 1 does not fit in uint64"), out)
+    if (nativeSupported()) {
+        for flag in ["--std", "--no-std"] {
+            var exe = "${dir}/hash${flag}"
+            [string] args = ["build", src, "-o", exe]
+            if (flag == "--no-std") {
+                args.push(flag)
+            }
+            var b = burn(".", args)
+            check(b.code == 0, both(b))
+            same(both(run(".", exe, [])), out, "the native hash${flag}")
+        }
+    }
+    Files.remove(dir)
+}
+
+/** Ember, the example language built on bvm, runs its demo and writes it as bvm assembly and bytecode. */
+pub fun emberRunsItsDemo() {
+    if (!nativeSupported()) {
+        return
+    }
+    var tmp = tempDir("ember")
+    var exe = "${tmp}/ember"
+    var b = burn(".", ["build", "examples/bvm/ember/ember.bn", "-o", exe])
+    if (b.code != 0) {
+        fail(both(b))
+        return
+    }
+    same(both(run(".", exe, ["examples/bvm/ember/demo.em"])), readFile("examples/bvm/ember/demo.out"), "examples/bvm/ember/demo.em")
+    var w = run(".", exe, ["examples/bvm/ember/demo.em", "--emit-asm", "${tmp}/demo.bvm", "-o", "${tmp}/demo.bvmc"])
+    check(w.code == 0, both(w))
+    var a = run(".", tool("bvm"), ["asm", "${tmp}/demo.bvm", "-o", "${tmp}/again.bvmc"])
+    check(a.code == 0 && sameFile("${tmp}/demo.bvmc", "${tmp}/again.bvmc"), "the assembly Ember writes does not assemble to its bytecode\n${both(a)}")
+    var bad = "${tmp}/bad.em"
+    put(bad, "let x = 1\nx = \"text\"\n")
+    var e = run(".", exe, [bad])
+    check(e.code == 1 && contains(both(e), "bad.em:2: x holds int, not str"), both(e))
+    Files.remove(tmp)
+}

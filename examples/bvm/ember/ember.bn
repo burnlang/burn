@@ -1,0 +1,899 @@
+/**
+ * Ember, a small language built on bvm: a lexer, a parser and a code generator that builds a bvm module, which the
+ * bvm written in Burn runs. Ember has ints, strings and arrays of ints, functions, `let`, `if`, `while`, and a host
+ * function `square` that the program running Ember provides.
+ *
+ *     burn build examples/bvm/ember/ember.bn -o ember
+ *     ./ember examples/bvm/ember/demo.em                     run a program
+ *     ./ember demo.em --emit-asm demo.bvm -o demo.bvmc       write it as bvm assembly or bytecode
+ */
+import "../../../compiler/src/bvm/binary.bn"
+import "../../../compiler/src/bvm/files.bn"
+import "../../../compiler/src/bvm/interp.bn"
+import "../../../compiler/src/vm/asm.bn"
+import "../../../compiler/src/vm/module.bn"
+import "../../../compiler/src/check/hir.bn"
+import "std/fs"
+import "std/json"
+import "std/process"
+
+def enum Tok {
+    Int(value: int),
+    Str(text: string),
+    Ident(name: string),
+    Sym(s: string),
+    Eof
+}
+
+const SYMS = ["==", "!=", "<=", ">=", "&&", "||", "+", "-", "*", "/", "%", "<", ">", "=", "!", "(", ")", "{", "}", "[", "]", ",", ":"]
+
+var file = ""
+
+/** Stops with an error at `line`. */
+fun die(line: int, msg: string) {
+    eprint("error: ${file}:${line}: ${msg}")
+    exit(1)
+}
+
+def type Token {
+    Tok tok
+    int line
+}
+
+fun isDigit(c: string): bool {
+    return c >= "0" && c <= "9"
+}
+
+fun isNameChar(c: string): bool {
+    return c >= "a" && c <= "z" || c >= "A" && c <= "Z" || c == "_" || isDigit(c)
+}
+
+fun lex(src: string): [Token] {
+    var cs = chars(src)
+    [Token] out = []
+    var i = 0
+    var line = 1
+    while (i < len(cs)) {
+        var c = cs[i]
+        if (c == "\n") {
+            line += 1
+            i += 1
+        } else if (c == " " || c == "\t" || c == "\r" || c == ";") {
+            i += 1
+        } else if (c == "#") {
+            while (i < len(cs) && cs[i] != "\n") {
+                i += 1
+            }
+        } else if (isDigit(c)) {
+            var text = ""
+            while (i < len(cs) && isDigit(cs[i])) {
+                text += cs[i]
+                i += 1
+            }
+            if (len(text) > 18) {
+                die(line, "number too large")
+            }
+            out.push(Token { tok: Tok.Int(toInt(text)), line: line })
+        } else if (c == "\"") {
+            var s = ""
+            i += 1
+            while (i < len(cs) && cs[i] != "\"") {
+                if (cs[i] == "\\" && i + 1 < len(cs)) {
+                    i += 1
+                    if (cs[i] == "n") {
+                        s += "\n"
+                    } else if (cs[i] == "t") {
+                        s += "\t"
+                    } else {
+                        s += cs[i]
+                    }
+                } else {
+                    s += cs[i]
+                }
+                i += 1
+            }
+            if (i == len(cs)) {
+                die(line, "unterminated string")
+            }
+            i += 1
+            out.push(Token { tok: Tok.Str(s), line: line })
+        } else if (isNameChar(c)) {
+            var name = ""
+            while (i < len(cs) && isNameChar(cs[i])) {
+                name += cs[i]
+                i += 1
+            }
+            out.push(Token { tok: Tok.Ident(name), line: line })
+        } else {
+            var two = c
+            if (i + 1 < len(cs)) {
+                two += cs[i + 1]
+            }
+            var found = ""
+            for s in SYMS {
+                if (found == "" && startsWith(two, s)) {
+                    found = s
+                }
+            }
+            if (found == "") {
+                die(line, "unexpected character ${toJSON(c)}")
+            }
+            out.push(Token { tok: Tok.Sym(found), line: line })
+            i += len(found)
+        }
+    }
+    out.push(Token { tok: Tok.Eof, line: line })
+    return out
+}
+
+def enum Ty {
+    Int,
+    Str,
+    Arr,
+    Void
+}
+
+fun tid(t: Ty): int {
+    return match t {
+        Ty.Int => 3
+        Ty.Str => 6
+        Ty.Arr => 11
+        Ty.Void => 1
+    }
+}
+
+fun tyName(t: Ty): string {
+    return match t {
+        Ty.Int => "int"
+        Ty.Str => "str"
+        Ty.Arr => "arr"
+        Ty.Void => "nothing"
+    }
+}
+
+def enum Expr {
+    Int(value: int),
+    Str(text: string),
+    Var(name: string),
+    Array(items: [Expr]),
+    Index(arr: Expr, index: Expr),
+    Call(name: string, args: [Expr]),
+    Unary(op: string, x: Expr),
+    Binary(op: string, a: Expr, b: Expr)
+}
+
+def enum Stmt {
+    Let(name: string, value: Expr),
+    Assign(name: string, value: Expr),
+    SetIndex(arr: Expr, index: Expr, value: Expr),
+    If(cond: Expr, then: [Line], els: [Line]),
+    While(cond: Expr, body: [Line]),
+    Return(value: Expr?),
+    Eval(e: Expr)
+}
+
+def type Line {
+    int line
+    Stmt s
+}
+
+def type Param {
+    string name
+    Ty ty
+}
+
+def type Func {
+    string name
+    [Param] params
+    Ty ret
+    [Line] body
+}
+
+fun describe(t: Tok): string {
+    return match t {
+        Tok.Int(v) => "${v}"
+        Tok.Str(s) => toJSON(s)
+        Tok.Ident(n) => n
+        Tok.Sym(s) => s
+        Tok.Eof => "the end of the file"
+    }
+}
+
+const LEVELS = [["||"], ["&&"], ["==", "!=", "<", "<=", ">", ">="], ["+", "-"], ["*", "/", "%"]]
+
+def struct Parser(toks: [Token]) {
+    int i = 0
+
+    fun peek(): Tok {
+        return toks[i].tok
+    }
+
+    fun line(): int {
+        return toks[i].line
+    }
+
+    fun next(): Tok {
+        var t = toks[i].tok
+        if (i + 1 < len(toks)) {
+            i += 1
+        }
+        return t
+    }
+
+    fun isSym(s: string): bool {
+        var t = peek()
+        return t is Tok.Sym && t.s == s
+    }
+
+    fun eat(s: string): bool {
+        if (isSym(s)) {
+            next()
+            return true
+        }
+        return false
+    }
+
+    fun expect(s: string) {
+        if (!eat(s)) {
+            die(line(), "expected ${s} but found ${describe(peek())}")
+        }
+    }
+
+    fun keyword(k: string): bool {
+        var t = peek()
+        if (t is Tok.Ident && t.name == k) {
+            next()
+            return true
+        }
+        return false
+    }
+
+    fun ident(): string {
+        var l = line()
+        var t = next()
+        if (t is Tok.Ident) {
+            return t.name
+        }
+        die(l, "expected a name but found ${describe(t)}")
+        return ""
+    }
+
+    fun ty(): Ty {
+        var l = line()
+        var n = ident()
+        if (n == "int") {
+            return Ty.Int
+        }
+        if (n == "str") {
+            return Ty.Str
+        }
+        if (n == "arr") {
+            return Ty.Arr
+        }
+        die(l, "unknown type ${n}")
+        return Ty.Int
+    }
+
+    fun block(): [Line] {
+        expect("{")
+        [Line] out = []
+        while (!eat("}")) {
+            if (peek() is Tok.Eof) {
+                die(line(), "unclosed {")
+            }
+            out.push(stmt())
+        }
+        return out
+    }
+
+    fun stmt(): Line {
+        var l = line()
+        if (keyword("let")) {
+            var name = ident()
+            expect("=")
+            return Line { line: l, s: Stmt.Let(name, expr()) }
+        }
+        if (keyword("if")) {
+            var c = expr()
+            var a = block()
+            [Line] b = []
+            if (keyword("else")) {
+                var t = peek()
+                if (t is Tok.Ident && t.name == "if") {
+                    b = [stmt()]
+                } else {
+                    b = block()
+                }
+            }
+            return Line { line: l, s: Stmt.If(c, a, b) }
+        }
+        if (keyword("while")) {
+            var c = expr()
+            return Line { line: l, s: Stmt.While(c, block()) }
+        }
+        if (keyword("return")) {
+            if (isSym("}")) {
+                return Line { line: l, s: Stmt.Return(null) }
+            }
+            return Line { line: l, s: Stmt.Return(expr()) }
+        }
+        var e = expr()
+        if (eat("=")) {
+            var v = expr()
+            if (e is Expr.Var) {
+                return Line { line: l, s: Stmt.Assign(e.name, v) }
+            }
+            if (e is Expr.Index) {
+                return Line { line: l, s: Stmt.SetIndex(e.arr, e.index, v) }
+            }
+            die(l, "only variables and array elements can be assigned")
+        }
+        return Line { line: l, s: Stmt.Eval(e) }
+    }
+
+    fun expr(): Expr {
+        return binary(0)
+    }
+
+    fun binary(level: int): Expr {
+        if (level == len(LEVELS)) {
+            return unary()
+        }
+        var l = binary(level + 1)
+        while (true) {
+            var t = peek()
+            if (!(t is Tok.Sym) || !contains(LEVELS[level], t.s)) {
+                return l
+            }
+            next()
+            var r = binary(level + 1)
+            l = Expr.Binary(t.s, l, r)
+        }
+    }
+
+    fun unary(): Expr {
+        if (eat("-")) {
+            return Expr.Unary("-", unary())
+        }
+        if (eat("!")) {
+            return Expr.Unary("!", unary())
+        }
+        var e = primary()
+        while (eat("[")) {
+            var i = expr()
+            expect("]")
+            e = Expr.Index(e, i)
+        }
+        return e
+    }
+
+    fun items(close: string): [Expr] {
+        [Expr] xs = []
+        while (!eat(close)) {
+            xs.push(expr())
+            if (!eat(",")) {
+                expect(close)
+                break
+            }
+        }
+        return xs
+    }
+
+    fun primary(): Expr {
+        var l = line()
+        var t = next()
+        if (t is Tok.Int) {
+            return Expr.Int(t.value)
+        }
+        if (t is Tok.Str) {
+            return Expr.Str(t.text)
+        }
+        if (t is Tok.Ident) {
+            if (eat("(")) {
+                return Expr.Call(t.name, items(")"))
+            }
+            return Expr.Var(t.name)
+        }
+        if (t is Tok.Sym && t.s == "(") {
+            var e = expr()
+            expect(")")
+            return e
+        }
+        if (t is Tok.Sym && t.s == "[") {
+            return Expr.Array(items("]"))
+        }
+        die(l, "expected an expression but found ${describe(t)}")
+        return Expr.Int(0)
+    }
+}
+
+def type Var {
+    bool local
+    int slot
+    Ty ty
+}
+
+def type Sig {
+    int id
+    [Ty] params
+    Ty ret
+}
+
+/** The code of one function while it is generated, with labels that become instruction indexes at the end. */
+def struct Gen(m: VModule, sigs: {string: Sig}, globals: {string: Var}, top: bool, ret: Ty, params: int) {
+    [Op] code = []
+    [int] labels = []
+    [int] fixups = []
+    [int] fixLabels = []
+    {string: Var} locals = {}
+    [string] names = []
+    int nlocals = params
+    int line = 1
+
+    fun err(msg: string): void {
+        die(line, msg)
+    }
+
+    fun emit(op: Op): void {
+        code.push(op)
+    }
+
+    fun label(): int {
+        labels.push(-1)
+        return len(labels) - 1
+    }
+
+    fun bind(l: int) {
+        labels[l] = len(code)
+    }
+
+    fun jump(op: Op, l: int) {
+        fixups.push(len(code))
+        fixLabels.push(l)
+        emit(op)
+    }
+
+    fun finish(): [Op] {
+        for k in 0..len(fixups) {
+            code[fixups[k]] = withJumpTarget(code[fixups[k]], labels[fixLabels[k]])
+        }
+        return code
+    }
+
+    fun loc(): int {
+        var l = "${file}:${line}"
+        for i in 0..len(m.locs) {
+            if (m.locs[i] == l) {
+                return i
+            }
+        }
+        m.locs.push(l)
+        return len(m.locs) - 1
+    }
+
+    fun str(s: string): int {
+        for i in 0..len(m.strings) {
+            if (m.strings[i] == s) {
+                return i
+            }
+        }
+        m.strings.push(s)
+        return len(m.strings) - 1
+    }
+
+    fun lookup(name: string): Var? {
+        var l = locals[name]
+        if (l != null) {
+            return l
+        }
+        return globals[name]
+    }
+
+    fun block(body: [Line]): void {
+        for l in body {
+            line = l.line
+            stmt(l.s)
+        }
+    }
+
+    fun stmt(s: Stmt): void {
+        if (s is Stmt.Let) {
+            var ty = expr(s.value)
+            if (ty == Ty.Void) {
+                err("${s.name} cannot hold nothing")
+            }
+            if (top) {
+                var g = globals[s.name]
+                var id = len(m.globals)
+                if (g != null) {
+                    id = g.slot
+                } else {
+                    m.globals.push(s.name)
+                }
+                globals[s.name] = Var { local: false, slot: id, ty: ty }
+                emit(Op.GStore(id))
+            } else {
+                var slot = nlocals
+                nlocals += 1
+                names.push(s.name)
+                locals[s.name] = Var { local: true, slot: slot, ty: ty }
+                emit(Op.Store(slot))
+            }
+        } else if (s is Stmt.Assign) {
+            var ty = expr(s.value)
+            var v = lookup(s.name)
+            if (v == null) {
+                err("${s.name} is not defined; declare it with let")
+                return
+            }
+            if (ty != v.ty) {
+                err("${s.name} holds ${tyName(v.ty)}, not ${tyName(ty)}")
+            }
+            if (v.local) {
+                emit(Op.Store(v.slot))
+            } else {
+                emit(Op.GStore(v.slot))
+            }
+        } else if (s is Stmt.SetIndex) {
+            expectTy(s.arr, Ty.Arr)
+            expectTy(s.index, Ty.Int)
+            expectTy(s.value, Ty.Int)
+            emit(Op.SetIndex(loc()))
+            emit(Op.Pop)
+        } else if (s is Stmt.If) {
+            expectTy(s.cond, Ty.Int)
+            var other = label()
+            var end = label()
+            jump(Op.Jz(0), other)
+            block(s.then)
+            jump(Op.Jmp(0), end)
+            bind(other)
+            block(s.els)
+            bind(end)
+        } else if (s is Stmt.While) {
+            var start = label()
+            bind(start)
+            var end = label()
+            expectTy(s.cond, Ty.Int)
+            jump(Op.Jz(0), end)
+            block(s.body)
+            jump(Op.Jmp(0), start)
+            bind(end)
+        } else if (s is Stmt.Return) {
+            var v = s.value
+            if (v == null) {
+                if (ret != Ty.Void) {
+                    err("this function must return ${tyName(ret)}")
+                }
+                emit(Op.RetVoid)
+            } else {
+                expectTy(v, ret)
+                emit(Op.Ret)
+            }
+        } else if (s is Stmt.Eval) {
+            expr(s.e)
+            emit(Op.Pop)
+        }
+    }
+
+    fun expectTy(e: Expr, want: Ty): void {
+        var got = expr(e)
+        if (got != want) {
+            err("expected ${tyName(want)} but found ${tyName(got)}")
+        }
+    }
+
+    fun stringify(t: Ty): void {
+        if (t != Ty.Str) {
+            emit(Op.Const(tid(t)))
+            emit(Op.Rt("ToStr"))
+        }
+    }
+
+    fun expr(e: Expr): Ty {
+        if (e is Expr.Int) {
+            emit(Op.Const(e.value))
+            return Ty.Int
+        }
+        if (e is Expr.Str) {
+            emit(Op.Str(str(e.text)))
+            return Ty.Str
+        }
+        if (e is Expr.Var) {
+            var v = lookup(e.name)
+            if (v == null) {
+                err("${e.name} is not defined")
+                return Ty.Int
+            }
+            if (v.local) {
+                emit(Op.Load(v.slot))
+            } else {
+                emit(Op.GLoad(v.slot))
+            }
+            return v.ty
+        }
+        if (e is Expr.Array) {
+            for x in e.items {
+                expectTy(x, Ty.Int)
+            }
+            emit(Op.NewArray(tid(Ty.Arr), len(e.items)))
+            return Ty.Arr
+        }
+        if (e is Expr.Index) {
+            expectTy(e.arr, Ty.Arr)
+            expectTy(e.index, Ty.Int)
+            emit(Op.Index(loc()))
+            return Ty.Int
+        }
+        if (e is Expr.Unary) {
+            expectTy(e.x, Ty.Int)
+            if (e.op == "-") {
+                emit(Op.INeg)
+            } else {
+                emit(Op.Not)
+            }
+            return Ty.Int
+        }
+        if (e is Expr.Binary) {
+            return binary(e.op, e.a, e.b)
+        }
+        if (e is Expr.Call) {
+            return call(e.name, e.args)
+        }
+        return Ty.Int
+    }
+
+    fun binary(op: string, a: Expr, b: Expr): Ty {
+        if (op == "&&" || op == "||") {
+            expectTy(a, Ty.Int)
+            var end = label()
+            if (op == "&&") {
+                jump(Op.JzKeep(0), end)
+            } else {
+                jump(Op.JnzKeep(0), end)
+            }
+            emit(Op.Pop)
+            expectTy(b, Ty.Int)
+            bind(end)
+            return Ty.Int
+        }
+        var ta = expr(a)
+        if (op == "+" && ta == Ty.Str) {
+            stringify(expr(b))
+            emit(Op.Rt("StrConcat"))
+            return Ty.Str
+        }
+        var tb = expr(b)
+        if (op == "+" && tb == Ty.Str) {
+            emit(Op.Swap)
+            stringify(ta)
+            emit(Op.Swap)
+            emit(Op.Rt("StrConcat"))
+            return Ty.Str
+        }
+        if (ta == Ty.Str && tb == Ty.Str && (op == "==" || op == "!=")) {
+            emit(Op.Rt("StrEq"))
+            if (op == "!=") {
+                emit(Op.Not)
+            }
+            return Ty.Int
+        }
+        if (ta != Ty.Int || tb != Ty.Int) {
+            err("${op} works on ints, not ${tyName(ta)} and ${tyName(tb)}")
+        }
+        if (op == "+") {
+            emit(Op.IAdd)
+        } else if (op == "-") {
+            emit(Op.ISub)
+        } else if (op == "*") {
+            emit(Op.IMul)
+        } else if (op == "/") {
+            emit(Op.IDiv(loc()))
+        } else if (op == "%") {
+            emit(Op.IRem(loc()))
+        } else if (op == "==") {
+            emit(Op.ICmp(Cmp.Eq))
+        } else if (op == "!=") {
+            emit(Op.ICmp(Cmp.Ne))
+        } else if (op == "<") {
+            emit(Op.ICmp(Cmp.Lt))
+        } else if (op == "<=") {
+            emit(Op.ICmp(Cmp.Le))
+        } else if (op == ">") {
+            emit(Op.ICmp(Cmp.Gt))
+        } else {
+            emit(Op.ICmp(Cmp.Ge))
+        }
+        return Ty.Int
+    }
+
+    fun hostImport(name: string, argc: int): int {
+        for i in 0..len(m.imports) {
+            if (m.imports[i].name == name) {
+                return i
+            }
+        }
+        m.imports.push(Import { name: name, argc: argc })
+        return len(m.imports) - 1
+    }
+
+    fun call(name: string, args: [Expr]): Ty {
+        if (name == "print") {
+            if (len(args) == 0) {
+                emit(Op.Str(str("")))
+            }
+            for k in 0..len(args) {
+                var t = expr(args[k])
+                if (t == Ty.Void) {
+                    err("print needs values")
+                }
+                stringify(t)
+                if (k > 0) {
+                    emit(Op.Str(str(" ")))
+                    emit(Op.Swap)
+                    emit(Op.Rt("StrConcat"))
+                    emit(Op.Rt("StrConcat"))
+                }
+            }
+            emit(Op.Rt("Print"))
+            return Ty.Void
+        }
+        if (name == "len" && len(args) == 1) {
+            var t = expr(args[0])
+            if (t == Ty.Arr) {
+                emit(Op.Len)
+                return Ty.Int
+            }
+            if (t == Ty.Str) {
+                emit(Op.Rt("StrLen"))
+                return Ty.Int
+            }
+            err("len needs arr or str, not ${tyName(t)}")
+        }
+        if (name == "push" && len(args) == 2) {
+            expectTy(args[0], Ty.Arr)
+            expectTy(args[1], Ty.Int)
+            emit(Op.Rt("ArrPush"))
+            return Ty.Void
+        }
+        if (name == "clock" && len(args) == 0) {
+            emit(Op.Rt("NowMs"))
+            return Ty.Int
+        }
+        if (name == "square" && len(args) == 1) {
+            expectTy(args[0], Ty.Int)
+            emit(Op.Host(hostImport("square", 1)))
+            return Ty.Int
+        }
+        var sig = sigs[name]
+        if (sig == null) {
+            err("unknown function ${name}")
+            return Ty.Int
+        }
+        if (len(sig.params) != len(args)) {
+            err("${name} takes ${len(sig.params)} arguments, not ${len(args)}")
+        }
+        for k in 0..len(args) {
+            expectTy(args[k], sig.params[k])
+        }
+        emit(Op.Call(sig.id))
+        return sig.ret
+    }
+}
+
+/** Ends `g`'s code with a return, so that every path returns. */
+fun endWith(g: Gen, ret: Ty) {
+    if (ret == Ty.Void) {
+        g.emit(Op.RetVoid)
+    } else {
+        g.emit(Op.Const(0))
+        g.emit(Op.Ret)
+    }
+}
+
+/** The bvm module of the Ember program `src`. */
+fun compile(src: string): VModule {
+    var p = new Parser(lex(src))
+    [Func] funcs = []
+    [Line] top = []
+    while (!(p.peek() is Tok.Eof)) {
+        if (p.keyword("fn")) {
+            var name = p.ident()
+            p.expect("(")
+            [Param] params = []
+            while (!p.eat(")")) {
+                var pn = p.ident()
+                var pt = Ty.Int
+                if (p.eat(":")) {
+                    pt = p.ty()
+                }
+                params.push(Param { name: pn, ty: pt })
+                if (!p.eat(",")) {
+                    p.expect(")")
+                    break
+                }
+            }
+            var ret = Ty.Int
+            if (p.eat(":")) {
+                ret = p.ty()
+            }
+            funcs.push(Func { name: name, params: params, ret: ret, body: p.block() })
+        } else {
+            top.push(p.stmt())
+        }
+    }
+    var m = emptyModule()
+    {string: Sig} sigs = {}
+    for i in 0..len(funcs) {
+        [Ty] tys = []
+        for x in funcs[i].params {
+            tys.push(x.ty)
+        }
+        sigs[funcs[i].name] = Sig { id: i, params: tys, ret: funcs[i].ret }
+    }
+    {string: Var} globals = {}
+    var main = new Gen(m, sigs, globals, true, Ty.Void, 0)
+    main.block(top)
+    endWith(main, Ty.Void)
+    [VFunc] out = []
+    for f in funcs {
+        var g = new Gen(m, sigs, globals, false, f.ret, len(f.params))
+        for k in 0..len(f.params) {
+            g.locals[f.params[k].name] = Var { local: true, slot: k, ty: f.params[k].ty }
+            g.names.push(f.params[k].name)
+        }
+        g.block(f.body)
+        endWith(g, f.ret)
+        out.push(VFunc { name: f.name, params: len(f.params), locals: g.nlocals, names: g.names, code: g.finish(), external: false, sig: null })
+    }
+    out.push(VFunc { name: "main", params: 0, locals: main.nlocals, names: [], code: main.finish(), external: false, sig: null })
+    m.funcs = out
+    m.entry = len(out) - 1
+    return m
+}
+
+fun main() {
+    var a = args()
+    if (len(a) == 0) {
+        eprint("usage: ember <file.em> [--emit-asm <out.bvm>] [-o <out.bvmc>]")
+        exit(2)
+    }
+    file = a[0]
+    if (!fileExists(file)) {
+        eprint("error: cannot read ${file}")
+        exit(1)
+    }
+    var module = compile(readFile(file))
+    var wrote = false
+    var i = 1
+    while (i + 1 < len(a)) {
+        var out = a[i + 1]
+        var ok = false
+        if (a[i] == "--emit-asm") {
+            ok = writeFile(out, disassemble(module))
+        } else if (a[i] == "-o") {
+            ok = writeBytes(out, encode(module))
+        } else {
+            eprint("error: unknown option ${a[i]}")
+            exit(2)
+        }
+        if (!ok) {
+            eprint("error: cannot write ${out}")
+            exit(1)
+        }
+        wrote = true
+        i += 2
+    }
+    if (wrote) {
+        return
+    }
+    var square = fun(xs: [int]): int {
+        return wrappingMul(xs[0], xs[0])
+    }
+    var prog = prepare(module, [HostFn { name: "square", argc: 1, call: square }])
+    if (prog.error != "") {
+        eprint("error: ${prog.error}")
+        exit(1)
+    }
+    runEntry(prog)
+}

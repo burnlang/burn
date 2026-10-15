@@ -1,0 +1,190 @@
+/**
+ * What the end-to-end tests share: running the toolchain under test and other programs, temporary folders, the test
+ * cases, and recording failures.
+ */
+import "std/fs"
+import "std/process"
+import "std/random"
+import "std/time"
+
+/** What a program printed and its exit code. */
+pub def type Ran {
+    string out
+    string err
+    int code
+}
+
+/** Everything a program printed: its standard output, then its standard error. */
+pub fun both(r: Ran): string {
+    return r.out + r.err
+}
+
+/** The toolchain under test, `$BURN_TEST_TOOLCHAIN`: its `bin/burn` and `share/burn`. */
+pub fun toolchain(): string {
+    return env("BURN_TEST_TOOLCHAIN")
+}
+
+/** The program `name` of the toolchain under test, such as `burn` or `bvm`. */
+pub fun tool(name: string): string {
+    return "${toolchain()}/bin/${name}"
+}
+
+/** The root of the repository, where the tests run. */
+pub fun root(): string {
+    return Process.cwd()
+}
+
+var failures: [string] = []
+
+/** Records a failure of the running test. */
+pub fun fail(msg: string) {
+    failures.push(msg)
+}
+
+/** The failures recorded so far. */
+pub fun failed(): [string] {
+    return failures
+}
+
+/** Records `msg` as a failure unless `ok`. */
+pub fun check(ok: bool, msg: string) {
+    if (!ok) {
+        fail(msg)
+    }
+}
+
+/** Records a failure when `got` is not `want`. */
+pub fun same(got: string, want: string, what: string) {
+    if (got != want) {
+        fail("${what}:\n--- expected\n${want}\n--- got\n${got}")
+    }
+}
+
+/** `s` quoted for `sh`. */
+pub fun quote(s: string): string {
+    return "'" + replace(s, "'", "'\\''") + "'"
+}
+
+/** Runs `program` with `args` in `dir`, with the variables in `vars` (`NAME=value`) set and `input` as its input. */
+pub fun runWith(dir: string, vars: [string], program: string, args: [string], input: string?): Ran {
+    var cmd = "cd ${quote(dir)} && exec env"
+    for v in vars {
+        cmd += " " + quote(v)
+    }
+    cmd += " " + quote(program)
+    for a in args {
+        cmd += " " + quote(a)
+    }
+    var file = ""
+    if (input != null) {
+        file = tempFile("input")
+        writeFile(file, input)
+        cmd += " < " + quote(file)
+    } else {
+        cmd += " < /dev/null"
+    }
+    var r = Process.shellOutput(cmd)
+    if (file != "") {
+        Files.remove(file)
+    }
+    return Ran { out: r.out, err: r.err, code: r.code }
+}
+
+/** Runs `program` with `args` in `dir`. */
+pub fun run(dir: string, program: string, args: [string]): Ran {
+    return runWith(dir, [], program, args, null)
+}
+
+/** Runs the toolchain's `burn` with `args` in `dir`. */
+pub fun burn(dir: string, args: [string]): Ran {
+    return runWith(dir, [], tool("burn"), args, null)
+}
+
+/** Runs the toolchain's `burn` with `args` in `dir`, with the variables in `vars` set. */
+pub fun burnWith(dir: string, vars: [string], args: [string]): Ran {
+    return runWith(dir, vars, tool("burn"), args, null)
+}
+
+/** Whether `program` runs and succeeds with `arg`, to skip tests that need it. */
+pub fun has(program: string, arg: string): bool {
+    return Process.shellOutput("${quote(program)} ${quote(arg)} >/dev/null 2>&1").code == 0
+}
+
+var counter = 0
+
+/** A new path in the temporary folder for `tag`, which does not exist yet. */
+pub fun tempFile(tag: string): string {
+    var base = env("TMPDIR")
+    if (base == "") {
+        base = "/tmp"
+    }
+    counter += 1
+    return "${base}/burn-test-${tag}-${nowMs()}-${randomInt(0, 999999999)}-${counter}"
+}
+
+/** A new, empty folder in the temporary folder, with every symbolic link in its path resolved. */
+pub fun tempDir(tag: string): string {
+    var d = tempFile(tag)
+    Files.makeDir(d)
+    return trim(Process.shellOutput("cd ${quote(d)} && pwd -P").out)
+}
+
+/** Writes `text` to `path`, creating its folders. */
+pub fun put(path: string, text: string) {
+    var slash = len(path) - 1
+    while (slash > 0 && charAt(path, slash) != "/") {
+        slash -= 1
+    }
+    if (slash > 0) {
+        Files.makeDir(substring(path, 0, slash))
+    }
+    writeFile(path, text)
+}
+
+/** The names of the test programs in `tests/cases`, without `.bn`, sorted. */
+pub fun cases(): [string] {
+    [string] out = []
+    for f in Files.list("tests/cases") {
+        if (endsWith(f, ".bn")) {
+            out.push(substring(f, 0, len(f) - 3))
+        }
+    }
+    out.sort()
+    return out
+}
+
+/** What test case `name` must print. */
+pub fun expected(name: string): string {
+    return readFile("tests/cases/${name}.out")
+}
+
+/** The `.bn` files in `dir` and, when `deep`, in its folders, sorted. */
+pub fun burnFiles(dir: string, deep: bool): [string] {
+    [string] out = []
+    for name in Files.list(dir) {
+        var p = "${dir}/${name}"
+        if (Files.isDir(p)) {
+            if (deep) {
+                for f in burnFiles(p, true) {
+                    out.push(f)
+                }
+            }
+        } else if (endsWith(name, ".bn")) {
+            out.push(p)
+        }
+    }
+    out.sort()
+    return out
+}
+
+/** Whether this machine builds native executables. */
+pub fun nativeSupported(): bool {
+    var s = trim(Process.shellOutput("uname -s").out)
+    var m = trim(Process.shellOutput("uname -m").out)
+    return (s == "Linux" || s == "Darwin") && (m == "x86_64" || m == "aarch64" || m == "arm64")
+}
+
+/** How many times `needle` occurs in `s`. */
+pub fun count(s: string, needle: string): int {
+    return len(split(s, needle)) - 1
+}

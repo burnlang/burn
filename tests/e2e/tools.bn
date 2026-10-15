@@ -1,0 +1,180 @@
+/** The command line: errors, eval, the REPL, the formatter, fix, doc, generated sources and memory limits. */
+import "std/fs"
+import "harness.bn"
+
+/** Each program in `tests/errors` fails to check with the error its `.err` file names, at the right place. */
+pub fun compileErrorsPointAtTheRightLine() {
+    for f in burnFiles("tests/errors", false) {
+        var spec = trim(readFile(substring(f, 0, len(f) - 3) + ".err"))
+        var space = indexOf(spec, " ")
+        var pos = substring(spec, 0, space)
+        var msg = substring(spec, space + 1, len(spec))
+        var r = burn(".", ["check", f])
+        var out = both(r)
+        var name = substring(f, len("tests/errors/"), len(f))
+        var want = "${name}:${pos}"
+        check(r.code != 0 && contains(out, want) && contains(out, msg), "${f}: expected `${msg}` at ${want}\n${out}")
+    }
+}
+
+/** `burn eval` prints, exits with the code a program asks for, and reports runtime errors. */
+pub fun evalAndExitCodes() {
+    var r = burn(".", ["eval", "print(1 + 2)"])
+    same(both(r), "3\n", "eval")
+    check(r.code == 0, "eval exits with ${r.code}")
+    check(burn(".", ["eval", "exit(7)"]).code == 7, "exit(7)")
+    r = burn(".", ["eval", "print(1 / (2 - 2))"])
+    check(r.code == 1 && contains(both(r), "division by zero"), both(r))
+}
+
+/** The REPL keeps variables and functions between inputs and goes on after an error. */
+pub fun replKeepsStateBetweenInputs() {
+    var input = "var x = 20\nfun twice(n: int): int {\n    return n * 2\n}\ntwice(x) + 2\nx = x + 1\nprint(x)\nundefinedThing\nprint(\"still alive\")\n"
+    var r = runWith(".", [], tool("burn"), ["repl"], input)
+    for want in ["42", "21", "still alive"] {
+        check(contains(r.out, want), r.out)
+    }
+    check(contains(r.err, "cannot find `undefinedThing`"), r.err)
+}
+
+/** Formatting a formatted case changes nothing. */
+pub fun formatterIsIdempotent() {
+    var tmp = tempDir("fmt")
+    for name in cases() {
+        var once = burn(".", ["fmt", "tests/cases/${name}.bn"]).out
+        put("${tmp}/x.bn", once)
+        same(burn(".", ["fmt", "${tmp}/x.bn"]).out, once, "formatting tests/cases/${name}.bn twice")
+    }
+    Files.remove(tmp)
+}
+
+/** The Burn sources of the repository are formatted. */
+pub fun repositorySourcesAreFormatted() {
+    [string] files = []
+    for dir in ["tests/cases", "tests/e2e", "examples", "lib/std", "lib/rt", "lib/tools", "tests/modules"] {
+        for f in burnFiles(dir, false) {
+            files.push(f)
+        }
+    }
+    for f in burnFiles("compiler", true) {
+        files.push(f)
+    }
+    [string] args = ["fmt", "--check"]
+    for f in files {
+        args.push(f)
+    }
+    var r = burn(".", args)
+    check(r.code == 0, both(r))
+}
+
+/** No source of the repository uses a name of the standard library without importing its module. */
+pub fun repositorySourcesImportTheStandardModulesTheyUse() {
+    [string] files = []
+    for dir in ["tests", "examples", "lib/std", "lib/tools"] {
+        for f in burnFiles(dir, true) {
+            if (!startsWith(f, "tests/errors/") && !startsWith(f, "tests/fix/")) {
+                files.push(f)
+            }
+        }
+    }
+    for f in burnFiles("compiler/src", false) {
+        files.push(f)
+    }
+    for f in burnFiles("compiler/src/bin", false) {
+        files.push(f)
+    }
+    for f in files {
+        var out = both(burn(".", ["check", f]))
+        check(!contains(out, "is in the standard library module"), "${f}\n${out}")
+    }
+}
+
+/** The sources that programs in `compiler/src/bin` write are up to date. */
+pub fun generatedSourcesAreUpToDate() {
+    for pair in [["compiler/src/bin/gendoc.bn", "compiler/src/doc/assets.bn"], ["compiler/src/bin/genjs.bn", "compiler/src/js/prelude.bn"]] {
+        var r = burn(".", [pair[0]])
+        check(r.code == 0, both(r))
+        check(r.out == readFile(pair[1]), "${pair[1]} is out of date; run `burn ${pair[0]} > ${pair[1]}`")
+    }
+}
+
+/** burnfmt, the formatter written in Burn, formats like `burn fmt`, also from stdin. */
+pub fun burnfmtMatchesTheBuiltinFormatter() {
+    var fmt = "lib/tools/fmt.bn"
+    [string] files = [fmt]
+    for dir in ["tests/cases", "examples", "lib/std", "compiler"] {
+        for f in burnFiles(dir, false) {
+            files.push(f)
+        }
+    }
+    for f in files {
+        check(burn(".", [fmt, f]).out == burn(".", ["fmt", f]).out, "burnfmt differs from burn fmt on ${f}")
+    }
+    var r = runWith(".", [], tool("burn"), [fmt], "fun   f( a:int ){\nreturn a*2}\n")
+    same(r.out, "fun f(a: int) {\n    return a * 2\n}\n", "burnfmt on stdin")
+}
+
+/** `burni` runs, `burnc` compiles and `bvm` runs bytecode, all from the same executable. */
+pub fun toolchainNamesSelectTheRightMode() {
+    var r = run(".", tool("burni"), ["-e", "print(6 * 7)"])
+    same(both(r), "42\n", "burni -e")
+    check(startsWith(both(run(".", tool("burnc"), ["--version"])), "burnc "), "burnc --version")
+    var c = run(".", tool("burnc"), ["--check", "examples/fib.bn"])
+    check(c.code == 0, both(c))
+    check(startsWith(both(run(".", tool("bvm"), ["version"])), "bvm "), "bvm version")
+}
+
+/** `burn fix` applies the compiler's suggestions. */
+pub fun fixAppliesTheCompilerSuggestions() {
+    var tmp = tempDir("fix")
+    var file = "${tmp}/input.bn"
+    put(file, readFile("tests/fix/input.bn"))
+    var r = burn(".", ["fix", file])
+    check(r.code == 0 && contains(both(r), "fixed 8 problems"), both(r))
+    same(readFile(file), readFile("tests/fix/expected.bn"), "the fixed file")
+    Files.remove(tmp)
+}
+
+/** `burn doc` writes pages for a program, the standard library and the built-in functions. */
+pub fun docGeneratesPagesForProgramsTheStandardLibraryAndBuiltins() {
+    var out = tempDir("doc")
+    var r = burn(".", ["doc", "examples/zoo.bn", "-o", out])
+    check(r.code == 0, both(r))
+    var animal = readFile("${out}/t-zoo.Animal.html")
+    check(contains(animal, "An animal living in the zoo.") && contains(animal, "Extended by"), "t-zoo.Animal.html")
+    check(contains(animal, "the animal&#x27;s name") || contains(animal, "the animal's name"), "t-zoo.Animal.html")
+    check(contains(readFile("${out}/m-zoo.html"), "Deprecated"), "m-zoo.html")
+    check(contains(readFile("${out}/t-std-date.Date.html"), "A calendar date"), "t-std-date.Date.html")
+    var builtins = readFile("${out}/builtins.html")
+    check(contains(builtins, "println") && contains(builtins, "id=\"sqrt\""), "builtins.html")
+    check(contains(readFile("${out}/search-index.js"), "\"Animal.describe\""), "search-index.js")
+    Files.remove(out)
+}
+
+/** A program that keeps growing stops at the heap limit with an error that names it. */
+pub fun runawayProgramsStopAtTheHeapLimit() {
+    var dir = tempDir("heap")
+    var file = "${dir}/grow.bn"
+    put(file, "var all: [[int]] = []\nwhile (true) {\n    var chunk: [int] = []\n    for (i in 0..50000) {\n        chunk.push(i)\n    }\n    all.push(chunk)\n}\n")
+    var r = burnWith(".", ["BURN_MAX_HEAP_MB=64"], [file])
+    check(r.code == 1 && contains(both(r), "out of memory") && contains(both(r), "BURN_MAX_HEAP_MB"), both(r))
+    if (nativeSupported()) {
+        r = burnWith(".", ["BURN_MAX_HEAP_MB=64"], ["run", "--native", file])
+        check(r.code == 1 && contains(both(r), "out of memory"), both(r))
+    }
+    Files.remove(dir)
+}
+
+/** Values that only reference each other, through fields, arrays and closures, are freed. */
+pub fun valuesThatOnlyReferenceEachOtherAreFreed() {
+    var dir = tempDir("cycles")
+    var file = "${dir}/cycles.bn"
+    put(file, "def struct Node(name: string) {\n    Node? next = null\n    [any] seen = []\n}\n\nfun ring(n: int): int {\n    var first = new Node(\"first\")\n    var cur = first\n    for i in 0..n {\n        var next = new Node(\"node \${i}\")\n        cur.next = next\n        next.seen.push(cur)\n        cur = next\n    }\n    cur.next = first\n    return n\n}\n\nvar total = 0\nfor round in 0..30000 {\n    total += ring(20)\n}\nvar count = fun(): fun(): int {\n    var n = 0\n    var self: any = null\n    var f = fun(): int {\n        n += 1\n        return n\n    }\n    self = f\n    return f\n}\nfor i in 0..100000 {\n    count()()\n}\nprint(total)\n")
+    var r = burnWith(".", ["BURN_MAX_HEAP_MB=24"], [file])
+    same(both(r), "600000\n", "cycles on bvm")
+    if (nativeSupported()) {
+        r = burnWith(".", ["BURN_MAX_HEAP_MB=24"], ["run", "--native", file])
+        same(both(r), "600000\n", "cycles natively")
+    }
+    Files.remove(dir)
+}

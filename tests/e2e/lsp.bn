@@ -1,0 +1,339 @@
+/** The language server: completion, navigation, renames, code actions and reloading projects. */
+import "std/fs"
+import "std/json"
+import "harness.bn"
+
+/** A language server session: the messages to send, then everything the server answered. */
+pub def struct Session(dir: string, vars: [string]) {
+    [string] bodies = []
+    [string] answers = []
+    int id = 0
+
+    /** Queues a message. */
+    fun send(body: string) {
+        bodies.push(body)
+    }
+
+    /** Queues a request and gives its id. */
+    fun request(method: string, params: string): int {
+        id += 1
+        send("{\"jsonrpc\":\"2.0\",\"id\":${id},\"method\":\"${method}\",\"params\":${params}}")
+        return id
+    }
+
+    /** Queues opening the document `uri` with `text`. */
+    fun open(uri: string, text: string) {
+        send("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"${uri}\",\"languageId\":\"burn\",\"version\":1,\"text\":${toJSON(text)}}}}")
+    }
+
+    /** Queues replacing the text of the document `uri`. */
+    fun change(uri: string, text: string) {
+        send("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"${uri}\",\"version\":2},\"contentChanges\":[{\"text\":${toJSON(text)}}]}}")
+    }
+
+    /** Runs the server on the queued messages, then shutdown and exit, and keeps what it answered. */
+    fun finish() {
+        request("shutdown", "null")
+        send("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")
+        var input = ""
+        for body in bodies {
+            input += "Content-Length: ${len(bytes(body))}\r\n\r\n${body}"
+        }
+        var r = runWith(dir, vars, tool("burn"), ["lsp"], input)
+        answers = messages(r.out)
+    }
+
+    /** The answer to request `n`. */
+    fun reply(n: int): string {
+        for m in answers {
+            if (contains(m, "\"id\":${n},") || contains(m, "\"id\":${n}}")) {
+                return m
+            }
+        }
+        return "(no answer to request ${n}; the server answered ${len(answers)} messages)"
+    }
+
+    /** The first message that contains every text in `needles`. */
+    fun find(needles: [string]): string {
+        for m in answers {
+            var all = true
+            for n in needles {
+                if (!contains(m, n)) {
+                    all = false
+                }
+            }
+            if (all) {
+                return m
+            }
+        }
+        return "(no message with ${join(needles, ", ")})"
+    }
+}
+
+/** The messages in the output of a language server. */
+fun messages(out: string): [string] {
+    var b = bytes(out)
+    [string] found = []
+    var i = 0
+    while (i < len(b)) {
+        var size = -1
+        while (i < len(b)) {
+            var end = i
+            while (end < len(b) && b[end] != 10) {
+                end += 1
+            }
+            var line = trim(fromBytes(slice(b, i, end)))
+            i = end + 1
+            if (line == "") {
+                break
+            }
+            if (startsWith(line, "Content-Length:")) {
+                size = toInt(trim(substring(line, 15, len(line))))
+            }
+        }
+        if (size < 0 || i + size > len(b)) {
+            break
+        }
+        found.push(fromBytes(slice(b, i, i + size)))
+        i += size
+    }
+    return found
+}
+
+/** The parameters of a request about position `line`:`ch` of `uri`. */
+fun at(uri: string, line: int, ch: int): string {
+    return "{\"textDocument\":{\"uri\":\"${uri}\"},\"position\":{\"line\":${line},\"character\":${ch}}}"
+}
+
+/** The parameters of a request about the document `uri`. */
+fun doc(uri: string): string {
+    return "{\"textDocument\":{\"uri\":\"${uri}\"}}"
+}
+
+/** The parameters of a code action request for `uri` with the diagnostics `diags`. */
+fun actions(uri: string, line: int, endCh: int, diags: string): string {
+    return "{\"textDocument\":{\"uri\":\"${uri}\"},\"range\":{\"start\":{\"line\":${line},\"character\":0},\"end\":{\"line\":${line},\"character\":${endCh}}},\"context\":{\"diagnostics\":${diags}}}"
+}
+
+/** Import paths complete, and a name two imports define is reported as ambiguous once. */
+pub fun languageServerCompletesImportsAndReportsAmbiguityOnce() {
+    var dir = tempDir("lsp-imports")
+    put("${dir}/util/helpers.bn", "pub fun greet(): int {\n    return 1\n}\n")
+    put("${dir}/other.bn", "pub fun greet(): int {\n    return 2\n}\n")
+    var uri = "file://${dir}/main.bn"
+    var s = new Session(dir, [])
+    s.request("initialize", "{\"capabilities\":{}}")
+    s.open(uri, "import \"util/helpers\"\nimport \"other\"\nprint(greet())\nimport \"u")
+    var items = s.request("textDocument/completion", at(uri, 3, 9))
+    s.finish()
+    var diags = s.find(["publishDiagnostics", "main.bn"])
+    check(contains(diags, "is ambiguous") && !contains(diags, "cannot find `greet`"), diags)
+    var got = s.reply(items)
+    check(contains(got, "\"util/\"") && !contains(got, "\"print\""), got)
+    Files.remove(dir)
+}
+
+/** After an import alias, completion offers the public names of its module and the members of its types. */
+pub fun languageServerCompletesNamesAfterAnImportAlias() {
+    var dir = tempDir("lsp-alias")
+    put("${dir}/util/helpers.bn", "pub fun greet(): int {\n    return 1\n}\n\npriv fun hidden(): int {\n    return 2\n}\n")
+    var uri = "file://${dir}/main.bn"
+    var s = new Session(dir, [])
+    s.request("initialize", "{\"capabilities\":{}}")
+    s.open(uri, "import \"std/math\" as M\nimport \"util/helpers\" as H\nprint(H.greet())\nprint(H.)\nprint(M.Math.)\n")
+    var module = s.request("textDocument/completion", at(uri, 3, 8))
+    var statics = s.request("textDocument/completion", at(uri, 4, 13))
+    s.finish()
+    var got = s.reply(module)
+    check(contains(got, "\"greet\"") && !contains(got, "\"hidden\""), got)
+    got = s.reply(statics)
+    check(contains(got, "\"gcd\""), got)
+    Files.remove(dir)
+}
+
+/** Enum variants with data complete with their fields and show up as document symbols. */
+pub fun languageServerCompletesEnumVariantsWithData() {
+    var dir = tempDir("lsp-enums")
+    var text = "def enum Token {\n    Word(text: string),\n    End\n}\n\nfun main() {\n    var t = Token.\n}\n"
+    put("${dir}/main.bn", text)
+    var uri = "file://${dir}/main.bn"
+    var s = new Session(dir, ["BURN_HOME=${dir}/home"])
+    s.request("initialize", "{\"capabilities\":{}}")
+    s.open(uri, text)
+    var items = s.request("textDocument/completion", at(uri, 6, 18))
+    var symbols = s.request("textDocument/documentSymbol", doc(uri))
+    s.finish()
+    var got = s.reply(items)
+    check(contains(got, "\"label\":\"Word\"") && contains(got, "Token.Word(text: string)") && contains(got, "\"label\":\"End\""), got)
+    got = s.reply(symbols)
+    check(contains(got, "\"Token\"") && contains(got, "\"Word\""), got)
+    Files.remove(dir)
+}
+
+/** Definitions lead into the standard library and built-ins, and references, renames, signatures, hints and symbols work across files. */
+pub fun languageServerNavigatesIntoLibrariesAndRenamesAcrossFiles() {
+    var dir = tempDir("lsp-nav")
+    var home = "${dir}/home"
+    put("${dir}/shapes.bn", "pub def interface Shape {\n    fun area(): float\n}\n\npub def struct Square(side: float) :: Shape {\n    fun area(): float {\n        return side * side\n    }\n}\n\npub fun twice(x: int): int {\n    return x * 2\n}\n")
+    var text = "import \"shapes.bn\"\nimport \"std/date\"\nimport \"std/math\"\n\nfun total(s: Shape): float {\n    return s.area()\n}\n\nfun main() {\n    var sq = new Square(2.0)\n    print(total(sq), twice(3), sqrt(2.0), Date.today())\n    twice(4)\n}\n"
+    put("${dir}/main.bn", text)
+    var uri = "file://${dir}/main.bn"
+    var s = new Session(dir, ["BURN_HOME=${home}"])
+    var init = s.request("initialize", "{\"rootUri\":\"file://${dir}\",\"capabilities\":{}}")
+    s.open(uri, text)
+    var sqrtDef = s.request("textDocument/definition", at(uri, 10, 32))
+    var dateDef = s.request("textDocument/definition", at(uri, 10, 42))
+    var areaDef = s.request("textDocument/definition", at(uri, 5, 15))
+    var refs = s.request("textDocument/references", replace(at(uri, 10, 23), "}}", "},\"context\":{\"includeDeclaration\":true}}"))
+    var rename = s.request("textDocument/rename", replace(at(uri, 5, 15), "}}", "},\"newName\":\"size\"}"))
+    var bad = s.request("textDocument/rename", replace(at(uri, 10, 32), "}}", "},\"newName\":\"root\"}"))
+    var sig = s.request("textDocument/signatureHelp", at(uri, 11, 11))
+    var hints = s.request("textDocument/inlayHint", "{\"textDocument\":{\"uri\":\"${uri}\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":20,\"character\":0}}}")
+    var symbols = s.request("workspace/symbol", "{\"query\":\"twi\"}")
+    s.finish()
+    var got = s.reply(init)
+    for cap in ["renameProvider", "referencesProvider", "signatureHelpProvider", "inlayHintProvider", "workspaceSymbolProvider"] {
+        check(contains(got, cap), got)
+    }
+    got = s.reply(sqrtDef)
+    check(contains(got, "/cache/sources/") && contains(got, "builtins.bn"), got)
+    var version = trim(substring(trim(burn(".", ["version"]).out), 5, len(trim(burn(".", ["version"]).out))))
+    var builtins = "${home}/cache/sources/${version}/builtins.bn"
+    check(fileExists(builtins) && contains(readFile(builtins), "fun sqrt(x: float): float"), "${builtins} does not declare sqrt")
+    got = s.reply(dateDef)
+    check(contains(got, "std/date.bn"), got)
+    got = s.reply(areaDef)
+    check(contains(got, "shapes.bn") && contains(got, "\"line\":1"), got)
+    got = s.reply(refs)
+    check(count(got, "\"uri\"") == 3, got)
+    got = s.reply(rename)
+    check(contains(got, "shapes.bn") && contains(got, "main.bn") && count(got, "\"newText\":\"size\"") == 3, got)
+    got = s.reply(bad)
+    check(contains(got, "built into Burn"), got)
+    got = s.reply(sig)
+    check(contains(got, "fun twice(x: int): int"), got)
+    got = s.reply(hints)
+    check(contains(got, ": Square"), got)
+    got = s.reply(symbols)
+    check(contains(got, "\"twice\"") && contains(got, "shapes.bn"), got)
+    Files.remove(dir)
+}
+
+/** Links, folding, hover and type definitions work, and completion keeps working on code that is being typed. */
+pub fun languageServerKeepsWorkingWhileTypingAndLinksImports() {
+    var dir = tempDir("lsp-ide")
+    put("${dir}/shapes.bn", "pub def struct Square(side: float) {\n    fun area(): float {\n        return side * side\n    }\n}\n\npub fun twice(x: int): int {\n    return x * 2\n}\n")
+    var text = "import \"shapes.bn\"\nimport \"std/date\"\n\nfun main() {\n    var sq = new Square(2.0)\n    var name = \"burn\"\n    println(sq.area(), name)\n}\n"
+    put("${dir}/main.bn", text)
+    var uri = "file://${dir}/main.bn"
+    var s = new Session(dir, ["BURN_HOME=${dir}/home"])
+    var init = s.request("initialize", "{\"rootUri\":\"file://${dir}\",\"capabilities\":{}}")
+    s.open(uri, text)
+    var links = s.request("textDocument/documentLink", doc(uri))
+    var definition = s.request("textDocument/definition", at(uri, 0, 10))
+    var hover = s.request("textDocument/hover", at(uri, 1, 10))
+    var folds = s.request("textDocument/foldingRange", doc(uri))
+    var tdef = s.request("textDocument/typeDefinition", at(uri, 4, 9))
+    s.change(uri, "import \"shapes.bn\"\nimport \"std/date\"\n\nfun main() {\n    var sq = new Square(2.0)\n    var name = \"burn\"\n    if name != \"\" {\n        sq.\n}\n")
+    var members = s.request("textDocument/completion", at(uri, 7, 11))
+    s.change(uri, "import \"shapes.bn\"\n\nfun main() {\n    var sq = new Square(2.0)\n    var name = \"burn\"\n    name.\n}\n")
+    var strings = s.request("textDocument/completion", at(uri, 5, 9))
+    s.change(uri, "import \"shapes.bn\"\n\nfun main() {\n    var word = \"x\"\n    println(wo\n}\n")
+    var locals = s.request("textDocument/completion", at(uri, 4, 14))
+    s.change(uri, "def annotation Route {\n    string path\n    string method = \"GET\"\n}\n\n@\n")
+    var annotations = s.request("textDocument/completion", at(uri, 5, 1))
+    s.change(uri, "def annotation Route {\n    string path\n    string method = \"GET\"\n}\n\n@Route(\"/x\", \n")
+    var fields = s.request("textDocument/completion", at(uri, 5, 14))
+    s.change(uri, "import \"shapes.bn\"\n\nfun area(s: \n")
+    var types = s.request("textDocument/completion", at(uri, 2, 12))
+    s.change(uri, "def \n")
+    var kinds = s.request("textDocument/completion", at(uri, 0, 4))
+    s.change(uri, "fun main() {\n    println(twice(2), padLeft(\"a\", 2, \" \"))\n}\n")
+    var diags = "[{\"range\":{\"start\":{\"line\":1,\"character\":12},\"end\":{\"line\":1,\"character\":17}},\"message\":\"cannot find `twice` in this scope\"},{\"range\":{\"start\":{\"line\":1,\"character\":22},\"end\":{\"line\":1,\"character\":29}},\"message\":\"cannot find `padLeft` in this scope\"}]"
+    var fixes = s.request("textDocument/codeAction", actions(uri, 1, 40, diags))
+    s.finish()
+    var got = s.reply(init)
+    for cap in ["documentLinkProvider", "foldingRangeProvider", "typeDefinitionProvider", "implementationProvider"] {
+        check(contains(got, cap), got)
+    }
+    got = s.reply(links)
+    check(contains(got, "shapes.bn") && contains(got, "std/date.bn"), got)
+    got = s.reply(definition)
+    check(contains(got, "shapes.bn"), got)
+    got = s.reply(hover)
+    check(contains(got, "std/date") && contains(got, "Exports"), got)
+    got = s.reply(folds)
+    check(contains(got, "\"startLine\":3"), got)
+    got = s.reply(tdef)
+    check(contains(got, "shapes.bn"), got)
+    got = s.reply(members)
+    check(contains(got, "\"area\"") && contains(got, "\"side\""), got)
+    got = s.reply(strings)
+    check(contains(got, "\"upper\"") && contains(got, "\"trim\"") && !contains(got, "__exec"), got)
+    got = s.reply(locals)
+    check(contains(got, "\"word\"") && contains(got, "import \\\"std/strings\\\""), got)
+    got = s.reply(annotations)
+    check(contains(got, "\"Route\"") && contains(got, "\"Deprecated\"") && !contains(got, "\"println\""), got)
+    got = s.reply(fields)
+    check(contains(got, "\"method\"") && contains(got, "method: "), got)
+    got = s.reply(types)
+    check(contains(got, "\"Square\"") && contains(got, "\"uint64\"") && !contains(got, "\"println\""), got)
+    got = s.reply(kinds)
+    check(contains(got, "\"struct\"") && contains(got, "\"interface\"") && !contains(got, "\"println\""), got)
+    got = s.reply(fixes)
+    check(contains(got, "Import `twice` from \\\"shapes.bn\\\"") && contains(got, "Import `padLeft` from \\\"std/strings\\\""), got)
+    Files.remove(dir)
+}
+
+/** A project's own files import it by its package name, which completes, fixes imports and leads to its sources. */
+pub fun languageServerImportsTheProjectItselfByPackageName() {
+    var dir = tempDir("lsp-self")
+    put("${dir}/burn.toml", "[package]\nname = \"example.com/Ada/shapes\"\nversion = \"0.1.0\"\nkind = \"lib\"\nmain = \"src/lib.bn\"\n\n[dependencies]\n")
+    put("${dir}/src/lib.bn", "pub fun twice(x: int): int {\n    return x * 2\n}\n")
+    var text = "import \"example.com/ada/\"\n\nassert(twice(2) == 4)\n"
+    put("${dir}/tests/main.bn", text)
+    var uri = "file://${dir}/tests/main.bn"
+    var s = new Session(dir, ["BURN_HOME=${dir}/home"])
+    s.request("initialize", "{\"rootUri\":\"file://${dir}\",\"capabilities\":{}}")
+    s.open(uri, text)
+    var paths = s.request("textDocument/completion", at(uri, 0, 24))
+    var diags = "[{\"range\":{\"start\":{\"line\":2,\"character\":7},\"end\":{\"line\":2,\"character\":12}},\"message\":\"cannot find `twice` in this scope\"}]"
+    var fixes = s.request("textDocument/codeAction", actions(uri, 2, 20, diags))
+    s.change(uri, "import \"example.com/ada/shapes\"\n\nassert(twice(2) == 4)\n")
+    var definition = s.request("textDocument/definition", at(uri, 2, 8))
+    s.finish()
+    var got = s.reply(paths)
+    check(contains(got, "\"example.com/Ada/shapes\""), got)
+    got = s.reply(fixes)
+    check(contains(got, "Import `twice` from \\\"example.com/Ada/shapes\\\""), got)
+    got = s.reply(definition)
+    check(contains(got, "src/lib.bn"), got)
+    Files.remove(dir)
+}
+
+/** A missing package offers to reload the project, which runs `ash sync`. */
+pub fun languageServerReloadsTheProjectWithAshSync() {
+    var dir = tempDir("lsp-reload")
+    var home = "${dir}/home"
+    put("${home}/bin/ash", "#!/bin/sh\necho \"$@\" > \"${dir}/ran\"\n")
+    run(".", "chmod", ["755", "${home}/bin/ash"])
+    put("${dir}/burn.toml", "[package]\nname = \"example.com/ada/app\"\nversion = \"0.1.0\"\nmain = \"src/main.bn\"\n\n[dependencies]\n\"example.com/ada/colors\" = \"^1.0\"\n")
+    var text = "import \"example.com/ada/colors\"\n\nfun main() {}\n"
+    put("${dir}/src/main.bn", text)
+    var uri = "file://${dir}/src/main.bn"
+    var s = new Session(dir, ["BURN_HOME=${home}"])
+    var init = s.request("initialize", "{\"rootUri\":\"file://${dir}\",\"capabilities\":{}}")
+    s.open(uri, text)
+    var diags = "[{\"range\":{\"start\":{\"line\":0,\"character\":7},\"end\":{\"line\":0,\"character\":31}},\"message\":\"the package `example.com/ada/colors` is not installed yet; run `ash install`\"}]"
+    var fixes = s.request("textDocument/codeAction", actions(uri, 0, 31, diags))
+    var done = s.request("workspace/executeCommand", "{\"command\":\"burn.server.reloadProject\",\"arguments\":[\"${uri}\"]}")
+    s.finish()
+    var got = s.reply(init)
+    check(contains(got, "burn.server.reloadProject"), got)
+    got = s.reply(fixes)
+    check(contains(got, "Reload project (ash sync)") && contains(got, "burn.server.reloadProject"), got)
+    got = s.reply(done)
+    check(contains(got, "\"result\":null"), got)
+    check(fileExists("${dir}/ran") && trim(readFile("${dir}/ran")) == "sync", "ash sync did not run")
+    Files.remove(dir)
+}

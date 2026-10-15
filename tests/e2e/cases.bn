@@ -1,0 +1,188 @@
+/** The test programs in `tests/cases` give the output in their `.out` files on every backend. */
+import "std/fs"
+import "harness.bn"
+
+/** Whether the files at `a` and `b` hold the same bytes. */
+pub fun sameFile(a: string, b: string): bool {
+    return run(".", "cmp", ["-s", a, b]).code == 0
+}
+
+/** Each case prints what its `.out` file says on bvm. */
+pub fun vmMatchesExpectedOutput() {
+    for name in cases() {
+        same(both(burn(".", ["tests/cases/${name}.bn"])), expected(name), "tests/cases/${name}.bn")
+    }
+}
+
+/** Each case prints the same as a native executable, also with a small cycle collector threshold. */
+pub fun nativeMatchesVm() {
+    if (!nativeSupported()) {
+        return
+    }
+    var tmp = tempDir("native")
+    for name in cases() {
+        var exe = "${tmp}/${name}"
+        var b = burn(".", ["build", "tests/cases/${name}.bn", "-o", exe])
+        if (b.code != 0) {
+            fail("tests/cases/${name}.bn: build failed\n${both(b)}")
+            continue
+        }
+        same(both(run(".", exe, [])), expected(name), "tests/cases/${name}.bn (native)")
+        same(both(runWith(".", ["BURN_GC_THRESHOLD=16384"], exe, [], null)), expected(name), "tests/cases/${name}.bn (native, gc threshold 16384)")
+    }
+    Files.remove(tmp)
+}
+
+/** Each case cross-compiled to Linux arm64 prints the same under qemu, when qemu and a cross compiler are installed. */
+pub fun arm64ExecutablesMatchVm() {
+    var host = trim(run(".", "uname", ["-sm"]).out)
+    if (host != "Linux x86_64" || !has("qemu-aarch64", "--version") || !has("aarch64-linux-gnu-gcc", "--version")) {
+        return
+    }
+    var tmp = tempDir("arm64")
+    var rt = "${tmp}/runtime"
+    var r = runWith(".", ["BURN=${tool("burn")}", "BURN_CC=aarch64-linux-gnu-gcc", "TARGET=aarch64-unknown-linux-gnu"], "sh", ["scripts/native-runtime.sh", rt], null)
+    if (r.code != 0) {
+        fail("the arm64 runtime does not build:\n${both(r)}")
+        return
+    }
+    var cross = ["BURN_PLATFORM=linux-aarch64", "BURN_RUNTIME_DIR=${rt}", "BURN_CC=aarch64-linux-gnu-gcc"]
+    for name in cases() {
+        if (name == "process_fs") {
+            continue
+        }
+        var exe = "${tmp}/${name}"
+        var b = burnWith(".", cross, ["build", "tests/cases/${name}.bn", "-o", exe])
+        if (b.code != 0) {
+            fail("tests/cases/${name}.bn: build failed\n${both(b)}")
+            continue
+        }
+        var out = runWith(".", ["BURN_GC_THRESHOLD=16384"], "qemu-aarch64", ["-L", "/usr/aarch64-linux-gnu", exe], null)
+        same(both(out), expected(name), "tests/cases/${name}.bn (arm64)")
+    }
+    Files.remove(tmp)
+}
+
+/** Each case compiled to JavaScript prints the same under Node.js, when it is installed. */
+pub fun jsMatchesVm() {
+    if (!has("node", "--version")) {
+        return
+    }
+    var tmp = tempDir("js")
+    for name in cases() {
+        var js = "${tmp}/${name}.js"
+        var b = burn(".", ["build", "tests/cases/${name}.bn", "--target", "js", "-o", js])
+        if (b.code != 0) {
+            fail("tests/cases/${name}.bn: js build failed\n${both(b)}")
+            continue
+        }
+        same(both(run(".", "node", [js])), expected(name), "tests/cases/${name}.bn (js)")
+    }
+    Files.remove(tmp)
+}
+
+/** No case uses a value after freeing it, which `BURN_RC_CHECK` reports, also when cycles are collected often. */
+pub fun freedValuesAreNeverUsedAgain() {
+    for name in cases() {
+        var r = burnWith(".", ["BURN_RC_CHECK=1", "BURN_GC_THRESHOLD=4096"], ["tests/cases/${name}.bn"])
+        same(both(r), expected(name), "tests/cases/${name}.bn (rc check)")
+    }
+}
+
+/** Each case written as bytecode and as bvm assembly assembles back to the same bytes, and both run. */
+pub fun bvmModulesRoundTripAndRun() {
+    var tmp = tempDir("bvm")
+    for name in cases() {
+        var bin = "${tmp}/${name}.bvmc"
+        var text = "${tmp}/${name}.bvm"
+        var b = burn(".", ["build", "--target", "bvm", "-o", bin, "-S", text, "tests/cases/${name}.bn"])
+        if (b.code != 0) {
+            fail("tests/cases/${name}.bn: build failed\n${both(b)}")
+            continue
+        }
+        var again = "${tmp}/${name}.again.bvmc"
+        var a = run(".", tool("bvm"), ["asm", text, "-o", again])
+        check(a.code == 0 && sameFile(bin, again), "tests/cases/${name}.bn: the text form does not assemble back to the same module\n${both(a)}")
+        for m in [bin, text] {
+            same(both(burn(".", [m])), expected(name), m)
+        }
+    }
+    Files.remove(tmp)
+}
+
+/** Each case built as bytecode runs on the toolchain's `bvm`, also with a small cycle collector threshold. */
+pub fun bvmRunsTheTestCases() {
+    var tmp = tempDir("bvm-run")
+    for name in cases() {
+        var module = "${tmp}/${name}.bvmc"
+        var b = burn(".", ["build", "--target", "bvm", "tests/cases/${name}.bn", "-o", module])
+        if (b.code != 0) {
+            fail("tests/cases/${name}.bn: build failed\n${both(b)}")
+            continue
+        }
+        same(both(run(".", tool("bvm"), ["run", module])), expected(name), "tests/cases/${name}.bn (bvm)")
+        same(both(runWith(".", ["BURN_GC_THRESHOLD=16384"], tool("bvm"), ["run", module], null)), expected(name), "tests/cases/${name}.bn (bvm, gc threshold 16384)")
+    }
+    Files.remove(tmp)
+}
+
+/** The cases that need no standard library print the same with `--no-std`, on bvm and natively, and the checker explains what needs it. */
+pub fun programsWithoutTheStandardLibraryBehaveTheSame() {
+    var tmp = tempDir("nostd")
+    var ran = 0
+    [string] plain = []
+    for name in cases() {
+        if (burn(".", ["check", "--no-std", "tests/cases/${name}.bn"]).code == 0) {
+            plain.push(name)
+        }
+    }
+    for name in plain {
+        ran += 1
+        var r = burnWith(".", ["BURN_RC_CHECK=1", "BURN_GC_THRESHOLD=4096"], ["--no-std", "tests/cases/${name}.bn"])
+        same(both(r), expected(name), "tests/cases/${name}.bn (no-std)")
+    }
+    check(ran >= 15, "only ${ran} cases run without the standard library")
+    if (nativeSupported()) {
+        for name in plain {
+            var exe = "${tmp}/${name}"
+            var b = burn(".", ["build", "--no-std", "tests/cases/${name}.bn", "-o", exe])
+            if (b.code != 0) {
+                fail("tests/cases/${name}.bn: no-std build failed\n${both(b)}")
+                continue
+            }
+            var r = runWith(".", ["BURN_RC_CHECK=1", "BURN_GC_THRESHOLD=4096"], exe, [], null)
+            same(both(r), expected(name), "tests/cases/${name}.bn (no-std, native)")
+        }
+        var hello = "${tmp}/hello.bn"
+        put(hello, "fun main() {\n    print(\"hello\")\n}\n")
+        for flag in ["--no-std", "--std"] {
+            var exe = "${tmp}/hello${flag}"
+            [string] args = ["build", hello, "-o", exe]
+            if (flag == "--no-std") {
+                args.push(flag)
+            }
+            var b = burn(".", args)
+            check(b.code == 0, both(b))
+            same(both(run(".", exe, [])), "hello\n", "hello world built with ${flag}")
+        }
+    }
+    var project = "${tmp}/app"
+    put("${project}/burn.toml", "[package]\nname = \"example.com/ada/app\"\ntarget = \"bvm\"\nstd = false\n")
+    put("${project}/src/main.bn", "import \"std/http\"\nimport \"std/strings\"\n\nasync fun later(): int {\n    return 1\n}\n\nfun main() {\n    print(toJSON([1]), await later())\n}\n")
+    var c = burn(project, ["check"])
+    var out = both(c)
+    check(c.code == 1, out)
+    for msg in ["`std/http` is part of the standard library", "`std/strings` is part of the standard library", "an `async fun` needs the standard library", "`toJSON` is in the standard library module `std/json`", "`await` needs the standard library", "std = false"] {
+        check(contains(out, msg), "missing `${msg}` in\n${out}")
+    }
+    check(!contains(out, "import it with"), out)
+    put("${project}/src/main.bn", "fun main() {\n    var names = [\"b\", \"a\"]\n    names.sort()\n    print(names.join(\",\"), \"x\".upper(), toInt(\"41\") + 1)\n}\n")
+    var b = burn(project, ["build"])
+    check(b.code == 0, both(b))
+    var r = burn(project, ["build/app.bvmc"])
+    same(both(r), "a,b X 42\n", "a no-std project")
+    put("${project}/src/main.bn", "import \"std/fs\"\n\nfun main() {\n    print(readFile(\"x\"))\n}\n")
+    c = burn(project, ["check"])
+    check(c.code == 1 && contains(both(c), "`std/fs` is part of the standard library"), both(c))
+    Files.remove(tmp)
+}

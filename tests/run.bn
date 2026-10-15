@@ -1,0 +1,104 @@
+/**
+ * The end-to-end tests: they run the toolchain in `$BURN_TEST_TOOLCHAIN` on the programs and projects in `tests/`.
+ * `scripts/test.sh` builds a toolchain and runs them; run from the repository root, `run --list` prints their names
+ * and `run <name>...` runs some of them.
+ */
+import "std/process"
+import "e2e/bytecode.bn"
+import "e2e/cases.bn"
+import "e2e/harness.bn"
+import "e2e/lsp.bn"
+import "e2e/projects.bn"
+import "e2e/tools.bn"
+
+def type Test {
+    string name
+    fun(): void body
+}
+
+fun tests(): [Test] {
+    return [
+        Test { name: "vm_matches_expected_output", body: vmMatchesExpectedOutput },
+        Test { name: "native_matches_vm", body: nativeMatchesVm },
+        Test { name: "arm64_executables_match_vm", body: arm64ExecutablesMatchVm },
+        Test { name: "js_matches_vm", body: jsMatchesVm },
+        Test { name: "freed_values_are_never_used_again", body: freedValuesAreNeverUsedAgain },
+        Test { name: "bvm_modules_round_trip_and_run", body: bvmModulesRoundTripAndRun },
+        Test { name: "bvm_runs_the_test_cases", body: bvmRunsTheTestCases },
+        Test { name: "programs_without_the_standard_library_behave_the_same", body: programsWithoutTheStandardLibraryBehaveTheSame },
+        Test { name: "bvm_reads_and_writes_bytecode", body: bvmReadsAndWritesBytecode },
+        Test { name: "bvm_links_modules_and_applies_mixins", body: bvmLinksModulesAndAppliesMixins },
+        Test { name: "bvm_packs_and_runs_archives", body: bvmPacksAndRunsArchives },
+        Test { name: "mixins_rewrite_bytecode_and_are_rejected_for_native_code_and_javascript", body: mixinsRewriteBytecodeAndAreRejectedForNativeCodeAndJavascript },
+        Test { name: "bytecode_libraries_run_on_bvm_in_archives_and_in_native_executables", body: bytecodeLibrariesRunOnBvmInArchivesAndInNativeExecutables },
+        Test { name: "apps_can_be_imported_as_bytecode_and_changed_with_mixins", body: appsCanBeImportedAsBytecodeAndChangedWithMixins },
+        Test { name: "native_code_calls_c_and_c_calls_burn", body: nativeCodeCallsCAndCCallsBurn },
+        Test { name: "runtime_libraries_written_in_burn_link_into_native_programs", body: runtimeLibrariesWrittenInBurnLinkIntoNativePrograms },
+        Test { name: "uint64_uses_all_64_bits_on_bvm_and_natively", body: uint64UsesAll64BitsOnBvmAndNatively },
+        Test { name: "ember_runs_its_demo", body: emberRunsItsDemo },
+        Test { name: "compile_errors_point_at_the_right_line", body: compileErrorsPointAtTheRightLine },
+        Test { name: "eval_and_exit_codes", body: evalAndExitCodes },
+        Test { name: "repl_keeps_state_between_inputs", body: replKeepsStateBetweenInputs },
+        Test { name: "formatter_is_idempotent", body: formatterIsIdempotent },
+        Test { name: "repository_sources_are_formatted", body: repositorySourcesAreFormatted },
+        Test { name: "repository_sources_import_the_standard_modules_they_use", body: repositorySourcesImportTheStandardModulesTheyUse },
+        Test { name: "generated_sources_are_up_to_date", body: generatedSourcesAreUpToDate },
+        Test { name: "burnfmt_matches_the_builtin_formatter", body: burnfmtMatchesTheBuiltinFormatter },
+        Test { name: "toolchain_names_select_the_right_mode", body: toolchainNamesSelectTheRightMode },
+        Test { name: "fix_applies_the_compiler_suggestions", body: fixAppliesTheCompilerSuggestions },
+        Test { name: "doc_generates_pages_for_programs_the_standard_library_and_builtins", body: docGeneratesPagesForProgramsTheStandardLibraryAndBuiltins },
+        Test { name: "runaway_programs_stop_at_the_heap_limit", body: runawayProgramsStopAtTheHeapLimit },
+        Test { name: "values_that_only_reference_each_other_are_freed", body: valuesThatOnlyReferenceEachOtherAreFreed },
+        Test { name: "projects_use_a_standard_layout", body: projectsUseAStandardLayout },
+        Test { name: "workspaces_build_every_member", body: workspacesBuildEveryMember },
+        Test { name: "init_creates_projects_that_build_and_import_packages", body: initCreatesProjectsThatBuildAndImportPackages },
+        Test { name: "language_server_completes_imports_and_reports_ambiguity_once", body: languageServerCompletesImportsAndReportsAmbiguityOnce },
+        Test { name: "language_server_completes_names_after_an_import_alias", body: languageServerCompletesNamesAfterAnImportAlias },
+        Test { name: "language_server_completes_enum_variants_with_data", body: languageServerCompletesEnumVariantsWithData },
+        Test { name: "language_server_navigates_into_libraries_and_renames_across_files", body: languageServerNavigatesIntoLibrariesAndRenamesAcrossFiles },
+        Test { name: "language_server_keeps_working_while_typing_and_links_imports", body: languageServerKeepsWorkingWhileTypingAndLinksImports },
+        Test { name: "language_server_imports_the_project_itself_by_package_name", body: languageServerImportsTheProjectItselfByPackageName },
+        Test { name: "language_server_reloads_the_project_with_ash_sync", body: languageServerReloadsTheProjectWithAshSync }
+    ]
+}
+
+fun main() {
+    var a = args()
+    if (len(a) > 0 && a[0] == "--list") {
+        for t in tests() {
+            print(t.name)
+        }
+        return
+    }
+    if (toolchain() == "") {
+        eprint("error: set BURN_TEST_TOOLCHAIN to the toolchain to test (see scripts/test.sh)")
+        exit(2)
+    }
+    var bad = 0
+    var ran = 0
+    for t in tests() {
+        if (len(a) > 0 && !contains(a, t.name)) {
+            continue
+        }
+        ran += 1
+        var before = len(failed())
+        t.body()
+        var now = failed()
+        if (len(now) == before) {
+            print("test ${t.name} ... ok")
+        } else {
+            bad += 1
+            print("test ${t.name} ... FAILED")
+            for i in before..len(now) {
+                print(now[i])
+            }
+        }
+    }
+    if (ran == 0) {
+        eprint("error: no test is called ${join(a, ", ")}")
+        exit(2)
+    }
+    if (bad > 0) {
+        exit(1)
+    }
+}
