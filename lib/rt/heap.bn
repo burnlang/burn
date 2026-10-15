@@ -1068,7 +1068,7 @@ pub unsafe fun f32ToBits(f32: int): int {
     var out = 0
     asm {
         x86_64 {
-            mov eax, dword ptr {x}
+            mov rax, {x}
             movd xmm0, eax
             cvtss2sd xmm0, xmm0
             movq rax, xmm0

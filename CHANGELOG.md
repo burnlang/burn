@@ -4,6 +4,7 @@
 
 No Rust: the compiler, the command line, bvm and the runtime are written in Burn, the toolchain is a native executable that builds itself in under a minute, and building Burn needs only a C compiler, starting from assembly seeds in the repository.
 
+- The inline assembly of the runtime assembles with clang too (`mul` and `div` take a register, and `f32ToBits` loads its argument whole), so the macOS seeds and toolchains build on Intel Macs.
 - No Rust is left in the repository: the bvm crate (`bvm/`, with its runtime core `bvm/runtime`, the Rust tests and `bvm/runtime.bvm`), `Cargo.toml`, `Cargo.lock`, `rustfmt.toml`, `lib/runtime` (the runtime functions the Rust bvm linked into programs) and `compiler/src/bin/genrt.bn` are gone. `compiler/src/vm/runtime.bn` now names the runtime functions itself, and releases check their tag against `compiler/src/version.bn`.
 - The end-to-end tests are written in Burn: `tests/run.bn` and `tests/e2e/` replace `bvm/tests/burn.rs`, and `sh scripts/test.sh` builds a toolchain (or takes one with `--toolchain`) and runs them in parallel, in about 30 seconds. Language server tests send their messages in one batch and pick the answers by id. CI builds, tests and smoke-tests the toolchain without cargo.
 - Ember, the example language built on bvm, is written in Burn: `examples/bvm/ember/ember.bn` builds bvm modules with the compiler's own module types and runs them with the bvm written in Burn, giving the same output as `bvm/examples/ember.rs`, which is gone.
