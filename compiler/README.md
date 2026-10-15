@@ -106,22 +106,24 @@ The inputs include the error-recovery fixtures in `tests/lexer` and `tests/parse
    - `scripts/package.sh` builds it as a native executable, `bin/burn`, with the compiler the bootstrap made; the runtime it links is written in Burn in `lib/rt`.
 10. **Retiring the Rust compiler** (done in `26.1.0-experimental-3`). `crates/burn` is removed. `cargo test` builds bvm, builds the toolchain from the boot compiler and runs the end-to-end tests in `bvm/tests/burn.rs` against it; toolchains ship bvm as `bin/burn`.
 
-## The boot compiler
+## The seed
 
-The compiler is written in Burn, so something has to run it the first time. That is `compiler/boot/compiler.bvmc`: the
-compiler from an earlier commit, compiled to bvm bytecode and kept in the repository, like `zig1.wasm` in Zig. Only
-Rust is needed to start: cargo builds bvm, and bvm runs the boot compiler. No released Burn is downloaded.
+The compiler is written in Burn, so something has to build it the first time. That is the seed in `compiler/boot`:
+the compiler (`src/main.bn`) from an earlier commit and the runtime it links (`lib/rt`), compiled to assembly for
+each platform (`linux-x86_64.tar.xz`, `linux-aarch64.tar.xz`, `macos-x86_64.tar.xz`, `macos-aarch64.tar.xz`), like
+`zig1.wasm` in Zig. Only a C compiler, tar and xz are needed to start: the C compiler assembles the seed into a native
+compiler. No released Burn is downloaded, and no Rust is needed.
 
-- **The bootstrap:** `scripts/bootstrap.sh` lets the boot compiler build `compiler/src` (`stage1.bvm`), lets stage 1
-  build it again (`stage2.bvm`), and, when the two differ because the code generator changed since the boot compiler
-  was made, lets stage 2 build it a third time (`stage3.bvm`). The last two stages must be identical. Stage 2 builds
-  the toolchain. The CI job `bootstrap` runs it on every push, and so do
-  `scripts/package.sh` and the tests (`bvm/tests/burn.rs`), which build the toolchain with stage 1.
-- **The rule:** `compiler/src` may only use language features that the boot compiler understands. To use a new one
-  in the compiler, add it to the language first, then run `sh scripts/bootstrap.sh --update`, which replaces the boot
-  compiler with the one just built, and commit it together with the first use.
-- **Keeping it small:** the boot compiler is about 1.9 MB of bytecode (300 KB compressed in git). Update it only when
-  the compiler's own sources need something new, or when bvm changes its bytecode format.
+- **The bootstrap:** `scripts/bootstrap.sh` assembles the seed of this platform (stage 0), lets it build
+  `compiler/src/main.bn` and `lib/rt` (stage 1), lets stage 1 build them again (stage 2), and, when the two differ
+  because the code generator changed since the seed was made, lets stage 2 build them a third time (stage 3). The
+  assembly of the last two stages must be identical; each stage takes a few seconds. The CI job `bootstrap` runs it on
+  every push, and `scripts/package.sh` builds the toolchain with the stage it ends with.
+- **The rule:** `compiler/src` may only use language features that the seed understands. To use a new one in the
+  compiler, add it to the language first, then run `sh scripts/bootstrap.sh --update`, which replaces the seeds of
+  every platform with the compiler just built, and commit them together with the first use.
+- **Keeping it small:** each seed is about 56 MB of assembly, 1.3 MB compressed. Update the seeds only when the
+  compiler's own sources need something new.
 
 To cut a release by hand, run the **Release** workflow from the Actions tab with the tag to create. The tag must be `v` followed by the workspace version.
 

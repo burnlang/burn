@@ -2,43 +2,47 @@
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BVM="${BVM:-$ROOT/target/release/bvm}"
-BOOT="$ROOT/compiler/boot/compiler.bvmc"
 OUT="$ROOT/compiler/build"
+SEED=""
 UPDATE=0
+CC="${BURN_CC:-${CC:-cc}}"
+PLATFORMS="linux-x86_64 linux-aarch64 macos-x86_64 macos-aarch64"
 
 usage() {
     cat <<EOF2
-Builds the Burn compiler with itself, starting from the boot compiler in the repository,
-and checks that the result is stable:
+Builds the Burn compiler with itself, starting from the seed in the repository, and checks
+that the result is stable:
 
-  stage 1  the boot compiler (compiler/boot/compiler.bvmc) builds compiler/src
-  stage 2  stage 1 builds compiler/src again
-  stage 3  stage 2 builds compiler/src again, unless stage 1 and stage 2 are already the same
-  the last two stages must be the same bvm module, byte for byte
+  stage 0  the C compiler assembles the seed (compiler/boot/<platform>.tar.xz), the compiler
+           and its runtime as assembly for this platform
+  stage 1  stage 0 builds compiler/src/main.bn and lib/rt, which the C compiler assembles
+  stage 2  stage 1 builds them again
+  stage 3  stage 2 builds them again, unless stage 1 and stage 2 are already the same
+  the last two stages must be the same assembly, byte for byte
 
-bvm runs every stage, so only Rust is needed to start: cargo builds bvm, and bvm runs the
-compiler written in Burn. The modules are bvm assembly that \`bvm <file.bvm>\` runs.
+Only a C compiler (cc), tar and xz are needed: no Burn, no Rust. Each stage is a native
+executable, \$OUT/stage<n>, and \$OUT/stage<n>.s and \$OUT/runtime<n>.s are its assembly.
 
-The boot compiler is a compiled copy of the compiler from an earlier commit. compiler/src may
-only use language features that it understands; --update replaces it with the compiler just
+The seed is the compiler from an earlier commit. compiler/src may only use language features
+that it understands; --update replaces the seeds of every platform with the compiler just
 built, after which the sources can use everything that compiler knows.
 
 Usage:
-  scripts/bootstrap.sh [--bvm <bvm>] [--boot <compiler.bvmc>] [--out <dir>] [--update]
+  scripts/bootstrap.sh [--seed <file.tar.xz>] [--out <dir>] [--update]
 
 Options:
-  --bvm <bvm>       the bvm that runs the stages (default: \$BVM or target/release/bvm, built with cargo if missing)
-  --boot <file>     the compiler that starts the bootstrap (default: compiler/boot/compiler.bvmc)
+  --seed <file>     the seed to start from (default: compiler/boot/<this platform>.tar.xz)
   --out <dir>       where to write the stages (default: compiler/build)
-  --update          write the final stage to compiler/boot/compiler.bvmc
+  --update          write the final stage as the seeds of all platforms ($PLATFORMS)
+
+Environment:
+  BURN_CC, CC       the C compiler that assembles and links the stages (default: cc)
 EOF2
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --bvm) BVM="$2"; shift 2 ;;
-        --boot) BOOT="$2"; shift 2 ;;
+        --seed) SEED="$2"; shift 2 ;;
         --out) OUT="$2"; shift 2 ;;
         --update) UPDATE=1; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -46,29 +50,76 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if [ ! -x "$BVM" ]; then
-    echo "building bvm"
-    (cd "$ROOT" && cargo build --release --locked --quiet -p bvm)
+case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64) PLATFORM=linux-x86_64 ;;
+    Linux-aarch64 | Linux-arm64) PLATFORM=linux-aarch64 ;;
+    Darwin-x86_64) PLATFORM=macos-x86_64 ;;
+    Darwin-arm64 | Darwin-aarch64) PLATFORM=macos-aarch64 ;;
+    *)
+        echo "error: Burn runs on x86_64 and arm64 macOS and Linux, not $(uname -s)-$(uname -m)" >&2
+        exit 1
+        ;;
+esac
+if [ -z "$SEED" ]; then
+    SEED="$ROOT/compiler/boot/$PLATFORM.tar.xz"
 fi
 
 mkdir -p "$OUT"
+OUT="$(cd "$OUT" && pwd)"
 cd "$ROOT"
-echo "stage 1: the boot compiler builds compiler/src"
-"$BVM" "$BOOT" build compiler/src/main.bn -o "$OUT/stage1.bvm"
+
+link() {
+    "$CC" "$1" "$2" -lpthread -ldl -lm -o "$3"
+}
+
+stage() {
+    "$OUT/stage$2" build --target runtime lib/rt/runtime.bn -o "$OUT/runtime$1.s" >/dev/null
+    "$OUT/stage$2" build --target asm compiler/src/main.bn -o "$OUT/stage$1.s" >/dev/null
+    link "$OUT/stage$1.s" "$OUT/runtime$1.s" "$OUT/stage$1"
+}
+
+same() {
+    cmp -s "$OUT/stage$1.s" "$OUT/stage$2.s" && cmp -s "$OUT/runtime$1.s" "$OUT/runtime$2.s"
+}
+
+echo "stage 0: the C compiler assembles the seed ($(basename "$SEED"))"
+rm -rf "$OUT/seed"
+mkdir -p "$OUT/seed"
+xz -dc "$SEED" | tar -xf - -C "$OUT/seed"
+link "$OUT/seed/compiler.s" "$OUT/seed/runtime.s" "$OUT/stage0"
+echo "stage 1: stage 0 builds compiler/src"
+stage 1 0
 echo "stage 2: stage 1 builds compiler/src"
-"$BVM" "$OUT/stage1.bvm" build compiler/src/main.bn -o "$OUT/stage2.bvm"
-if cmp -s "$OUT/stage1.bvm" "$OUT/stage2.bvm"; then
+stage 2 1
+FINAL=2
+if same 1 2; then
     echo "stage 1 and stage 2 are identical"
 else
     echo "stage 3: stage 2 builds compiler/src"
-    "$BVM" "$OUT/stage2.bvm" build compiler/src/main.bn -o "$OUT/stage3.bvm"
-    if ! cmp -s "$OUT/stage2.bvm" "$OUT/stage3.bvm"; then
+    stage 3 2
+    if ! same 2 3; then
         echo "error: stage 2 and stage 3 differ" >&2
         exit 1
     fi
     echo "stage 2 and stage 3 are identical"
 fi
+cp -f "$OUT/stage$FINAL" "$OUT/compiler"
+
 if [ "$UPDATE" -eq 1 ]; then
-    "$BVM" asm "$OUT/stage2.bvm" -o "$ROOT/compiler/boot/compiler.bvmc" >/dev/null
-    echo "updated compiler/boot/compiler.bvmc"
+    rm -rf "$OUT/update"
+    for p in $PLATFORMS; do
+        mkdir -p "$OUT/update/$p"
+        BURN_PLATFORM="$p" "$OUT/compiler" build --target asm compiler/src/main.bn -o "$OUT/update/$p/compiler.s" >/dev/null
+        BURN_PLATFORM="$p" "$OUT/compiler" build --target runtime lib/rt/runtime.bn -o "$OUT/update/$p/runtime.s" >/dev/null
+    done
+    echo "compressing the seeds"
+    for p in $PLATFORMS; do
+        (cd "$OUT/update/$p" && tar -cf - compiler.s runtime.s) | xz -9e -T1 >"$OUT/update/$p.tar.xz" &
+    done
+    wait
+    for p in $PLATFORMS; do
+        mv -f "$OUT/update/$p.tar.xz" "$ROOT/compiler/boot/$p.tar.xz"
+        echo "updated compiler/boot/$p.tar.xz"
+    done
+    rm -rf "$OUT/update"
 fi

@@ -17,52 +17,12 @@ fn toolchain() -> &'static Path {
     DIR.get_or_init(|| {
         let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("burn-toolchain-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("bin")).unwrap();
-        std::fs::create_dir_all(dir.join("share/burn")).unwrap();
-        let compiler = dir.join("compiler.bvm");
-        let (out, code) = output(
-            Command::new(bvm_exe())
-                .current_dir(root())
-                .arg(root().join("compiler/boot/compiler.bvmc"))
-                .args(["build", "compiler/src/main.bn", "-o"])
-                .arg(&compiler),
-        );
-        assert_eq!(code, 0, "the boot compiler cannot build compiler/src:\n{}", out);
         assert!(
             native_supported(),
             "the Burn toolchain is a native executable, which this platform cannot build"
         );
-        let work = dir.join("work");
-        std::fs::create_dir_all(&work).unwrap();
-        for (target, file, out) in [("runtime", "lib/rt/runtime.bn", "runtime.s"), ("asm", "compiler/src/bin/burn.bn", "burn.s")] {
-            let (log, code) = output(
-                Command::new(bvm_exe())
-                    .current_dir(root())
-                    .arg(&compiler)
-                    .args(["build", "--target", target, file, "-o"])
-                    .arg(work.join(out)),
-            );
-            assert_eq!(code, 0, "the compiler cannot build {}:\n{}", file, log);
-        }
-        let (out, code) = output(
-            Command::new("cc")
-                .arg(work.join("burn.s"))
-                .arg(work.join("runtime.s"))
-                .args(["-lpthread", "-ldl", "-lm", "-o"])
-                .arg(dir.join("bin/burn")),
-        );
-        assert_eq!(code, 0, "{}", out);
-        for tool in ["burni", "burnc", "burn-lsp"] {
-            std::os::unix::fs::symlink("burn", dir.join("bin").join(tool)).unwrap();
-        }
-        let (out, code) = output(
-            Command::new("sh")
-                .arg(root().join("scripts/native-runtime.sh"))
-                .arg(dir.join("share/burn/lib"))
-                .env("BURN", dir.join("bin/burn")),
-        );
-        assert_eq!(code, 0, "{}", out);
-        let _ = std::fs::remove_dir_all(&work);
+        let (out, code) = output(Command::new("sh").arg(root().join("scripts/package.sh")).arg("--prefix").arg(&dir).arg("-q"));
+        assert_eq!(code, 0, "scripts/package.sh cannot build the toolchain:\n{}", out);
         dir
     })
 }
@@ -226,7 +186,15 @@ fn the_bvm_written_in_burn_reads_and_writes_bytecode_like_bvm() {
     let fib = tmp.join("fib.bvmc");
     let (out, code) = output(burn().current_dir(&root).args(["build", "--target", "bvm", "examples/fib.bn", "-o"]).arg(&fib));
     assert_eq!(code, 0, "{}", out);
-    for module in [root.join("compiler/boot/compiler.bvmc"), fib] {
+    let big = tmp.join("compiler.bvmc");
+    let (out, code) = output(
+        burn()
+            .current_dir(&root)
+            .args(["build", "--target", "bvm", "compiler/src/main.bn", "-o"])
+            .arg(&big),
+    );
+    assert_eq!(code, 0, "{}", out);
+    for module in [big, fib] {
         let copy = tmp.join("copy.bvmc");
         let (out, code) = output(Command::new(&exe).arg("copy").arg(&module).arg(&copy));
         assert_eq!(code, 0, "{}", out);
@@ -294,17 +262,13 @@ fn the_bvm_written_in_burn_links_modules_and_applies_mixins_like_bvm() {
     let exe = tmp.join("bvm");
     let (out, code) = output(burn().current_dir(&root).arg("build").arg("compiler/src/bin/bvm.bn").arg("-o").arg(&exe));
     assert_eq!(code, 0, "{}", out);
-    let text = tmp.join("mixins.bvm");
-    let (out, code) = output(
-        Command::new(bvm_exe())
-            .current_dir(&root)
-            .arg(toolchain().join("compiler.bvm"))
-            .args(["build", "tests/mixins/mixins.bn", "-o"])
-            .arg(&text),
-    );
-    assert_eq!(code, 0, "{}", out);
     let module = tmp.join("mixins.bvmc");
-    let (out, code) = output(Command::new(bvm_exe()).arg("asm").arg(&text).arg("-o").arg(&module));
+    let (out, code) = output(
+        burn()
+            .current_dir(&root)
+            .args(["build", "--target", "bvm", "tests/mixins/mixins.bn", "-o"])
+            .arg(&module),
+    );
     assert_eq!(code, 0, "{}", out);
     let (out, _, code) = stdout_of(Command::new(&exe).arg("run").arg(&module));
     assert_eq!(code, 0);

@@ -54,16 +54,17 @@ jobs:
           "$RUNNER_TEMP/burn/bin/burn" run --native examples/fib.bn
 
   bootstrap:
-    name: The Burn compiler builds itself
+    name: The Burn compiler builds itself from the seed
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: The boot compiler builds compiler/src, which builds itself until it is stable
+      - name: The C compiler assembles the seed, which builds compiler/src until it is stable
         run: sh scripts/bootstrap.sh --out "$RUNNER_TEMP/bootstrap"
-      - name: The compiler it built compiles a program that runs
+      - name: The compiler it built compiles a program
         run: |
-          target/release/bvm "$RUNNER_TEMP/bootstrap/stage2.bvm" build examples/fib.bn -o "$RUNNER_TEMP/fib.bvm"
-          target/release/bvm "$RUNNER_TEMP/fib.bvm"
+          "$RUNNER_TEMP/bootstrap/compiler" build examples/fib.bn -o "$RUNNER_TEMP/fib.bvm"
+          "$RUNNER_TEMP/bootstrap/compiler" build --target asm examples/fib.bn -o "$RUNNER_TEMP/fib.s"
+          cc "$RUNNER_TEMP/fib.s" "$RUNNER_TEMP/bootstrap/runtime2.s" -lpthread -ldl -lm -o "$RUNNER_TEMP/fib"
+          "$RUNNER_TEMP/fib"
       - name: It reads every Burn file in the repository
-        run: git ls-files -z '*.bn' | xargs -0 target/release/bvm "$RUNNER_TEMP/bootstrap/stage2.bvm" --tokens > "$RUNNER_TEMP/tokens.txt" && wc -l "$RUNNER_TEMP/tokens.txt"
+        run: git ls-files -z '*.bn' | xargs -0 "$RUNNER_TEMP/bootstrap/compiler" --tokens > "$RUNNER_TEMP/tokens.txt" && wc -l "$RUNNER_TEMP/tokens.txt"
