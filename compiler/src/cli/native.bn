@@ -156,22 +156,32 @@ pub fun buildNative(c: Compiled, opts: NativeOptions): string? {
         return link(asm, opts.output, opts.strip, core, "-lm")
     }
     if (len(libs) > 0) {
-        return linkBvm(asm, opts)
+        return bytecodeExecutable(c, opts)
     }
     var libsText = readText(pathJoin(dir, "native-libs.txt")) ?? ""
     return link(asm, opts.output, opts.strip, pathJoin(dir, "libburn_runtime.a"), trim(libsText))
 }
 
-/** Links a program that runs bytecode against `libburn_bvm.a`, bvm with its runtime, or `libburn_runtime.a` in a toolchain that has only that. */
-priv fun linkBvm(asm: string, opts: NativeOptions): string? {
-    var dir = runtimeDir()
-    var bvmLib = pathJoin(dir, "libburn_bvm.a")
-    if (Files.isFile(bvmLib)) {
-        var libsText = readText(pathJoin(dir, "bvm-libs.txt")) ?? ""
-        return link(asm, opts.output, opts.strip, bvmLib, trim(libsText))
+/**
+ * An executable for a program that imports bytecode libraries: the program is compiled to bytecode, linked with
+ * its libraries, and bundled with the launcher, so that it runs on bvm like the libraries do.
+ */
+priv fun bytecodeExecutable(c: Compiled, opts: NativeOptions): string? {
+    var dir = tempPath("build")
+    Files.makeDir(dir)
+    var tmp = pathJoin(dir, "program.bvmc")
+    var written = writeBytecode(moduleOf(c), libraryPaths(c), tmp, "")
+    if (written != "") {
+        Files.remove(dir)
+        var tab = indexOf(written, "\t")
+        if (tab >= 0) {
+            return substring(written, tab + 1, len(written))
+        }
+        return written
     }
-    var libsText = readText(pathJoin(dir, "native-libs.txt")) ?? ""
-    return link(asm, opts.output, opts.strip, pathJoin(dir, "libburn_runtime.a"), trim(libsText))
+    var problem = buildLauncher(tmp, opts)
+    Files.remove(dir)
+    return problem
 }
 
 /** `file`'s name without folders and extension, with every character that cannot be in a C symbol replaced by `_`. */
@@ -251,5 +261,34 @@ pub fun buildLauncher(file: string, opts: NativeOptions): string? {
     if (unsupported != null) {
         return unsupported
     }
-    return linkBvm(asm, opts)
+    var rt = runtimeDir()
+    var launcher = pathJoin(rt, "libburn_launcher.a")
+    if (!Files.isFile(launcher)) {
+        return "this toolchain has no launcher for bytecode (${launcher})"
+    }
+    var libsText = readText(pathJoin(rt, "native-libs.txt")) ?? ""
+    return link(asm, opts.output, opts.strip, launcher, pathJoin(rt, "libburn_runtime.a") + " " + trim(libsText))
+}
+
+/** Writes the assembly of a checked program to `output` without linking it, for `--target asm`. Returns null or the error. */
+pub fun writeNativeAssembly(c: Compiled, output: string): string? {
+    if (len(libraryPaths(c)) > 0) {
+        return "a program that imports bytecode libraries cannot be written as assembly"
+    }
+    var problem = nativeProblem(c.program, [])
+    if (problem != null) {
+        return problem
+    }
+    var arch = "x86_64"
+    if (endsWith(targetPlatform(), "aarch64")) {
+        arch = "arm64"
+    }
+    var asmIssue = asmProblem(c.checker, arch)
+    if (asmIssue != null) {
+        return asmIssue
+    }
+    if (!writeFile(output, nativeAssembly(c.checker, c.program, [], targetPlatform()))) {
+        return "cannot write ${output}"
+    }
+    return null
 }
