@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- bvm written in Burn links: `compiler/src/bvm/link.bn` merges modules like `bvm link` (equal types become one, external functions are bound to their definitions, several entries run one after another) and `mixin.bn` applies @Inject, @Overwrite and @Redirect. Modules with mixins are linked when they load. `compiler/src/bin/bvm.bn link` writes the same module as `bvm link`.
 - bvm written in Burn runs bytecode: `compiler/src/bvm/interp.bn` is an interpreter for bvm modules, with `verify.bn` checking them first and `types.bn` adding a module's types after those of the program it runs in, so both share one runtime. Instructions are prepared once into fixed-size records with resolved targets, and common sequences are fused. Every test case gives the same output on it as on bvm. `compiler/src/bin/bvm.bn run <module>` runs a module with it.
 - Native code tests `x is T` without calling the runtime when `T` is a record that nothing extends, such as an enum variant: decoding the boot compiler takes half the time.
 - `BURN_SYMBOLS=1` makes native builds name every function in the assembly, for debuggers and profilers.

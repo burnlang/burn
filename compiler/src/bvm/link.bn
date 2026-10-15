@@ -1,0 +1,697 @@
+/**
+ * Links bvm modules into one, like `bvm/src/link.rs`: their types are merged so that equal types get one number,
+ * their strings, locations, globals, imports and dispatch tables are combined, and the external functions of each
+ * module are bound to the functions another module defines with the same name, export name or `module::name`.
+ */
+import "../check/hir.bn"
+import "../vm/module.bn"
+import "binary.bn"
+import "mixin.bn"
+import "verify.bn"
+
+/** The result of `link`: the linked module, or why the modules do not link. */
+pub def type Linked {
+    VModule module
+    string error
+}
+
+fun linkError(msg: string): Linked {
+    return Linked { module: emptyModule(), error: msg }
+}
+
+/** `d` with every type number in it changed by `map`. */
+fun mapDesc(d: Desc, map: [int]): Desc {
+    if (d is Desc.Array) {
+        return Desc.Array(map[d.elem])
+    }
+    if (d is Desc.Map) {
+        return Desc.Map(map[d.key], map[d.value])
+    }
+    if (d is Desc.Optional) {
+        return Desc.Optional(map[d.inner])
+    }
+    if (d is Desc.Future) {
+        return Desc.Future(map[d.inner])
+    }
+    if (d is Desc.Record) {
+        [DescField] fields = []
+        for f in d.fields {
+            fields.push(DescField { name: f.name, ty: map[f.ty] })
+        }
+        [int] impls = []
+        for t in d.implements {
+            impls.push(map[t])
+        }
+        return Desc.Record(d.name, fields, d.isClass, impls)
+    }
+    return d
+}
+
+/** Whether every type number in `d` is below `n`. */
+fun refsBelow(d: Desc, n: int): bool {
+    for t in typeRefs(d) {
+        if (t < 0 || t >= n) {
+            return false
+        }
+    }
+    return true
+}
+
+fun typeRefs(d: Desc): [int] {
+    if (d is Desc.Array) {
+        return [d.elem]
+    }
+    if (d is Desc.Optional) {
+        return [d.inner]
+    }
+    if (d is Desc.Future) {
+        return [d.inner]
+    }
+    if (d is Desc.Map) {
+        return [d.key, d.value]
+    }
+    if (d is Desc.Record) {
+        [int] out = []
+        for f in d.fields {
+            out.push(f.ty)
+        }
+        for t in d.implements {
+            out.push(t)
+        }
+        return out
+    }
+    return []
+}
+
+/** A text that is the same for two types exactly when they are equal. */
+pub fun descKey(d: Desc): string {
+    if (d is Desc.Array) {
+        return "a${d.elem}"
+    }
+    if (d is Desc.Map) {
+        return "m${d.key},${d.value}"
+    }
+    if (d is Desc.Optional) {
+        return "o${d.inner}"
+    }
+    if (d is Desc.Future) {
+        return "f${d.inner}"
+    }
+    if (d is Desc.Num) {
+        return "n${d.code}"
+    }
+    if (d is Desc.Record) {
+        var out = "r${len(d.name)}:${d.name}"
+        if (d.isClass) {
+            out += "c"
+        }
+        for f in d.fields {
+            out += ";${len(f.name)}:${f.name}=${f.ty}"
+        }
+        out += "|"
+        for t in d.implements {
+            out += "${t},"
+        }
+        return out
+    }
+    if (d is Desc.Interface) {
+        return "i${d.name}"
+    }
+    if (d is Desc.Enum) {
+        var out = "e${len(d.name)}:${d.name}"
+        for v in d.variants {
+            out += ";${len(v)}:${v}"
+        }
+        return out
+    }
+    return match d {
+        Desc.Error => "E"
+        Desc.Void => "V"
+        Desc.Null => "N"
+        Desc.Int => "I"
+        Desc.Float => "F"
+        Desc.Bool => "B"
+        Desc.Str => "S"
+        Desc.Any => "A"
+        Desc.Func => "U"
+        else => "?"
+    }
+}
+
+fun display(m: VModule): string {
+    if (m.name == "") {
+        return "<unnamed>"
+    }
+    return m.name
+}
+
+/** The name the function `f` of `m` is exported as with @Export, or "". */
+pub fun exportName(m: VModule, f: int): string {
+    for a in m.annotations {
+        var t = a.target
+        if (t is Target.Func && t.id == f && a.name == "Export") {
+            for arg in a.args {
+                if (arg.key == "name" || arg.key == "value") {
+                    var v = arg.value
+                    if (v is Value.Str) {
+                        return v.text
+                    }
+                }
+            }
+            return m.funcs[f].name
+        }
+    }
+    return ""
+}
+
+def type TypeMerge {
+    [Desc] types
+    [[int]] maps
+    string error
+}
+
+fun mergeTypes(modules: [VModule]): TypeMerge {
+    var builtins = builtinDescs()
+    [Desc] all = builtinDescs()
+    [[int]] maps = []
+    for m in modules {
+        var ok = len(m.types) >= FIRST_USER_TYPE
+        if (ok) {
+            for i in 0..FIRST_USER_TYPE {
+                if (descKey(m.types[i]) != descKey(builtins[i])) {
+                    ok = false
+                }
+            }
+        }
+        if (!ok) {
+            return TypeMerge { types: [], maps: [], error: "module ${display(m)} does not start with the built-in types" }
+        }
+        [int] map = []
+        for i in 0..FIRST_USER_TYPE {
+            map.push(i)
+        }
+        for i in FIRST_USER_TYPE..len(m.types) {
+            map.push(len(all))
+            all.push(Desc.Error)
+        }
+        for i in FIRST_USER_TYPE..len(m.types) {
+            var d = m.types[i]
+            for t in typeRefs(d) {
+                if (t < 0 || t >= len(map)) {
+                    return TypeMerge { types: [], maps: [], error: "type #${i} of module ${display(m)} refers to type #${t}, which does not exist" }
+                }
+            }
+            all[map[i]] = mapDesc(d, map)
+        }
+        maps.push(map)
+    }
+    var n = len(all)
+    [int] canon = []
+    for i in 0..n {
+        canon.push(i)
+    }
+    while (true) {
+        var changed = false
+        {string: int} seen = {}
+        for i in 0..n {
+            if (canon[i] != i) {
+                continue
+            }
+            var key = descKey(mapDesc(all[i], canon))
+            var j = seen[key]
+            if (j != null) {
+                canon[i] = j
+                changed = true
+            } else {
+                seen[key] = i
+            }
+        }
+        for i in 0..n {
+            var c = canon[i]
+            while (canon[c] != c) {
+                c = canon[c]
+            }
+            canon[i] = c
+        }
+        if (!changed) {
+            break
+        }
+    }
+    [int] compact = []
+    [int] kept = []
+    for i in 0..n {
+        compact.push(-1)
+    }
+    for i in 0..n {
+        if (canon[i] == i) {
+            compact[i] = len(kept)
+            kept.push(i)
+        }
+    }
+    [int] fin = []
+    for i in 0..n {
+        fin.push(compact[canon[i]])
+    }
+    [Desc] types = []
+    for i in kept {
+        types.push(mapDesc(all[i], fin))
+    }
+    [[int]] finalMaps = []
+    for map in maps {
+        [int] fm = []
+        for t in map {
+            fm.push(fin[t])
+        }
+        finalMaps.push(fm)
+    }
+    return TypeMerge { types: types, maps: finalMaps, error: "" }
+}
+
+fun remapSig(s: Sig?, map: [int]): Sig? {
+    if (s == null) {
+        return null
+    }
+    [int] params = []
+    for t in s.params {
+        params.push(map[t])
+    }
+    return Sig { params: params, ret: map[s.ret] }
+}
+
+fun sameSig(a: Sig, b: Sig): bool {
+    if (a.ret != b.ret || len(a.params) != len(b.params)) {
+        return false
+    }
+    for i in 0..len(a.params) {
+        if (a.params[i] != b.params[i]) {
+            return false
+        }
+    }
+    return true
+}
+
+fun mapLocIn(l: int, off: int): int {
+    if (l == 4294967295) {
+        return l
+    }
+    return l + off
+}
+
+fun remapOp(op: Op, smap: [int], tmap: [int], fmap: [int], tabmap: [int], imap: [int], locOff: int, globOff: int): Op {
+    if (op is Op.Str) {
+        return Op.Str(smap[op.id])
+    }
+    if (op is Op.TypeConst) {
+        return Op.TypeConst(tmap[op.ty])
+    }
+    if (op is Op.LocConst) {
+        return Op.LocConst(mapLocIn(op.loc, locOff))
+    }
+    if (op is Op.FuncRef) {
+        return Op.FuncRef(fmap[op.func])
+    }
+    if (op is Op.Call) {
+        return Op.Call(fmap[op.func])
+    }
+    if (op is Op.GLoad) {
+        return Op.GLoad(op.id + globOff)
+    }
+    if (op is Op.GStore) {
+        return Op.GStore(op.id + globOff)
+    }
+    if (op is Op.GTee) {
+        return Op.GTee(op.id + globOff)
+    }
+    if (op is Op.IDiv) {
+        return Op.IDiv(mapLocIn(op.loc, locOff))
+    }
+    if (op is Op.IAddOv) {
+        return Op.IAddOv(mapLocIn(op.loc, locOff))
+    }
+    if (op is Op.ISubOv) {
+        return Op.ISubOv(mapLocIn(op.loc, locOff))
+    }
+    if (op is Op.IMulOv) {
+        return Op.IMulOv(mapLocIn(op.loc, locOff))
+    }
+    if (op is Op.INegOv) {
+        return Op.INegOv(mapLocIn(op.loc, locOff))
+    }
+    if (op is Op.IRem) {
+        return Op.IRem(mapLocIn(op.loc, locOff))
+    }
+    if (op is Op.Index) {
+        return Op.Index(mapLocIn(op.loc, locOff))
+    }
+    if (op is Op.SetIndex) {
+        return Op.SetIndex(mapLocIn(op.loc, locOff))
+    }
+    if (op is Op.Dispatch) {
+        return Op.Dispatch(tabmap[op.table], op.argc)
+    }
+    if (op is Op.Host) {
+        return Op.Host(imap[op.id])
+    }
+    if (op is Op.Spawn) {
+        return Op.Spawn(fmap[op.func], op.argc, tmap[op.ty])
+    }
+    if (op is Op.NewRecord) {
+        return Op.NewRecord(tmap[op.ty], op.argc)
+    }
+    if (op is Op.NewArray) {
+        return Op.NewArray(tmap[op.ty], op.count)
+    }
+    return op
+}
+
+/** Links `modules` into one, like `link_with`; with `allowUnresolved`, functions nothing defines stay external. */
+pub fun link(modules: [VModule], allowUnresolved: bool, skipMixins: bool): Linked {
+    if (len(modules) == 0) {
+        return linkError("nothing to link")
+    }
+    var merged = mergeTypes(modules)
+    if (merged.error != "") {
+        return linkError(merged.error)
+    }
+    var tmaps = merged.maps
+    var out = emptyModule()
+    out.name = modules[0].name
+    out.types = merged.types
+    [[int]] smaps = []
+    {string: int} stringIds = {}
+    [int] locOff = []
+    [int] globOff = []
+    [[int]] imaps = []
+    for m in modules {
+        [int] sm = []
+        for s in m.strings {
+            var id = stringIds[s]
+            if (id == null) {
+                id = len(out.strings)
+                stringIds[s] = len(out.strings)
+                out.strings.push(s)
+            }
+            sm.push(id)
+        }
+        smaps.push(sm)
+        locOff.push(len(out.locs))
+        for l in m.locs {
+            out.locs.push(l)
+        }
+        globOff.push(len(out.globals))
+        for g in m.globals {
+            out.globals.push(g)
+        }
+        [int] im = []
+        for imp in m.imports {
+            var at = -1
+            for p in 0..len(out.imports) {
+                if (out.imports[p].name == imp.name) {
+                    at = p
+                    break
+                }
+            }
+            if (at >= 0 && out.imports[at].argc != imp.argc) {
+                return linkError("import ${imp.name} is declared with ${out.imports[at].argc} arguments in one module and ${imp.argc} in another")
+            }
+            if (at < 0) {
+                out.imports.push(Import { name: imp.name, argc: imp.argc })
+                at = len(out.imports) - 1
+            }
+            im.push(at)
+        }
+        imaps.push(im)
+    }
+    [int] defMod = []
+    [int] defFunc = []
+    for mi in 0..len(modules) {
+        var m = modules[mi]
+        for fi in 0..len(m.funcs) {
+            if (!m.funcs[fi].external) {
+                defMod.push(mi)
+                defFunc.push(fi)
+            }
+        }
+    }
+    {string: [int]} byName = {}
+    for k in 0..len(defMod) {
+        var m = modules[defMod[k]]
+        var f = m.funcs[defFunc[k]]
+        [string] names = [f.name]
+        var e = exportName(m, defFunc[k])
+        if (e != "" && e != f.name) {
+            names.push(e)
+        }
+        if (m.name != "") {
+            names.push("${m.name}::${f.name}")
+        }
+        for name in names {
+            var list = byName[name]
+            if (list == null) {
+                byName[name] = [k]
+            } else {
+                list.push(k)
+            }
+        }
+    }
+    [[int]] fmaps = []
+    for m in modules {
+        [int] fm = []
+        for f in m.funcs {
+            fm.push(-1)
+        }
+        fmaps.push(fm)
+    }
+    for k in 0..len(defMod) {
+        fmaps[defMod[k]][defFunc[k]] = k
+    }
+    [int] unresolvedMod = []
+    [int] unresolvedFunc = []
+    {string: int} unresolvedIds = {}
+    for mi in 0..len(modules) {
+        var m = modules[mi]
+        for fi in 0..len(m.funcs) {
+            var f = m.funcs[fi]
+            if (!f.external) {
+                continue
+            }
+            [int] found = []
+            for k in byName[f.name] ?? [] {
+                if (defMod[k] != mi) {
+                    found.push(k)
+                }
+            }
+            if (len(found) == 1) {
+                var k = found[0]
+                var dm = defMod[k]
+                var d = modules[dm].funcs[defFunc[k]]
+                if (d.params != f.params) {
+                    return linkError("${f.name} is declared with ${f.params} parameters in module ${display(m)} but defined with ${d.params} in module ${display(modules[dm])}")
+                }
+                var sa = remapSig(f.sig, tmaps[mi])
+                var sb = remapSig(d.sig, tmaps[dm])
+                if (sa != null && sb != null && !sameSig(sa, sb)) {
+                    return linkError("${f.name} has different parameter or return types in module ${display(m)} and module ${display(modules[dm])}")
+                }
+                fmaps[mi][fi] = k
+            } else if (len(found) == 0) {
+                if (!allowUnresolved) {
+                    return linkError("module ${display(m)} needs function ${f.name}, but no linked module defines it")
+                }
+                var id = unresolvedIds[f.name]
+                if (id == null) {
+                    id = len(defMod) + len(unresolvedMod)
+                    unresolvedIds[f.name] = len(defMod) + len(unresolvedMod)
+                    unresolvedMod.push(mi)
+                    unresolvedFunc.push(fi)
+                }
+                fmaps[mi][fi] = id
+            } else {
+                [string] where = []
+                for k in found {
+                    where.push(display(modules[defMod[k]]))
+                }
+                return linkError("function ${f.name} is defined in several modules (${join(where, ", ")}); refer to it as module::${f.name}")
+            }
+        }
+    }
+    [[int]] tabmaps = []
+    for mi in 0..len(modules) {
+        var m = modules[mi]
+        [int] tm = []
+        for t in m.tables {
+            [TableEntry] entries = []
+            for e in t.entries {
+                entries.push(TableEntry { ty: tmaps[mi][e.ty], func: fmaps[mi][e.func] })
+            }
+            var at = -1
+            for p in 0..len(out.tables) {
+                if (out.tables[p].name == t.name && out.tables[p].argc == t.argc) {
+                    at = p
+                    break
+                }
+            }
+            if (at >= 0) {
+                for e in entries {
+                    var dup = false
+                    for prev in out.tables[at].entries {
+                        if (prev.ty == e.ty) {
+                            if (prev.func != e.func) {
+                                return linkError("table ${t.name} has two functions for type #${e.ty}")
+                            }
+                            dup = true
+                        }
+                    }
+                    if (!dup) {
+                        out.tables[at].entries.push(e)
+                    }
+                }
+                tm.push(at)
+            } else {
+                out.tables.push(Table { name: t.name, argc: t.argc, entries: entries })
+                tm.push(len(out.tables) - 1)
+            }
+        }
+        tabmaps.push(tm)
+    }
+    [int] allMod = []
+    [int] allFunc = []
+    for k in 0..len(defMod) {
+        allMod.push(defMod[k])
+        allFunc.push(defFunc[k])
+    }
+    for k in 0..len(unresolvedMod) {
+        allMod.push(unresolvedMod[k])
+        allFunc.push(unresolvedFunc[k])
+    }
+    for k in 0..len(allMod) {
+        var mi = allMod[k]
+        var src = modules[mi].funcs[allFunc[k]]
+        [Op] code = []
+        for op in src.code {
+            code.push(remapOp(op, smaps[mi], tmaps[mi], fmaps[mi], tabmaps[mi], imaps[mi], locOff[mi], globOff[mi]))
+        }
+        out.funcs.push(VFunc { name: src.name, params: src.params, locals: src.locals, names: src.names, code: code, external: src.external, sig: remapSig(src.sig, tmaps[mi]) })
+    }
+    for mi in 0..len(modules) {
+        var m = modules[mi]
+        for a in m.annotations {
+            var t = a.target
+            Target target = Target.Module
+            if (t is Target.Func) {
+                if (m.funcs[t.id].external) {
+                    continue
+                }
+                target = Target.Func(fmaps[mi][t.id])
+            } else if (t is Target.Type) {
+                target = Target.Type(tmaps[mi][t.id])
+            } else if (t is Target.Global) {
+                target = Target.Global(t.id + globOff[mi])
+            }
+            out.annotations.push(VAnnotation { target: target, name: a.name, args: a.args })
+        }
+    }
+    [int] entries = []
+    for mi in 0..len(modules) {
+        var e = modules[mi].entry
+        if (e != null && fmaps[mi][e] >= 0) {
+            entries.push(fmaps[mi][e])
+        }
+    }
+    if (len(entries) == 1) {
+        out.entry = entries[0]
+    } else if (len(entries) > 1) {
+        [Op] code = []
+        var i = len(entries) - 1
+        while (i >= 1) {
+            code.push(Op.Call(entries[i]))
+            code.push(Op.Pop)
+            i -= 1
+        }
+        code.push(Op.Call(entries[0]))
+        code.push(Op.Pop)
+        code.push(Op.RetVoid)
+        out.funcs.push(VFunc { name: "<start>", params: 0, locals: 0, names: [], code: code, external: false, sig: null })
+        out.entry = len(out.funcs) - 1
+    }
+    bindExports(out)
+    if (!skipMixins) {
+        var problem = applyMixins(out)
+        if (problem != "") {
+            return linkError(problem)
+        }
+    }
+    var a = analyze(out)
+    if (a.error != "") {
+        return linkError("the linked module is invalid: ${a.error}")
+    }
+    return Linked { module: out, error: "" }
+}
+
+/** Turns imports that a function of `m` exports with the same name and argument count into calls to it, like `bind_exports`. */
+pub fun bindExports(m: VModule) {
+    {string: int} exports = {}
+    for i in 0..len(m.funcs) {
+        if (m.funcs[i].external) {
+            continue
+        }
+        var n = exportName(m, i)
+        if (n != "") {
+            exports[n] = i
+        }
+    }
+    [int] bound = []
+    var any = false
+    for imp in m.imports {
+        var f = exports[imp.name]
+        if (f != null && m.funcs[f].params == imp.argc) {
+            bound.push(f)
+            any = true
+        } else {
+            bound.push(-1)
+        }
+    }
+    if (!any) {
+        return
+    }
+    [Import] keep = []
+    [int] newIdx = []
+    for i in 0..len(m.imports) {
+        if (bound[i] < 0) {
+            newIdx.push(len(keep))
+            keep.push(m.imports[i])
+        } else {
+            newIdx.push(-1)
+        }
+    }
+    for f in m.funcs {
+        for k in 0..len(f.code) {
+            var op = f.code[k]
+            if (op is Op.Host) {
+                if (bound[op.id] >= 0) {
+                    f.code[k] = Op.Call(bound[op.id])
+                } else {
+                    f.code[k] = Op.Host(newIdx[op.id])
+                }
+            }
+        }
+    }
+    m.imports = keep
+}
+
+/** Whether loading `m` needs the linker: it has mixins, or imports what it exports itself, like `needs_link`. */
+pub fun needsLink(m: VModule): bool {
+    for a in m.annotations {
+        if (contains(MIXIN_KINDS, a.name)) {
+            return true
+        }
+    }
+    for imp in m.imports {
+        for f in 0..len(m.funcs) {
+            if (exportName(m, f) == imp.name) {
+                return true
+            }
+        }
+    }
+    return false
+}
