@@ -1,0 +1,142 @@
+/** Projects: the standard layout, workspaces, `burn init` and packages. */
+import "std/fs"
+import "harness.bn"
+
+/** Records a failure unless running `burn` with `args` in `dir` prints `want` and succeeds. */
+fun prints(dir: string, args: [string], want: string) {
+    var r = burn(dir, args)
+    same(both(r), want, "burn ${join(args, " ")}")
+    check(r.code == 0, "burn ${join(args, " ")} exits with ${r.code}")
+}
+
+/** A project finds its modules, binaries, examples and tests in the standard layout. */
+pub fun projectsUseAStandardLayout() {
+    var dir = tempDir("layout")
+    var r = burn(dir, ["init", "github.com/ada/app", "--no-git"])
+    check(r.code == 0, both(r))
+    var app = "${dir}/app"
+    put("${app}/src/net/http/mod.bn", "import \"@/util/text\"\n\npub fun fetch(url: string): string {\n    return shout(\"GET \" + url)\n}\n")
+    put("${app}/src/util/text.bn", "pub fun shout(s: string): string {\n    return upper(s)\n}\n")
+    put("${app}/src/net/dns.bn", "import \"@/net/http\"\n\npub fun lookup(host: string): string {\n    return fetch(\"dns://\" + host)\n}\n")
+    put("${app}/src/main.bn", "import \"@/net/http\"\nimport \"github.com/ada/app/net/dns\"\nimport \"github.com/ada/app/src/util/text\"\n\nfun main() {\n    print(fetch(\"a\"), lookup(\"b\"), shout(\"c\"))\n}\n")
+    put("${app}/src/bin/tool.bn", "import \"@/util/text\"\nimport \"std/process\"\n\nfun main() {\n    print(shout(\"tool\"), args())\n}\n")
+    put("${app}/src/bin/server/main.bn", "fun main() {\n    print(\"server\")\n}\n")
+    put("${app}/examples/hello.bn", "import \"@/net/http\"\n\nprint(fetch(\"example\"))\n")
+    put("${app}/tests/text.bn", "import \"std/testing\"\nimport \"@/util/text\"\n\nassert(shout(\"a\") == \"A\")\n")
+    prints(app, ["run"], "GET A GET DNS://B C\n")
+    prints(app, ["run", "--bin", "tool", "--", "x"], "TOOL [\"x\"]\n")
+    prints(app, ["run", "--bin", "server"], "server\n")
+    prints(app, ["run", "--example", "hello"], "GET EXAMPLE\n")
+    r = burn(app, ["run", "--bin", "nope"])
+    check(r.code != 0 && contains(both(r), "it has: server, tool"), both(r))
+    check(burn(app, ["check"]).code == 0, "burn check")
+    r = burn(app, ["build", "--target", "bvm"])
+    check(r.code == 0, both(r))
+    for f in ["build/app.bvmc", "build/server.bvmc", "build/tool.bvmc"] {
+        check(Files.isFile("${app}/${f}"), "${f} missing after:\n${both(r)}")
+    }
+    r = burn(app, ["test"])
+    check(r.code == 0 && contains(both(r), "test tests/text.bn ... ok") && contains(both(r), "1 passed, 0 failed"), both(r))
+    put("${app}/tests/broken.bn", "import \"std/testing\"\n\nassert(1 == 2, \"one is not two\")\n")
+    r = burn(app, ["test"])
+    check(r.code != 0 && contains(both(r), "test tests/broken.bn ... FAILED") && contains(both(r), "one is not two"), both(r))
+    put("${app}/src/bad.bn", "import \"@/missing/thing\"\n")
+    r = burn(app, ["check", "src/bad.bn"])
+    check(r.code != 0 && contains(both(r), "cannot find `@/missing/thing`"), both(r))
+    Files.remove(dir)
+}
+
+/** A workspace builds, runs, tests and checks every member, and `burn init` adds members to it. */
+pub fun workspacesBuildEveryMember() {
+    var dir = tempDir("workspace")
+    var r = burn(dir, ["init", "github.com/ada/game", "--workspace", "--no-git"])
+    check(r.code == 0, both(r))
+    var ws = "${dir}/game"
+    var toml = readFile("${ws}/burn.toml")
+    check(contains(toml, "members = [\"common\", \"native\", \"js\", \"bvm\"]"), toml)
+    r = burn(ws, ["build"])
+    check(r.code == 0, both(r))
+    for f in ["native/build/native", "js/build/js.js", "bvm/build/bvm.bvmc"] {
+        check(Files.isFile("${ws}/${f}"), "${f} missing after:\n${both(r)}")
+    }
+    for t in ["native", "js", "bvm"] {
+        prints(ws, ["run", "-p", t], "Hello from ${t}!\n")
+    }
+    r = burn(ws, ["run"])
+    check(r.code != 0 && contains(both(r), "pick one with `-p` (native, js, bvm)"), both(r))
+    prints("${ws}/native", ["run"], "Hello from native!\n")
+    r = burn(ws, ["run", "-p", "nope"])
+    check(r.code != 0 && contains(both(r), "has no member `nope`"), both(r))
+    r = burn(ws, ["init", "tools", "--lib", "--no-git"])
+    check(r.code == 0 && contains(both(r), "added \"tools\" to the workspace's members"), both(r))
+    check(contains(readFile("${ws}/tools/burn.toml"), "name = \"github.com/ada/game/tools\""), "the member's name")
+    put("${ws}/native/src/main.bn", "import \"github.com/ada/game/common\"\nimport \"github.com/ada/game/tools\"\n\nfun main() {\n    print(greeting(\"native\"), greet(\"tools\"))\n}\n")
+    prints(ws, ["run", "-p", "native"], "Hello from native! Hello, tools!\n")
+    r = burn(ws, ["test"])
+    var out = both(r)
+    check(r.code == 0 && contains(out, "common/tests/main.bn ... ok") && contains(out, "tools/tests/main.bn ... ok") && contains(out, "2 passed"), out)
+    check(burn(ws, ["check"]).code == 0, "burn check in the workspace")
+    r = burn(ws, ["check", "-p", "native"])
+    check(r.code == 0, both(r))
+    Files.remove(dir)
+}
+
+/** `burn init` makes libraries and apps for every target, and projects import packages from paths and the cache. */
+pub fun initCreatesProjectsThatBuildAndImportPackages() {
+    var dir = tempDir("projects")
+    var vars = ["BURN_HOME=${dir}/home"]
+    var r = burnWith(dir, vars, ["init", "hello"])
+    check(r.code == 2 && contains(both(r), "github.com/you/hello"), both(r))
+    r = burnWith(dir, vars, ["init", "example.com/ada/greet", "--lib", "--no-git"])
+    check(r.code == 0, both(r))
+    r = burnWith("${dir}/greet", vars, ["run", "tests/main.bn"])
+    same(both(r), "all tests passed\n", "the library's tests")
+    r = burnWith("${dir}/greet", vars, ["run"])
+    check(r.code == 2 && contains(both(r), "is a library"), both(r))
+    r = burnWith(dir, vars, ["init", "example.com/ada/dotted.bn", "--lib", "--no-git"])
+    check(r.code == 0, both(r))
+    r = burnWith("${dir}/dotted.bn", vars, ["run", "tests/main.bn"])
+    same(both(r), "all tests passed\n", "the tests of a library with a dot in its name")
+    put("${dir}/greet/tests/case.bn", "import \"example.com/Ada/greet.bn\"\n\nprint(greet(\"case\"))\n")
+    r = burnWith("${dir}/greet", vars, ["run", "tests/case.bn"])
+    check(r.code == 0 && contains(both(r), "case"), both(r))
+
+    r = burnWith(dir, vars, ["init", "example.com/ada/web", "--target", "js", "--no-git"])
+    check(r.code == 0, both(r))
+    var web = "${dir}/web"
+    var toml = readFile("${web}/burn.toml")
+    check(contains(toml, "target = \"js\"") && contains(toml, "node build/web.js"), toml)
+    r = burnWith(web, vars, ["build"])
+    check(r.code == 0 && contains(both(r), "building example.com/ada/web 0.1.0 (js)"), both(r))
+    if (has("node", "--version")) {
+        same(both(run(".", "node", ["${web}/build/web.js"])), "Hello from web!\n", "the js app")
+    }
+    r = burnWith(dir, vars, ["init", "example.com/ada/app", "--target", "bar", "--no-git"])
+    check(r.code == 0, both(r))
+    var app = "${dir}/app"
+    toml = readFile("${app}/burn.toml")
+    check(contains(toml, "target = \"bar\"") && contains(toml, "[scripts]"), toml)
+    r = burnWith(app, vars, ["run"])
+    same(both(r), "Hello from app!\n", "the bar app")
+
+    put("${app}/src/main.bn", "import \"example.com/ada/greet\"\nimport \"example.com/ada/cached\"\nimport \"example.com/ada/cached/src/more\"\n\nfun main() {\n    print(greet(\"packages\"), twice(21), more())\n}\n")
+    r = burnWith(app, vars, ["check"])
+    check(r.code == 1, both(r))
+    check(contains(both(r), "not a dependency; add it with `ash install example.com/ada/greet`"), both(r))
+    check(contains(both(r), "this project is `example.com/ada/app`"), both(r))
+    put("${app}/burn.toml", replace(toml, "[dependencies]\n", "[dependencies]\n\"example.com/ada/greet\" = { path = \"../greet\" }\n\"example.com/ada/cached\" = \"^1.0\"\n"))
+    r = burnWith(app, vars, ["check"])
+    check(r.code == 1 && contains(both(r), "`example.com/ada/cached` is not installed yet; run `ash install`"), both(r))
+
+    var cached = "${dir}/home/packages/example.com/ada/cached@0123456789ab"
+    put("${cached}/burn.toml", "[package]\nname = \"example.com/ada/cached\"\nkind = \"lib\"\n")
+    put("${cached}/src/lib.bn", "pub fun twice(x: int): int {\n    return x * 2\n}\n")
+    put("${cached}/src/more.bn", "pub fun more(): string {\n    return \"more\"\n}\n")
+    put("${app}/burn.lock", "version = 1\n\n[[package]]\nname = \"example.com/ada/cached\"\nversion = \"v1.0.0\"\nrev = \"0123456789abcdef\"\nsource = \"git+https://example.com/ada/cached\"\ndependencies = []\n")
+    r = burnWith(app, vars, ["run"])
+    same(both(r), "Hello, packages! 42 more\n", "the app with packages")
+    r = burnWith(app, vars, ["build"])
+    check(r.code == 0 && contains(both(r), "building example.com/ada/app 0.1.0 (bar)"), both(r))
+    same(both(burn(".", ["${app}/build/app.bar"])), "Hello, packages! 42 more\n", "the built archive")
+    Files.remove(dir)
+}

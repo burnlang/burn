@@ -287,7 +287,7 @@ bvm asm hello.bvm -o hello.bvmc # bytecode
 bvm dis hello.bvmc              # and back
 ```
 
-[`bvm/examples/ember.rs`](bvm/examples/ember.rs) is a complete small language built on bvm.
+[`examples/bvm/ember/ember.bn`](examples/bvm/ember/ember.bn) is a complete small language built on bvm, written in Burn.
 
 ### Libraries, archives, mixins and native code
 
@@ -353,7 +353,7 @@ examples are in [`examples/bvm/`](examples/bvm/).
 - `install.sh`: forwards to [burnup](https://github.com/burnlang/burnup), the installer
 - `assets/`: the logo
 - `lib/std/`: the standard library, written in Burn
-- `tests/`: end-to-end tests, which `cargo test` runs with a toolchain built from the boot compiler (`bvm/tests/burn.rs`)
+- `tests/`: the test programs and the end-to-end tests (`tests/run.bn`, written in Burn), which `scripts/test.sh` runs against a toolchain
 
 Editor support lives in its own repositories: [vscode-burn](https://github.com/burnlang/vscode-burn),
 [intellij-burn](https://github.com/burnlang/intellij-burn), [zed-burn](https://github.com/burnlang/zed-burn) and
@@ -364,15 +364,14 @@ The documentation is in [burnlang/docs](https://github.com/burnlang/docs).
 
 ```sh
 sh scripts/package.sh --prefix ~/.burn   # build and install the toolchain from this checkout
-cargo test            # builds bvm, builds the toolchain from the boot compiler and runs every test
-cargo clippy --all-targets
+sh scripts/test.sh                       # build a toolchain from this checkout and run every test
+sh scripts/test.sh --toolchain ~/.burn native_matches_vm   # run one test against an installed toolchain
 ```
 
 Building the toolchain only needs a C compiler, tar and xz. The C compiler assembles the seed in `compiler/boot`, the
 compiler written in Burn as assembly for this platform, which builds `compiler/src`; from then on the compiler builds
 itself. `sh scripts/bootstrap.sh --update` replaces the seeds with the compiler built from `compiler/src`, so the
 compiler's own sources can use new language features.
-```
 
 ## Contributing
 
@@ -383,7 +382,7 @@ Contributions are welcome:
 3. Commit your changes
 4. Push the branch and open a pull request
 
-Please make sure `cargo test` passes and new language features come with a test in `tests/cases/`.
+Please make sure `sh scripts/test.sh` passes and new language features come with a test in `tests/cases/`.
 
 ## License
 

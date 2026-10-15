@@ -1,0 +1,22 @@
+bvm - the Burn Virtual Machine
+
+usage:
+  bvm <file> [args...]                run a module (.bvm, .bvmc) or an archive (.bar)
+  bvm run <file> [args...]            same as above
+  bvm asm <file.bvm> [-o out.bvmc]    assemble text into bytecode
+  bvm dis <file> [-o out.bvm]         disassemble a module or archive into text
+  bvm check <file>...                 verify modules and archives without running them
+  bvm link <files>... [-o out] [--lib]
+                                      link modules into one; --lib allows unresolved externs
+  bvm pack <files>... -o app.bar [options]
+                                      bundle modules and resources into a runnable archive
+      --name <name>                   application name (default: the output file name)
+      --version <version>             application version
+      --main <module>                 the module whose entry runs (default: the first module)
+      --entry <function>              the function that runs (default: the main module's entry)
+      --no-shebang                    leave out the #!/usr/bin/env bvm line
+  bvm list <app.bar>                  show an archive's manifest and contents
+  bvm unpack <app.bar> [-d dir]       extract an archive's modules and resources
+  bvm runtime                         list the runtime functions available to `rt`
+  bvm version                         print the version
+  bvm help                            show this help
