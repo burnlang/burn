@@ -308,6 +308,32 @@ fun inheritMembers(c: Checker, ri: int, p: int) {
 }
 
 /** Inherited members, virtual slots and overriding rules, like `check_structs` in Rust. */
+/**
+ * Checks that every overriding method has the signature of the method it overrides. It runs after the bodies are
+ * checked, because a method without a return type gets it from its body, which may use globals declared later.
+ */
+pub fun checkOverrides(c: Checker) {
+    for o in c.overrides {
+        var sig = methodSig(c, o.parent, o.name)
+        if (sig == null) {
+            continue
+        }
+        var ret = funcRet(c, o.func)
+        var info = c.funcs[o.func]
+        [int] ps = []
+        for i in 1..len(info.params) {
+            ps.push(info.params[i].ty)
+        }
+        if (!sameInts(ps, sig.params) || ret != sig.ret || info.isAsync != sig.isAsync) {
+            var want = methodSigStr(c, sig.params, sig.ret, sig.isAsync)
+            var got = methodSigStr(c, ps, ret, info.isAsync)
+            var rname = c.types.records[o.rec].name
+            var pname = c.types.records[o.parent].name
+            c.errorDetail(info.span, "`${rname}.${o.name}` does not match `${pname}.${o.name}`", "expected `${want}` but found `${got}`")
+        }
+    }
+}
+
 pub fun checkStructs(c: Checker) {
     var order = structOrder(c)
     {int: bool} parents = {}
@@ -374,22 +400,7 @@ pub fun checkStructs(c: Checker) {
             }
         }
         for x in sortSlotNames(own) {
-            var sig = methodSig(c, p, x.name)
-            if (sig == null) {
-                continue
-            }
-            var ret = funcRet(c, x.value)
-            var info = c.funcs[x.value]
-            [int] ps = []
-            for i in 1..len(info.params) {
-                ps.push(info.params[i].ty)
-            }
-            if (!sameInts(ps, sig.params) || ret != sig.ret || info.isAsync != sig.isAsync) {
-                var want = methodSigStr(c, sig.params, sig.ret, sig.isAsync)
-                var got = methodSigStr(c, ps, ret, info.isAsync)
-                var pname = c.types.records[p].name
-                c.errorDetail(info.span, "`${rec.name}.${x.name}` does not match `${pname}.${x.name}`", "expected `${want}` but found `${got}`")
-            }
+            c.overrides.push(Override { rec: ri, parent: p, name: x.name, func: x.value })
         }
         if (rec.isAbstract) {
             continue

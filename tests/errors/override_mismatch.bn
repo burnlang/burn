@@ -1,0 +1,15 @@
+var n = 1
+
+def struct A() {
+    fun f(): int {
+        return 1
+    }
+}
+
+def struct B() : A() {
+    fun f() {
+        return "x" + "${n}"
+    }
+}
+
+print(new B().f())

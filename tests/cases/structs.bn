@@ -240,3 +240,21 @@ for b in bases {
 }
 new Base(9)
 print(new Derived(4, 5))
+
+var visits = 0
+
+def struct Visitor() {
+    fun visit() {
+    }
+}
+
+def struct Counting() : Visitor() {
+    fun visit() {
+        visits += 1
+    }
+}
+
+Visitor v = new Counting()
+v.visit()
+v.visit()
+print("visits", visits)
