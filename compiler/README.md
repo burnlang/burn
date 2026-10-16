@@ -15,7 +15,7 @@ This directory holds the Burn compiler and its tools, written in Burn. They were
 | `src/lower/` | passes over the checked program: ownership (reference counting) | `own.rs` |
 | `src/vm/` | bvm code generation and the bvm assembly text it is written as | `vm/compile.rs`, and from the bvm crate `op.rs`, `module.rs`, `builder.rs` and `asm.rs` |
 | `src/dump/` | the `burn dump` text forms that the tests compare | `astdump.rs`, `loaddump.rs`, `check/declsdump.rs`, `check/hirdump.rs` |
-| `src/main.bn` | the command line: `build <file.bn> [-o <file.bvm>]` and the `burn dump` forms | |
+| `src/main.bn` | the compiler on its own: `build [--target bvm\|asm\|runtime] <file.bn> [-o <out>]` and the `burn dump` forms | |
 | `src/cli/` | the `burn` command line: running, checking and building programs and projects, `burni`, `burnc` and the `burn dump` forms | `main.rs`, `driver.rs`, `targets.rs` |
 | `src/doc/` | Burndoc comments and the HTML sites of `burn doc` | `doc/` |
 | `src/bin/gendoc.bn` | writes `src/doc/assets.bn` from `lib/doc` | |
@@ -125,20 +125,26 @@ compiler. No released Burn is downloaded, and no Rust is needed.
 - **Keeping it small:** each seed is about 56 MB of assembly, 1.3 MB compressed. Update the seeds only when the
   compiler's own sources need something new.
 
-To cut a release by hand, run the **Release** workflow from the Actions tab with the tag to create. The tag must be `v` followed by the workspace version.
+To cut a release by hand, run the **Release** workflow from the Actions tab with the tag to create. The tag must be `v` followed by the version in `src/version.bn`.
 
 ## Using it
 
-The compiler runs on bvm. `burn` itself is the command line written in Burn, which contains the compiler. Run the compiler from source with any `burn`, or build it once and run the module:
+`burn` itself is the command line written in Burn and compiled to native code, which contains the compiler. `src/main.bn` is the compiler on its own, the program the seeds hold and the bootstrap builds:
 
 ```sh
-burn compiler/src/main.bn build examples/fib.bn -o fib.bvm   # compile with the Burn compiler from source
-burn fib.bvm                                                 # run the result on bvm
-sh scripts/bootstrap.sh                                      # build compiler/build/stage2.bvm
-burn compiler/build/stage2.bvm build examples/fib.bn         # the compiler built by itself
+sh scripts/bootstrap.sh                                                # compiler/build/stage2 (or stage3), a native compiler
+compiler/build/stage2 build examples/fib.bn -o fib.bvm                 # bvm assembly
+burn fib.bvm                                                           # run it
+compiler/build/stage2 build --target asm examples/fib.bn -o fib.s      # native assembly for this platform
+compiler/build/stage2 build --target runtime lib/rt/runtime.bn -o rt.s # a runtime library
+burn compiler/src/main.bn build examples/fib.bn -o fib.bvm             # the compiler from source, run with any burn
 ```
 
-It writes bvm assembly (`.bvm`) rather than binary `.bvmc`, because Burn cannot write binary files yet. Errors and warnings print the same way as `burn check` without colours.
+Errors and warnings print the same way as `burn check` without colours.
+
+## The JIT
+
+`src/bvm/jit.bn` compiles bvm code to x86-64 machine code while a program runs. Each function record counts its calls and the backward jumps of its loops; at `BURN_JIT_THRESHOLD` (1000) the interpreter hands the function to the JIT, which writes machine code from the prepared instruction records (`src/bvm/layout.bn` describes them) into memory it maps executable. Compiled code keeps the interpreter's frame, so the two call each other freely, and a loop that gets hot in the middle of a call continues in compiled code at the same instruction (on-stack replacement). Instructions without a machine code form call `burn_bvm_slow`, the function that runs them for the interpreter as well. `BURN_JIT=0` turns the JIT off; the suite runs every test program with the JIT compiling everything at once (`BURN_JIT_THRESHOLD=1`) and with it off, and compares the output with the native executables.
 
 ## Language features this relies on
 

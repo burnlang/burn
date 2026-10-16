@@ -8,8 +8,8 @@ Burn is an easy-to-use, statically typed, general-purpose programming language w
 Burn is written in **Burn**: the compiler, the command line, the formatter, the documentation generator and the
 language server are Burn programs compiled to native code, and **bvm**, the Burn virtual machine, is written in Burn
 too. No other language is involved: the toolchain only links the C library, and a C compiler assembles the first
-build. Programs run instantly on bvm during development and compile to small **native executables**, portable bytecode, self-contained
-`.bar` archives or JavaScript for shipping.
+build. Programs run instantly on bvm during development, where a JIT compiles hot code to machine code, and compile to
+small **native executables**, portable bytecode, self-contained `.bar` archives or JavaScript for shipping.
 
 Current version: **26.1.0-experimental-7**
 
@@ -76,6 +76,8 @@ fun main() {
 - A self-hosted toolchain: the compiler, the command line, the runtime and bvm are written in Burn, and the compiler
   builds itself, starting from a copy kept in the repository as assembly, so building Burn only needs a C compiler
 - bvm, a general-purpose virtual machine with its own assembly language, bytecode format and verifier, which other languages can target too
+- A JIT in bvm: functions and loops that run often are compiled to x86-64 machine code while the program runs, so
+  `burni` gets close to native speed on hot code
 - Write once, run everywhere: `.bar` archives bundle an application's bytecode and resources and run wherever bvm runs
 - Mixins: `@Inject`, `@Overwrite` and `@Redirect` rewrite existing bytecode functions when modules are linked
 - Native interop: Burn calls C functions and C calls Burn functions (`@Extern`), and runtime libraries written in Burn link into native programs
@@ -98,7 +100,7 @@ See [installation](https://burnlang.github.io/docs/tooling/installation) for all
 
 | Command | What it does |
 | --- | --- |
-| `burni` | the interpreter: runs programs instantly on bvm, starts the REPL without arguments |
+| `burni` | the interpreter: runs programs instantly on bvm (with its JIT), starts the REPL without arguments |
 | `burnc` | the compiler: standalone native executables, bvm bytecode with `--target bvm`, a runnable archive with `--target bar`, JavaScript with `--target js` |
 | `burnfmt` | the code formatter, written in Burn itself |
 | `burn-lsp` | the language server for editors |
@@ -290,6 +292,21 @@ bvm dis hello.bvmc              # and back
 
 [`examples/bvm/ember/ember.bn`](examples/bvm/ember/ember.bn) is a complete small language built on bvm, written in Burn.
 
+### The JIT
+
+bvm interprets code at first and counts how often each function is called and each loop turns. Once that reaches
+1000, it compiles the function to x86-64 machine code and keeps running it there; a loop that gets hot in the middle of
+a call moves into the compiled code without starting over (on-stack replacement). Interpreted and compiled functions
+call each other freely, and runtime errors, `exit`, the REPL and stack overflows behave the same in both.
+
+| Program | Interpreted | With the JIT | Native |
+| --- | --- | --- | --- |
+| `fib(32)` | 1.4 s | 45 ms | 20 ms |
+| 30 million loop turns at the top level | 3.7 s | 0.1 s | 0.08 s |
+
+`BURN_JIT=0` turns the JIT off, and `BURN_JIT_THRESHOLD=<n>` sets how many calls or loop turns make code hot. On
+arm64, bvm interprets.
+
 ### Libraries, archives, mixins and native code
 
 ```burn
@@ -344,7 +361,7 @@ examples are in [`examples/bvm/`](examples/bvm/).
   - `src/cli/`, `src/lsp/`, `src/doc/`: the command line, the language server and `burn doc`
   - `src/main.bn` is the compiler on its own, and `src/bin/burn.bn` the command line that toolchains ship
   - `src/bvm/`: bvm, the Burn Virtual Machine: bytecode format, assembler, verifier, linker, mixins, archives, the
-    interpreter and the `bvm` command
+    interpreter, the JIT and the `bvm` command
 - `lib/rt/`: the runtime written in Burn (memory, strings, collections, printing, files, processes, JSON, HTTP and
   tasks), which native executables and bvm link
 - `lib/tools/`: tools written in Burn that programs can also import, such as the formatter (`import "tools/fmt"`), which `burnfmt` is built from
@@ -391,5 +408,6 @@ This project is licensed under the GNU General Public License v3.0 - see the [LI
 
 ## Plans for Burn
 
-1. Native backends for Windows
-2. Shipping the self-hosted compiler (it already builds itself, see [compiler/README.md](compiler/README.md))
+1. A faster JIT: values kept in registers and more instructions compiled inline
+2. The JIT on arm64 (Apple silicon and Linux)
+3. Native backends for Windows
