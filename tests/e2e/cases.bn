@@ -186,3 +186,13 @@ pub fun programsWithoutTheStandardLibraryBehaveTheSame() {
     check(c.code == 1 && contains(both(c), "`std/fs` is part of the standard library"), both(c))
     Files.remove(tmp)
 }
+
+/** Each case prints the same when the JIT compiles every function and loop at once, and when it is off. */
+pub fun jitMatchesVm() {
+    for name in cases() {
+        var r = burnWith(".", ["BURN_JIT_THRESHOLD=1", "BURN_RC_CHECK=1", "BURN_GC_THRESHOLD=4096"], ["tests/cases/${name}.bn"])
+        same(both(r), expected(name), "tests/cases/${name}.bn (everything compiled)")
+        r = burnWith(".", ["BURN_JIT=0"], ["tests/cases/${name}.bn"])
+        same(both(r), expected(name), "tests/cases/${name}.bn (JIT off)")
+    }
+}

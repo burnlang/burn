@@ -23,6 +23,7 @@ fun tests(): [Test] {
         Test { name: "arm64_executables_match_vm", body: arm64ExecutablesMatchVm },
         Test { name: "js_matches_vm", body: jsMatchesVm },
         Test { name: "freed_values_are_never_used_again", body: freedValuesAreNeverUsedAgain },
+        Test { name: "jit_matches_vm", body: jitMatchesVm },
         Test { name: "bvm_modules_round_trip_and_run", body: bvmModulesRoundTripAndRun },
         Test { name: "bvm_runs_the_test_cases", body: bvmRunsTheTestCases },
         Test { name: "programs_without_the_standard_library_behave_the_same", body: programsWithoutTheStandardLibraryBehaveTheSame },

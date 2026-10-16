@@ -26,7 +26,7 @@ This directory holds the Burn compiler and its tools, written in Burn. They were
 | `src/lsp/` | the language server | `lsp/` |
 | `src/build.bn` | loads, checks and compiles a program to bvm assembly, or to native assembly for the bootstrap | `driver.rs`, `vm/mod.rs` |
 | `src/bin/genstd.bn` | writes `src/project/stdlib.bn` from `lib/std` | |
-| `src/bvm/` | bvm: the bytecode format, the assembler, the verifier, the linker, mixins, archives, the interpreter and the `bvm` command | `bvm/src/` |
+| `src/bvm/` | bvm: the bytecode format, the assembler, the verifier, the linker, mixins, archives, the interpreter, the JIT (`jit.bn`, x86-64) and the `bvm` command | `bvm/src/` |
 
 The sources import each other with relative paths (`"../syntax/ast.bn"`) because they were first built by a stage0 that did not know `@/` imports.
 
