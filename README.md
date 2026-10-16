@@ -11,7 +11,7 @@ too. No other language is involved: the toolchain only links the C library, and 
 build. Programs run instantly on bvm during development, where a JIT compiles hot code to machine code, and compile to
 small **native executables**, portable bytecode, self-contained `.bar` archives or JavaScript for shipping.
 
-Current version: **26.1.0-experimental-7**
+Current version: **26.1.0-experimental-8**
 
 > [!WARNING]
 > Burn is **not** ready for production. Syntax may still change. Please report bugs as issues.
