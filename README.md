@@ -297,12 +297,15 @@ bvm dis hello.bvmc              # and back
 bvm interprets code at first and counts how often each function is called and each loop turns. Once that reaches
 1000, it compiles the function to x86-64 machine code and keeps running it there; a loop that gets hot in the middle of
 a call moves into the compiled code without starting over (on-stack replacement). Interpreted and compiled functions
-call each other freely, and runtime errors, `exit`, the REPL and stack overflows behave the same in both.
+call each other freely, and runtime errors, `exit`, the REPL and stack overflows behave the same in both. Compiled code
+keeps values in registers, and arithmetic, comparisons, fields, arrays and reference counting run inline.
 
 | Program | Interpreted | With the JIT | Native |
 | --- | --- | --- | --- |
-| `fib(32)` | 1.4 s | 45 ms | 20 ms |
-| 30 million loop turns at the top level | 3.7 s | 0.1 s | 0.08 s |
+| `fib(32)` | 1.4 s | 31 ms | 20 ms |
+| 50 million loop turns with `%` | 4.6 s | 0.17 s | 0.17 s |
+| 30 million loop turns at the top level | 3.7 s | 0.05 s | 0.08 s |
+| a sieve of Eratosthenes over arrays | 6.0 s | 0.9 s | 0.75 s |
 
 `BURN_JIT=0` turns the JIT off, and `BURN_JIT_THRESHOLD=<n>` sets how many calls or loop turns make code hot. On
 arm64, bvm interprets.
@@ -408,6 +411,6 @@ This project is licensed under the GNU General Public License v3.0 - see the [LI
 
 ## Plans for Burn
 
-1. A faster JIT: values kept in registers and more instructions compiled inline
-2. The JIT on arm64 (Apple silicon and Linux)
+1. The JIT on arm64 (Apple silicon and Linux)
+2. Floats in registers and inline method calls in the JIT
 3. Native backends for Windows

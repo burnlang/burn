@@ -30,12 +30,12 @@
 - Fast builds: the toolchain builds itself in about 25 seconds and the test suite runs in under 2 minutes
 - `unsafe`, inline assembly for every target, raw memory (`std/memory`) and calling C both ways (`@Extern`)
 - Import aliases (`import "std/memory" as Mem`) and imports inside functions and blocks
-- bvm: a JIT that compiles hot functions and loops to x86-64 machine code, with on-stack replacement
+- bvm: a JIT that compiles hot functions and loops to x86-64 machine code, with on-stack replacement, values in registers and inline arithmetic, arrays and reference counting
 
 ## Next
 
 - Native backends for Windows (PE/COFF)
-- bvm: a faster JIT (values kept in registers, more instructions inline) and the JIT on arm64
+- bvm: the JIT on arm64, floats in registers and inline method calls
 - Generic methods, generic interfaces, and generic structs that extend other structs
 - Windows installer
 - bvm: a debugger
