@@ -66,7 +66,7 @@ fun main() {
 - Automatic memory without a garbage collector: the compiler tracks ownership and frees each value as soon as it is no
   longer used, cycles included, with no pauses and nothing to write by hand
 - `async fun` / `await` running on real threads
-- Tiny executables without the standard library: `std = false` in burn.toml or `--no-std`
+- Programs that use only the core of the language: `std = false` in burn.toml or `--no-std`
 - Low-level code when you need it: `unsafe` blocks and functions, inline assembly with a section per target
   (x86-64, arm64, bvm, JavaScript) and an `else` fallback in Burn, and raw memory with `std/memory`
 - Four ways to ship sharing one type checker and runtime: native x86-64 and arm64 (Apple silicon), bvm bytecode, `.bar` archives, JavaScript
@@ -94,7 +94,7 @@ curl -fsSL https://raw.githubusercontent.com/burnlang/burnup/master/install.sh |
 and adds it to your `PATH`. It installs and switches versions (`burnup install 26.1`, `burnup default master`), and
 a project can pin its version with `burn = "26.1"` in `burn.toml`. It builds from source when no
 prebuilt release is available, which needs a C compiler, tar and xz. Native executables need a C toolchain (`cc`) and are built for Linux and macOS on x86-64 and arm64, Apple silicon Macs included.
-See [installation](https://burnlang.github.io/docs/tooling/installation) for all options, updating and uninstalling.
+See [installation](https://s42yt.github.io/burn-docs/tooling/installation) for all options, updating and uninstalling.
 
 ## The toolchain
 
@@ -126,7 +126,7 @@ burn init github.com/you/app    # start a project with burn.toml
 ash install github.com/you/lib  # add a package
 ```
 
-See [the toolchain](https://burnlang.github.io/docs/tooling/toolchain) and the [command line reference](https://burnlang.github.io/docs/tooling/cli).
+See [the toolchain](https://s42yt.github.io/burn-docs/tooling/toolchain) and the [command line reference](https://s42yt.github.io/burn-docs/tooling/cli).
 
 ## Language at a glance
 
@@ -338,13 +338,13 @@ burnc app.bn --target bar -o app.bar        # one archive: ./app.bar runs anywhe
 ```
 
 The library calls `hostName()` back in the program, and the program's mixin rewrites the library's `describe`,
-both on bvm and in the native executable. See [the bvm documentation](https://burnlang.github.io/docs/bvm/overview),
-[archives](https://burnlang.github.io/docs/bvm/archives), [mixins](https://burnlang.github.io/docs/bvm/mixins) and [native interop](https://burnlang.github.io/docs/bvm/native-interop).
+both on bvm and in the native executable. See [the bvm documentation](https://s42yt.github.io/burn-docs/bvm/overview),
+[archives](https://s42yt.github.io/burn-docs/bvm/archives), [mixins](https://s42yt.github.io/burn-docs/bvm/mixins) and [native interop](https://s42yt.github.io/burn-docs/bvm/native-interop).
 
 ## Documentation
 
-The documentation is at **[burnlang.github.io/docs](https://burnlang.github.io/docs/)**: the whole language, the
-standard library, the command line and tools, [how Burn works in the background](https://burnlang.github.io/docs/internals/overview)
+The documentation is at **[s42yt.github.io/burn-docs](https://s42yt.github.io/burn-docs/)**: the whole language, the
+standard library, the command line and tools, [how Burn works in the background](https://s42yt.github.io/burn-docs/internals/overview)
 and the Burn Virtual Machine. Its sources and the website live in [burnlang/docs](https://github.com/burnlang/docs).
 
 <p align="center"><img src="https://raw.githubusercontent.com/burnlang/docs/master/content/images/pipeline.svg" alt="The pipeline from source to bvm, native code and JavaScript" width="820"></p>
@@ -378,7 +378,7 @@ examples are in [`examples/bvm/`](examples/bvm/).
 
 Editor support lives in its own repositories: [vscode-burn](https://github.com/burnlang/vscode-burn),
 [intellij-burn](https://github.com/burnlang/intellij-burn), [zed-burn](https://github.com/burnlang/zed-burn) and
-[tree-sitter-burn](https://github.com/burnlang/tree-sitter-burn). See [editor support](https://burnlang.github.io/docs/tooling/editors).
+[tree-sitter-burn](https://github.com/burnlang/tree-sitter-burn). See [editor support](https://s42yt.github.io/burn-docs/tooling/editors).
 The documentation is in [burnlang/docs](https://github.com/burnlang/docs).
 
 ## Development
