@@ -25,14 +25,20 @@
 - Automatic memory management without a garbage collector: compiler-inserted reference counting with a cycle collector
 - Sized number types (`int8` to `uint64`, `float32`) with packed arrays
 - Building without the standard runtime (`--no-std`, `std = false`) for small native executables
-- Self-hosting: the compiler, the command line, `burn doc`, the REPL and the language server are written in Burn and the compiler builds itself; the compiler written in Rust is retired, and only bvm stays in Rust
+- Self-hosting: the compiler, the command line, `burn doc`, the REPL and the language server are written in Burn and the compiler builds itself
+- No Rust: bvm and the runtime are written in Burn too, the toolchain is a native executable, and Burn builds from assembly seeds with only a C compiler
+- Fast builds: the toolchain builds itself in about 25 seconds and the test suite runs in under 2 minutes
+- `unsafe`, inline assembly for every target, raw memory (`std/memory`) and calling C both ways (`@Extern`)
+- Import aliases (`import "std/memory" as Mem`) and imports inside functions and blocks
+- bvm: a JIT that compiles hot functions and loops to x86-64 machine code, with on-stack replacement
 
 ## Next
 
-- Native backends for Windows (PE/COFF), or a JIT in bvm
+- Native backends for Windows (PE/COFF)
+- bvm: a faster JIT (values kept in registers, more instructions inline) and the JIT on arm64
 - Generic methods, generic interfaces, and generic structs that extend other structs
 - Windows installer
-- bvm: a JIT or threaded-code dispatch and a debugger
+- bvm: a debugger
 - Annotations on parameters and reflection for functions and fields
 - Compile a Burn program as several bytecode modules, one per source file
 - More languages on bvm (a Lisp)
