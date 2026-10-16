@@ -265,6 +265,13 @@ pub fun hover(s: Server, uri: string, params: Json): Json {
         }
         return jo(["contents"], [markdown(value)])
     }
+    var lw = languageWordAt(a.root(), off)
+    if (lw != null) {
+        var doc = languageDoc(lw)
+        if (doc != null) {
+            return jo(["contents"], [markdown(hoverMarkdown("${lw}\u{1}${doc}"))])
+        }
+    }
     return Json.Null
 }
 

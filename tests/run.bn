@@ -56,6 +56,7 @@ fun tests(): [Test] {
         Test { name: "language_server_completes_imports_and_reports_ambiguity_once", body: languageServerCompletesImportsAndReportsAmbiguityOnce },
         Test { name: "language_server_completes_names_after_an_import_alias", body: languageServerCompletesNamesAfterAnImportAlias },
         Test { name: "language_server_completes_enum_variants_with_data", body: languageServerCompletesEnumVariantsWithData },
+        Test { name: "language_server_documents_keywords_and_builtin_types", body: languageServerDocumentsKeywordsAndBuiltinTypes },
         Test { name: "language_server_navigates_into_libraries_and_renames_across_files", body: languageServerNavigatesIntoLibrariesAndRenamesAcrossFiles },
         Test { name: "language_server_keeps_working_while_typing_and_links_imports", body: languageServerKeepsWorkingWhileTypingAndLinksImports },
         Test { name: "language_server_imports_the_project_itself_by_package_name", body: languageServerImportsTheProjectItselfByPackageName },

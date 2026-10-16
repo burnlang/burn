@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Editors explain the language itself: hovering over a keyword (`def`, `struct`, `fun`, `match`, `unsafe`, …) or a built-in type (`int`, `string`, `uint8`, `Future`, … and their other names such as `String` or `byte`) shows what it does with an example and a link to the documentation, and going to its definition (Ctrl+click) opens `language.md` at its section. The text lives in `lib/doc/language.md`, which the compiler embeds like the built-in functions and `burn sources` writes next to them. Words in strings are left alone.
 ## 26.1.0-experimental-8
 
 The JIT: bvm compiles the functions and loops a program spends its time in to x86-64 or arm64 machine code while it runs, so `burn run` and `burni` get close to native speed on hot code.
