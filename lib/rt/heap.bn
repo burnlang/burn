@@ -134,12 +134,26 @@ pub unsafe fun setMainThread() {
 pub unsafe fun taskStarted() {
     atomicAdd64(counterBlock(), 1)
     rcMt = 1
+    st64(mtCell(), 1)
 }
 
 pub unsafe fun taskFinished() {
     if (atomicAdd64(counterBlock(), -1) == 1) {
         rcMt = 0
+        st64(mtCell(), 0)
     }
+}
+
+var mtCellAddr = 0
+
+/** The address of 8 bytes that are 1 while more than one thread runs Burn code, like `burn_rc_mt`, for machine code the bvm JIT writes. */
+@Extern("burn_rt_mt_cell")
+pub unsafe fun mtCell(): int {
+    if (mtCellAddr == 0) {
+        mtCellAddr = zalloc(8)
+        st64(mtCellAddr, rcMt)
+    }
+    return mtCellAddr
 }
 
 pub unsafe fun runningTasks(): int {
