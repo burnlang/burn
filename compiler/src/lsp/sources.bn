@@ -1,10 +1,12 @@
 import "../cli/host.bn"
+import "../diag/diag.bn"
 import "../doc/assets.bn"
 import "../doc/builtin_docs.bn"
 import "../doc/text.bn"
 import "../project/paths.bn"
 import "../project/project.bn"
 import "../project/stdlib.bn"
+import "../syntax/lexer.bn"
 import "std/strings"
 
 /** Where the language server writes the sources it shows for the standard library, built-ins and bytecode libraries. */
@@ -96,6 +98,113 @@ pub fun builtinLocation(all: [Builtin], name: string): BuiltinLocation? {
     return null
 }
 
+/** The other names of the built-in types, and the name `language.md` documents them under. */
+const TYPE_NAMES: {string: string} = {
+    "Int": "int",
+    "i64": "int",
+    "long": "int",
+    "int64": "int",
+    "Int64": "int",
+    "Float": "float",
+    "double": "float",
+    "Double": "float",
+    "float64": "float",
+    "Float64": "float",
+    "f64": "float",
+    "number": "float",
+    "String": "string",
+    "str": "string",
+    "Str": "string",
+    "Bool": "bool",
+    "boolean": "bool",
+    "Boolean": "bool",
+    "Any": "any",
+    "object": "any",
+    "Void": "void",
+    "Unit": "void",
+    "Int8": "int8",
+    "i8": "int8",
+    "Int16": "int16",
+    "i16": "int16",
+    "short": "int16",
+    "Int32": "int32",
+    "i32": "int32",
+    "UInt8": "uint8",
+    "u8": "uint8",
+    "byte": "uint8",
+    "Byte": "uint8",
+    "UInt16": "uint16",
+    "u16": "uint16",
+    "UInt32": "uint32",
+    "u32": "uint32",
+    "UInt64": "uint64",
+    "u64": "uint64",
+    "Float32": "float32",
+    "f32": "float32"
+}
+
+/** The 0-based line of the heading of keyword or built-in type `word` in `language.md`, or -1. */
+pub fun languageLine(word: string): int {
+    var lines = textLines(LANGUAGE_DOC)
+    var heading = "## `${word}`"
+    for i in 0..len(lines) {
+        if (lines[i] == heading) {
+            return i
+        }
+    }
+    return -1
+}
+
+/** The documentation of keyword or built-in type `word`, as Markdown, or null. */
+pub fun languageDoc(word: string): string? {
+    var lines = textLines(LANGUAGE_DOC)
+    var at = languageLine(word)
+    if (at < 0) {
+        return null
+    }
+    [string] body = []
+    var i = at + 1
+    while (i < len(lines) && !startsWith(lines[i], "## ")) {
+        body.push(lines[i])
+        i += 1
+    }
+    return trim(join(body, "\n"))
+}
+
+/**
+ * The keyword or built-in type at byte offset `off` of `f`, under the name `language.md` documents it, or null; words
+ * in strings and comments are not keywords.
+ */
+pub fun languageWordAt(f: SourceFile, off: int): string? {
+    for t in lex(f.src).tokens {
+        if (t.start > off) {
+            return null
+        }
+        if (off >= t.end && !(off == t.end && t.end > t.start)) {
+            continue
+        }
+        if (t.kind == Kind.Str || t.kind == Kind.Template || t.kind == Kind.AsmText) {
+            return null
+        }
+        var w = f.text(t.start, t.end)
+        var name = TYPE_NAMES[w] ?? w
+        if (languageLine(name) >= 0) {
+            return name
+        }
+        return null
+    }
+    return null
+}
+
+/** Writes the documentation of the keywords and built-in types and gives its path. */
+pub fun languageFile(): string? {
+    var p = pathJoin(sourcesDir(), "language.md")
+    if (writeReadOnly(p, LANGUAGE_DOC)) {
+        return p
+    }
+    return null
+}
+
 /** A written stub of a bytecode library, and the 0-based line of the function asked for. */
 pub def type LibraryStub {
     string path
@@ -130,7 +239,7 @@ pub fun libraryStub(lib: string, names: [string], sigs: [string], target: string
 
 /** `burn sources`: writes the standard library and built-in sources the editor shows, and prints where. */
 pub fun cmdSources(): int {
-    var ok = builtinsFile() != null
+    var ok = builtinsFile() != null && languageFile() != null
     for s in stdModules() {
         if (stdFile(s.name) == null) {
             ok = false

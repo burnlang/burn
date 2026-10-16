@@ -233,6 +233,13 @@ pub fun definition(s: Server, uri: string, params: Json): Json {
             return point(loc.path, loc.line, loc.col, nameLen)
         }
     }
+    var lw = languageWordAt(a.root(), off)
+    if (lw != null) {
+        var p = languageFile()
+        if (p != null) {
+            return point(p, languageLine(lw), 4, len(bytes(lw)))
+        }
+    }
     return Json.Null
 }
 

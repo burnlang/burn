@@ -170,6 +170,44 @@ pub fun languageServerCompletesEnumVariantsWithData() {
     Files.remove(dir)
 }
 
+/** Keywords and built-in types show their documentation on hover and lead to it, but not inside strings. */
+pub fun languageServerDocumentsKeywordsAndBuiltinTypes() {
+    var dir = tempDir("lsp-keywords")
+    var text = "def struct Point(x: int) {\n}\n\nString s = \"if\"\nvar p = new Point(1)\n"
+    put("${dir}/main.bn", text)
+    var uri = "file://${dir}/main.bn"
+    var s = new Session(dir, ["BURN_HOME=${dir}/home"])
+    s.request("initialize", "{\"capabilities\":{}}")
+    s.open(uri, text)
+    var structHover = s.request("textDocument/hover", at(uri, 0, 6))
+    var intHover = s.request("textDocument/hover", at(uri, 0, 21))
+    var aliasHover = s.request("textDocument/hover", at(uri, 3, 2))
+    var stringHover = s.request("textDocument/hover", at(uri, 3, 13))
+    var newDef = s.request("textDocument/definition", at(uri, 4, 9))
+    s.finish()
+    var got = s.reply(structHover)
+    check(contains(got, "*keyword*") && contains(got, "def struct Name(params)"), got)
+    got = s.reply(intHover)
+    check(contains(got, "*type*: a 64-bit signed integer"), got)
+    got = s.reply(aliasHover)
+    check(contains(got, "*type*: an immutable sequence of Unicode characters"), got)
+    got = s.reply(stringHover)
+    check(contains(got, "\"result\":null"), got)
+    got = s.reply(newDef)
+    check(contains(got, "/cache/sources/") && contains(got, "language.md"), got)
+    var at = indexOf(got, "\"line\":") + 7
+    var digits = ""
+    while (at < len(got) && isInt(substring(got, at, at + 1))) {
+        digits += substring(got, at, at + 1)
+        at += 1
+    }
+    var v = trim(burn(".", ["version"]).out)
+    var lines = split(readFile("${dir}/home/cache/sources/${trim(substring(v, 5, len(v)))}/language.md"), "\n")
+    var line = toInt(digits)
+    check(line < len(lines) && lines[line] == "## `new`", got)
+    Files.remove(dir)
+}
+
 /** Definitions lead into the standard library and built-ins, and references, renames, signatures, hints and symbols work across files. */
 pub fun languageServerNavigatesIntoLibrariesAndRenamesAcrossFiles() {
     var dir = tempDir("lsp-nav")
