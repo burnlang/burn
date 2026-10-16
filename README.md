@@ -76,8 +76,8 @@ fun main() {
 - A self-hosted toolchain: the compiler, the command line, the runtime and bvm are written in Burn, and the compiler
   builds itself, starting from a copy kept in the repository as assembly, so building Burn only needs a C compiler
 - bvm, a general-purpose virtual machine with its own assembly language, bytecode format and verifier, which other languages can target too
-- A JIT in bvm: functions and loops that run often are compiled to x86-64 machine code while the program runs, so
-  `burni` gets close to native speed on hot code
+- A JIT in bvm: functions and loops that run often are compiled to x86-64 or arm64 machine code while the program
+  runs, so `burni` gets close to native speed on hot code
 - Write once, run everywhere: `.bar` archives bundle an application's bytecode and resources and run wherever bvm runs
 - Mixins: `@Inject`, `@Overwrite` and `@Redirect` rewrite existing bytecode functions when modules are linked
 - Native interop: Burn calls C functions and C calls Burn functions (`@Extern`), and runtime libraries written in Burn link into native programs
@@ -295,7 +295,7 @@ bvm dis hello.bvmc              # and back
 ### The JIT
 
 bvm interprets code at first and counts how often each function is called and each loop turns. Once that reaches
-1000, it compiles the function to x86-64 machine code and keeps running it there; a loop that gets hot in the middle of
+1000, it compiles the function to machine code for the processor (x86-64 or arm64) and keeps running it there; a loop that gets hot in the middle of
 a call moves into the compiled code without starting over (on-stack replacement). Interpreted and compiled functions
 call each other freely, and runtime errors, `exit`, the REPL and stack overflows behave the same in both. Compiled code
 keeps values in registers, and arithmetic, comparisons, fields, arrays and reference counting run inline.
@@ -307,8 +307,8 @@ keeps values in registers, and arithmetic, comparisons, fields, arrays and refer
 | 30 million loop turns at the top level | 3.7 s | 0.05 s | 0.08 s |
 | a sieve of Eratosthenes over arrays | 6.0 s | 0.9 s | 0.75 s |
 
-`BURN_JIT=0` turns the JIT off, and `BURN_JIT_THRESHOLD=<n>` sets how many calls or loop turns make code hot. On
-arm64, bvm interprets.
+`BURN_JIT=0` turns the JIT off, and `BURN_JIT_THRESHOLD=<n>` sets how many calls or loop turns make code hot. The
+times are on x86-64 Linux; the JIT works the same way on arm64 (Apple silicon and Linux).
 
 ### Libraries, archives, mixins and native code
 
@@ -411,6 +411,5 @@ This project is licensed under the GNU General Public License v3.0 - see the [LI
 
 ## Plans for Burn
 
-1. The JIT on arm64 (Apple silicon and Linux)
-2. Floats in registers and inline method calls in the JIT
-3. Native backends for Windows
+1. Floats in registers and inline method calls in the JIT
+2. Native backends for Windows
