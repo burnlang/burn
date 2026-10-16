@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- bvm has a JIT: functions that are called often and loops that turn often are compiled to x86-64 machine code while the program runs (`compiler/src/bvm/jit.bn`), so `burn run` and `burni` get close to native speed on hot code: `fib(32)` takes 45 ms instead of 1.4 s, and a loop over 30 million numbers 0.1 s instead of 3.7 s. Compiled code keeps the interpreter's frames, with every operand stack slot at a fixed offset, so interpreted and compiled functions call each other freely, and a hot loop moves from the interpreter into compiled code in the middle of a call (on-stack replacement). Runtime errors, `exit`, the REPL's recovery and stack overflows work the same in compiled code. `BURN_JIT=0` turns it off and `BURN_JIT_THRESHOLD` sets how many calls or loop turns make code hot (1000). On arm64 bvm still interprets.
+- The less common instructions of bvm (division, floats, records, arrays, host functions, tasks) run in one function, `burn_bvm_slow`, which the interpreter and compiled code share.
+
 ## 26.1.0-experimental-7
 
 No Rust: the compiler, the command line, bvm and the runtime are written in Burn, the toolchain is a native executable that builds itself in under a minute, and building Burn needs only a C compiler, starting from assembly seeds in the repository.
