@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 26.1.0-experimental-8
+
+The JIT: bvm compiles the functions and loops a program spends its time in to x86-64 or arm64 machine code while it runs, so `burn run` and `burni` get close to native speed on hot code.
+
 - The JIT runs on arm64 too, on Linux and on Macs with Apple silicon: `compiler/src/bvm/jit_arm64.bn` writes arm64 machine code with the same frames, on-stack replacement, values in registers and inline fast paths as on x86-64. The parts both processors share moved to `jitbase.bn`, and the x86-64 code generator to `jit_x86.bn`. Under qemu, `fib(32)` takes 0.35 s instead of 10.9 s.
 - Fixed: a method that overrides one of its parent struct's and uses a global, without a declared return type, failed with "`x` is used before it is declared". Overriding signatures are now compared after every body is checked.
 - The JIT keeps values in registers and compiles more inline. While it compiles a function it tracks what each operand stack slot holds (a constant, a local's value or the value in `rax`) and writes it to memory only when a jump, a call or a jump target needs it there, so `a + b * 2` is a few register instructions instead of a load and a store per step. Comparisons followed by a branch become one `cmp` and conditional jump; division and remainder use `idiv` (falling back to the runtime only for 0 and -1); writes to arrays of plain values and retain and release are inline, calling the runtime only when an object dies, is shared between threads or was freed. A loop with `%` over 50 million numbers takes 0.17 s instead of 1.1 s (as fast as native code), `fib(32)` 31 ms instead of 45 ms, and a sieve over arrays 0.9 s instead of 1.3 s. The runtime gives the JIT the address of its "other threads run" flag (`burn_rt_mt_cell`).

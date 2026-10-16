@@ -31,7 +31,7 @@ fun cSetsockopt(fd: int, level: int, name: int, value: int, len: int): Int32
 @Extern("close")
 fun cCloseSocket(fd: int): Int32
 
-const VERSION = "26.1.0-experimental-7"
+const VERSION = "26.1.0-experimental-8"
 
 /** The parts of a URL: whether it is `https`, the host, the port and the path with the query. */
 fun urlParts(url: string): [string] {

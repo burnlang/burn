@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to create and release, e.g. v26.1.0-experimental-7 (must match VERSION in compiler/src/version.bn)"
+        description: "Tag to create and release, e.g. v26.1.0-experimental-8 (must match VERSION in compiler/src/version.bn)"
         required: true
 
 permissions:
