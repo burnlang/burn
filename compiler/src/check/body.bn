@@ -754,6 +754,7 @@ fun checkWith(c: Checker): CheckResult {
     c.declare()
     checkStructs(c)
     finishChecking(c)
+    checkOverrides(c)
     checkNoStd(c)
     HProgram? program = null
     if (!anyErrors(loaded.diags) && !anyErrors(c.diags)) {

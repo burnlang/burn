@@ -516,10 +516,19 @@ pub fun findInstance(list: [GenericInstance], targs: [int]): int? {
 const MAX_INSTANCES = 256
 
 /** The type checker, ported from `check/` part by part. This part declares every type, function and global. */
+/** A method that overrides one of its parent struct's, whose signatures are compared once every body is checked. */
+pub def type Override {
+    int rec
+    int parent
+    string name
+    int func
+}
+
 pub def struct Checker(loaded: Loaded) {
     Types types = new Types()
     int localImports = 0
     [string] libPaths = []
+    [Override] overrides = []
     bool wantIndex = false
     [Builtin]? builtinDocList = null
     [IndexHover] hovers = []
