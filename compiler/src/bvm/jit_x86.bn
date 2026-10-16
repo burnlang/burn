@@ -1,0 +1,1001 @@
+/**
+ * The x86-64 code generator of the JIT. `rbx` holds the frame base (the locals of the call, then its operand stack),
+ * `r13` the interpreter state and `r12` the top of the stack whenever code calls something; `rax` is the accumulator
+ * whose value the operand stack tracks, and `rcx`, `rdx` and `rsi` hold the other operands of an instruction.
+ */
+import "jitbase.bn"
+import "layout.bn"
+import "std/memory"
+
+const RAX = 0
+const RCX = 1
+const RDX = 2
+const RBX = 3
+const RSP = 4
+const RBP = 5
+const RSI = 6
+const RDI = 7
+const R8 = 8
+const R9 = 9
+const R12 = 12
+const R13 = 13
+
+const CC_O = 0
+const CC_NO = 1
+const CC_B = 2
+const CC_AE = 3
+const CC_E = 4
+const CC_NE = 5
+const CC_A = 7
+
+/** The x86-64 condition code of each comparison, in the order of `Cmp`: eq, ne, lt, le, gt, ge. */
+const CMP_CC = [4, 5, 12, 14, 15, 13]
+
+/** The comparison of each `Cmp` with its operands swapped. */
+const CMP_SWAP = [0, 1, 4, 5, 2, 3]
+
+const ARG_REGS = [7, 6, 2, 1, 8, 9]
+
+const KIND_FREED = 238
+
+const V_MEM = 0
+const V_CONST = 1
+const V_LOCAL = 2
+const V_RAX = 3
+
+fun rexw(a: Asm, reg: int, rm: int) {
+    a.byte(72 | ((reg >> 3) << 2) | (rm >> 3))
+}
+
+fun rexOpt(a: Asm, reg: int, rm: int) {
+    var r = 64 | ((reg >> 3) << 2) | (rm >> 3)
+    if (r != 64) {
+        a.byte(r)
+    }
+}
+
+/** The ModRM (and SIB) bytes and 32-bit displacement of `[base + disp]` with register field `reg`. */
+fun mem(a: Asm, reg: int, base: int, disp: int) {
+    a.byte(128 | ((reg & 7) << 3) | (base & 7))
+    if ((base & 7) == 4) {
+        a.byte(36)
+    }
+    a.i32(disp)
+}
+
+fun rr(a: Asm, reg: int, rm: int) {
+    a.byte(192 | ((reg & 7) << 3) | (rm & 7))
+}
+
+/** `mov dst, [base + disp]` */
+fun ld(a: Asm, dst: int, base: int, disp: int) {
+    rexw(a, dst, base)
+    a.byte(139)
+    mem(a, dst, base, disp)
+}
+
+/** `mov [base + disp], src` */
+fun st(a: Asm, base: int, disp: int, src: int) {
+    rexw(a, src, base)
+    a.byte(137)
+    mem(a, src, base, disp)
+}
+
+/** `mov dst, imm` */
+fun movri(a: Asm, dst: int, imm: int) {
+    if (fits32(imm)) {
+        rexw(a, 0, dst)
+        a.byte(199)
+        rr(a, 0, dst)
+        a.i32(imm)
+    } else {
+        a.byte(72 | (dst >> 3))
+        a.byte(184 + (dst & 7))
+        a.i64(imm)
+    }
+}
+
+/** `mov qword [base + disp], imm32` */
+fun stimm(a: Asm, base: int, disp: int, imm: int) {
+    rexw(a, 0, base)
+    a.byte(199)
+    mem(a, 0, base, disp)
+    a.i32(imm)
+}
+
+/** An instruction `opc dst, [base + disp]`: 3 add, 43 sub, 35 and, 11 or, 51 xor, 59 cmp, 139 mov. */
+fun aluRM(a: Asm, opc: int, dst: int, base: int, disp: int) {
+    rexw(a, dst, base)
+    a.byte(opc)
+    mem(a, dst, base, disp)
+}
+
+/** An instruction `opc dst, src` with the register field `src`: 1 add, 41 sub, 57 cmp, 133 test, 137 mov. */
+fun aluRR(a: Asm, opc: int, src: int, dst: int) {
+    rexw(a, src, dst)
+    a.byte(opc)
+    rr(a, src, dst)
+}
+
+/** An instruction `op dst, imm32` with opcode extension `ext`: 0 add, 5 sub, 7 cmp. */
+fun aluRI(a: Asm, ext: int, dst: int, imm: int) {
+    rexw(a, 0, dst)
+    a.byte(129)
+    rr(a, ext, dst)
+    a.i32(imm)
+}
+
+/** An instruction `op qword [base + disp], imm32` with opcode extension `ext`. */
+fun aluMI(a: Asm, ext: int, base: int, disp: int, imm: int) {
+    rexw(a, 0, base)
+    a.byte(129)
+    mem(a, ext, base, disp)
+    a.i32(imm)
+}
+
+fun lea(a: Asm, dst: int, base: int, disp: int) {
+    rexw(a, dst, base)
+    a.byte(141)
+    mem(a, dst, base, disp)
+}
+
+/** `cmp byte [base + disp], imm8` */
+fun cmp8(a: Asm, base: int, disp: int, imm: int) {
+    rexOpt(a, 0, base)
+    a.byte(128)
+    mem(a, 7, base, disp)
+    a.byte(imm)
+}
+
+/** `mov dst32, dword [base + disp]`, which clears the upper half. */
+fun ld32(a: Asm, dst: int, base: int, disp: int) {
+    rexOpt(a, dst, base)
+    a.byte(139)
+    mem(a, dst, base, disp)
+}
+
+/** `test byte [base + disp], imm8` */
+fun test8(a: Asm, base: int, disp: int, imm: int) {
+    rexOpt(a, 0, base)
+    a.byte(246)
+    mem(a, 0, base, disp)
+    a.byte(imm)
+}
+
+/** An instruction `op dword [base + disp], imm8` with opcode extension `ext`: 0 add, 5 sub. */
+fun dword(a: Asm, ext: int, base: int, disp: int, imm: int) {
+    rexOpt(a, 0, base)
+    a.byte(131)
+    mem(a, ext, base, disp)
+    a.byte(imm)
+}
+
+/** `setcc al; movzx eax, al` */
+fun setcc(a: Asm, cc: int) {
+    a.byte(15)
+    a.byte(144 + cc)
+    a.byte(192)
+    a.byte(15)
+    a.byte(182)
+    a.byte(192)
+}
+
+/** A conditional jump with a 32-bit offset still to patch, whose position it gives. */
+fun jcc(a: Asm, cc: int): int {
+    a.byte(15)
+    a.byte(128 + cc)
+    var at = a.pos()
+    a.i32(0)
+    return at
+}
+
+/** A jump with a 32-bit offset still to patch, whose position it gives. */
+fun jmp(a: Asm): int {
+    a.byte(233)
+    var at = a.pos()
+    a.i32(0)
+    return at
+}
+
+/** `call reg` */
+fun callR(a: Asm, r: int) {
+    rexOpt(a, 0, r)
+    a.byte(255)
+    rr(a, 2, r)
+}
+
+/** Calls the C function at `addr` (the arguments are already in their registers). */
+fun callAbs(a: Asm, addr: int) {
+    movri(a, RAX, addr)
+    callR(a, RAX)
+}
+
+fun bytesOf(xs: [int], a: Asm) {
+    for x in xs {
+        a.byte(x)
+    }
+}
+
+/** Saves the registers C keeps, the way both thunks start. */
+fun thunkStart(a: Asm) {
+    bytesOf([85, 72, 137, 229, 83, 65, 84, 65, 85, 65, 86, 65, 87, 72, 131, 236, 8], a)
+}
+
+fun thunkEnd(a: Asm) {
+    bytesOf([72, 131, 196, 8, 65, 95, 65, 94, 65, 93, 65, 92, 91, 93, 195], a)
+}
+
+/** Sets the lowest address the native stack may reach, 4 MB below the first entry, unless it is set. */
+fun stackLimit(a: Asm) {
+    aluMI(a, 7, R13, VM_RSPLIMIT, 0)
+    var set = jcc(a, CC_NE)
+    lea(a, RAX, RSP, -4194304)
+    st(a, R13, VM_RSPLIMIT, RAX)
+    a.patch(set, a.pos())
+}
+
+/** The two thunks C calls compiled code through: `enter(code, sp, vm)` and `resume(osr, bp, vm, target)`. */
+pub fun x86Thunks(): [Asm] {
+    var e = new Asm()
+    thunkStart(e)
+    aluRR(e, 137, RSI, R12)
+    aluRR(e, 137, RDX, R13)
+    stackLimit(e)
+    callR(e, RDI)
+    thunkEnd(e)
+    var o = new Asm()
+    thunkStart(o)
+    aluRR(o, 137, RDX, R13)
+    stackLimit(o)
+    callR(o, RDI)
+    thunkEnd(o)
+    return [e, o]
+}
+
+/** A function being compiled to x86-64 machine code. */
+pub def struct JobX86(fi: int, prog: int, h: Helpers, macos: bool) :: Job(fi, prog, h, macos) {
+    int ovf1 = 0
+    int ovf2 = 0
+
+    /** Puts the value of stack entry `j` into register `r`. */
+    fun load(j: int, r: int) {
+        var k = vk[j]
+        if (k == V_MEM) {
+            ld(a, r, RBX, slot(j))
+        } else if (k == V_CONST) {
+            movri(a, r, vv[j])
+        } else if (k == V_LOCAL) {
+            ld(a, r, RBX, 8 * vv[j])
+        } else if (r != RAX) {
+            aluRR(a, 137, RAX, r)
+        }
+    }
+
+    fun flush(j: int): void {
+        var k = vk[j]
+        if (k == V_CONST) {
+            if (fits32(vv[j])) {
+                stimm(a, RBX, slot(j), vv[j])
+            } else {
+                movri(a, RCX, vv[j])
+                st(a, RBX, slot(j), RCX)
+            }
+        } else if (k == V_LOCAL) {
+            ld(a, RCX, RBX, 8 * vv[j])
+            st(a, RBX, slot(j), RCX)
+        } else if (k == V_ACC) {
+            st(a, RBX, slot(j), RAX)
+        }
+        vk[j] = V_MEM
+    }
+
+    /** Loads stack entries `js` into registers `regs`, after writing any other value in `rax` to its slot. */
+    fun take(js: [int], regs: [int]) {
+        var held = -1
+        for k in 0..len(js) {
+            if (vk[js[k]] == V_ACC) {
+                held = k
+            }
+        }
+        if (held < 0) {
+            spillAcc()
+        } else if (regs[held] != RAX) {
+            aluRR(a, 137, RAX, regs[held])
+        }
+        for k in 0..len(js) {
+            if (k != held) {
+                load(js[k], regs[k])
+            }
+        }
+    }
+
+    /** `rax = rax op v`, where `v` is stack entry `j`: `rm` is the opcode of `op r64, r/m64` and `ext` its immediate form's extension (-1 for `imul`). */
+    fun alu(j: int, rm: int, ext: int) {
+        var at = place(j)
+        if (vk[j] == V_CONST && fits32(vv[j])) {
+            rexw(a, RAX, RAX)
+            if (ext < 0) {
+                a.byte(105)
+                rr(a, RAX, RAX)
+            } else {
+                a.byte(129)
+                rr(a, ext, RAX)
+            }
+            a.i32(vv[j])
+            return
+        }
+        if (at < 0) {
+            load(j, RCX)
+        }
+        rexw(a, RAX, RBX)
+        if (ext < 0) {
+            a.byte(15)
+            a.byte(175)
+        } else {
+            a.byte(rm)
+        }
+        if (at < 0) {
+            rr(a, RAX, RCX)
+        } else {
+            mem(a, RAX, RBX, at)
+        }
+    }
+
+    /** A binary integer instruction on the two values on top, leaving the result in `rax`; gives whether the operands were swapped. */
+    fun binary(rm: int, ext: int, swaps: bool): bool {
+        var d = len(vk)
+        var l = d - 2
+        var r = d - 1
+        var swapped = false
+        if (vk[r] == V_ACC) {
+            if (swaps) {
+                l = d - 1
+                r = d - 2
+                swapped = true
+            } else {
+                aluRR(a, 137, RAX, RCX)
+                load(l, RAX)
+                rexw(a, RAX, RCX)
+                a.byte(rm)
+                rr(a, RAX, RCX)
+                drop(2)
+                push(V_ACC, 0)
+                return false
+            }
+        }
+        if (vk[l] != V_ACC) {
+            spillAcc()
+            load(l, RAX)
+        }
+        alu(r, rm, ext)
+        drop(2)
+        push(V_ACC, 0)
+        return swapped
+    }
+
+    /** Runs the instruction at `pc` with `burn_bvm_slow`, with `d` values on the stack. */
+    fun slow(pc: int, d: int) {
+        lea(a, RDX, RBX, slot(d))
+        st(a, R13, VM_SP, RDX)
+        aluRR(a, 137, R13, RDI)
+        movri(a, RSI, pc)
+        callAbs(a, h.slow)
+    }
+
+    /** The slow path of an instruction whose operands are in `regs` (from the deepest): writes them to their slots, runs it with `burn_bvm_slow` and loads its result into `rax`. */
+    fun fallback(pc: int, regs: [int]) {
+        var d = len(vk)
+        var base = d - len(regs)
+        for k in 0..len(regs) {
+            st(a, RBX, slot(base + k), regs[k])
+        }
+        slow(pc, d)
+        ld(a, RAX, RBX, slot(base))
+    }
+
+    /** Calls the C function `f` with the value in `rcx`, keeping the value in `rax` unless it is entry `except`. */
+    fun callWith(f: int, except: int) {
+        var held = inAcc()
+        if (held >= 0 && held != except) {
+            st(a, RBX, slot(held), RAX)
+        }
+        lea(a, RDX, RBX, slot(len(vk)))
+        st(a, R13, VM_SP, RDX)
+        aluRR(a, 137, RCX, RDI)
+        callAbs(a, f)
+        if (held >= 0 && held != except) {
+            ld(a, RAX, RBX, slot(held))
+        }
+    }
+
+    /** Jumps (with their positions) taken when the object in `rcx` is null or static; the rest goes on when the reference count can change without the runtime. */
+    fun rcChecks(): [int] {
+        aluRR(a, 133, RCX, RCX)
+        var none = jcc(a, CC_E)
+        test8(a, RCX, 2, 1)
+        var fixed = jcc(a, CC_NE)
+        return [none, fixed]
+    }
+
+    /** A jump taken when the object in `rcx` was freed or other threads run, so the runtime must change its count. */
+    fun rcShared(): [int] {
+        cmp8(a, RCX, 0, KIND_FREED)
+        var freed = jcc(a, CC_E)
+        movri(a, RDX, h.mtCell)
+        aluMI(a, 7, RDX, 0, 0)
+        var shared = jcc(a, CC_NE)
+        return [freed, shared]
+    }
+
+    /** `retain` of the value on top, inline unless the runtime has to do it. */
+    fun retain() {
+        var j = len(vk) - 1
+        if (vk[j] == V_CONST && vv[j] == 0) {
+            return
+        }
+        load(j, RCX)
+        var skips = rcChecks()
+        var slows = rcShared()
+        dword(a, 0, RCX, 12, 1)
+        var done = jmp(a)
+        a.patch(slows[0], a.pos())
+        a.patch(slows[1], a.pos())
+        callWith(h.retain, -1)
+        a.patch(done, a.pos())
+        a.patch(skips[0], a.pos())
+        a.patch(skips[1], a.pos())
+    }
+
+    /** `release` of the value on top, inline unless the object dies or the runtime has to do it; leaves 0 on top. */
+    fun release() {
+        var j = len(vk) - 1
+        if (vk[j] == V_CONST && vv[j] == 0) {
+            return
+        }
+        load(j, RCX)
+        var skips = rcChecks()
+        var slows = rcShared()
+        dword(a, 5, RCX, 12, 1)
+        var zero = jcc(a, CC_E)
+        test8(a, RCX, 2, 4)
+        var untracked = jcc(a, CC_E)
+        callWith(h.possibleRoot, j)
+        var done1 = jmp(a)
+        a.patch(zero, a.pos())
+        callWith(h.releaseZero, j)
+        var done2 = jmp(a)
+        a.patch(slows[0], a.pos())
+        a.patch(slows[1], a.pos())
+        callWith(h.release, j)
+        a.patch(done1, a.pos())
+        a.patch(done2, a.pos())
+        a.patch(untracked, a.pos())
+        a.patch(skips[0], a.pos())
+        a.patch(skips[1], a.pos())
+        vk[j] = V_CONST
+        vv[j] = 0
+    }
+
+    /** Stops with an integer overflow at `loc` unless the last instruction left the overflow flag clear. */
+    fun overflowCheck(loc: int) {
+        var fine = jcc(a, CC_NO)
+        movri(a, RDI, loc)
+        callAbs(a, h.errOverflow)
+        a.patch(fine, a.pos())
+    }
+
+    /** Calls the function in `rsi` (or `fi`, when it is not 0) with its arguments ending at slot `end`; the result is in `rax`. */
+    fun call(fi: int, end: int) {
+        lea(a, R12, RBX, slot(end))
+        if (fi != 0) {
+            movri(a, RSI, fi)
+        }
+        ld(a, RAX, RSI, F_JIT)
+        aluRR(a, 133, RAX, RAX)
+        var interp = jcc(a, CC_E)
+        callR(a, RAX)
+        var done = jmp(a)
+        a.patch(interp, a.pos())
+        aluRR(a, 137, R13, RDI)
+        aluRR(a, 137, R12, RDX)
+        callAbs(a, h.call)
+        a.patch(done, a.pos())
+    }
+
+    /** The fast path of `getfield` on the record on top, falling back to `pc`. */
+    fun getField(i: int, pc: int) {
+        take([len(vk) - 1], [RAX])
+        aluRR(a, 133, RAX, RAX)
+        var s1 = jcc(a, CC_E)
+        cmp8(a, RAX, 0, 3)
+        var s2 = jcc(a, CC_NE)
+        ld32(a, RCX, RAX, 8)
+        aluRI(a, 7, RCX, 24 + 8 * i)
+        var s3 = jcc(a, CC_B)
+        ld(a, RAX, RAX, 16 + 8 * i)
+        var done = jmp(a)
+        a.patch(s1, a.pos())
+        a.patch(s2, a.pos())
+        a.patch(s3, a.pos())
+        fallback(pc, [RAX])
+        a.patch(done, a.pos())
+        drop(1)
+        push(V_ACC, 0)
+    }
+
+    /** Jumps to the slow path unless `rax` is an array of plain words and `rcx` an index in it. */
+    fun arrayChecks(): [int] {
+        aluRR(a, 133, RAX, RAX)
+        var s1 = jcc(a, CC_E)
+        cmp8(a, RAX, 0, 2)
+        var s2 = jcc(a, CC_NE)
+        cmp8(a, RAX, 3, 0)
+        var s3 = jcc(a, CC_NE)
+        aluRM(a, 59, RCX, RAX, 16)
+        var s4 = jcc(a, CC_AE)
+        return [s1, s2, s3, s4]
+    }
+
+    /** Compares the two values on top and branches on the result when instruction `next` is `jz` or `jnz` that no jump reaches; otherwise leaves 0 or 1. */
+    unsafe fun compare(c: int, i: int, next: int) {
+        var d = len(vk)
+        var l = d - 2
+        var r = d - 1
+        var cc = c
+        if (vk[r] == V_ACC) {
+            l = d - 1
+            r = d - 2
+            cc = CMP_SWAP[c]
+        }
+        if (vk[l] != V_ACC) {
+            spillAcc()
+            load(l, RAX)
+        }
+        var n = Memory.load64(next)
+        if ((n == OP_JZ || n == OP_JNZ) && i + 1 < count && !targets[i + 1]) {
+            var rk = vk[r]
+            var rv = vv[r]
+            var at = place(r)
+            drop(2)
+            flushAll()
+            if (rk == V_CONST && fits32(rv)) {
+                aluRI(a, 7, RAX, rv)
+            } else if (at >= 0) {
+                aluRM(a, 59, RAX, RBX, at)
+            } else {
+                movri(a, RCX, rv)
+                aluRR(a, 57, RCX, RAX)
+            }
+            var jc = CMP_CC[cc]
+            if (n == OP_JZ) {
+                jc = jc ^ 1
+            }
+            jumpTo(jcc(a, jc), target(Memory.load64(next + 8)), len(vk))
+            skip = 1
+            return
+        }
+        alu(r, 59, 7)
+        setcc(a, CMP_CC[cc])
+        drop(2)
+        push(V_ACC, 0)
+    }
+
+    fun op(pc: int, i: int): int {
+        unsafe {
+            return gen(pc, i)
+        }
+    }
+
+    /** Compiles instruction record `pc` (index `i`), like `op`. */
+    unsafe fun gen(pc: int, i: int): int {
+        var k = Memory.load64(pc)
+        var x = Memory.load64(pc + 8)
+        var y = Memory.load64(pc + 16)
+        var z = Memory.load64(pc + 24)
+        var d = len(vk)
+        if (k == OP_LOAD) {
+            push(V_LOCAL, x)
+            return d + 1
+        }
+        if (k == OP_CONST) {
+            push(V_CONST, x)
+            return d + 1
+        }
+        if (k == OP_LOAD2) {
+            push(V_LOCAL, x)
+            push(V_LOCAL, y)
+            return d + 2
+        }
+        if (k == OP_LOADK) {
+            push(V_LOCAL, x)
+            push(V_CONST, y)
+            return d + 2
+        }
+        if (k == OP_STORE || k == OP_TEE) {
+            var j = d - 1
+            if (vk[j] == V_LOCAL && vv[j] == x) {
+                if (k == OP_STORE) {
+                    drop(1)
+                }
+                return len(vk)
+            }
+            flushLocal(x, j)
+            if (vk[j] == V_CONST && fits32(vv[j])) {
+                stimm(a, RBX, 8 * x, vv[j])
+            } else if (vk[j] == V_ACC) {
+                st(a, RBX, 8 * x, RAX)
+            } else {
+                load(j, RCX)
+                st(a, RBX, 8 * x, RCX)
+                vk[j] = V_LOCAL
+                vv[j] = x
+            }
+            if (k == OP_STORE) {
+                drop(1)
+            }
+            return len(vk)
+        }
+        if (k == OP_JZ || k == OP_JNZ) {
+            var j = d - 1
+            var at = place(j)
+            if (at < 0) {
+                take([j], [RAX])
+            }
+            drop(1)
+            flushAll()
+            if (at < 0) {
+                aluRR(a, 133, RAX, RAX)
+            } else {
+                aluMI(a, 7, RBX, at, 0)
+            }
+            var cc = CC_E
+            if (k == OP_JNZ) {
+                cc = CC_NE
+            }
+            jumpTo(jcc(a, cc), target(x), d - 1)
+            return d - 1
+        }
+        if (k == OP_JZK || k == OP_JNZK) {
+            flushAll()
+            aluMI(a, 7, RBX, slot(d - 1), 0)
+            var cc = CC_E
+            if (k == OP_JNZK) {
+                cc = CC_NE
+            }
+            jumpTo(jcc(a, cc), target(x), d)
+            return d
+        }
+        if (k == OP_JMP) {
+            flushAll()
+            jumpTo(jmp(a), target(x), d)
+            return -1
+        }
+        if (k >= OP_JLL && k < OP_JLC) {
+            flushAll()
+            ld(a, RAX, RBX, 8 * x)
+            aluRM(a, 59, RAX, RBX, 8 * y)
+            jumpTo(jcc(a, CMP_CC[k - OP_JLL] ^ 1), target(z), d)
+            return d
+        }
+        if (k >= OP_JLC && k < OP_ICMP) {
+            flushAll()
+            aluMI(a, 7, RBX, 8 * x, y)
+            jumpTo(jcc(a, CMP_CC[k - OP_JLC] ^ 1), target(z), d)
+            return d
+        }
+        if (k >= OP_ICMP && k < OP_IADD) {
+            compare(k - OP_ICMP, i, pc + OP_SIZE)
+            return len(vk)
+        }
+        if (k == OP_IADD || k == OP_IADDOV) {
+            binary(3, 0, true)
+            if (k == OP_IADDOV) {
+                overflowCheck(x)
+            }
+            return d - 1
+        }
+        if (k == OP_ISUB || k == OP_ISUBOV) {
+            binary(43, 5, false)
+            if (k == OP_ISUBOV) {
+                overflowCheck(x)
+            }
+            return d - 1
+        }
+        if (k == OP_AND || k == OP_OR || k == OP_XOR) {
+            var rm = 35
+            var ext = 4
+            if (k == OP_OR) {
+                rm = 11
+                ext = 1
+            } else if (k == OP_XOR) {
+                rm = 51
+                ext = 6
+            }
+            binary(rm, ext, true)
+            return d - 1
+        }
+        if (k == OP_IMUL || k == OP_IMULOV) {
+            binary(0, -1, true)
+            if (k == OP_IMULOV) {
+                overflowCheck(x)
+            }
+            return d - 1
+        }
+        if (k == OP_IDIV || k == OP_IREM) {
+            take([d - 2, d - 1], [RAX, RCX])
+            aluRR(a, 133, RCX, RCX)
+            var s1 = jcc(a, CC_E)
+            aluRI(a, 7, RCX, -1)
+            var s2 = jcc(a, CC_E)
+            bytesOf([72, 153, 72, 247, 249], a)
+            if (k == OP_IREM) {
+                aluRR(a, 137, RDX, RAX)
+            }
+            var done = jmp(a)
+            a.patch(s1, a.pos())
+            a.patch(s2, a.pos())
+            fallback(pc, [RAX, RCX])
+            a.patch(done, a.pos())
+            drop(2)
+            push(V_ACC, 0)
+            return d - 1
+        }
+        if (k == OP_INC || k == OP_INCOV) {
+            flushLocal(x, -1)
+            aluMI(a, 0, RBX, 8 * x, y)
+            if (k == OP_INCOV) {
+                overflowCheck(z)
+            }
+            return d
+        }
+        if (k == OP_INEG) {
+            take([d - 1], [RAX])
+            rexw(a, 0, RAX)
+            a.byte(247)
+            rr(a, 3, RAX)
+            drop(1)
+            push(V_ACC, 0)
+            return d
+        }
+        if (k == OP_SHL || k == OP_SHR || k == OP_USHR) {
+            var ext = 4
+            if (k == OP_SHR) {
+                ext = 7
+            } else if (k == OP_USHR) {
+                ext = 5
+            }
+            if (vk[d - 1] == V_CONST) {
+                var n = vv[d - 1] & 63
+                drop(1)
+                take([d - 2], [RAX])
+                rexw(a, 0, RAX)
+                a.byte(193)
+                rr(a, ext, RAX)
+                a.byte(n)
+            } else {
+                take([d - 2, d - 1], [RAX, RCX])
+                rexw(a, 0, RAX)
+                a.byte(211)
+                rr(a, ext, RAX)
+                drop(1)
+            }
+            drop(1)
+            push(V_ACC, 0)
+            return d - 1
+        }
+        if (k == OP_NOT) {
+            take([d - 1], [RAX])
+            aluRR(a, 133, RAX, RAX)
+            setcc(a, CC_E)
+            drop(1)
+            push(V_ACC, 0)
+            return d
+        }
+        if (k == OP_POP) {
+            drop(1)
+            return d - 1
+        }
+        if (k == OP_DUP) {
+            var j = d - 1
+            if (vk[j] == V_ACC) {
+                flush(j)
+                push(V_ACC, 0)
+            } else if (vk[j] == V_MEM) {
+                spillAcc()
+                ld(a, RAX, RBX, slot(j))
+                push(V_ACC, 0)
+            } else {
+                push(vk[j], vv[j])
+            }
+            return d + 1
+        }
+        if (k == OP_SWAP) {
+            flush(d - 1)
+            flush(d - 2)
+            ld(a, RAX, RBX, slot(d - 1))
+            ld(a, RCX, RBX, slot(d - 2))
+            st(a, RBX, slot(d - 1), RCX)
+            st(a, RBX, slot(d - 2), RAX)
+            return d
+        }
+        if (k == OP_GLOAD) {
+            spillAcc()
+            movri(a, RCX, Memory.load64(prog + P_GLOBALS))
+            ld(a, RAX, RCX, 8 * x)
+            push(V_ACC, 0)
+            return d + 1
+        }
+        if (k == OP_GSTORE || k == OP_GTEE) {
+            take([d - 1], [RAX])
+            movri(a, RCX, Memory.load64(prog + P_GLOBALS))
+            st(a, RCX, 8 * x, RAX)
+            drop(1)
+            if (k == OP_GSTORE) {
+                return d - 1
+            }
+            push(V_ACC, 0)
+            return d
+        }
+        if (k == OP_RET) {
+            load(d - 1, RAX)
+            toEnd.push(jmp(a))
+            return -1
+        }
+        if (k == OP_RETV) {
+            bytesOf([49, 192], a)
+            toEnd.push(jmp(a))
+            return -1
+        }
+        if (k == OP_CALL) {
+            var params = Memory.load64(x + F_PARAMS)
+            flushTop(params)
+            call(x, d)
+            drop(params)
+            push(V_ACC, 0)
+            return d - params + 1
+        }
+        if (k == OP_CALLIND || k == OP_DISPATCH) {
+            var n = x + 1
+            if (k == OP_DISPATCH) {
+                n = y
+            }
+            flushTop(n)
+            lea(a, RDX, RBX, slot(d))
+            st(a, R13, VM_SP, RDX)
+            aluRR(a, 137, R13, RDI)
+            movri(a, RSI, pc)
+            callAbs(a, h.callee)
+            aluRR(a, 137, RAX, RSI)
+            if (k == OP_CALLIND) {
+                call(0, d - 1)
+            } else {
+                call(0, d)
+            }
+            drop(n)
+            push(V_ACC, 0)
+            return d - n + 1
+        }
+        if (k == OP_RT) {
+            if (y > 6) {
+                ok = false
+                return -1
+            }
+            var held = inAcc()
+            if (held >= 0 && held < d - y) {
+                flush(held)
+            }
+            lea(a, R12, RBX, slot(d))
+            st(a, R13, VM_SP, R12)
+            for j in 0..y {
+                load(d - y + j, ARG_REGS[j])
+            }
+            callAbs(a, x)
+            drop(y)
+            push(V_ACC, 0)
+            return d - y + 1
+        }
+        if (k == OP_RETAIN) {
+            retain()
+            return d
+        }
+        if (k == OP_RELEASE) {
+            release()
+            return d
+        }
+        if (k == OP_GETFIELD) {
+            getField(x, pc)
+            return d
+        }
+        if (k == OP_LOADFIELD) {
+            push(V_LOCAL, x)
+            getField(y, pc + OP_SIZE)
+            return d + 1
+        }
+        if (k == OP_INDEX) {
+            take([d - 2, d - 1], [RAX, RCX])
+            var s = arrayChecks()
+            ld(a, RDX, RAX, 32)
+            bytesOf([72, 139, 4, 202], a)
+            var done = jmp(a)
+            for at in s {
+                a.patch(at, a.pos())
+            }
+            fallback(pc, [RAX, RCX])
+            a.patch(done, a.pos())
+            drop(2)
+            push(V_ACC, 0)
+            return d - 1
+        }
+        if (k == OP_SETINDEX) {
+            take([d - 3, d - 2, d - 1], [RAX, RCX, RDX])
+            var s = arrayChecks()
+            ld(a, RSI, RAX, 32)
+            bytesOf([72, 137, 20, 206], a)
+            aluRR(a, 137, RDX, RAX)
+            var done = jmp(a)
+            for at in s {
+                a.patch(at, a.pos())
+            }
+            fallback(pc, [RAX, RCX, RDX])
+            a.patch(done, a.pos())
+            drop(3)
+            push(V_ACC, 0)
+            return d - 2
+        }
+        if (k == OP_LEN) {
+            take([d - 1], [RAX])
+            aluRR(a, 133, RAX, RAX)
+            var s1 = jcc(a, CC_E)
+            cmp8(a, RAX, 0, 2)
+            var s2 = jcc(a, CC_NE)
+            ld(a, RAX, RAX, 16)
+            var done = jmp(a)
+            a.patch(s1, a.pos())
+            a.patch(s2, a.pos())
+            fallback(pc, [RAX])
+            a.patch(done, a.pos())
+            drop(1)
+            push(V_ACC, 0)
+            return d
+        }
+        flushAll()
+        slow(pc, d)
+        var after = slowDepth(k, y, d)
+        memOnly(after)
+        return after
+    }
+
+    fun begin(params: int, frame: int): int {
+        bytesOf([85, 72, 137, 229, 83, 72, 131, 236, 8], a)
+        aluRR(a, 137, RSI, RBX)
+        bytesOf([255, 225], a)
+        var entry = a.pos()
+        bytesOf([85, 72, 137, 229, 83, 72, 131, 236, 8], a)
+        aluRM(a, 59, RSP, R13, VM_RSPLIMIT)
+        ovf1 = jcc(a, CC_B)
+        lea(a, RBX, R12, -8 * params)
+        lea(a, RAX, RBX, 8 * frame)
+        aluRM(a, 59, RAX, R13, VM_STACK_END)
+        ovf2 = jcc(a, CC_A)
+        for k in params..locals {
+            stimm(a, RBX, 8 * k, 0)
+        }
+        return entry
+    }
+
+    fun finish(): bool {
+        var end = a.pos()
+        for at in toEnd {
+            a.patch(at, end)
+        }
+        bytesOf([72, 139, 93, 248, 201, 195], a)
+        a.patch(ovf1, a.pos())
+        a.patch(ovf2, a.pos())
+        callAbs(a, h.overflow)
+        return true
+    }
+
+    fun patchJump(at: int, to: int): void {
+        a.patch(at, to)
+    }
+}

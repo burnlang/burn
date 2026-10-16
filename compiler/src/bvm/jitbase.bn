@@ -1,0 +1,378 @@
+/**
+ * What the code generators of the JIT share: the machine code buffer, executable memory, and `Job`, which walks a
+ * function's prepared instruction records and tracks what each operand stack slot holds while `jit_x86.bn` or
+ * `jit_arm64.bn` writes the machine code for them.
+ */
+import "layout.bn"
+import "std/memory"
+
+@Extern("mmap")
+fun cMmap(addr: int, size: int, prot: int, flags: int, fd: int, off: int): int
+
+@Extern("mprotect")
+fun cMprotect(addr: int, size: int, prot: int): Int32
+
+@Extern("__clear_cache", macos: "sys_icache_invalidate")
+fun cClearCache(start: int, end: int): int
+
+/** The value of an operand stack slot is in the slot. */
+pub const V_MEM = 0
+
+/** The value of an operand stack slot is a constant. */
+pub const V_CONST = 1
+
+/** The value of an operand stack slot is the value of a local. */
+pub const V_LOCAL = 2
+
+/** The value of an operand stack slot is in the accumulator register (`rax` or `x9`). */
+pub const V_ACC = 3
+
+/** The addresses of the functions compiled code calls, and of the runtime's "other threads run" flag. */
+pub def type Helpers {
+    int slow
+    int call
+    int callee
+    int overflow
+    int retain
+    int release
+    int releaseZero
+    int possibleRoot
+    int errOverflow
+    int mtCell
+}
+
+/** Machine code being written. */
+pub def struct Asm() {
+    [int] b = []
+
+    fun byte(x: int) {
+        b.push(x & 255)
+    }
+
+    fun i32(x: int) {
+        b.push(x & 255)
+        b.push((x >> 8) & 255)
+        b.push((x >> 16) & 255)
+        b.push((x >> 24) & 255)
+    }
+
+    fun i64(x: int) {
+        for k in 0..8 {
+            b.push((x >> (8 * k)) & 255)
+        }
+    }
+
+    fun pos(): int {
+        return len(b)
+    }
+
+    /** Points the 32-bit relative jump ending at `at + 4` to `target`. */
+    fun patch(at: int, target: int) {
+        var rel = target - (at + 4)
+        b[at] = rel & 255
+        b[at + 1] = (rel >> 8) & 255
+        b[at + 2] = (rel >> 16) & 255
+        b[at + 3] = (rel >> 24) & 255
+    }
+
+    /** The 32-bit word at `at`. */
+    fun word(at: int): int {
+        return b[at] | (b[at + 1] << 8) | (b[at + 2] << 16) | (b[at + 3] << 24)
+    }
+
+    fun setWord(at: int, w: int) {
+        b[at] = w & 255
+        b[at + 1] = (w >> 8) & 255
+        b[at + 2] = (w >> 16) & 255
+        b[at + 3] = (w >> 24) & 255
+    }
+}
+
+pub fun fits32(v: int): bool {
+    return v >= -2147483648 && v <= 2147483647
+}
+
+/** How long the fused instruction `op` is, in records. */
+pub fun width(op: int): int {
+    if (op == OP_LOAD2 || op == OP_LOADK || op == OP_LOADFIELD) {
+        return 2
+    }
+    if (op == OP_INC || op == OP_INCOV || op >= OP_JLL && op < OP_ICMP) {
+        return 4
+    }
+    return 1
+}
+
+/** Executable memory holding the machine code `a`, or 0; `macos` picks the flags of `mmap`. */
+pub unsafe fun install(a: Asm, macos: bool): int {
+    var n = a.pos()
+    var size = (n + 4095) / 4096 * 4096
+    var flags = 34
+    if (macos) {
+        flags = 4098
+    }
+    var p = cMmap(0, size, 3, flags, -1, 0)
+    if (p == -1 || p == 0) {
+        return 0
+    }
+    for i in 0..n {
+        Memory.store8(p + i, a.b[i])
+    }
+    if (cMprotect(p, size, 5) != 0) {
+        return 0
+    }
+    if (macos) {
+        cClearCache(p, n)
+    } else {
+        cClearCache(p, p + n)
+    }
+    return p
+}
+
+/**
+ * A function being compiled: its machine code, where each instruction's code starts, and what each operand stack slot
+ * holds (`vk` the kind, `vv` the constant or local). A code generator implements the instructions (`op`), writing a
+ * stack entry to its slot (`flush`), the start and end of the function, and how jumps are patched.
+ */
+pub def abstract struct Job(fi: int, prog: int, h: Helpers, macos: bool) {
+    Asm a = new Asm()
+    [int] starts = []
+    [int] depths = []
+    [bool] targets = []
+    [int] fixAt = []
+    [int] fixTo = []
+    [int] toEnd = []
+    [int] vk = []
+    [int] vv = []
+    int locals = 0
+    int code = 0
+    int skip = 0
+    int count = 0
+    bool ok = true
+
+    /** Compiles instruction record `pc` (index `i`); gives the stack depth after it, or -1 when nothing follows it. */
+    abstract fun op(pc: int, i: int): int
+
+    /** Writes stack entry `j` to its slot. */
+    abstract fun flush(j: int): void
+
+    /** Writes the code that enters the function at a jump target, then the start of the function; gives where the function starts. */
+    abstract fun begin(params: int, frame: int): int
+
+    /** Writes the end of the function after its code; gives false when the code cannot work. */
+    abstract fun finish(): bool
+
+    /** Points the jump at `at` to `to`. */
+    abstract fun patchJump(at: int, to: int): void
+
+    /** The displacement from the frame base of operand stack slot `d`. */
+    fun slot(d: int): int {
+        return 8 * (locals + d)
+    }
+
+    /** Notes that instruction `t` is reached with `d` values on the stack. */
+    fun reach(t: int, d: int) {
+        if (t < 0 || t >= len(depths)) {
+            ok = false
+            return
+        }
+        if (depths[t] < 0) {
+            depths[t] = d
+        } else if (depths[t] != d) {
+            ok = false
+        }
+    }
+
+    /** A jump at `at` to instruction `t`, with `d` values on the stack there. */
+    fun jumpTo(at: int, t: int, d: int) {
+        reach(t, d)
+        fixAt.push(at)
+        fixTo.push(t)
+    }
+
+    fun target(addr: int): int {
+        return (addr - code) / OP_SIZE
+    }
+
+    fun push(k: int, v: int) {
+        vk.push(k)
+        vv.push(v)
+    }
+
+    fun drop(n: int) {
+        for k in 0..n {
+            vk.pop()
+            vv.pop()
+        }
+    }
+
+    /** Makes the stack `n` values deep, all in their slots. */
+    fun memOnly(n: int) {
+        while (len(vk) > n) {
+            drop(1)
+        }
+        for j in 0..len(vk) {
+            vk[j] = V_MEM
+        }
+        while (len(vk) < n) {
+            push(V_MEM, 0)
+        }
+    }
+
+    /** Writes every stack entry to its slot, the state every jump and jump target agrees on. */
+    fun flushAll() {
+        for j in 0..len(vk) {
+            flush(j)
+        }
+    }
+
+    /** Writes the stack entries that stand for local `x`, except entry `except`, before `x` changes. */
+    fun flushLocal(x: int, except: int) {
+        for j in 0..len(vk) {
+            if (j != except && vk[j] == V_LOCAL && vv[j] == x) {
+                flush(j)
+            }
+        }
+    }
+
+    /** The stack entry in the accumulator, or -1. */
+    fun inAcc(): int {
+        for j in 0..len(vk) {
+            if (vk[j] == V_ACC) {
+                return j
+            }
+        }
+        return -1
+    }
+
+    fun spillAcc() {
+        var j = inAcc()
+        if (j >= 0) {
+            flush(j)
+        }
+    }
+
+    /** Writes the top `n` entries to their slots and the value in the accumulator to its slot, for a call that reads them there. */
+    fun flushTop(n: int) {
+        var d = len(vk)
+        for j in 0..d {
+            if (j >= d - n || vk[j] == V_ACC) {
+                flush(j)
+            }
+        }
+    }
+
+    /** Where stack entry `j` is in memory (from the frame base), or -1 when it is not. */
+    fun place(j: int): int {
+        if (vk[j] == V_MEM) {
+            return slot(j)
+        }
+        if (vk[j] == V_LOCAL) {
+            return 8 * vv[j]
+        }
+        return -1
+    }
+
+    /** The stack depth after the instruction `k` (with operands `y`) that `burn_bvm_slow` runs, from `d`. */
+    fun slowDepth(k: int, y: int, d: int): int {
+        if (k == OP_UCMP || k == OP_FCMP || k == OP_SETFIELD || k >= OP_FADD && k <= OP_FREM) {
+            return d - 1
+        }
+        if (k == OP_HOST || k == OP_SPAWN || k == OP_NEWRECORD || k == OP_NEWARRAY) {
+            return d - y + 1
+        }
+        return d
+    }
+
+    /** Notes the instructions that jumps lead to, where the stack must be in its slots. */
+    unsafe fun findTargets(n: int) {
+        var i = 0
+        while (i < n) {
+            var pc = code + OP_SIZE * i
+            var k = Memory.load64(pc)
+            var t = -1
+            if (k == OP_JZ || k == OP_JNZ || k == OP_JZK || k == OP_JNZK || k == OP_JMP) {
+                t = target(Memory.load64(pc + 8))
+            } else if (k >= OP_JLL && k < OP_ICMP) {
+                t = target(Memory.load64(pc + 24))
+            }
+            if (t >= 0 && t <= n) {
+                targets[t] = true
+            }
+            i += width(k)
+        }
+    }
+
+    /** Compiles the function and installs its code in the function record; gives false when it cannot. */
+    unsafe fun run(): bool {
+        code = Memory.load64(fi + F_CODE)
+        var n = Memory.load64(fi + F_NOPS)
+        count = n
+        var params = Memory.load64(fi + F_PARAMS)
+        locals = Memory.load64(fi + F_LOCALS)
+        for i in 0..n + 1 {
+            starts.push(-1)
+            depths.push(-1)
+            targets.push(false)
+        }
+        findTargets(n)
+        var entry = begin(params, Memory.load64(fi + F_FRAME))
+        depths[0] = 0
+        var i = 0
+        var falls = true
+        while (i < n && ok) {
+            if (!falls) {
+                var d = depths[i]
+                if (d < 0) {
+                    i += width(Memory.load64(code + OP_SIZE * i))
+                    continue
+                }
+                memOnly(d)
+            } else {
+                if (targets[i]) {
+                    flushAll()
+                }
+                reach(i, len(vk))
+            }
+            starts[i] = a.pos()
+            var pc = code + OP_SIZE * i
+            var w = width(Memory.load64(pc))
+            skip = 0
+            var after = op(pc, i)
+            falls = after >= 0
+            if (falls && after != len(vk)) {
+                ok = false
+            }
+            i += w + skip
+        }
+        if (!ok || falls) {
+            return false
+        }
+        for k in 0..len(fixAt) {
+            var t = starts[fixTo[k]]
+            if (t < 0) {
+                return false
+            }
+            patchJump(fixAt[k], t)
+        }
+        if (!finish()) {
+            return false
+        }
+        var base = install(a, macos)
+        if (base == 0) {
+            return false
+        }
+        var map = Memory.alloc(8 * n + 8)
+        for k in 0..n {
+            if (targets[k] && starts[k] >= 0) {
+                Memory.store64(map + 8 * k, base + starts[k])
+            } else {
+                Memory.store64(map + 8 * k, 0)
+            }
+        }
+        Memory.store64(fi + F_OSRMAP, map)
+        Memory.store64(fi + F_OSR, base)
+        Memory.store64(fi + F_JIT, base + entry)
+        return true
+    }
+}
