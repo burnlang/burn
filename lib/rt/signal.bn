@@ -5,6 +5,7 @@
 import "heap.bn"
 import "io.bn"
 import "sys.bn"
+import "win.bn"
 
 @Extern("sigaction", windows: "burn_rt_unavailable")
 fun cSigaction(sig: int, act: int, old: int): Int32
@@ -43,6 +44,7 @@ unsafe fun onSignal(sig: int, info: int, ctx: int): int {
 pub unsafe fun installSignals(base: int) {
     stackBase = base
     if (isWindows()) {
+        winCrashHandler()
         return
     }
     var size = 65536
@@ -76,4 +78,61 @@ pub unsafe fun installSignals(base: int) {
     cSigaction(11, act, 0)
     cSigaction(bus, act, 0)
     cFree(act)
+}
+
+var crashCode = 0
+var crashStack = 0
+
+/** Where a crash continues on Windows, on a stack of its own: prints what happened and stops the program. */
+@Extern("burn_win_crashed")
+pub unsafe fun winCrashed(): int {
+    flushForSignal()
+    if (crashCode == 3221225725) {
+        writeText("runtime error: stack overflow (recursion is too deep)\n")
+    } else {
+        writeText("runtime error: segmentation fault (this is a bug in Burn, please report it)\n")
+    }
+    cExitNow(1)
+    return 0
+}
+
+/**
+ * The filter Windows calls for an exception nothing handles. On a stack overflow there is almost no stack left, so it
+ * only points the thread at `winCrashed` on the crash stack and lets it continue there.
+ */
+@Extern("burn_win_crash")
+pub unsafe fun winCrash(info: int): int {
+    var code = ld32(ld64(info))
+    if (code != 3221225725 && code != 3221225477) {
+        return 0
+    }
+    crashCode = code
+    var ctx = ld64(info + 8)
+    st64(ctx + 152, crashStack - 8)
+    st64(ctx + 248, __cfun(winCrashed))
+    return -1
+}
+
+/**
+ * Stack overflows are caught first, before other handlers that would need stack, such as the one of the thread
+ * library; other crashes only when nothing else handles them.
+ */
+@Extern("burn_win_overflow")
+pub unsafe fun winOverflow(info: int): int {
+    if (ld32(ld64(info)) != 3221225725) {
+        return 0
+    }
+    return winCrash(info)
+}
+
+/** Reports stack overflows and invalid memory accesses like the signal handlers do elsewhere. */
+pub unsafe fun winCrashHandler() {
+    var size = 262144
+    crashStack = (cMalloc(size) + size) & -16
+    var room = zalloc(8)
+    st64(room, 32768)
+    cSetThreadStackGuarantee(room)
+    cFree(room)
+    cAddVectoredExceptionHandler(1, __cfun(winOverflow))
+    cSetUnhandledExceptionFilter(__cfun(winCrash))
 }

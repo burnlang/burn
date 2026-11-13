@@ -8,6 +8,7 @@ import "io.bn"
 import "meta.bn"
 import "sys.bn"
 import "text.bn"
+import "win.bn"
 
 @Extern("strerror")
 
@@ -50,7 +51,7 @@ fun cRmdir(path: int): Int32
 
 fun cUnlink(path: int): Int32
 
-@Extern("rename")
+@Extern("rename", windows: "burn_win_rename")
 
 fun cRename(from: int, to: int): Int32
 
@@ -541,6 +542,9 @@ const R_FAIL = 24
  * the output and error string objects, and the error number when the program could not be started.
  */
 pub unsafe fun runProcess(program: int, args: int, capture: bool, input: int, n: int): int {
+    if (isWindows()) {
+        return runProcessWin(program, args, capture, input, n)
+    }
     var res = zalloc(32)
     var argc = arrayLen(args)
     var argv = zalloc(8 * argc + 16)
@@ -663,6 +667,149 @@ pub unsafe fun runProcess(program: int, args: int, capture: bool, input: int, n:
     cFree(status)
     cFree(pid)
     cFree(fds)
+    return res
+}
+
+/** A pipe whose end `keep` (0 for reading, 1 for writing) stays in this process and the other is inherited by a child. */
+unsafe fun winPipe(ends: int, keep: int) {
+    var sa = zalloc(24)
+    st32(sa, 24)
+    st32(sa + 16, 1)
+    cCreatePipe(ends, ends + 8, sa, 0)
+    cFree(sa)
+    cSetHandleInformation(ld64(ends + 8 * keep), 1, 0)
+}
+
+/** Reads what is waiting in pipe `h` into `b`; false once the pipe is closed. */
+unsafe fun winDrain(h: int, b: int, chunk: int, got: int): bool {
+    var avail = zalloc(8)
+    var ok = cPeekNamedPipe(h, 0, 0, 0, avail, 0) != 0
+    var n = ld32(avail)
+    cFree(avail)
+    if (!ok) {
+        return false
+    }
+    if (n > 65536) {
+        n = 65536
+    }
+    if (n > 0 && cReadFile(h, chunk, n, got, 0) != 0) {
+        bufAdd(b, chunk, ld32(got))
+    }
+    return true
+}
+
+/** `runProcess` on Windows: `CreateProcessA` with pipes for the standard streams when `capture`. */
+unsafe fun runProcessWin(program: int, args: int, capture: bool, input: int, n: int): int {
+    var res = zalloc(32)
+    var line = winQuote(textOf(program))
+    for i in 0..arrayLen(args) {
+        line += " " + winQuote(textOf(arrayAt(args, i)))
+    }
+    var cmd = cText(line)
+    var si = zalloc(104)
+    st32(si, 104)
+    var pi = zalloc(24)
+    var outP = zalloc(16)
+    var errP = zalloc(16)
+    var inP = zalloc(16)
+    if (capture) {
+        winPipe(outP, 0)
+        winPipe(errP, 0)
+        winPipe(inP, 1)
+        st32(si + 60, 256)
+        st64(si + 80, ld64(inP))
+        st64(si + 88, ld64(outP + 8))
+        st64(si + 96, ld64(errP + 8))
+    } else {
+        flush()
+    }
+    var inherit = 0
+    if (capture) {
+        inherit = 1
+    }
+    var ok = cCreateProcess(0, cmd, 0, 0, inherit, 0, 0, 0, si, pi) != 0
+    var fail = 0
+    if (!ok) {
+        fail = winErrno()
+    }
+    cFree(cmd)
+    cFree(si)
+    if (capture) {
+        cCloseHandle(ld64(inP))
+        cCloseHandle(ld64(outP + 8))
+        cCloseHandle(ld64(errP + 8))
+    }
+    if (!ok) {
+        if (capture) {
+            cCloseHandle(ld64(outP))
+            cCloseHandle(ld64(errP))
+            cCloseHandle(ld64(inP + 8))
+        }
+        st64(res + R_FAIL, fail)
+        st64(res + R_OUT, strNew(0, 0))
+        st64(res + R_ERR, strNew(0, 0))
+    } else {
+        var proc = ld64(pi)
+        cCloseHandle(ld64(pi + 8))
+        if (capture) {
+            var w = ld64(inP + 8)
+            var done = zalloc(8)
+            var at = 0
+            while (at < n) {
+                var part = n - at
+                if (part > 65536) {
+                    part = 65536
+                }
+                if (cWriteFile(w, input + at, part, done, 0) == 0 || ld32(done) == 0) {
+                    break
+                }
+                at += ld32(done)
+            }
+            cFree(done)
+            cCloseHandle(w)
+            var outB = bufNew()
+            var errB = bufNew()
+            var chunk = zalloc(65536)
+            var got = zalloc(8)
+            var ho = ld64(outP)
+            var he = ld64(errP)
+            while (ho != 0 || he != 0) {
+                var before = ld64(outB + 8) + ld64(errB + 8)
+                if (ho != 0 && !winDrain(ho, outB, chunk, got)) {
+                    cCloseHandle(ho)
+                    ho = 0
+                }
+                if (he != 0 && !winDrain(he, errB, chunk, got)) {
+                    cCloseHandle(he)
+                    he = 0
+                }
+                if (ld64(outB + 8) + ld64(errB + 8) == before) {
+                    cSleepMs(1)
+                }
+            }
+            cFree(chunk)
+            cFree(got)
+            st64(res + R_OUT, lossyText(ld64(outB), ld64(outB + 8)))
+            st64(res + R_ERR, lossyText(ld64(errB), ld64(errB + 8)))
+            cFree(ld64(outB))
+            cFree(outB)
+            cFree(ld64(errB))
+            cFree(errB)
+        } else {
+            st64(res + R_OUT, strNew(0, 0))
+            st64(res + R_ERR, strNew(0, 0))
+        }
+        cWaitForSingleObject(proc, 4294967295)
+        var code = zalloc(8)
+        cGetExitCodeProcess(proc, code)
+        st64(res + R_CODE, ld32(code))
+        cFree(code)
+        cCloseHandle(proc)
+    }
+    cFree(pi)
+    cFree(outP)
+    cFree(errP)
+    cFree(inP)
     return res
 }
 

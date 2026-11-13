@@ -9,6 +9,7 @@ import "meta.bn"
 import "os.bn"
 import "sys.bn"
 import "text.bn"
+import "win.bn"
 
 @Extern("getaddrinfo")
 
@@ -33,7 +34,7 @@ fun cConnect(fd: int, addr: int, len: int): Int32
 
 fun cSetsockopt(fd: int, level: int, name: int, value: int, len: int): Int32
 
-@Extern("close")
+@Extern("close", windows: "closesocket")
 
 fun cCloseSocket(fd: int): Int32
 
@@ -288,6 +289,7 @@ unsafe fun connectTo(host: string, port: string, err: [string]): int {
     var hints = zalloc(64)
     st32(hints + 8, 1)
     var list = zalloc(8)
+    winsockStart()
     var h = host
     var pt = port
     var r = cGetaddrinfo(__addr(h) + STR_BYTES, __addr(pt) + STR_BYTES, hints, list)
@@ -304,7 +306,7 @@ unsafe fun connectTo(host: string, port: string, err: [string]): int {
     var last = "could not resolve to any addresses"
     var fd = -1
     var addrAt = 24
-    if (isMacos()) {
+    if (isMacos() || isWindows()) {
         addrAt = 32
     }
     while (ai != 0) {
@@ -314,10 +316,10 @@ unsafe fun connectTo(host: string, port: string, err: [string]): int {
                 fd = s
                 break
             }
-            last = osError(errno())
+            last = osError(sockErrno())
             cCloseSocket(s)
         } else {
-            last = osError(errno())
+            last = osError(sockErrno())
         }
         ai = ld64(ai + 40)
     }
@@ -336,7 +338,10 @@ unsafe fun plainRequest(method: string, host: string, port: string, path: string
     }
     var tv = zalloc(16)
     st64(tv, 60)
-    if (isMacos()) {
+    if (isWindows()) {
+        st64(tv, 60000)
+        cSetsockopt(fd, 65535, 4102, tv, 4)
+    } else if (isMacos()) {
         cSetsockopt(fd, 65535, 4102, tv, 16)
     } else {
         cSetsockopt(fd, 1, 20, tv, 16)
@@ -361,8 +366,8 @@ unsafe fun plainRequest(method: string, host: string, port: string, path: string
     }
     req += "\r\n"
     var rq = req
-    if (!writeAll(fd, __addr(rq) + STR_BYTES, ld64(__addr(rq) + STR_LEN)) || !writeAll(fd, body + STR_BYTES, n)) {
-        var e = osError(errno())
+    if (!sockWriteAll(fd, __addr(rq) + STR_BYTES, ld64(__addr(rq) + STR_LEN)) || !sockWriteAll(fd, body + STR_BYTES, n)) {
+        var e = osError(sockErrno())
         cCloseSocket(fd)
         return result(0, e, "")
     }
@@ -374,12 +379,12 @@ unsafe fun plainRequest(method: string, host: string, port: string, path: string
             cap *= 2
             buf = grow(buf, cap)
         }
-        var r = cRead(fd, buf + got, cap - got)
-        if (r < 0 && errno() == 4) {
+        var r = sockRead(fd, buf + got, cap - got)
+        if (r < 0 && !isWindows() && errno() == 4) {
             continue
         }
         if (r < 0) {
-            var e = osError(errno())
+            var e = osError(sockErrno())
             cCloseSocket(fd)
             cFree(buf)
             return result(0, e, "")
@@ -455,4 +460,28 @@ pub unsafe fun httpRequest(method: int, url: int, body: int, headers: int): int 
         return curlRequest(m, u, body, hs)
     }
     return plainRequest(m, parts[1], parts[2], parts[3], body, hs)
+}
+
+/** The error number of the last failed socket call. */
+unsafe fun sockErrno(): int {
+    if (isWindows()) {
+        return cWsaGetLastError()
+    }
+    return errno()
+}
+
+/** Writes all `n` bytes at `p` to socket `fd`: with `send` on Windows, where sockets are not files. */
+unsafe fun sockWriteAll(fd: int, p: int, n: int): bool {
+    if (isWindows()) {
+        return winSendAll(fd, p, n)
+    }
+    return writeAll(fd, p, n)
+}
+
+/** Reads up to `n` bytes from socket `fd` into `p`. */
+unsafe fun sockRead(fd: int, p: int, n: int): int {
+    if (isWindows()) {
+        return cRecv(fd, p, n, 0)
+    }
+    return cRead(fd, p, n)
 }

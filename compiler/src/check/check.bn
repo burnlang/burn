@@ -2585,17 +2585,14 @@ pub def struct Checker(loaded: Loaded) {
         if (ret != null && ret != T_VOID && !cType(ret)) {
             error(spanIn(mi, f.name.span), "`${f.name.name}` returns ${show(ret)}, but C functions only return numbers, bools or nothing")
         }
-        var ints = 0
         var floats = 0
         for p in params {
             if (types.kindOf(p.ty) is Ty.Float) {
                 floats += 1
-            } else {
-                ints += 1
             }
         }
-        if (ints > 6 || floats > 8) {
-            error(spanIn(mi, f.name.span), "an @Extern function can take at most 6 integer and 8 float parameters, which C passes in registers")
+        if (floats > 8) {
+            error(spanIn(mi, f.name.span), "an @Extern function can take at most 8 float parameters, which C passes in registers")
         }
     }
 
