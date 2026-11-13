@@ -140,12 +140,15 @@ pub unsafe fun fatalError(msg: string, loc: int) {
 }
 
 @Extern("pthread_key_create")
+
 fun cKeyCreate(key: int, dtor: int): Int32
 
 @Extern("pthread_getspecific")
+
 fun cGetSpecific(key: int): int
 
 @Extern("pthread_setspecific")
+
 fun cSetSpecific(key: int, v: int): Int32
 
 var panicMode = false
@@ -509,10 +512,11 @@ pub unsafe fun formatError(msg: string, loc: int): string {
     return out
 }
 
-@Extern("open")
+@Extern("open", windows: "burn_win_open")
 fun cOpen(path: int, flags: int): Int32
 
 @Extern("close")
+
 fun cClose(fd: int): Int32
 
 /** The contents of the file at `path` in an array, or an empty array when it cannot be read. */

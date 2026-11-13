@@ -11,6 +11,7 @@ import "meta.bn"
 import "sys.bn"
 
 @Extern("strtod")
+
 fun cStrtod(s: int, end: int): float
 
 /** The number of bytes of the UTF-8 sequence that starts with byte `b`. */

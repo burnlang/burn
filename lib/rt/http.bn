@@ -11,24 +11,30 @@ import "sys.bn"
 import "text.bn"
 
 @Extern("getaddrinfo")
+
 fun cGetaddrinfo(host: int, port: int, hints: int, out: int): Int32
 
 @Extern("freeaddrinfo")
+
 fun cFreeaddrinfo(list: int): void
 
-@Extern("gai_strerror")
+@Extern("gai_strerror", windows: "burn_win_gai_strerror")
 fun cGaiStrerror(code: int): int
 
 @Extern("socket")
+
 fun cSocket(family: int, kind: int, protocol: int): Int32
 
 @Extern("connect")
+
 fun cConnect(fd: int, addr: int, len: int): Int32
 
 @Extern("setsockopt")
+
 fun cSetsockopt(fd: int, level: int, name: int, value: int, len: int): Int32
 
 @Extern("close")
+
 fun cCloseSocket(fd: int): Int32
 
 const VERSION = "26.1.0-experimental-9"

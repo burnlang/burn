@@ -1,0 +1,199 @@
+/**
+ * The C library functions Windows lacks or lays out differently, written in Burn. The declarations elsewhere in the
+ * runtime name them for Windows (`@Extern("uname", windows: "burn_win_uname")`), and each one gives its result in
+ * the layout of Linux on x86-64, which the rest of the runtime reads. Windows functions that other systems lack are
+ * declared with `burn_rt_unavailable` as their name there, so the runtime links everywhere.
+ */
+import "heap.bn"
+import "sys.bn"
+
+@Extern("burn_rt_unavailable", windows: "GetModuleHandleA")
+fun cGetModuleHandle(name: int): int
+
+@Extern("burn_rt_unavailable", windows: "GetProcAddress")
+fun cGetProcAddress(m: int, name: int): int
+
+@Extern("burn_rt_unavailable", windows: "GetSystemInfo")
+fun cGetSystemInfo(info: int): void
+
+@Extern("burn_rt_unavailable", windows: "GlobalMemoryStatusEx")
+fun cGlobalMemoryStatusEx(buf: int): Int32
+
+@Extern("burn_rt_unavailable", windows: "_localtime64_s")
+fun cLocaltime64(tm: int, t: int): Int32
+
+@Extern("burn_rt_unavailable", windows: "_stat64")
+fun cStat64(path: int, buf: int): Int32
+
+@Extern("burn_rt_unavailable", windows: "_read")
+fun cRead32(fd: int, buf: int, n: int): Int32
+
+@Extern("burn_rt_unavailable", windows: "_write")
+fun cWrite32(fd: int, buf: int, n: int): Int32
+
+@Extern("burn_rt_unavailable", windows: "_open")
+fun cOpen32(path: int, flags: int, mode: int): Int32
+
+@Extern("burn_rt_unavailable", windows: "_setmode")
+fun cSetmode(fd: int, mode: int): Int32
+
+@Extern("burn_rt_unavailable", windows: "readdir")
+fun cReaddirWin(dir: int): int
+
+/** What a C function that the system lacks gives: -1, like a failed call. */
+@Extern("burn_rt_unavailable")
+pub unsafe fun rtUnavailable(): int {
+    return -1
+}
+
+/** `uname`: the system name `Windows` and the machine `x86_64`, in the 65-byte fields of Linux. */
+@Extern("burn_win_uname")
+pub unsafe fun winUname(buf: int): int {
+    var sys = "Windows"
+    cMemcpy(buf, __addr(sys) + STR_BYTES, 8)
+    var machine = "x86_64"
+    cMemcpy(buf + 4 * 65, __addr(machine) + STR_BYTES, 7)
+    return 0
+}
+
+/** `sysconf` for the names the runtime asks: the page size, the number of pages of memory and of processors. */
+@Extern("burn_win_sysconf")
+pub unsafe fun winSysconf(name: int): int {
+    if (name == 30) {
+        return 4096
+    }
+    if (name == 85) {
+        var ms = zalloc(64)
+        st32(ms, 64)
+        var pages = -1
+        if (cGlobalMemoryStatusEx(ms) != 0) {
+            pages = ld64(ms + 8) / 4096
+        }
+        cFree(ms)
+        return pages
+    }
+    if (name == 84) {
+        var si = zalloc(64)
+        cGetSystemInfo(si)
+        var n = ld32(si + 32)
+        cFree(si)
+        return n
+    }
+    return -1
+}
+
+/** `dlsym` on the program itself. */
+@Extern("burn_win_dlsym")
+pub unsafe fun winDlsym(handle: int, name: int): int {
+    return cGetProcAddress(cGetModuleHandle(0), name)
+}
+
+fun daysFromCivil(year: int, month: int, day: int): int {
+    var y = year
+    if (month <= 2) {
+        y -= 1
+    }
+    var era = y / 400
+    if (y < 0 && y % 400 != 0) {
+        era -= 1
+    }
+    var yoe = y - era * 400
+    var mp = month + 9
+    if (month > 2) {
+        mp = month - 3
+    }
+    var doy = (153 * mp + 2) / 5 + day - 1
+    var doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+    return era * 146097 + doe - 719468
+}
+
+/** `localtime_r`, with the offset from UTC at byte 40 like glibc's `tm_gmtoff`. */
+@Extern("burn_win_localtime_r")
+pub unsafe fun winLocaltime(t: int, tm: int): int {
+    if (cLocaltime64(tm, t) != 0) {
+        return 0
+    }
+    var days = daysFromCivil(ld32s(tm + 20) + 1900, ld32s(tm + 16) + 1, ld32s(tm + 12))
+    var local = days * 86400 + ld32s(tm + 8) * 3600 + ld32s(tm + 4) * 60 + ld32s(tm)
+    st64(tm + 40, local - ld64(t))
+    return tm
+}
+
+/** `stat`, from `_stat64`, with the mode, size and times where Linux on x86-64 keeps them. */
+@Extern("burn_win_stat")
+pub unsafe fun winStat(path: int, out: int): int {
+    var b = zalloc(64)
+    var r = cStat64(path, b)
+    if (r == 0) {
+        cMemset(out, 0, 144)
+        st32(out + 24, ld16(b + 6))
+        st64(out + 48, ld64(b + 24))
+        st64(out + 72, ld64(b + 32))
+        st64(out + 88, ld64(b + 40))
+        st64(out + 104, ld64(b + 48))
+    }
+    cFree(b)
+    return r
+}
+
+var direntBuf = 0
+
+/** `readdir`, with the name at byte 19 like Linux. */
+@Extern("burn_win_readdir")
+pub unsafe fun winReaddir(dir: int): int {
+    var e = cReaddirWin(dir)
+    if (e == 0) {
+        return 0
+    }
+    if (direntBuf == 0) {
+        direntBuf = zalloc(19 + 264)
+    }
+    var n = cStrlen(e + 8)
+    if (n > 260) {
+        n = 260
+    }
+    cMemcpy(direntBuf + 19, e + 8, n)
+    st8(direntBuf + 19 + n, 0)
+    return direntBuf
+}
+
+/** `read`, which gives a 32-bit count on Windows. */
+@Extern("burn_win_read")
+pub unsafe fun winRead(fd: int, buf: int, n: int): int {
+    var want = n
+    if (want > 1073741824) {
+        want = 1073741824
+    }
+    return cRead32(fd, buf, want)
+}
+
+/** `write`, which gives a 32-bit count on Windows. */
+@Extern("burn_win_write")
+pub unsafe fun winWrite(fd: int, buf: int, n: int): int {
+    var want = n
+    if (want > 1073741824) {
+        want = 1073741824
+    }
+    return cWrite32(fd, buf, want)
+}
+
+/** `open`, in binary mode so that Windows leaves line endings alone. */
+@Extern("burn_win_open")
+pub unsafe fun winOpen(path: int, flags: int): int {
+    return cOpen32(path, flags | 32768, 438)
+}
+
+/** The message of a failed name lookup. */
+@Extern("burn_win_gai_strerror")
+pub unsafe fun winGaiStrerror(code: int): int {
+    var m = "could not resolve the host name"
+    return __addr(m) + STR_BYTES
+}
+
+/** Puts standard output and standard error in binary mode, so that `\n` stays `\n` like on other systems. */
+pub unsafe fun winInit() {
+    if (isWindows()) {
+        cSetmode(1, 32768)
+        cSetmode(2, 32768)
+    }
+}

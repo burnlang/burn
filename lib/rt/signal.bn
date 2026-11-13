@@ -6,10 +6,10 @@ import "heap.bn"
 import "io.bn"
 import "sys.bn"
 
-@Extern("sigaction")
+@Extern("sigaction", windows: "burn_rt_unavailable")
 fun cSigaction(sig: int, act: int, old: int): Int32
 
-@Extern("sigaltstack")
+@Extern("sigaltstack", windows: "burn_rt_unavailable")
 fun cSigaltstack(ss: int, old: int): Int32
 
 var stackBase = 0
@@ -42,6 +42,9 @@ unsafe fun onSignal(sig: int, info: int, ctx: int): int {
 /** Installs the handler for SIGSEGV and SIGBUS; `base` is the top of the main thread's stack. */
 pub unsafe fun installSignals(base: int) {
     stackBase = base
+    if (isWindows()) {
+        return
+    }
     var size = 65536
     var mem = cMalloc(size)
     if (mem == 0) {

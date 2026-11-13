@@ -10,33 +10,43 @@ import "meta.bn"
 import "sys.bn"
 
 @Extern("pthread_mutex_init")
+
 fun cMutexInit(m: int, attr: int): Int32
 
 @Extern("pthread_mutex_lock")
+
 fun cMutexLock(m: int): Int32
 
 @Extern("pthread_mutex_unlock")
+
 fun cMutexUnlock(m: int): Int32
 
 @Extern("pthread_cond_init")
+
 fun cCondInit(c: int, attr: int): Int32
 
 @Extern("pthread_cond_wait")
+
 fun cCondWait(c: int, m: int): Int32
 
 @Extern("pthread_cond_broadcast")
+
 fun cCondBroadcast(c: int): Int32
 
 @Extern("pthread_attr_init")
+
 fun cAttrInit(a: int): Int32
 
 @Extern("pthread_attr_setstacksize")
+
 fun cAttrStack(a: int, size: int): Int32
 
 @Extern("pthread_create")
+
 fun cThreadCreate(out: int, attr: int, start: int, arg: int): Int32
 
 @Extern("pthread_detach")
+
 fun cThreadDetach(t: int): Int32
 
 priv const F_MUTEX = 0

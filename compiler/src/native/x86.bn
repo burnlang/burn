@@ -13,6 +13,9 @@ priv const ENTRY = ".intel_syntax noprefix\n.text\n.globl {P}main\n{P}main:\n   
 
 priv const ARG_REGS = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
 
+/** The registers of the first four arguments of a Windows C call. */
+priv const WIN_REGS = ["rcx", "rdx", "r8", "r9"]
+
 /** The callee-saved registers that hold a function's hottest number locals. */
 priv const SAVED_REGS = ["rbx", "r13", "r14", "r15"]
 
@@ -78,7 +81,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
     }
 
     fun plt(): string {
-        if (t.macos) {
+        if (t.macos || t.windows) {
             return ""
         }
         return "@PLT"
@@ -95,7 +98,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
 
     /** Starts the code of `name`: in a section of its own on Linux, so that the linker can leave it out when nothing uses it. */
     fun textSection(name: string) {
-        if (t.macos) {
+        if (t.macos || t.windows) {
             out += ".text\n"
         } else {
             put(".section .text.${name},\"ax\",@progbits\n")
@@ -109,6 +112,9 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
     fun glob(name: string): string {
         if (!split) {
             return ""
+        }
+        if (t.windows) {
+            return ".globl ${name}\n"
         }
         return ".globl ${name}\n.hidden ${name}\n"
     }
@@ -212,7 +218,12 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
         if (p.library) {
             out += ".intel_syntax noprefix\n.text\n"
         } else {
-            put(replace(replace(replace(ENTRY, "{P}", t.prefix), "{PLT}", plt()), "{PRE_ENTRY}", preEntry(exps)))
+            var entry = ENTRY
+            if (t.windows) {
+                entry = replace(entry, "    mov r13, rdi\n    mov r14, rsi\n", "    push rdi\n    push rsi\n    mov r13, rcx\n    mov r14, rdx\n")
+                entry = replace(entry, "    mov rsp, r12\n    add rsp, 8\n    pop r15\n", "    mov rsp, r12\n    pop rsi\n    pop rdi\n    add rsp, 8\n    pop r15\n")
+            }
+            put(replace(replace(replace(entry, "{P}", t.prefix), "{PLT}", plt()), "{PRE_ENTRY}", preEntry(exps)))
             put(".set burn_entry, bf_${p.entry}\n")
         }
         var globSym = sym(globalsName(p))
@@ -232,6 +243,8 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
         }
         if (t.macos) {
             out += ".section __TEXT,__const\n"
+        } else if (t.windows) {
+            out += ".section .rdata,\"dr\"\n"
         } else {
             out += ".section .rodata\n"
         }
@@ -281,6 +294,8 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
         }
         if (t.macos) {
             out += ".section __DATA,__const\n"
+        } else if (t.windows) {
+            out += ".section .rdata,\"dr\"\n"
         } else {
             out += ".section .data.rel.ro\n"
         }
@@ -322,7 +337,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
         }
         out += ".p2align 4\n"
         put(glob(globSym) + globalsData(p, globSym, t.prefix))
-        if (!t.macos) {
+        if (!t.macos && !t.windows) {
             out += ".section .note.GNU-stack,\"\",@progbits\n"
         }
     }
@@ -349,11 +364,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
             return
         }
         if (ext is External.C) {
-            var csym = ext.symbol
-            if (t.macos) {
-                csym = ext.macos
-            }
-            cImport(f, csym)
+            cImport(f, cName(ext, t))
             return
         }
         e("push rbp")
@@ -394,26 +405,8 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
     }
 
     /** The body of a function that C provides: moves the arguments from the stack into the registers C reads them from, and widens the result. */
-    fun cImport(f: HFunc, name: string) {
-        e("push rbp")
-        e("mov rbp, rsp")
-        var np = f.params
-        var floats = cFloatParams(p.checker, f)
-        var ni = 0
-        var nf = 0
-        for i in 0..np {
-            var at = "qword ptr [rbp + ${16 + 8 * (np - 1 - i)}]"
-            if (floats[i]) {
-                e("movq xmm${nf}, ${at}")
-                nf += 1
-            } else {
-                e("mov ${ARG_REGS[ni]}, ${at}")
-                ni += 1
-            }
-        }
-        e("and rsp, -16")
-        e("mov eax, ${nf}")
-        e(callTarget(name))
+    /** The body of a function that Windows C code provides, called with the Win64 convention: four arguments in registers, the rest on the stack above 32 bytes of shadow space. */
+    fun cResult(f: HFunc) {
         var r = cRet(p.checker, f.ret)
         if (r is CRet.Float) {
             e("movq rax, xmm0")
@@ -436,6 +429,62 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
                 e("mov eax, eax")
             }
         }
+    }
+
+    fun cImportWin(f: HFunc, name: string) {
+        e("push rbp")
+        e("mov rbp, rsp")
+        var np = f.params
+        var floats = cFloatParams(p.checker, f)
+        var extra = 0
+        if (np > 4) {
+            extra = np - 4
+        }
+        e("and rsp, -16")
+        e("sub rsp, ${(32 + 8 * extra + 15) / 16 * 16}")
+        for i in 0..np {
+            var at = "qword ptr [rbp + ${16 + 8 * (np - 1 - i)}]"
+            if (i >= 4) {
+                e("mov rax, ${at}")
+                e("mov qword ptr [rsp + ${32 + 8 * (i - 4)}], rax")
+            } else {
+                e("mov ${WIN_REGS[i]}, ${at}")
+                if (floats[i]) {
+                    e("movq xmm${i}, ${at}")
+                }
+            }
+        }
+        e(callTarget(name))
+        cResult(f)
+        e("leave")
+        e("ret")
+    }
+
+    fun cImport(f: HFunc, name: string) {
+        if (t.windows && !startsWith(name, "burn_")) {
+            cImportWin(f, name)
+            return
+        }
+        e("push rbp")
+        e("mov rbp, rsp")
+        var np = f.params
+        var floats = cFloatParams(p.checker, f)
+        var ni = 0
+        var nf = 0
+        for i in 0..np {
+            var at = "qword ptr [rbp + ${16 + 8 * (np - 1 - i)}]"
+            if (floats[i]) {
+                e("movq xmm${nf}, ${at}")
+                nf += 1
+            } else {
+                e("mov ${ARG_REGS[ni]}, ${at}")
+                ni += 1
+            }
+        }
+        e("and rsp, -16")
+        e("mov eax, ${nf}")
+        e(callTarget(name))
+        cResult(f)
         e("leave")
         e("ret")
     }
@@ -479,6 +528,21 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
         e("pop rbx")
         e("pop rbp")
         e("ret")
+        if (t.windows) {
+            put(".globl ${sym(name)}_w64\n${sym(name)}_w64:\n")
+            e("push rdi")
+            e("push rsi")
+            e("sub rsp, 8")
+            e("mov rdi, rcx")
+            e("mov rsi, rdx")
+            e("mov rdx, r8")
+            e("mov rcx, r9")
+            e("call ${sym(name)}")
+            e("add rsp, 8")
+            e("pop rsi")
+            e("pop rdi")
+            e("ret")
+        }
     }
 
     fun loc(slot: int): string {
@@ -1424,7 +1488,10 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
             var k0 = args[0].kind
             var name = ""
             if (k0 is HKind.Int && k0.value >= 0 && k0.value < len(p.funcs)) {
-                name = cSymbol(p.funcs[k0.value], t.macos) ?? ""
+                name = cSymbol(p.funcs[k0.value], t) ?? ""
+                if (name != "" && t.windows && cExport(p.funcs[k0.value]) != null) {
+                    name += "_w64"
+                }
             }
             if (name == "") {
                 return false

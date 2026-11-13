@@ -22,6 +22,7 @@ pub def type AsmTarget {
     string prefix
     bool macos
     string arch
+    bool windows
 }
 
 /** The target of the machine the compiler runs on, from its platform such as `linux-x86_64`. */
@@ -31,9 +32,9 @@ pub fun asmTarget(platform: string): AsmTarget {
         arch = "aarch64"
     }
     if (startsWith(platform, "macos")) {
-        return AsmTarget { prefix: "_", macos: true, arch: arch }
+        return AsmTarget { prefix: "_", macos: true, arch: arch, windows: false }
     }
-    return AsmTarget { prefix: "", macos: false, arch: arch }
+    return AsmTarget { prefix: "", macos: false, arch: arch, windows: startsWith(platform, "windows") }
 }
 
 /** What the code generator needs of a checked program, after the ownership pass. */
@@ -470,17 +471,14 @@ pub fun debugLabel(f: HFunc, fid: int): string {
 }
 
 /** The C symbol of `f` for `__cfun`: the name it exports to C, or the C function it imports, or null. */
-pub fun cSymbol(f: HFunc, macos: bool): string? {
+pub fun cSymbol(f: HFunc, t: AsmTarget): string? {
     var exported = cExport(f)
     if (exported != null) {
         return exported
     }
     var ext = f.external
     if (ext is External.C) {
-        if (macos) {
-            return ext.macos
-        }
-        return ext.symbol
+        return cName(ext, t)
     }
     return null
 }
@@ -587,4 +585,18 @@ pub fun log2Exact(d: int): int {
         k += 1
     }
     return k
+}
+
+/** The name of C function `ext` on target `t`. */
+pub fun cName(ext: External, t: AsmTarget): string {
+    if (ext is External.C) {
+        if (t.macos) {
+            return ext.macos
+        }
+        if (t.windows) {
+            return ext.windows
+        }
+        return ext.symbol
+    }
+    return ""
 }

@@ -10,9 +10,11 @@ import "meta.bn"
 import "sys.bn"
 
 @Extern("log10")
+
 fun cLog10(x: float): float
 
 @Extern("ceil")
+
 fun cCeil(x: float): float
 
 priv const LIMBS = 120
