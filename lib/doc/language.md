@@ -67,7 +67,8 @@ More: https://s42yt.github.io/burn-docs/language/structs-and-interfaces
 
 *keyword*: `def interface Name { ... }` lists the methods a struct must have. A struct declares that it implements it
 with `::`, the compiler checks that every method is there, and calls through the interface are dispatched to the
-struct's method.
+struct's method. An interface can have type parameters, like `def interface Shows<T>`; a struct implements one
+instance of it, such as `:: Shows<int>`.
 
 ```burn
 def interface Shape {

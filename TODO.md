@@ -19,7 +19,7 @@
 - Bytecode libraries in Burn (`import "lib.bvmc"`) on bvm, in archives and in native executables
 - Package manager: ash, `burn init`, `burn.toml`, `burn.lock` and package imports; burnup installs the toolchain
 - Closures that capture local variables
-- Generics for functions, methods, `def type` and `def struct`
+- Generics for functions, methods, interfaces, `def type` and `def struct`
 - `match` expressions and statements
 - Bit operators (`& | ^ ~ << >> >>>`)
 - Automatic memory management without a garbage collector: compiler-inserted reference counting with a cycle collector
@@ -36,7 +36,7 @@
 ## Next
 
 - bvm: floats in registers and inline method calls in the JIT
-- Generic interfaces, and generic structs that extend other structs
+- Generic structs that extend other structs
 - Windows installer in burnup (`install.ps1`)
 - bvm: a debugger
 - Annotations on parameters and reflection for functions and fields

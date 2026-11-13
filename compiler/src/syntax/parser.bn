@@ -889,7 +889,7 @@ def struct Parser(toks: [Token]) {
             return null
         }
         [Ident] tparams = []
-        if (kw == "struct" || kw == "class" || kw == "type" || kw == "record") {
+        if (kw == "struct" || kw == "class" || kw == "type" || kw == "record" || kw == "interface" || kw == "trait") {
             var tp = typeParams()
             if (tp == null) {
                 return null
@@ -962,7 +962,7 @@ def struct Parser(toks: [Token]) {
             if (expect(Kind.RBrace, "`}`") == null) {
                 return null
             }
-            return Def.Interface(name, methods)
+            return Def.Interface(name, methods, tparams)
         }
         if (kw == "enum") {
             if (expect(Kind.LBrace, "`{`") == null) {
@@ -1053,6 +1053,23 @@ def struct Parser(toks: [Token]) {
         if (s == null) {
             return null
         }
+        [TypeExpr] targs = []
+        if (at(Kind.Lt) && !peek().nl) {
+            advance()
+            while (true) {
+                var a = ty()
+                if (a == null) {
+                    return null
+                }
+                targs.push(a)
+                if (!eat(Kind.Comma)) {
+                    break
+                }
+            }
+            if (expectGt() == null) {
+                return null
+            }
+        }
         [Expr]? args = null
         if (at(Kind.LParen) && !peek().nl) {
             args = callArgs()
@@ -1060,7 +1077,7 @@ def struct Parser(toks: [Token]) {
                 return null
             }
         }
-        return SuperRef { name: s, args: args }
+        return SuperRef { name: s, args: args, targs: targs }
     }
 
     fun structDef(name: Ident, kind: StructKind, tparams: [Ident]): Def? {

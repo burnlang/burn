@@ -130,6 +130,7 @@ pub def type Field {
 pub def type SuperRef {
     Ident name
     [Expr]? args
+    [TypeExpr] targs
 }
 
 pub def type StaticVal {
@@ -167,7 +168,7 @@ pub def type Variant {
 pub def enum Def {
     Type(name: Ident, fields: [Field], tparams: [Ident]),
     Alias(name: Ident, ty: TypeExpr),
-    Interface(name: Ident, methods: [FunSig]),
+    Interface(name: Ident, methods: [FunSig], tparams: [Ident]),
     Struct(s: StructDef),
     Enum(name: Ident, variants: [Variant]),
     Annotation(name: Ident, fields: [Field])
