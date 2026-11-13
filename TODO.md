@@ -31,13 +31,13 @@
 - `unsafe`, inline assembly for every target, raw memory (`std/memory`) and calling C both ways (`@Extern`)
 - Import aliases (`import "std/memory" as Mem`) and imports inside functions and blocks
 - bvm: a JIT that compiles hot functions and loops to x86-64 and arm64 machine code, with on-stack replacement, values in registers and inline arithmetic, arrays and reference counting
+- Windows: native x86-64 executables and the whole toolchain (`burn.exe`), cross-built with mingw-w64 and tested on Windows in CI
 
 ## Next
 
-- Native backends for Windows (PE/COFF)
 - bvm: floats in registers and inline method calls in the JIT
 - Generic methods, generic interfaces, and generic structs that extend other structs
-- Windows installer
+- Windows installer in burnup (`install.ps1`)
 - bvm: a debugger
 - Annotations on parameters and reflection for functions and fields
 - Compile a Burn program as several bytecode modules, one per source file

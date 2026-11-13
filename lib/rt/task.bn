@@ -136,6 +136,10 @@ pub unsafe fun futureFree(p: int) {
     }
 }
 
+/** `taskMain` as the thread library calls it: through its Win64 entry on Windows. */
+@Extern("burn_rt_task_main", windows: "burn_rt_task_main_w64")
+fun taskMainEntry(job: int): int
+
 /** The body of a task's thread: runs the Burn function and hands its result to the future. */
 @Extern("burn_rt_task_main")
 unsafe fun taskMain(job: int): int {
@@ -197,7 +201,7 @@ unsafe fun startTask(f: int, args: int, argc: int, t: int): int {
     cAttrInit(attr)
     cAttrStack(attr, 67108864)
     var th = zalloc(16)
-    var r = cThreadCreate(th, attr, __cfun(taskMain), job)
+    var r = cThreadCreate(th, attr, __cfun(taskMainEntry), job)
     cFree(attr)
     if (r != 0) {
         cFree(th)

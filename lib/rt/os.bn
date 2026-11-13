@@ -455,7 +455,15 @@ pub unsafe fun cwd(): int {
     while (true) {
         var buf = zalloc(size)
         if (cGetcwd(buf, size) != 0) {
-            var s = lossyText(buf, cStrlen(buf))
+            var n = cStrlen(buf)
+            if (isWindows()) {
+                for i in 0..n {
+                    if (ld8(buf + i) == 92) {
+                        st8(buf + i, 47)
+                    }
+                }
+            }
+            var s = lossyText(buf, n)
             cFree(buf)
             return s
         }

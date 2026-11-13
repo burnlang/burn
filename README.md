@@ -40,8 +40,11 @@ curl -fsSL https://raw.githubusercontent.com/burnlang/burnup/master/install.sh |
 ```
 
 This installs [burnup](https://github.com/burnlang/burnup), the toolchain and [ash](https://github.com/burnlang/ash),
-the package manager, into `~/.burn/bin`. Burn runs on Linux and macOS, on x86-64 and arm64. Building native
-executables needs a C compiler (`cc`).
+the package manager, into `~/.burn/bin`. Burn runs on Linux and macOS, on x86-64 and arm64, and on Windows x86-64.
+Building native executables needs a C compiler (`cc`; on Windows `gcc` from MinGW-w64, such as MSYS2 or w64devkit).
+
+On Windows, unzip `burn-windows-x86_64.zip` from the [releases](https://github.com/burnlang/burn/releases) and add its
+`bin` folder to `PATH`.
 
 ## Use
 

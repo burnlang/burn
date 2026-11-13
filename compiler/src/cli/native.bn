@@ -54,9 +54,29 @@ pub fun nativeUnsupported(): string? {
 pub fun tempPath(tag: string): string {
     var base = env("TMPDIR")
     if (base == "") {
+        base = replace(env("TEMP"), "\\", "/")
+    }
+    if (base == "") {
         base = "/tmp"
     }
     return pathJoin(base, "burn-${tag}-${nowMs()}-${randomInt(0, 999999999)}")
+}
+
+/** Assembles the pieces `p0.s` to `p<n-1>.s` in `dir`: in parallel on every core, or one after another on Windows, which has no `sh`. */
+priv fun assemblePieces(cc: string, dir: string, n: int): ProcessOutput {
+    if (startsWith(platform(), "windows")) {
+        var last = ProcessOutput { code: 0, out: "", err: "" }
+        for i in 0..n {
+            var path = pathJoin(dir, "p${i}.s")
+            last = Process.output(cc, ["-c", path, "-o", path + ".o"])
+            if (last.code != 0) {
+                return last
+            }
+        }
+        return last
+    }
+    var script = "n=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4); cd \"$2\" && ls p*.s | xargs -P \"$n\" -I{} \"$1\" -c {} -o {}.o"
+    return Process.output("sh", ["-c", script, "sh", cc, dir])
 }
 
 priv fun link(asm: string, output: string, strip: bool, runtime: string, libs: string): string? {
@@ -68,6 +88,9 @@ priv fun link(asm: string, output: string, strip: bool, runtime: string, libs: s
     }
     if (cc == "") {
         cc = "cc"
+        if (startsWith(platform(), "windows")) {
+            cc = "gcc"
+        }
     }
     [string] args = []
     if (contains(asm, CUT)) {
@@ -88,8 +111,7 @@ priv fun link(asm: string, output: string, strip: bool, runtime: string, libs: s
             }
             args.push(path + ".o")
         }
-        var script = "n=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4); cd \"$2\" && ls p*.s | xargs -P \"$n\" -I{} \"$1\" -c {} -o {}.o"
-        var r = Process.output("sh", ["-c", script, "sh", cc, dir])
+        var r = assemblePieces(cc, dir, len(pieces))
         if (r.code < 0) {
             Files.remove(dir)
             return "could not run the assembler `${cc}`: ${trim(r.err)} (install a C toolchain or set BURN_CC)"

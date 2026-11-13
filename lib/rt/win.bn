@@ -97,6 +97,15 @@ fun cAddVectoredExceptionHandler(first: int, handler: int): int
 @Extern("burn_rt_unavailable", windows: "SetThreadStackGuarantee")
 fun cSetThreadStackGuarantee(size: int): Int32
 
+@Extern("burn_rt_unavailable", windows: "VirtualAlloc")
+fun cVirtualAlloc(addr: int, size: int, kind: int, protect: int): int
+
+@Extern("burn_rt_unavailable", windows: "VirtualProtect")
+fun cVirtualProtect(addr: int, size: int, protect: int, old: int): Int32
+
+@Extern("burn_rt_unavailable", windows: "_fullpath")
+fun cFullpath(out: int, path: int, size: int): int
+
 /** What a C function that the system lacks gives: -1, like a failed call. */
 @Extern("burn_rt_unavailable")
 pub unsafe fun rtUnavailable(): int {
@@ -326,4 +335,48 @@ pub unsafe fun winSendAll(s: int, p: int, n: int): bool {
         done += w
     }
     return true
+}
+
+/** `mmap` for the anonymous read-write memory the JIT asks for. */
+@Extern("burn_win_mmap")
+pub unsafe fun winMmap(addr: int, size: int, prot: int, flags: int, fd: int, off: int): int {
+    var p = cVirtualAlloc(0, size, 12288, 4)
+    if (p == 0) {
+        return -1
+    }
+    return p
+}
+
+/** `mprotect` for making JIT code executable (`5`, read and execute) or writable again. */
+@Extern("burn_win_mprotect")
+pub unsafe fun winMprotect(addr: int, size: int, prot: int): int {
+    var flags = 4
+    if (prot == 5) {
+        flags = 32
+    } else if (prot == 7) {
+        flags = 64
+    }
+    var old = zalloc(8)
+    var ok = cVirtualProtect(addr, size, flags, old)
+    cFree(old)
+    if (ok != 0) {
+        return 0
+    }
+    return -1
+}
+
+/** `realpath`, from `_fullpath`, with `/` between the parts like on other systems. */
+@Extern("burn_win_realpath")
+pub unsafe fun winRealpath(path: int, out: int): int {
+    var p = cFullpath(out, path, 4096)
+    if (p == 0) {
+        return 0
+    }
+    var n = cStrlen(p)
+    for i in 0..n {
+        if (ld8(p + i) == 92) {
+            st8(p + i, 47)
+        }
+    }
+    return p
 }

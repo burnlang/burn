@@ -3,16 +3,37 @@ import "std/process"
 
 /**
  * Path operations with the meaning they have in Rust's `std::path`, so that paths print the same way in both compilers.
- * Only `/` separates parts.
+ * Only `/` separates parts. On Windows a path can start with a drive (`C:/`), which keeps its place as the first part.
  */
 def type Parts {
     bool rooted
     [string] names
 }
 
-fun partsOf(p: string): Parts {
+/** Whether `name` is a Windows drive such as `C:`. */
+pub fun isDrive(name: string): bool {
+    if (len(name) != 2 || charAt(name, 1) != ":") {
+        return false
+    }
+    var c = charCode(charAt(name, 0))
+    return (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+}
+
+/** Whether `p` is absolute: it starts with `/`, or with a drive and a separator on Windows. */
+pub fun isRooted(p: string): bool {
+    if (startsWith(p, "/")) {
+        return true
+    }
+    return len(p) >= 3 && isDrive(substring(p, 0, 2)) && (charAt(p, 2) == "/" || charAt(p, 2) == "\\")
+}
+
+fun partsOf(path: string): Parts {
+    var p = path
+    if (isRooted(p) && !startsWith(p, "/")) {
+        p = replace(p, "\\", "/")
+    }
     [string] names = []
-    var rooted = startsWith(p, "/")
+    var rooted = isRooted(p)
     var first = true
     for part in split(p, "/") {
         if (part == "" || (part == "." && !first)) {
@@ -27,6 +48,12 @@ fun partsOf(p: string): Parts {
 
 fun joined(rooted: bool, names: [string]): string {
     var body = join(names, "/")
+    if (len(names) > 0 && isDrive(names[0])) {
+        if (len(names) == 1) {
+            return body + "/"
+        }
+        return body
+    }
     if (rooted) {
         return "/" + body
     }
@@ -35,7 +62,7 @@ fun joined(rooted: bool, names: [string]): string {
 
 /** `base.join(child)`: an absolute child replaces the base. */
 pub fun pathJoin(base: string, child: string): string {
-    if (startsWith(child, "/") || base == "") {
+    if (isRooted(child) || base == "") {
         return child
     }
     if (endsWith(base, "/")) {
