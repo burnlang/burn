@@ -238,7 +238,7 @@ pub fun importSpec(from: string, to: string): string {
 
 priv fun components(p: string): [string] {
     [string] out = []
-    if (startsWith(p, "/")) {
+    if (startsWith(p, "/") || isRooted(p)) {
         out.push("/")
     }
     var first = true

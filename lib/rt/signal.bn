@@ -83,6 +83,13 @@ pub unsafe fun installSignals(base: int) {
 var crashCode = 0
 var crashStack = 0
 
+/** `winOverflow` and `winCrash` as Windows calls them, through their Win64 entries. */
+@Extern("burn_win_overflow", windows: "burn_win_overflow_w64")
+fun winOverflowEntry(info: int): int
+
+@Extern("burn_win_crash", windows: "burn_win_crash_w64")
+fun winCrashEntry(info: int): int
+
 /** Where a crash continues on Windows, on a stack of its own: prints what happened and stops the program. */
 @Extern("burn_win_crashed")
 pub unsafe fun winCrashed(): int {
@@ -133,6 +140,6 @@ pub unsafe fun winCrashHandler() {
     st64(room, 32768)
     cSetThreadStackGuarantee(room)
     cFree(room)
-    cAddVectoredExceptionHandler(1, __cfun(winOverflow))
-    cSetUnhandledExceptionFilter(__cfun(winCrash))
+    cAddVectoredExceptionHandler(1, __cfun(winOverflowEntry))
+    cSetUnhandledExceptionFilter(__cfun(winCrashEntry))
 }

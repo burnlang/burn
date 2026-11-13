@@ -47,6 +47,66 @@ jobs:
           "$RUNNER_TEMP/fib"
           "$RUNNER_TEMP/burn/bin/burn" run --native examples/fib.bn
 
+  windows-build:
+    name: Build the Windows toolchain
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: mingw-w64, the C compiler for Windows
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q mingw-w64
+      - name: Build the toolchain, then the one for Windows with it
+        run: |
+          sh scripts/package.sh --prefix "$RUNNER_TEMP/burn"
+          BURN="$RUNNER_TEMP/burn/bin/burn" sh scripts/package-windows.sh --prefix "$RUNNER_TEMP/burn-windows"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: burn-windows
+          path: ${{ runner.temp }}/burn-windows
+
+  windows:
+    name: Burn on Windows
+    needs: windows-build
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: burn-windows
+          path: burn-windows
+      - name: Toolchain smoke test
+        run: |
+          B=burn-windows/bin/burn.exe
+          "$B" version
+          "$B" examples/fib.bn
+          "$B" build examples/fib.bn -o fib-native
+          ./fib-native.exe
+          "$B" build --target bvm examples/fib.bn -o fib.bvm
+          "$B" fib.bvm
+          "$B" check examples/fib.bn
+          burn-windows/bin/burni.exe examples/fib.bn
+      - name: The test programs give their expected output, natively and on bvm
+        run: |
+          B=burn-windows/bin/burn.exe
+          failed=""
+          for f in tests/cases/*.bn; do
+            name="$(basename "$f" .bn)"
+            [ "$name" = process_fs ] && continue
+            "$B" build "$f" -o "case-$name" >/dev/null || { failed="$failed build:$name"; continue; }
+            "./case-$name.exe" > "case-$name.out" 2>&1 || true
+            cmp -s "case-$name.out" "tests/cases/$name.out" || failed="$failed native:$name"
+            "$B" "$f" > "case-$name.vm" 2>&1 || true
+            cmp -s "case-$name.vm" "tests/cases/$name.out" || failed="$failed vm:$name"
+          done
+          if [ -n "$failed" ]; then
+            echo "failed:$failed"
+            exit 1
+          fi
+
   bootstrap:
     name: The Burn compiler builds itself from the seed
     runs-on: ubuntu-latest

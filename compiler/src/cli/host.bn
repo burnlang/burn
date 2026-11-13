@@ -52,26 +52,29 @@ priv fun rtRelease(p: int): int
 @Extern("isatty")
 priv fun cIsatty(fd: int): Int32
 
-@Extern("realpath")
+@Extern("realpath", windows: "burn_win_realpath")
 priv fun cRealpath(path: int, out: int): int
 
-@Extern("readlink")
+@Extern("readlink", windows: "burn_rt_unavailable")
 priv fun cReadlink(path: int, buf: int, n: int): int
 
 @Extern("chmod")
 priv fun cChmod(path: int, mode: int): Int32
 
-@Extern("read")
+@Extern("read", windows: "burn_win_read")
 priv fun cReadFd(fd: int, buf: int, n: int): int
 
-@Extern("dlsym")
+@Extern("dlsym", windows: "burn_win_dlsym")
 priv fun cDlsym(handle: int, name: int): int
 
-@Extern("getrlimit")
+@Extern("getrlimit", windows: "burn_rt_unavailable")
 priv fun cGetrlimit(resource: int, out: int): Int32
 
-@Extern("setrlimit")
+@Extern("setrlimit", windows: "burn_rt_unavailable")
 priv fun cSetrlimit(resource: int, limit: int): Int32
+
+@Extern("burn_rt_unavailable", windows: "GetModuleFileNameA")
+priv fun cModuleFileName(module: int, buf: int, n: int): Int32
 
 /** The string object at `p`, which the caller owned and gives up, or null when `p` is 0. */
 priv unsafe fun owned(p: int): string? {
@@ -130,10 +133,10 @@ priv fun stemOf(path: string): string {
     return base
 }
 
-/** The path the toolchain was started with. */
+/** The path the toolchain was started with, with `/` between the parts on Windows too. */
 priv fun programPath(): string {
     unsafe {
-        return owned(rtProgram()) ?? ""
+        return replace(owned(rtProgram()) ?? "", "\\", "/")
     }
 }
 
@@ -828,6 +831,16 @@ priv fun exePath(): string? {
                 return null
             }
             return realPath(s) ?? s
+        }
+        if (startsWith(platform(), "windows")) {
+            var wb = Memory.alloc(4097)
+            var wn = cModuleFileName(0, wb, 4096)
+            var ws: string? = null
+            if (wn > 0) {
+                ws = replace(owned(rtLossyText(wb, wn)) ?? "", "\\", "/")
+            }
+            Memory.free(wb)
+            return ws
         }
         var link = "/proc/self/exe"
         var buf = Memory.alloc(4097)

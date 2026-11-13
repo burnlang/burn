@@ -1502,9 +1502,6 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
             var name = ""
             if (k0 is HKind.Int && k0.value >= 0 && k0.value < len(p.funcs)) {
                 name = cSymbol(p.funcs[k0.value], t) ?? ""
-                if (name != "" && t.windows && cExport(p.funcs[k0.value]) != null) {
-                    name += "_w64"
-                }
             }
             if (name == "") {
                 return false

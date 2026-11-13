@@ -6,10 +6,10 @@
 import "layout.bn"
 import "std/memory"
 
-@Extern("mmap")
+@Extern("mmap", windows: "burn_win_mmap")
 fun cMmap(addr: int, size: int, prot: int, flags: int, fd: int, off: int): int
 
-@Extern("mprotect")
+@Extern("mprotect", windows: "burn_win_mprotect")
 fun cMprotect(addr: int, size: int, prot: int): Int32
 
 @Extern("__clear_cache", macos: "sys_icache_invalidate")

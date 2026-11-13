@@ -1,10 +1,10 @@
 /** Reading and writing files as bytes, for bytecode modules and archives. */
 import "std/memory"
 
-@Extern("open")
+@Extern("open", windows: "burn_win_open")
 fun cOpen(path: int, flags: int): Int32
 
-@Extern("read")
+@Extern("read", windows: "burn_win_read")
 fun cRead(fd: int, buf: int, n: int): int
 
 @Extern("close")
