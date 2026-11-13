@@ -1,0 +1,7 @@
+fun main() {
+    var seen = {"a": 1, "b": 2}
+    for k in seen {
+        remove(seen, k)
+    }
+    print(len(seen))
+}

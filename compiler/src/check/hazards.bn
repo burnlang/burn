@@ -1,0 +1,193 @@
+/**
+ * Memory hazards the checker rejects: changing an array or map while a `for` loop goes over it, using a value after it
+ * was given to an `async fun` that may still be changing it, and async functions that touch globals another thread can
+ * change at the same time.
+ */
+import "../diag/diag.bn"
+import "check.bn"
+import "hir.bn"
+import "structs.bn"
+import "types.bn"
+
+/** The runtime functions that change the length of the array or map they get first. */
+const RESIZERS = ["ArrPush", "ArrPop", "ArrInsert", "ArrRemove", "ArrClear", "MapRemove", "MapClear"]
+
+/** Where the value of `h` lives, when it is a local, a global or a field of one, as text that names it, or null. */
+pub fun pathOf(c: Checker, h: HExpr): string? {
+    var k = h.kind
+    if (k is HKind.Local) {
+        return "${c.ctx().func}:L${k.slot}"
+    }
+    if (k is HKind.Global) {
+        return "G${k.id}"
+    }
+    if (k is HKind.GetField) {
+        var p = pathOf(c, k.obj)
+        if (p != null) {
+            return "${p}.${k.index}"
+        }
+        return null
+    }
+    if (k is HKind.Rt && k.name == "Alive" && len(k.args) > 0) {
+        return pathOf(c, k.args[0])
+    }
+    return null
+}
+
+/** Whether values of type `t` can be changed in place, so two threads that both hold one race. */
+pub fun sharedMutable(c: Checker, t: int): bool {
+    var k = c.types.kindOf(t)
+    if (k is Ty.Optional) {
+        return sharedMutable(c, k.inner)
+    }
+    return k is Ty.Array || k is Ty.Map || k is Ty.Record || k is Ty.Interface
+}
+
+/** Starts checking the body of a `for` loop over `h`, which `text` names in the source. */
+pub fun guardLoop(c: Checker, h: HExpr, text: string, span: SrcSpan) {
+    var p = pathOf(c, h) ?? ""
+    var fix = "for x in copy(${text})"
+    if (c.types.kindOf(h.ty) is Ty.Map) {
+        fix = "for k in keys(${text})"
+    }
+    c.loopGuards.push(LoopGuard { path: p, name: text, fix: fix, func: c.ctx().func, span: span })
+}
+
+/** Ends the body of the innermost `for` loop. */
+pub fun unguardLoop(c: Checker) {
+    if (len(c.loopGuards) > 0) {
+        c.loopGuards.pop()
+    }
+}
+
+/** Reports a call in `h`, the checked call of built-in `name`, that resizes a collection a surrounding loop goes over. */
+pub fun checkResize(c: Checker, h: HExpr, span: SrcSpan) {
+    if (len(c.loopGuards) == 0 || len(c.fx) == 0) {
+        return
+    }
+    var k = h.kind
+    var call = h
+    if (k is HKind.Seq) {
+        for s in k.stmts {
+            if (s is HStmt.Eval) {
+                var sk = s.value.kind
+                if (sk is HKind.Rt && contains(RESIZERS, sk.name)) {
+                    call = s.value
+                }
+            }
+        }
+    }
+    var ck = call.kind
+    if (!(ck is HKind.Rt) || !contains(RESIZERS, ck.name) || len(ck.args) == 0) {
+        return
+    }
+    var p = pathOf(c, ck.args[0])
+    if (p == null) {
+        return
+    }
+    for g in c.loopGuards {
+        if (g.path == p && g.func == c.ctx().func) {
+            var line = c.lineOf(g.span)
+            c.errorNote(span, "`${g.name}` changes size while the `for` loop on line ${line} goes over it", "loop over a copy (`${g.fix}`), or collect the changes and make them after the loop")
+            return
+        }
+    }
+}
+
+/** Marks the locals and globals among `args` (and the receiver `recv`) as given to the task an async call starts at `span`. */
+pub fun giveToTask(c: Checker, recv: HExpr?, args: [HExpr], span: SrcSpan) {
+    if (len(c.fx) == 0) {
+        return
+    }
+    [HExpr] all = []
+    if (recv != null) {
+        all.push(recv)
+    }
+    for a in args {
+        all.push(a)
+    }
+    for a in all {
+        if (!sharedMutable(c, a.ty)) {
+            continue
+        }
+        var k = a.kind
+        if (k is HKind.Rt && k.name == "Alive" && len(k.args) > 0) {
+            k = k.args[0].kind
+        }
+        var key = -1
+        if (k is HKind.Local) {
+            key = k.slot
+        } else if (k is HKind.Global) {
+            key = GLOBAL_KEY + k.id
+        }
+        if (key >= 0) {
+            c.anyDead = true
+            addFact(c, Fact.Given(key, span, -1), 0)
+        }
+    }
+}
+
+/** Ties the values given to tasks since fact `mark` to the variable `key` that now holds the task's future. */
+pub fun bindFutures(c: Checker, mark: int, key: int, t: int) {
+    if (!(c.types.kindOf(t) is Ty.Future)) {
+        return
+    }
+    for i in mark..len(c.facts) {
+        var f = c.facts[i]
+        if (f is Fact.Given && f.future < 0) {
+            c.facts[i] = Fact.Given(f.target, f.span, key)
+        }
+    }
+}
+
+/** Ends the tasks given values since fact `mark` (an awaited call), or whose future is in `key` (an awaited variable). */
+pub fun endTasks(c: Checker, mark: int, key: int) {
+    if (len(c.fx) == 0 || len(c.facts) == 0) {
+        return
+    }
+    var narrow = c.ctx().narrow
+    for k in keys(narrow) {
+        if (k < FACT_KEY || k >= GLOBAL_KEY) {
+            continue
+        }
+        var i = k - FACT_KEY
+        var f = c.facts[i]
+        if (f is Fact.Given && (i >= mark || (key >= 0 && f.future == key))) {
+            remove(narrow, k)
+        }
+    }
+}
+
+/** The key of the variable `h` reads, or -1. */
+pub fun varKey(h: HExpr): int {
+    var k = h.kind
+    if (k is HKind.Local) {
+        return k.slot
+    }
+    if (k is HKind.Global) {
+        return GLOBAL_KEY + k.id
+    }
+    return -1
+}
+
+/** Whether the code being checked is the body of an `async fun`, which runs on its own thread. */
+pub fun inAsync(c: Checker): bool {
+    if (len(c.fx) == 0 || c.ctx().isInit) {
+        return false
+    }
+    return c.funcs[c.ctx().func].isAsync
+}
+
+/** Reports reading global `name` of type `t` in an async function when another thread can change it in place. */
+pub fun checkAsyncRead(c: Checker, name: string, t: int, isConst: bool, span: SrcSpan) {
+    if (!isConst && inAsync(c) && sharedMutable(c, t)) {
+        c.errorNote(span, "async functions run on their own thread, so reading the global `${name}` here races with code that changes it", "pass the value as an argument, or a copy of it (`copy(${name})`)")
+    }
+}
+
+/** Reports changing global `name` in an async function. */
+pub fun checkAsyncWrite(c: Checker, name: string, span: SrcSpan) {
+    if (inAsync(c)) {
+        c.errorNote(span, "async functions run on their own thread, so changing the global `${name}` here races with the rest of the program", "return the new value and set `${name}` after `await`")
+    }
+}

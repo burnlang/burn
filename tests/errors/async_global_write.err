@@ -1,0 +1,1 @@
+4:5 async functions run on their own thread, so changing the global `count` here races with the rest of the program

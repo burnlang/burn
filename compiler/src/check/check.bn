@@ -206,7 +206,17 @@ pub def type AsmUse {
 /** A function added to one object (`x.name() { ... }`), or an object that was destroyed. */
 pub def enum Fact {
     Ext(target: int, name: string, fid: int),
-    Dead(target: int, span: SrcSpan)
+    Dead(target: int, span: SrcSpan),
+    Given(target: int, span: SrcSpan, future: int)
+}
+
+/** A `for` loop whose body is being checked: where the collection it goes over lives, and how the source names it. */
+pub def type LoopGuard {
+    string path
+    string name
+    string fix
+    int func
+    SrcSpan span
 }
 
 pub def type ClosureInfo {
@@ -569,6 +579,7 @@ pub def struct Checker(loaded: Loaded) {
     {int: bool} vslotSet = {}
     [Fact] facts = []
     bool anyDead = false
+    [LoopGuard] loopGuards = []
     bool hasDestroy = false
     {int: bool} extFuncs = {}
     [InitSpan] initSpans = []

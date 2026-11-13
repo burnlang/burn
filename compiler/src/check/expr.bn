@@ -6,6 +6,7 @@ import "calls.bn"
 import "check.bn"
 import "closures.bn"
 import "generics.bn"
+import "hazards.bn"
 import "hir.bn"
 import "matching.bn"
 import "nullsafe.bn"
@@ -491,7 +492,9 @@ fun exprInner(c: Checker, e: Expr, expected: int?): HExpr {
     }
     if (k is ExprKind.Await) {
         needsStd(c, span, "`await`")
+        var mark = len(c.facts)
         var h = exprOf(c, k.value, null)
+        endTasks(c, mark, varKey(h))
         var hk = c.types.kindOf(h.ty)
         if (hk is Ty.Future) {
             return rt("Await", [h], hk.inner)
@@ -693,6 +696,7 @@ pub fun identExpr(c: Checker, name: string, span: SrcSpan): HExpr {
         var gt = gi.ty
         if (gt != null) {
             checkAlive(c, GLOBAL_KEY + sym.id, name, span)
+            checkAsyncRead(c, name, gt, gi.isConst, span)
             if (c.wantIndex) {
                 c.defLink(span, gi.span)
                 var kw = "var"
@@ -1395,7 +1399,11 @@ fun placeTy(p: Place): int? {
 
 fun assignExpr(c: Checker, target: Expr, op: BinOp?, value: Expr, span: SrcSpan): HExpr {
     [HStmt] pre = []
+    var mark = len(c.facts)
     var p = placeOf(c, target, op != null, pre)
+    if (p is Place.Global) {
+        checkAsyncWrite(c, c.globals[p.id].name, c.sp(target.span))
+    }
     var pt = placeTy(p)
     var v = errExpr()
     if (op == null) {
@@ -1413,6 +1421,9 @@ fun assignExpr(c: Checker, target: Expr, op: BinOp?, value: Expr, span: SrcSpan)
         v = arith(c, op, cur, r, span)
     }
     var w = writePlace(c, p, v, c.sp(value.span))
+    if (p is Place.Local) {
+        bindFutures(c, mark, p.slot, v.ty)
+    }
     if (len(pre) == 0) {
         return w
     }

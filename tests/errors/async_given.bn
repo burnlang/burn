@@ -1,0 +1,11 @@
+async fun fill(xs: [int]): int {
+    xs.push(1)
+    return len(xs)
+}
+
+fun main() {
+    var xs = [1]
+    var f = fill(xs)
+    print(len(xs))
+    print(await f)
+}

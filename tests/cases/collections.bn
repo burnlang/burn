@@ -54,3 +54,13 @@ var cfg = { debug: true }
 print(cfg.debug)
 var m: {string: any} = { name: "burn", version: 2 }
 print(m)
+var grow = [1, 2]
+for g in copy(grow) {
+    grow.push(g * 10)
+}
+print(grow)
+var drop = {"a": 1, "b": 2}
+for k in keys(drop) {
+    remove(drop, k)
+}
+print(len(drop))
