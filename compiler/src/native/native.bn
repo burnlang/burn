@@ -1,6 +1,7 @@
 import "../check/body.bn"
 import "../check/check.bn"
 import "../check/hir.bn"
+import "../lower/inline.bn"
 import "../lower/own.bn"
 import "arm64.bn"
 import "meta.bn"
@@ -37,7 +38,7 @@ pub fun nativeProblem(p: HProgram, libFuncs: [string]): string? {
 /** The x86-64 assembly of a checked program for `platform` (such as `linux-x86_64`), with the bytes of its bytecode libraries, like `assembly` in `native/mod.rs`. */
 pub fun nativeAssembly(c: Checker, p: HProgram, libs: [[int]], platform: string): string {
     var meta = encodeMeta(c)
-    var funcs = lowerOwnership(c.types, p.funcs)
+    var funcs = lowerOwnership(c.types, inlineSmall(c.types, p.funcs))
     var np = NativeProgram { checker: c, funcs: funcs, globals: len(p.globals), entry: p.entry, libs: libs, library: false, name: "" }
     var t = asmTarget(platform)
     if (t.arch == "aarch64") {
@@ -66,7 +67,7 @@ pub fun runtimeLibraryProblem(c: Checker, p: HProgram): string? {
 
 /** The assembly of the runtime library `name` written in Burn for `platform`: its functions, the C functions it exports with @Extern and `burn_<name>_init`, which runs its top-level code. */
 pub fun runtimeLibraryAssembly(c: Checker, p: HProgram, platform: string, name: string): string {
-    var funcs = lowerOwnership(c.types, p.funcs)
+    var funcs = lowerOwnership(c.types, inlineSmall(c.types, p.funcs))
     var np = NativeProgram { checker: c, funcs: funcs, globals: len(p.globals), entry: p.entry, libs: [], library: true, name: name }
     var t = asmTarget(platform)
     if (t.arch == "aarch64") {

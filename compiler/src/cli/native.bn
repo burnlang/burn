@@ -1,5 +1,6 @@
 import "../check/asm.bn"
 import "../native/native.bn"
+import "../native/shared.bn"
 import "../project/paths.bn"
 import "../project/project.bn"
 import "compile.bn"
@@ -61,11 +62,6 @@ pub fun tempPath(tag: string): string {
 priv fun link(asm: string, output: string, strip: bool, runtime: string, libs: string): string? {
     var dir = tempPath("build")
     Files.makeDir(dir)
-    var asmPath = pathJoin(dir, "program.s")
-    if (!writeFile(asmPath, asm)) {
-        Files.remove(dir)
-        return "cannot write ${asmPath}"
-    }
     var cc = env("BURN_CC")
     if (cc == "") {
         cc = env("CC")
@@ -73,7 +69,46 @@ priv fun link(asm: string, output: string, strip: bool, runtime: string, libs: s
     if (cc == "") {
         cc = "cc"
     }
-    [string] args = [asmPath, runtime, "-o", output]
+    [string] args = []
+    if (contains(asm, CUT)) {
+        var pieces = split(asm, CUT + "\n")
+        var head = ""
+        if (!endsWith(targetPlatform(), "aarch64")) {
+            head = ".intel_syntax noprefix\n"
+        }
+        for i in 0..len(pieces) {
+            var path = pathJoin(dir, "p${i}.s")
+            var text = pieces[i]
+            if (i > 0) {
+                text = head + text
+            }
+            if (!writeFile(path, text)) {
+                Files.remove(dir)
+                return "cannot write ${path}"
+            }
+            args.push(path + ".o")
+        }
+        var script = "n=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4); cd \"$2\" && ls p*.s | xargs -P \"$n\" -I{} \"$1\" -c {} -o {}.o"
+        var r = Process.output("sh", ["-c", script, "sh", cc, dir])
+        if (r.code < 0) {
+            Files.remove(dir)
+            return "could not run the assembler `${cc}`: ${trim(r.err)} (install a C toolchain or set BURN_CC)"
+        }
+        if (r.code != 0) {
+            Files.remove(dir)
+            return "assembling failed:\n${r.err}"
+        }
+    } else {
+        var asmPath = pathJoin(dir, "program.s")
+        if (!writeFile(asmPath, asm)) {
+            Files.remove(dir)
+            return "cannot write ${asmPath}"
+        }
+        args.push(asmPath)
+    }
+    args.push(runtime)
+    args.push("-o")
+    args.push(output)
     for l in split(libs, " ") {
         if (trim(l) != "") {
             args.push(trim(l))
