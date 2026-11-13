@@ -206,6 +206,14 @@ pub fun callExpr(c: Checker, callee: Expr, args: [Expr], span: SrcSpan, expected
             var vslot = c.vslots["${ri} ${name}"]
             var stat = rec.statics[name]
             var hasOuter = isBuiltin(name) || c.lookupValueEntry(c.curModule(), name) != null
+            var gm = genericMethodOf(c, ri, name)
+            if (gm != null && method == null && stat == null && vslot == null) {
+                var selfRecv: HExpr? = null
+                if (c.genericFns[gm].selfTy != null) {
+                    selfRecv = c.selfExpr(st)
+                }
+                return genericCall(c, gm, selfRecv, args, span, c.sp(callee.span), expected)
+            }
             if (vslot != null) {
                 var argc = c.slots[vslot].argc
                 if (!hasOuter || argc == len(args) + 1) {
@@ -390,6 +398,10 @@ pub fun methodCall(c: Checker, obj: Expr, name: Ident, args: [Expr], span: SrcSp
             if (stat != null) {
                 return directCall(c, stat, null, args, span, nspan)
             }
+            var gs = genericMethodOf(c, tk.index, name.name)
+            if (gs != null && c.genericFns[gs].selfTy == null) {
+                return genericCall(c, gs, null, args, span, nspan, expected)
+            }
             var meth = rec.methods[name.name]
             if (meth != null) {
                 return directCall(c, meth, null, args, span, nspan)
@@ -434,6 +446,10 @@ pub fun methodCall(c: Checker, obj: Expr, name: Ident, args: [Expr], span: SrcSp
             c.emit(d)
             evalAll(c, args)
             return errExpr()
+        }
+        var gm = genericMethodOf(c, k.index, name.name)
+        if (gm != null && c.genericFns[gm].selfTy != null && !has(rec.methods, name.name)) {
+            return genericCall(c, gm, o, args, span, nspan, expected)
         }
         var sm = structMethod(c, k.index, name, o, args, span)
         if (sm != null) {

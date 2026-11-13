@@ -134,3 +134,60 @@ fun wrap<T>(v: T): Pair<T, T> {
     return Pair { first: v, second: v }
 }
 print(wrap("w"), wrap(3).second)
+
+def struct Cell<T>(value: T) {
+    fun get(): T {
+        return value
+    }
+
+    fun map<U>(f: fun(T): U): Cell<U> {
+        return new Cell<U>(f(value))
+    }
+
+    fun pair<U>(other: U): string {
+        return "${value}/${other}"
+    }
+
+    fun twice<U>(f: fun(T): U): [U] {
+        return [map(f).get(), f(value)]
+    }
+}
+
+def struct Tools {
+    static fun firstOf<T>(xs: [T]): T {
+        return xs[0]
+    }
+
+    fun pick<T>(xs: [T], i: int): T {
+        return xs[i]
+    }
+
+    fun empty<T>(): [T] {
+        return []
+    }
+}
+
+def struct Named(name: string) {
+    fun with<T>(x: T): string {
+        return "${name}=${x}"
+    }
+}
+
+def struct Special(name: string) : Named(name) {
+}
+
+var cell = new Cell<int>(2)
+var shown = cell.map(fun(x: int): string {
+    return "v" + str(x)
+})
+print(cell.get(), shown.get(), cell.map(fun(x: int): float {
+    return toFloat(x) / 4.0
+}).get())
+print(cell.pair("x"), cell.pair(true), shown.pair(3))
+print(cell.twice(fun(x: int): int {
+    return x * 10
+}))
+var tools = new Tools()
+[string] nothing = tools.empty()
+print(Tools.firstOf(["a", "b"]), Tools.firstOf([7, 8]), tools.pick(["x", "y"], 1), tools.pick([1.5, 2.5], 0), len(nothing))
+print(new Named("n").with(1), new Special("s").with("str"))
