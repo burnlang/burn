@@ -32,12 +32,12 @@ def type Walk {
     bool asm
 }
 
-fun managedTy(types: Types, t: int): bool {
+pub fun managedTy(types: Types, t: int): bool {
     var k = types.kindOf(t)
     return k is Ty.Str || k is Ty.Any || k is Ty.Array || k is Ty.Map || k is Ty.Optional || k is Ty.Func || k is Ty.Future || k is Ty.Record || k is Ty.Interface
 }
 
-fun subStmts(s: HStmt): [[HStmt]] {
+pub fun subStmts(s: HStmt): [[HStmt]] {
     if (s is HStmt.If) {
         return [s.then, s.els]
     }
@@ -50,7 +50,7 @@ fun subStmts(s: HStmt): [[HStmt]] {
     return []
 }
 
-fun stmtExprs(s: HStmt): [HExpr] {
+pub fun stmtExprs(s: HStmt): [HExpr] {
     if (s is HStmt.Eval) {
         return [s.value]
     }
@@ -73,7 +73,7 @@ fun stmtExprs(s: HStmt): [HExpr] {
     return []
 }
 
-fun kids(e: HExpr): [HExpr] {
+pub fun kids(e: HExpr): [HExpr] {
     var k = e.kind
     if (k is HKind.SetLocal) {
         return [k.value]
@@ -151,7 +151,7 @@ fun kids(e: HExpr): [HExpr] {
     return []
 }
 
-fun seqStmts(e: HExpr): [HStmt] {
+pub fun seqStmts(e: HExpr): [HStmt] {
     var k = e.kind
     if (k is HKind.Seq) {
         return k.stmts
