@@ -1,0 +1,327 @@
+/**
+ * Inlining of small functions: a call to a function whose whole body is `return <expression>` (or one expression
+ * statement) over its parameters, with no locals of its own, becomes that expression with the arguments put in
+ * for the parameters. Getters, wrappers such as `ld64(a) = __mem(6, a, 0, 0)` and other one-line helpers then cost
+ * nothing to call.
+ */
+import "../check/hir.bn"
+import "../check/types.bn"
+import "borrow.bn"
+
+/** The most expression nodes an inlined body may have. */
+const MAX_NODES = 24
+
+def type Body {
+    HExpr value
+    bool void
+}
+
+fun inlinable(e: HExpr, params: int, budget: [int]): bool {
+    budget[0] -= 1
+    if (budget[0] < 0) {
+        return false
+    }
+    var k = e.kind
+    if (k is HKind.Int || k is HKind.Float || k is HKind.Bool || k is HKind.Str || k is HKind.Null || k is HKind.TypeId || k is HKind.LocId || k is HKind.Global) {
+        return true
+    }
+    if (k is HKind.Local) {
+        return k.slot < params
+    }
+    if (k is HKind.Unary || k is HKind.Binary || k is HKind.Conv || k is HKind.And || k is HKind.Or || k is HKind.GetField || k is HKind.Index || k is HKind.ArrLen || k is HKind.Rt || k is HKind.Call || k is HKind.BoxVal) {
+        for x in kids(e) {
+            if (!inlinable(x, params, budget)) {
+                return false
+            }
+        }
+        return true
+    }
+    return false
+}
+
+fun bodyOf(types: Types, f: HFunc): Body? {
+    if (f.isAsync || f.external != null || len(f.annotations) > 0 || len(f.locals) != f.params) {
+        return null
+    }
+    var b = f.body
+    HExpr? v = null
+    var void = false
+    if (len(b) == 1) {
+        var s = b[0]
+        if (s is HStmt.Return) {
+            v = s.value
+        } else if (s is HStmt.Eval) {
+            v = s.value
+            void = true
+        }
+    } else if (len(b) == 2) {
+        var s = b[0]
+        var r = b[1]
+        if (s is HStmt.Eval && r is HStmt.Return && r.value == null) {
+            v = s.value
+            void = true
+        }
+    }
+    if (v == null) {
+        return null
+    }
+    if (void && f.ret != T_VOID) {
+        return null
+    }
+    if (!void && v.ty != f.ret) {
+        return null
+    }
+    [int] budget = [MAX_NODES]
+    if (!inlinable(v, f.params, budget)) {
+        return null
+    }
+    return Body { value: v, void: void }
+}
+
+fun substAll(xs: [HExpr], reps: [HExpr]): [HExpr] {
+    [HExpr] out = []
+    for x in xs {
+        out.push(subst(x, reps))
+    }
+    return out
+}
+
+fun subst(e: HExpr, reps: [HExpr]): HExpr {
+    var k = e.kind
+    var t = e.ty
+    if (k is HKind.Local) {
+        return reps[k.slot]
+    }
+    if (k is HKind.Unary) {
+        return hexpr(HKind.Unary(k.op, subst(k.value, reps)), t)
+    }
+    if (k is HKind.Binary) {
+        return hexpr(HKind.Binary(k.op, subst(k.left, reps), subst(k.right, reps)), t)
+    }
+    if (k is HKind.Conv) {
+        return hexpr(HKind.Conv(k.conv, subst(k.value, reps)), t)
+    }
+    if (k is HKind.And) {
+        return hexpr(HKind.And(subst(k.left, reps), subst(k.right, reps)), t)
+    }
+    if (k is HKind.Or) {
+        return hexpr(HKind.Or(subst(k.left, reps), subst(k.right, reps)), t)
+    }
+    if (k is HKind.GetField) {
+        return hexpr(HKind.GetField(subst(k.obj, reps), k.index), t)
+    }
+    if (k is HKind.Index) {
+        return hexpr(HKind.Index(subst(k.obj, reps), subst(k.index, reps), k.loc), t)
+    }
+    if (k is HKind.ArrLen) {
+        return hexpr(HKind.ArrLen(subst(k.value, reps)), t)
+    }
+    if (k is HKind.BoxVal) {
+        return hexpr(HKind.BoxVal(subst(k.value, reps)), t)
+    }
+    if (k is HKind.Rt) {
+        return hexpr(HKind.Rt(k.name, substAll(k.args, reps)), t)
+    }
+    if (k is HKind.Call) {
+        return hexpr(HKind.Call(k.func, substAll(k.args, reps)), t)
+    }
+    return e
+}
+
+fun isConstant(e: HExpr): bool {
+    var k = e.kind
+    return k is HKind.Int || k is HKind.Float || k is HKind.Bool || k is HKind.Str || k is HKind.Null || k is HKind.TypeId || k is HKind.LocId
+}
+
+def type Inliner {
+    Types types
+    [Body?] bodies
+    [int] locals
+    int self
+}
+
+fun callSite(n: Inliner, e: HExpr, fid: int, args: [HExpr]): HExpr? {
+    if (fid == n.self || fid >= len(n.bodies)) {
+        return null
+    }
+    var b = n.bodies[fid]
+    if (b == null) {
+        return null
+    }
+    var simple = true
+    for a in args {
+        if (!(isConstant(a) || a.kind is HKind.Local)) {
+            simple = false
+        }
+    }
+    [HExpr] reps = []
+    [HStmt] pre = []
+    if (simple) {
+        reps = args
+    } else {
+        for a in args {
+            if (isConstant(a)) {
+                reps.push(a)
+                continue
+            }
+            if (managedTy(n.types, a.ty)) {
+                return null
+            }
+            var slot = len(n.locals)
+            n.locals.push(a.ty)
+            pre.push(HStmt.Eval(setLocal(slot, a, a.ty)))
+            reps.push(local(slot, a.ty))
+        }
+    }
+    var v = subst(b.value, reps)
+    if (b.void) {
+        pre.push(HStmt.Eval(v))
+        return hexpr(HKind.Seq(pre, hexpr(HKind.Null, e.ty)), e.ty)
+    }
+    if (len(pre) == 0) {
+        return v
+    }
+    return hexpr(HKind.Seq(pre, v), v.ty)
+}
+
+fun rewriteAll(n: Inliner, xs: [HExpr]): [HExpr] {
+    [HExpr] out = []
+    for x in xs {
+        out.push(rewrite(n, x))
+    }
+    return out
+}
+
+fun rewrite(n: Inliner, e: HExpr): HExpr {
+    var k = e.kind
+    var t = e.ty
+    if (k is HKind.Call) {
+        var args = rewriteAll(n, k.args)
+        var r = callSite(n, e, k.func, args)
+        if (r != null) {
+            return r
+        }
+        return hexpr(HKind.Call(k.func, args), t)
+    }
+    if (k is HKind.SetLocal) {
+        return hexpr(HKind.SetLocal(k.slot, rewrite(n, k.value)), t)
+    }
+    if (k is HKind.SetGlobal) {
+        return hexpr(HKind.SetGlobal(k.id, rewrite(n, k.value)), t)
+    }
+    if (k is HKind.Unary) {
+        return hexpr(HKind.Unary(k.op, rewrite(n, k.value)), t)
+    }
+    if (k is HKind.Binary) {
+        return hexpr(HKind.Binary(k.op, rewrite(n, k.left), rewrite(n, k.right)), t)
+    }
+    if (k is HKind.And) {
+        return hexpr(HKind.And(rewrite(n, k.left), rewrite(n, k.right)), t)
+    }
+    if (k is HKind.Or) {
+        return hexpr(HKind.Or(rewrite(n, k.left), rewrite(n, k.right)), t)
+    }
+    if (k is HKind.Conv) {
+        return hexpr(HKind.Conv(k.conv, rewrite(n, k.value)), t)
+    }
+    if (k is HKind.CallIndirect) {
+        return hexpr(HKind.CallIndirect(rewrite(n, k.callee), rewriteAll(n, k.args)), t)
+    }
+    if (k is HKind.CallIface) {
+        return hexpr(HKind.CallIface(k.slot, rewriteAll(n, k.args)), t)
+    }
+    if (k is HKind.Rt) {
+        return hexpr(HKind.Rt(k.name, rewriteAll(n, k.args)), t)
+    }
+    if (k is HKind.Spawn) {
+        return hexpr(HKind.Spawn(k.func, rewriteAll(n, k.args)), t)
+    }
+    if (k is HKind.NewStruct) {
+        return hexpr(HKind.NewStruct(k.ty, rewriteAll(n, k.args)), t)
+    }
+    if (k is HKind.NewArray) {
+        return hexpr(HKind.NewArray(k.ty, rewriteAll(n, k.items)), t)
+    }
+    if (k is HKind.GetField) {
+        return hexpr(HKind.GetField(rewrite(n, k.obj), k.index), t)
+    }
+    if (k is HKind.SetField) {
+        return hexpr(HKind.SetField(rewrite(n, k.obj), k.index, rewrite(n, k.value)), t)
+    }
+    if (k is HKind.Index) {
+        return hexpr(HKind.Index(rewrite(n, k.obj), rewrite(n, k.index), k.loc), t)
+    }
+    if (k is HKind.SetIndex) {
+        return hexpr(HKind.SetIndex(rewrite(n, k.obj), rewrite(n, k.index), rewrite(n, k.value), k.loc), t)
+    }
+    if (k is HKind.ArrLen) {
+        return hexpr(HKind.ArrLen(rewrite(n, k.value)), t)
+    }
+    if (k is HKind.BoxVal) {
+        return hexpr(HKind.BoxVal(rewrite(n, k.value)), t)
+    }
+    if (k is HKind.Seq) {
+        return hexpr(HKind.Seq(rewriteStmts(n, k.stmts), rewrite(n, k.value)), t)
+    }
+    return e
+}
+
+fun rewriteStmts(n: Inliner, ss: [HStmt]): [HStmt] {
+    [HStmt] out = []
+    for s in ss {
+        out.push(rewriteStmt(n, s))
+    }
+    return out
+}
+
+fun rewriteStmt(n: Inliner, s: HStmt): HStmt {
+    if (s is HStmt.Eval) {
+        return HStmt.Eval(rewrite(n, s.value))
+    }
+    if (s is HStmt.If) {
+        return HStmt.If(rewrite(n, s.cond), rewriteStmts(n, s.then), rewriteStmts(n, s.els))
+    }
+    if (s is HStmt.Loop) {
+        var c = s.cond
+        HExpr? c2 = null
+        if (c != null) {
+            c2 = rewrite(n, c)
+        }
+        return HStmt.Loop(c2, rewriteStmts(n, s.body), rewriteStmts(n, s.step))
+    }
+    if (s is HStmt.Return) {
+        var v = s.value
+        if (v != null) {
+            return HStmt.Return(rewrite(n, v))
+        }
+        return s
+    }
+    if (s is HStmt.Asm) {
+        return HStmt.Asm(s.code, rewriteStmts(n, s.pre), rewriteStmts(n, s.post), rewriteStmts(n, s.fallback), s.hasFallback)
+    }
+    return s
+}
+
+fun inlineOnce(types: Types, funcs: [HFunc]): [HFunc] {
+    [Body?] bodies = []
+    for f in funcs {
+        bodies.push(bodyOf(types, f))
+    }
+    [HFunc] out = []
+    for i in 0..len(funcs) {
+        var f = funcs[i]
+        if (f.external != null) {
+            out.push(f)
+            continue
+        }
+        var n = Inliner { types: types, bodies: bodies, locals: slice(f.locals, 0, len(f.locals)), self: i }
+        var body = rewriteStmts(n, f.body)
+        out.push(HFunc { name: f.name, params: f.params, locals: n.locals, ret: f.ret, body: body, isAsync: f.isAsync, span: f.span, endLoc: f.endLoc, annotations: f.annotations, external: f.external })
+    }
+    return out
+}
+
+/** Inlines calls to small functions, twice, so that small functions calling small functions are inlined too. */
+pub fun inlineSmall(types: Types, funcs: [HFunc]): [HFunc] {
+    return inlineOnce(types, inlineOnce(types, funcs))
+}

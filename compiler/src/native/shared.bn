@@ -8,6 +8,9 @@ import "../vm/compile.bn"
 import "../vm/module.bn"
 import "std/process"
 
+/** The line between two pieces of the assembly of a large program, which are assembled in parallel. */
+pub const CUT = "#burn-cut"
+
 /** The annotations that change the bytecode of a library. */
 pub const MIXINS = ["Inject", "Overwrite", "Redirect"]
 

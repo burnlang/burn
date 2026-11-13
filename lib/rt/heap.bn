@@ -599,45 +599,119 @@ unsafe fun children(p: int): int {
     return 0
 }
 
+/** Drops one reference to child `c` of an object being freed: frees it next when that was the last one. */
+unsafe fun dropChild(ws: int, c: int) {
+    if (c == 0 || isStatic(c)) {
+        return
+    }
+    if (ld8(c) == K_FREED) {
+        badObject(c, "release")
+    }
+    var rc = rcOf(c) - 1
+    setRc(c, rc)
+    if (rc != 0) {
+        possibleRoot(c)
+        return
+    }
+    var n = ld64(ws + 8)
+    var cap = ld64(ws + 16)
+    if (n >= cap) {
+        var more = cap * 2
+        if (more < 64) {
+            more = 64
+        }
+        var w = ld64(ws)
+        if (w == 0) {
+            w = zalloc(8 * more)
+        } else {
+            w = grow(w, 8 * more)
+        }
+        st64(ws, w)
+        st64(ws + 16, more)
+    }
+    st64(ld64(ws) + 8 * n, c)
+    st64(ws + 8, n + 1)
+}
+
+/** Drops the references object `o` holds, without building a list of them for arrays, structs and boxes. */
+unsafe fun dropChildren(o: int, ws: int) {
+    var k = ld8(o)
+    if (k == K_STR) {
+        return
+    }
+    var t = tidOf(o)
+    if (k == K_ARRAY) {
+        if (kindOf(t) == D_ARRAY && ld8(o + 3) == 0 && managed(descA(t))) {
+            var n = ld64(o + ARR_LEN)
+            var data = ld64(o + ARR_DATA)
+            for i in 0..n {
+                dropChild(ws, ld64(data + 8 * i))
+            }
+        }
+        return
+    }
+    if (k == K_STRUCT) {
+        if (kindOf(t) != D_RECORD) {
+            return
+        }
+        var nf = fieldCount(t)
+        var n = (sizeOf(o) - HDR) / 8
+        if (nf < n) {
+            n = nf
+        }
+        for i in 0..n {
+            if (managed(fieldType(t, i))) {
+                dropChild(ws, ld64(o + HDR + 8 * i))
+            }
+        }
+        return
+    }
+    if (k == K_BOX) {
+        if (managed(t)) {
+            dropChild(ws, ld64(o + BOX_VAL))
+        }
+        return
+    }
+    var kids = children(o)
+    if (kids != 0) {
+        for i in 0..ld64(kids) {
+            dropChild(ws, ld64(kids + 8 + 8 * i))
+        }
+        cFree(kids)
+    }
+}
+
 @Extern("burn_release_zero")
 pub unsafe fun releaseZero(p: int): int {
-    var work = zalloc(8 * 64)
-    var cap = 64
-    var n = 1
-    st64(work, p)
-    while (n > 0) {
-        n -= 1
-        var o = ld64(work + 8 * n)
-        var kids = children(o)
-        if (kids != 0) {
-            for i in 0..ld64(kids) {
-                var c = ld64(kids + 8 + 8 * i)
-                if (isStatic(c)) {
-                    continue
-                }
-                if (ld8(c) == K_FREED) {
-                    badObject(c, "release")
-                }
-                setRc(c, rcOf(c) - 1)
-                if (rcOf(c) == 0) {
-                    if (n >= cap) {
-                        cap *= 2
-                        work = grow(work, 8 * cap)
-                    }
-                    st64(work + 8 * n, c)
-                    n += 1
-                } else {
-                    possibleRoot(c)
-                }
+    var ws = 0
+    var o = p
+    while (true) {
+        if (ld8(o) != K_STR) {
+            if (ws == 0) {
+                ws = zalloc(24)
             }
-            cFree(kids)
+            dropChildren(o, ws)
         }
         setMark(o, BLACK)
         if ((flagsOf(o) & F_BUFFERED) == 0) {
             freeObj(o)
         }
+        if (ws == 0) {
+            return 0
+        }
+        var n = ld64(ws + 8)
+        if (n == 0) {
+            break
+        }
+        n -= 1
+        st64(ws + 8, n)
+        o = ld64(ld64(ws) + 8 * n)
     }
-    cFree(work)
+    var w = ld64(ws)
+    if (w != 0) {
+        cFree(w)
+    }
+    cFree(ws)
     return 0
 }
 
@@ -677,6 +751,91 @@ pub unsafe fun forceCollect(): int {
     return 0
 }
 
+var kidBuf = 0
+var kidCap = 0
+
+/**
+ * The managed objects that `p` refers to, like `children`, but in a buffer the cycle collector reuses instead of new
+ * memory: valid until the next call. Only the collector, which runs on the main thread, uses it.
+ */
+unsafe fun kidsOf(p: int): int {
+    var k = ld8(p)
+    if (k == K_STR) {
+        return 0
+    }
+    var t = tidOf(p)
+    if (k == K_ARRAY) {
+        if (kindOf(t) != D_ARRAY || ld8(p + 3) != 0 || !managed(descA(t))) {
+            return 0
+        }
+        var n = ld64(p + ARR_LEN)
+        var data = ld64(p + ARR_DATA)
+        kidRoom(n)
+        var c = 0
+        for i in 0..n {
+            var w = ld64(data + 8 * i)
+            if (w != 0) {
+                st64(kidBuf + 8 + 8 * c, w)
+                c += 1
+            }
+        }
+        st64(kidBuf, c)
+        return kidBuf
+    }
+    if (k == K_STRUCT) {
+        if (kindOf(t) != D_RECORD) {
+            return 0
+        }
+        var nf = fieldCount(t)
+        var n = (sizeOf(p) - HDR) / 8
+        if (nf < n) {
+            n = nf
+        }
+        kidRoom(n)
+        var c = 0
+        for i in 0..n {
+            if (managed(fieldType(t, i))) {
+                var w = ld64(p + HDR + 8 * i)
+                if (w != 0) {
+                    st64(kidBuf + 8 + 8 * c, w)
+                    c += 1
+                }
+            }
+        }
+        st64(kidBuf, c)
+        return kidBuf
+    }
+    var list = children(p)
+    if (list == 0) {
+        return 0
+    }
+    var n = ld64(list)
+    kidRoom(n)
+    for i in 0..n + 1 {
+        st64(kidBuf + 8 * i, ld64(list + 8 * i))
+    }
+    cFree(list)
+    return kidBuf
+}
+
+unsafe fun kidRoom(n: int) {
+    if (n + 1 > kidCap) {
+        var cap = kidCap * 2
+        if (cap < n + 1) {
+            cap = n + 1
+        }
+        if (cap < 64) {
+            cap = 64
+        }
+        if (kidBuf == 0) {
+            kidBuf = zalloc(8 * cap)
+        } else {
+            kidBuf = grow(kidBuf, 8 * cap)
+        }
+        kidCap = cap
+    }
+}
+
 unsafe fun markGray(p: int) {
     var stack = zalloc(8 * 64)
     var cap = 64
@@ -689,7 +848,7 @@ unsafe fun markGray(p: int) {
             continue
         }
         setMark(s, GRAY)
-        var kids = children(s)
+        var kids = kidsOf(s)
         if (kids != 0) {
             for i in 0..ld64(kids) {
                 var c = ld64(kids + 8 + 8 * i)
@@ -706,7 +865,6 @@ unsafe fun markGray(p: int) {
                     n += 1
                 }
             }
-            cFree(kids)
         }
     }
     cFree(stack)
@@ -721,7 +879,7 @@ unsafe fun scanBlack(p: int) {
     while (n > 0) {
         n -= 1
         var s = ld64(stack + 8 * n)
-        var kids = children(s)
+        var kids = kidsOf(s)
         if (kids != 0) {
             for i in 0..ld64(kids) {
                 var c = ld64(kids + 8 + 8 * i)
@@ -739,7 +897,6 @@ unsafe fun scanBlack(p: int) {
                     n += 1
                 }
             }
-            cFree(kids)
         }
     }
     cFree(stack)
@@ -760,7 +917,7 @@ unsafe fun scan(p: int) {
             scanBlack(s)
         } else {
             setMark(s, WHITE)
-            var kids = children(s)
+            var kids = kidsOf(s)
             if (kids != 0) {
                 for i in 0..ld64(kids) {
                     var c = ld64(kids + 8 + 8 * i)
@@ -773,7 +930,6 @@ unsafe fun scan(p: int) {
                         n += 1
                     }
                 }
-                cFree(kids)
             }
         }
     }
@@ -796,7 +952,7 @@ unsafe fun collectWhite(p: int) {
             continue
         }
         setMark(s, BLACK)
-        var kids = children(s)
+        var kids = kidsOf(s)
         if (kids != 0) {
             for i in 0..ld64(kids) {
                 var c = ld64(kids + 8 + 8 * i)
@@ -809,7 +965,6 @@ unsafe fun collectWhite(p: int) {
                     n += 1
                 }
             }
-            cFree(kids)
         }
         if (garbageCount >= garbageCap) {
             garbageCap = garbageCap * 2 + 64

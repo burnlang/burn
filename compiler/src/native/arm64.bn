@@ -82,6 +82,9 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
     int frame = 0
     [string] regs = []
     [string] saved = []
+    bool split = !t.macos && !p.library
+    int lines = 0
+    int lastCut = 0
     int saveAt = 0
     int params = 0
     [LoopLabels] loops = []
@@ -109,6 +112,25 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
         }
     }
 
+    /**
+     * In a program large enough to be assembled in pieces, makes `name` visible to the other pieces (but not outside
+     * the executable); otherwise nothing.
+     */
+    fun glob(name: string): string {
+        if (!split) {
+            return ""
+        }
+        return ".globl ${name}\n.hidden ${name}\n"
+    }
+
+    /** Marks a place where the assembly can be cut into pieces that are assembled in parallel, every 150000 lines. */
+    fun cutPoint() {
+        if (split && lines - lastCut > 150000) {
+            out += "${CUT}\n"
+            lastCut = lines
+        }
+    }
+
     /** Adds `text` to the assembly. */
     fun put(text: string) {
         out += text
@@ -116,6 +138,7 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
 
     fun e(s: string) {
         emitted += 1
+        lines += 1
         out += "    "
         out += s
         out += "\n"
@@ -349,30 +372,30 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
         }
         out += ".p2align 4\n"
         if (!p.library) {
-            put("burn_meta_len:\n    .quad ${len(meta)}\n")
-            put("burn_nglobals:\n    .quad ${p.globals}\n")
-            out += "burn_meta:\n"
+            put("${glob("burn_meta_len")}burn_meta_len:\n    .quad ${len(meta)}\n")
+            put("${glob("burn_nglobals")}burn_nglobals:\n    .quad ${p.globals}\n")
+            out += "${glob("burn_meta")}burn_meta:\n"
             byteLines(meta)
         }
         for i in 0..len(p.libs) {
             out += ".p2align 4\n"
-            put("burn_lib_${i}_len:\n    .quad ${len(p.libs[i])}\n")
-            put("burn_lib_${i}:\n")
+            put("${glob("burn_lib_${i}_len")}burn_lib_${i}_len:\n    .quad ${len(p.libs[i])}\n")
+            put("${glob("burn_lib_${i}")}burn_lib_${i}:\n")
             byteLines(p.libs[i])
         }
         for i in 0..len(p.funcs) {
             var ext = p.funcs[i].external
             if (ext is External.Lib) {
-                put("burn_libfn_${i}:\n")
+                put("${glob("burn_libfn_${i}")}burn_libfn_${i}:\n")
                 textBytes(ext.name)
             }
         }
         if (len(p.libs) > 0) {
             for k in 0..len(exps) {
-                put("burn_export_name_${k}:\n")
+                put("${glob("burn_export_name_${k}")}burn_export_name_${k}:\n")
                 textBytes(exps[k].name)
             }
-            out += "burn_mixins:\n"
+            out += "${glob("burn_mixins")}burn_mixins:\n"
             textBytes(mixinModule(p.funcs))
         }
         var strs = p.checker.strings
@@ -384,7 +407,7 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
                 flags = 3
             }
             out += ".p2align 4\n"
-            put("bs_${i}:\n")
+            put("${glob("bs_${i}")}bs_${i}:\n")
             put("    .byte 1, 0, ${flags}, 0\n")
             out += "    .long 6\n"
             put("    .long ${24 + n + 1}, 0\n")
@@ -416,7 +439,7 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
                 table[im.ty] = "bf_${im.func}"
             }
             out += ".p2align 3\n"
-            put("bi_${i}:\n")
+            put("${glob("bi_${i}")}bi_${i}:\n")
             var at = 0
             while (at < len(table)) {
                 var end = at + 8
@@ -433,7 +456,7 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
             out += ".bss\n"
         }
         out += ".p2align 4\n"
-        put(globalsData(p, sym(globalsName(p)), t.prefix))
+        put(glob(sym(globalsName(p))) + globalsData(p, sym(globalsName(p)), t.prefix))
         if (!t.macos) {
             out += ".section .note.GNU-stack,\"\",@progbits\n"
         }
@@ -453,9 +476,10 @@ priv def struct ArmGen(p: NativeProgram, t: AsmTarget) {
     }
 
     fun func(f: HFunc) {
+        cutPoint()
         textSection("bf_${fid}")
         out += ".p2align 2\n"
-        put("bf_${fid}:\n")
+        put("${glob("bf_${fid}")}bf_${fid}:\n")
         put(debugLabel(f, fid))
         var ext = f.external
         if (ext is External.Lib) {
