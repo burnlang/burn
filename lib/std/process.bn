@@ -62,7 +62,7 @@ pub def static struct Process {
     }
 
     /**
-     * Runs a command line with `sh` in the terminal and waits for it.
+     * Runs a command line with `sh` (`cmd` on Windows) in the terminal and waits for it.
      *
      * @param command the command line, for example `"burnc src/main.bn -o build/app"`
      * @return the exit code
@@ -72,11 +72,14 @@ pub def static struct Process {
      *     Process.shell("ls src | wc -l")
      */
     static fun shell(command: string): int {
+        if (env("OS") == "Windows_NT") {
+            return Process.run("cmd", ["/c", command])
+        }
         return Process.run("sh", ["-c", command])
     }
 
     /**
-     * Runs a command line with `sh` and collects its output.
+     * Runs a command line with `sh` (`cmd` on Windows) and collects its output.
      *
      * @param command the command line
      * @return the exit code and both outputs
@@ -86,6 +89,9 @@ pub def static struct Process {
      *     print(Process.shellOutput("echo $HOME").out)
      */
     static fun shellOutput(command: string): ProcessOutput {
+        if (env("OS") == "Windows_NT") {
+            return Process.output("cmd", ["/c", command])
+        }
         return Process.output("sh", ["-c", command])
     }
 

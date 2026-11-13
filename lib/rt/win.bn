@@ -40,6 +40,63 @@ fun cSetmode(fd: int, mode: int): Int32
 @Extern("burn_rt_unavailable", windows: "readdir")
 fun cReaddirWin(dir: int): int
 
+@Extern("burn_rt_unavailable", windows: "CreatePipe")
+fun cCreatePipe(r: int, w: int, sa: int, size: int): Int32
+
+@Extern("burn_rt_unavailable", windows: "SetHandleInformation")
+fun cSetHandleInformation(h: int, mask: int, flags: int): Int32
+
+@Extern("burn_rt_unavailable", windows: "CreateProcessA")
+fun cCreateProcess(app: int, cmd: int, pa: int, ta: int, inherit: int, flags: int, env: int, cwd: int, si: int, pi: int): Int32
+
+@Extern("burn_rt_unavailable", windows: "ReadFile")
+fun cReadFile(h: int, buf: int, n: int, got: int, ov: int): Int32
+
+@Extern("burn_rt_unavailable", windows: "WriteFile")
+fun cWriteFile(h: int, buf: int, n: int, done: int, ov: int): Int32
+
+@Extern("burn_rt_unavailable", windows: "PeekNamedPipe")
+fun cPeekNamedPipe(h: int, buf: int, size: int, got: int, avail: int, left: int): Int32
+
+@Extern("burn_rt_unavailable", windows: "WaitForSingleObject")
+fun cWaitForSingleObject(h: int, ms: int): Int32
+
+@Extern("burn_rt_unavailable", windows: "GetExitCodeProcess")
+fun cGetExitCodeProcess(h: int, code: int): Int32
+
+@Extern("burn_rt_unavailable", windows: "CloseHandle")
+fun cCloseHandle(h: int): Int32
+
+@Extern("burn_rt_unavailable", windows: "GetLastError")
+fun cGetLastError(): Int32
+
+@Extern("burn_rt_unavailable", windows: "Sleep")
+fun cSleepMs(ms: int): void
+
+@Extern("burn_rt_unavailable", windows: "MoveFileExA")
+fun cMoveFileEx(from: int, to: int, flags: int): Int32
+
+@Extern("burn_rt_unavailable", windows: "WSAStartup")
+fun cWsaStartup(version: int, data: int): Int32
+
+@Extern("burn_rt_unavailable", windows: "WSAGetLastError")
+fun cWsaGetLastError(): Int32
+
+@Extern("burn_rt_unavailable", windows: "send")
+fun cSend(s: int, buf: int, n: int, flags: int): Int32
+
+@Extern("burn_rt_unavailable", windows: "recv")
+fun cRecv(s: int, buf: int, n: int, flags: int): Int32
+
+@Extern("burn_rt_unavailable", windows: "SetUnhandledExceptionFilter")
+fun cSetUnhandledExceptionFilter(filter: int): int
+
+@Extern("burn_rt_unavailable", windows: "AddVectoredExceptionHandler")
+fun cAddVectoredExceptionHandler(first: int, handler: int): int
+
+@Extern("burn_rt_unavailable", windows: "SetThreadStackGuarantee")
+fun cSetThreadStackGuarantee(size: int): Int32
+
 /** What a C function that the system lacks gives: -1, like a failed call. */
 @Extern("burn_rt_unavailable")
 pub unsafe fun rtUnavailable(): int {
@@ -196,4 +253,77 @@ pub unsafe fun winInit() {
         cSetmode(1, 32768)
         cSetmode(2, 32768)
     }
+}
+
+/** The error number of the last failed Windows call, as the matching C error number where there is one. */
+pub unsafe fun winErrno(): int {
+    var e = cGetLastError()
+    if (e == 2 || e == 3) {
+        return 2
+    }
+    if (e == 5) {
+        return 13
+    }
+    return e
+}
+
+/** `rename`, which replaces the target like on other systems. */
+@Extern("burn_win_rename")
+pub unsafe fun winRename(from: int, to: int): int {
+    if (cMoveFileEx(from, to, 3) != 0) {
+        return 0
+    }
+    return -1
+}
+
+/** Argument `a` quoted for a Windows command line, the way C programs split it again. */
+pub fun winQuote(a: string): string {
+    var plain = len(a) > 0
+    for c in chars(a) {
+        if (c == " " || c == "\t" || c == "\n" || c == "\"") {
+            plain = false
+        }
+    }
+    if (plain) {
+        return a
+    }
+    var out = "\""
+    var slashes = 0
+    for c in chars(a) {
+        if (c == "\\") {
+            slashes += 1
+        } else if (c == "\"") {
+            out += repeat("\\", 2 * slashes + 1) + "\""
+            slashes = 0
+        } else {
+            out += repeat("\\", slashes) + c
+            slashes = 0
+        }
+    }
+    return out + repeat("\\", 2 * slashes) + "\""
+}
+
+var winsockReady = false
+
+/** Starts Winsock once, before the first socket. */
+pub unsafe fun winsockStart() {
+    if (!winsockReady && isWindows()) {
+        var data = zalloc(512)
+        cWsaStartup(514, data)
+        cFree(data)
+        winsockReady = true
+    }
+}
+
+/** Sends all `n` bytes at `p` on socket `s`. */
+pub unsafe fun winSendAll(s: int, p: int, n: int): bool {
+    var done = 0
+    while (done < n) {
+        var w = cSend(s, p + done, n - done, 0)
+        if (w <= 0) {
+            return false
+        }
+        done += w
+    }
+    return true
 }
