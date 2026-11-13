@@ -1,6 +1,7 @@
 import "../check/check.bn"
 import "../check/hir.bn"
 import "../check/types.bn"
+import "../lower/borrow.bn"
 import "../vm/asm.bn"
 import "../vm/bits.bn"
 import "../vm/compile.bn"
@@ -502,4 +503,85 @@ pub fun globalsData(p: NativeProgram, name: string, prefix: string): string {
     }
     out += "    .zero ${8 * pending}\n"
     return out
+}
+
+fun heatE(e: HExpr, w: int, heat: [int]): void {
+    var k = e.kind
+    if (k is HKind.Local && k.slot < len(heat)) {
+        heat[k.slot] += w
+    }
+    if (k is HKind.SetLocal && k.slot < len(heat)) {
+        heat[k.slot] += w
+    }
+    for x in kids(e) {
+        heatE(x, w, heat)
+    }
+    heatL(seqStmts(e), w, heat)
+}
+
+fun heatL(l: [HStmt], w: int, heat: [int]): bool {
+    for s in l {
+        if (s is HStmt.Asm) {
+            return true
+        }
+        var inner = w
+        if (s is HStmt.Loop && w < 4096) {
+            inner = w * 8
+        }
+        for e in stmtExprs(s) {
+            heatE(e, inner, heat)
+        }
+        for sub in subStmts(s) {
+            if (heatL(sub, inner, heat)) {
+                return true
+            }
+        }
+    }
+    return false
+}
+
+/**
+ * The locals of `f` worth keeping in registers, hottest first and at most `max` of them, weighted by how deep in
+ * loops they are used; only locals used in loops qualify. Empty for functions with inline assembly, which reads locals from the stack.
+ */
+pub fun hotLocals(types: Types, f: HFunc, max: int): [int] {
+    [int] heat = []
+    for t in f.locals {
+        heat.push(0)
+    }
+    [int] out = []
+    if (f.external != null || heatL(f.body, 1, heat)) {
+        return out
+    }
+    for i in 0..len(heat) {
+        if (heat[i] < 16) {
+            heat[i] = 0
+        }
+    }
+    while (len(out) < max) {
+        var best = -1
+        for i in 0..len(heat) {
+            if (heat[i] > 0 && (best < 0 || heat[i] > heat[best])) {
+                best = i
+            }
+        }
+        if (best < 0) {
+            break
+        }
+        out.push(best)
+        heat[best] = 0
+    }
+    return out
+}
+
+/** `k` when `d` is `2^k` with `k` at least 1, otherwise 0. */
+pub fun log2Exact(d: int): int {
+    if (d < 2 || (d & (d - 1)) != 0) {
+        return 0
+    }
+    var k = 0
+    while ((1 << k) < d) {
+        k += 1
+    }
+    return k
 }

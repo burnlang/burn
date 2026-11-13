@@ -1,6 +1,8 @@
 import "../check/check.bn"
 import "../check/hir.bn"
 import "../check/types.bn"
+import "../check/wide.bn"
+import "../lower/borrow.bn"
 import "../vm/asm.bn"
 import "../vm/bits.bn"
 import "../vm/runtime.bn"
@@ -10,6 +12,9 @@ import "shared.bn"
 priv const ENTRY = ".intel_syntax noprefix\n.text\n.globl {P}main\n{P}main:\n    push rbp\n    mov rbp, rsp\n    push rbx\n    push r12\n    push r13\n    push r14\n    push r15\n    sub rsp, 8\n    mov r13, rdi\n    mov r14, rsi\n    lea rdi, [rip + burn_meta]\n    mov rsi, qword ptr [rip + burn_meta_len]\n    lea rdx, [rip + {P}burn_globals]\n    mov rcx, qword ptr [rip + burn_nglobals]\n    mov r8, rbp\n    lea r9, [rip + {P}burn_call_trampoline]\n    mov r12, rsp\n    and rsp, -16\n    call {P}burn_rt_init{PLT}\n    mov rsp, r12\n    mov rdi, r13\n    mov rsi, r14\n    mov r12, rsp\n    and rsp, -16\n    call {P}burn_rt_set_args{PLT}\n    mov rsp, r12\n{PRE_ENTRY}    call burn_entry\n    xor edi, edi\n    mov r12, rsp\n    and rsp, -16\n    call {P}burn_rt_exit{PLT}\n    mov rsp, r12\n    add rsp, 8\n    pop r15\n    pop r14\n    pop r13\n    pop r12\n    pop rbx\n    pop rbp\n    ret\n\n.globl {P}burn_call_trampoline\n{P}burn_call_trampoline:\n    push rbp\n    mov rbp, rsp\n    push rbx\n    push r12\n    push r13\n    push r14\n    push r15\n    sub rsp, 8\n    mov rax, rdi\n    mov r12, rdx\n.Ltramp_loop:\n    test r12, r12\n    jz .Ltramp_done\n    dec r12\n    push qword ptr [rsi + r12*8]\n    jmp .Ltramp_loop\n.Ltramp_done:\n    call rax\n    lea rsp, [rbp - 40]\n    pop r15\n    pop r14\n    pop r13\n    pop r12\n    pop rbx\n    pop rbp\n    ret\n"
 
 priv const ARG_REGS = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
+
+/** The callee-saved registers that hold a function's hottest number locals. */
+priv const SAVED_REGS = ["rbx", "r13", "r14", "r15"]
 
 priv const I32_MIN = -2147483648
 priv const I32_MAX = 2147483647
@@ -59,6 +64,10 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
     int fid = 0
     [LoopLabels] loops = []
     {string: string} symbols = runtimeSymbols()
+    [string] regs = []
+    [string] saved = []
+    int saveAt = 0
+    int params = 0
 
     fun sym(name: string): string {
         return t.prefix + name
@@ -327,19 +336,33 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
         if (f.params > n) {
             n = f.params
         }
-        var frame = (n * 8 + 15) / 16 * 16
+        params = f.params
+        regs = []
+        for i in 0..n {
+            regs.push("")
+        }
+        saved = []
+        var hot = hotLocals(p.checker.types, f, len(SAVED_REGS))
+        for i in 0..len(hot) {
+            regs[hot[i]] = SAVED_REGS[i]
+            saved.push(SAVED_REGS[i])
+        }
+        saveAt = n
+        var frame = ((n + len(saved)) * 8 + 15) / 16 * 16
         if (frame > 0) {
             e("sub rsp, ${frame}")
         }
-        var np = f.params
-        for i in 0..np {
-            e("mov rax, qword ptr [rbp + ${16 + 8 * (np - 1 - i)}]")
-            e("mov ${local(i)}, rax")
+        for i in 0..len(saved) {
+            e("mov ${local(saveAt + i)}, ${saved[i]}")
+        }
+        for i in 0..params {
+            if (regs[i] != "") {
+                e("mov ${regs[i]}, ${mem(i)}")
+            }
         }
         stmts(f.body)
         e("xor eax, eax")
-        e("leave")
-        e("ret")
+        leaveFunc()
         out += cold
         cold = ""
     }
@@ -432,15 +455,71 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
         e("ret")
     }
 
+    fun loc(slot: int): string {
+        if (slot < len(regs) && regs[slot] != "") {
+            return regs[slot]
+        }
+        return mem(slot)
+    }
+
+    fun mem(slot: int): string {
+        if (slot < params) {
+            return "qword ptr [rbp + ${16 + 8 * (params - 1 - slot)}]"
+        }
+        return local(slot)
+    }
+
+    fun leaveFunc() {
+        for i in 0..len(saved) {
+            e("mov ${saved[i]}, ${local(saveAt + i)}")
+        }
+        e("leave")
+        e("ret")
+    }
+
     fun stmts(ss: [HStmt]): void {
         for s in ss {
             stmt(s)
         }
     }
 
+    fun inPlace(x: HExpr): bool {
+        var k = x.kind
+        if (!(k is HKind.SetLocal) || loc(k.slot) == mem(k.slot)) {
+            return false
+        }
+        var v = k.value.kind
+        if (!(v is HKind.Binary)) {
+            return false
+        }
+        var l = v.left.kind
+        var n = imm(v.right)
+        if (!(l is HKind.Local) || l.slot != k.slot || n == null) {
+            return false
+        }
+        var op = v.op
+        var r = loc(k.slot)
+        if (op is HBinOp.IAdd) {
+            e("add ${r}, ${n}")
+            overflow(op.loc)
+        } else if (op is HBinOp.ISub) {
+            e("sub ${r}, ${n}")
+            overflow(op.loc)
+        } else if (op is HBinOp.WAdd) {
+            e("add ${r}, ${n}")
+        } else if (op is HBinOp.WSub) {
+            e("sub ${r}, ${n}")
+        } else {
+            return false
+        }
+        return true
+    }
+
     fun stmt(s: HStmt): void {
         if (s is HStmt.Eval) {
-            expr(s.value)
+            if (!inPlace(s.value)) {
+                expr(s.value)
+            }
         } else if (s is HStmt.If) {
             var elseL = l()
             jumpFalse(s.cond, elseL)
@@ -477,8 +556,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
             } else {
                 e("xor eax, eax")
             }
-            e("leave")
-            e("ret")
+            leaveFunc()
         } else if (s is HStmt.Break) {
             e("jmp ${loops[len(loops) - 1].end}")
         } else if (s is HStmt.Continue) {
@@ -489,7 +567,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
                 stmts(s.pre)
                 [string] ops = []
                 for slot in asmSlots(code) {
-                    ops.push(local(slot))
+                    ops.push(mem(slot))
                 }
                 for line in asmLines(code, ops) {
                     e(line)
@@ -513,8 +591,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
         if (k is HKind.Binary) {
             var op = k.op
             if (op is HBinOp.ICmp) {
-                operands(k.left, k.right)
-                e("cmp rax, rcx")
+                compare(k.left, k.right)
                 e("j${cc(inv(op.cmp))} ${target}")
                 return
             }
@@ -552,8 +629,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
         if (k is HKind.Binary) {
             var op = k.op
             if (op is HBinOp.ICmp) {
-                operands(k.left, k.right)
-                e("cmp rax, rcx")
+                compare(k.left, k.right)
                 e("j${cc(op.cmp)} ${target}")
                 return
             }
@@ -617,7 +693,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
         } else if (k is HKind.FuncRef) {
             e("lea ${reg}, [rip + bf_${k.func}]")
         } else if (k is HKind.Local) {
-            e("mov ${reg}, ${local(k.slot)}")
+            e("mov ${reg}, ${loc(k.slot)}")
         } else if (k is HKind.Global) {
             e("mov ${reg}, ${global(k.id)}")
         } else {
@@ -686,7 +762,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
             } else if ((k is HKind.TypeId || k is HKind.LocId) && idOf(a) <= I32_MAX) {
                 e("push ${idOf(a)}")
             } else if (k is HKind.Local) {
-                e("push ${local(k.slot)}")
+                e("push ${loc(k.slot)}")
             } else {
                 expr(a)
                 e("push rax")
@@ -750,7 +826,123 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
         }
     }
 
+    fun imm(x: HExpr): string? {
+        var k = x.kind
+        if (k is HKind.Int && k.value >= I32_MIN && k.value <= I32_MAX) {
+            return "${k.value}"
+        }
+        return null
+    }
+
+    fun immBinary(op: HBinOp, a: HExpr, b: HExpr): bool {
+        var v = imm(b)
+        if (v == null) {
+            return false
+        }
+        var ins = ""
+        var loc = NONE
+        if (op is HBinOp.IAdd) {
+            ins = "add"
+            loc = op.loc
+        } else if (op is HBinOp.ISub) {
+            ins = "sub"
+            loc = op.loc
+        } else if (op is HBinOp.WAdd) {
+            ins = "add"
+        } else if (op is HBinOp.WSub) {
+            ins = "sub"
+        } else if (op is HBinOp.BitAnd) {
+            ins = "and"
+        } else if (op is HBinOp.BitOr) {
+            ins = "or"
+        } else if (op is HBinOp.BitXor) {
+            ins = "xor"
+        } else if (op is HBinOp.IMul) {
+            expr(a)
+            e("imul rax, rax, ${v}")
+            overflow(op.loc)
+            return true
+        } else if (op is HBinOp.ICmp) {
+            expr(a)
+            e("cmp rax, ${v}")
+            e("set${cc(op.cmp)} al")
+            e("movzx eax, al")
+            return true
+        } else {
+            return false
+        }
+        expr(a)
+        e("${ins} rax, ${v}")
+        overflow(loc)
+        return true
+    }
+
+    fun compare(a: HExpr, b: HExpr): void {
+        var v = imm(b)
+        if (v != null) {
+            expr(a)
+            e("cmp rax, ${v}")
+            return
+        }
+        var bk = b.kind
+        var ak = a.kind
+        if (ak is HKind.Local && bk is HKind.Local) {
+            var ra = loc(ak.slot)
+            var rb = loc(bk.slot)
+            if (!startsWith(ra, "qword") || !startsWith(rb, "qword")) {
+                e("cmp ${ra}, ${rb}")
+                return
+            }
+        }
+        operands(a, b)
+        e("cmp rax, rcx")
+    }
+
+    /** `rax / d` or `rax % d` for a constant `d` from 2 to 2^31-1, with shifts or a multiplication instead of `idiv`. */
+    fun divConst(d: int, isMod: bool) {
+        e("mov rcx, rax")
+        var k = log2Exact(d)
+        if (k > 0) {
+            e("mov rdx, rax")
+            e("sar rdx, 63")
+            e("shr rdx, ${64 - k}")
+            e("add rax, rdx")
+            e("sar rax, ${k}")
+        } else {
+            var l = 0
+            while ((1 << l) < d) {
+                l += 1
+            }
+            var m = wideDivU(widePow2(63 + l), wideFromInt(d))
+            var one = wideFromInt(1)
+            var magic = wideToI64(wideSub(wideAdd(m, one) ?? m, widePow2(64)) ?? m)
+            e("movabs rdx, ${magic}")
+            e("imul rdx")
+            e("add rdx, rcx")
+            if (l > 1) {
+                e("sar rdx, ${l - 1}")
+            }
+            e("mov rax, rcx")
+            e("shr rax, 63")
+            e("add rax, rdx")
+        }
+        if (isMod) {
+            e("imul rax, rax, ${d}")
+            e("sub rcx, rax")
+            e("mov rax, rcx")
+        }
+    }
+
     fun binary(op: HBinOp, a: HExpr, b: HExpr): void {
+        if (immBinary(op, a, b)) {
+            return
+        }
+        var bk = b.kind
+        if ((op is HBinOp.IDiv || op is HBinOp.IMod) && bk is HKind.Int && bk.value >= 2 && bk.value <= I32_MAX) {
+            expr(a)
+            divConst(bk.value, op is HBinOp.IMod)
+            return
+        }
         operands(a, b)
         if (op is HBinOp.IAdd) {
             e("add rax, rcx")
@@ -845,7 +1037,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
         var k = x.kind
         if (k is HKind.SetLocal) {
             expr(k.value)
-            e("mov ${local(k.slot)}, rax")
+            e("mov ${loc(k.slot)}, rax")
         } else if (k is HKind.SetGlobal) {
             expr(k.value)
             e("mov ${global(k.id)}, rax")
@@ -908,7 +1100,7 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
             e("call rax")
             popArgs(n)
         } else if (k is HKind.Rt) {
-            if (!inlineNum(k.name, k.args) && !inlineMem(k.name, k.args)) {
+            if (!inlineNum(k.name, k.args) && !inlineMem(k.name, k.args) && !inlinePush(k.name, k.args)) {
                 rtCall(k.name, k.args)
             }
         } else if (k is HKind.Spawn) {
@@ -1031,14 +1223,28 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
         indexCold(bad, "rax", loc)
     }
 
+    fun stableLocal(x: HExpr, value: HExpr): bool {
+        var k = x.kind
+        if (k is HKind.Local) {
+            return !writes(value, k.slot)
+        }
+        return isConst(x)
+    }
+
     fun setIndex(obj: HExpr, idx: HExpr, value: HExpr, loc: int): void {
-        expr(obj)
-        e("push rax")
-        expr(idx)
-        e("push rax")
-        expr(value)
-        e("pop rcx")
-        e("pop rdx")
+        if (stableLocal(obj, value) && stableLocal(idx, value)) {
+            expr(value)
+            simpleLoad(obj, "rdx")
+            simpleLoad(idx, "rcx")
+        } else {
+            expr(obj)
+            e("push rax")
+            expr(idx)
+            e("push rax")
+            expr(value)
+            e("pop rcx")
+            e("pop rdx")
+        }
         var bad = l()
         e("cmp rcx, qword ptr [rdx + 16]")
         e("jae ${bad}")
@@ -1056,6 +1262,54 @@ priv def struct Gen(p: NativeProgram, t: AsmTarget) {
             e("movq xmm0, rax\n    cvtsd2ss xmm0, xmm0\n    movss dword ptr [r8 + rcx*4], xmm0")
         }
         indexCold(bad, "rdx", loc)
+    }
+
+    /** `push` without calling the runtime while the array has room: stores the element, retaining it when it is counted. */
+    fun inlinePush(f: string, args: [HExpr]): bool {
+        if (f != "ArrPush" || len(args) != 2) {
+            return false
+        }
+        var types = p.checker.types
+        var ak = types.kindOf(args[0].ty)
+        if (!(ak is Ty.Array)) {
+            return false
+        }
+        var elem = packedElem(args[0].ty)
+        var counted = elem < 0 && managedTy(types, ak.elem)
+        operands(args[0], args[1])
+        var slow = l()
+        var done = l()
+        e("mov rdx, qword ptr [rax + 16]")
+        e("cmp rdx, qword ptr [rax + 24]")
+        e("jae ${slow}")
+        e("mov r8, qword ptr [rax + 32]")
+        if (elem < 0) {
+            e("mov qword ptr [r8 + rdx*8], rcx")
+        } else if (elem == I8 || elem == U8) {
+            e("mov byte ptr [r8 + rdx], cl")
+        } else if (elem == I16 || elem == U16) {
+            e("mov word ptr [r8 + rdx*2], cx")
+        } else if (elem == I32 || elem == U32) {
+            e("mov dword ptr [r8 + rdx*4], ecx")
+        } else {
+            e("movq xmm0, rcx\n    cvtsd2ss xmm0, xmm0\n    movss dword ptr [r8 + rdx*4], xmm0")
+        }
+        e("inc rdx")
+        e("mov qword ptr [rax + 16], rdx")
+        if (counted) {
+            var mtSlow = l()
+            e("test rcx, rcx")
+            e("jz ${done}")
+            e("test byte ptr [rcx + 2], 1")
+            e("jnz ${done}")
+            e("cmp byte ptr [rip + ${sym("burn_rc_mt")}], 0")
+            e("jne ${mtSlow}")
+            e("inc dword ptr [rcx + 12]")
+            addCold("${mtSlow}:\n    mov rdi, rcx\n${coldCall(rtSym("Retain"))}    jmp ${done}\n")
+        }
+        lbl(done)
+        addCold("${slow}:\n    mov rdi, rax\n    mov rsi, rcx\n${coldCall(rtSym("ArrPush"))}    jmp ${done}\n")
+        return true
     }
 
     fun retain(value: HExpr): void {
