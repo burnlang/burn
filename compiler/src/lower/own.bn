@@ -1,5 +1,6 @@
 import "../check/hir.bn"
 import "../check/types.bn"
+import "borrow.bn"
 
 def enum Want { Owned, Borrowed, Discard }
 
@@ -952,8 +953,9 @@ fun withFirst(first: HExpr, rest: [HExpr]): [HExpr] {
     return out
 }
 
-fun lowerFunc(types: Types, f: HFunc): HFunc {
+fun lowerFunc(types: Types, f: HFunc, mayFree: [bool]): HFunc {
     var nparams = f.params
+    var borrowed = borrowedLocals(types, f, mayFree)
     [bool] assigned = []
     for t in f.locals {
         assigned.push(false)
@@ -963,7 +965,7 @@ fun lowerFunc(types: Types, f: HFunc): HFunc {
     }
     [bool] owned = []
     for i in 0..len(f.locals) {
-        owned.push(managed(types, f.locals[i]) && (i >= nparams || assigned[i] || f.isAsync))
+        owned.push(managed(types, f.locals[i]) && (i >= nparams || assigned[i] || f.isAsync) && !borrowed[i])
     }
     var p = Pass { types: types, locals: slice(f.locals, 0, len(f.locals)), owned: owned, scopes: [], freeManaged: [], freeRaw: [] }
     var out = block(p, f.body)
@@ -990,11 +992,12 @@ fun lowerFunc(types: Types, f: HFunc): HFunc {
 /** Adds reference counting to every function, like `own::lower` in Rust. */
 pub fun lowerOwnership(types: Types, funcs: [HFunc]): [HFunc] {
     [HFunc] out = []
+    var mayFree = mayFreeHeld(types, funcs)
     for f in funcs {
         if (f.external != null) {
             out.push(f)
         } else {
-            out.push(lowerFunc(types, f))
+            out.push(lowerFunc(types, f, mayFree))
         }
     }
     return out
