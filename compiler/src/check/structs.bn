@@ -180,6 +180,9 @@ fun factTarget(f: Fact): int {
     if (f is Fact.Dead) {
         return f.target
     }
+    if (f is Fact.Given) {
+        return f.target
+    }
     return -1
 }
 
@@ -206,6 +209,18 @@ pub fun checkAlive(c: Checker, key: int, name: string, span: SrcSpan) {
     if (d != null) {
         var l = c.lineOf(d)
         c.errorNote(span, "`${name}` was destroyed on line ${l} and can no longer be used", "assign a new object to `${name}` before using it again")
+        return
+    }
+    if (!c.anyDead) {
+        return
+    }
+    for i in factEntries(c) {
+        var f = c.facts[i]
+        if (f is Fact.Given && f.target == key) {
+            var g = c.lineOf(f.span)
+            c.errorNote(span, "`${name}` was given to the async call on line ${g}, which may still be changing it", "`await` the call before using `${name}` again, or pass a copy: `copy(${name})`")
+            return
+        }
     }
 }
 

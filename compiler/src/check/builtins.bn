@@ -2,6 +2,7 @@ import "../diag/diag.bn"
 import "../syntax/ast.bn"
 import "annotations.bn"
 import "check.bn"
+import "hazards.bn"
 import "expr.bn"
 import "hir.bn"
 import "numeric.bn"
@@ -294,11 +295,18 @@ pub fun gateBuiltin(c: Checker, name: string, at: SrcSpan) {
 }
 
 pub fun builtinCall(c: Checker, name: string, recv: HExpr?, args: [Expr], span: SrcSpan, expected: int?): HExpr? {
-    return builtinWith(c, name, recv, span, args, span, expected)
+    return resizeChecked(c, builtinWith(c, name, recv, span, args, span, expected), span)
 }
 
 pub fun builtinCallRecv(c: Checker, name: string, recv: HExpr, recvSpan: SrcSpan, args: [Expr], span: SrcSpan, expected: int?): HExpr? {
-    return builtinWith(c, name, recv, recvSpan, args, span, expected)
+    return resizeChecked(c, builtinWith(c, name, recv, recvSpan, args, span, expected), span)
+}
+
+fun resizeChecked(c: Checker, h: HExpr?, span: SrcSpan): HExpr? {
+    if (h != null) {
+        checkResize(c, h, span)
+    }
+    return h
 }
 
 fun minMaxOp(name: string, ints: bool): string {

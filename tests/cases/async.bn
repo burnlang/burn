@@ -9,6 +9,11 @@ async fun greet(name: string): string {
     return "hello " + name
 }
 
+async fun fill(xs: [int]): int {
+    xs.push(len(xs))
+    return len(xs)
+}
+
 async fun fire() {
     print("fired")
 }
@@ -28,5 +33,11 @@ fun main() {
         total += await f
     }
     print("total", total)
+    var xs = [1]
+    var t = fill(xs)
+    print(await t, len(xs))
+    var u = fill(copy(xs))
+    print(len(xs), await u)
+    print(await fill(xs), len(xs))
     await fire()
 }

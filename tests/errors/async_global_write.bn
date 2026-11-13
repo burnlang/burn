@@ -1,0 +1,10 @@
+var count = 0
+
+async fun bump(): int {
+    count += 1
+    return 1
+}
+
+fun main() {
+    print(await bump())
+}

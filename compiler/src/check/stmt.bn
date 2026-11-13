@@ -4,6 +4,7 @@ import "asm.bn"
 import "check.bn"
 import "closures.bn"
 import "expr.bn"
+import "hazards.bn"
 import "hir.bn"
 import "matching.bn"
 import "structs.bn"
@@ -685,6 +686,7 @@ fun varDecl(c: Checker, name: Ident, ty: TypeExpr?, init: Expr?, isConst: bool, 
     }
     HExpr value = errExpr()
     var vty = T_ERROR
+    var mark = len(c.facts)
     if (init != null) {
         var ispan = c.sp(init.span)
         var h = exprOf(c, init, declared)
@@ -741,6 +743,7 @@ fun varDecl(c: Checker, name: Ident, ty: TypeExpr?, init: Expr?, isConst: bool, 
         c.warn(nspan, "`${name.name}` shadows a variable declared on line ${c.lineOf(prev.span)} in the same block")
     }
     var slot = c.declareLocal(name.name, t, nspan, isConst, SrcSpan { file: span.file, start: span.start, end: 4294967295 })
+    bindFutures(c, mark, slot, t)
     if (has(ctx.cellNames, name.name)) {
         var ct = makeCellLocal(c, slot)
         var cell = hexpr(HKind.NewStruct(ct, [value]), ct)
@@ -862,8 +865,15 @@ fun forIn(c: Checker, binding: Ident, index: Ident?, iter: ForIter, body: Block,
             }
         }
         c.ctx().loops += 1
+        var guarded = k is Ty.Array || k is Ty.Map
+        if (guarded) {
+            guardLoop(c, h, c.srcText(espan), span)
+        }
         for x in blockStmts(c, body.stmts) {
             b.push(x)
+        }
+        if (guarded) {
+            unguardLoop(c)
         }
         c.ctx().loops -= 1
         out.push(HStmt.Loop(cond, b, [stepStmt(ctr)]))

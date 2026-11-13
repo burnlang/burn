@@ -308,7 +308,8 @@ More: https://s42yt.github.io/burn-docs/language/control-flow
 ## `for`
 
 *keyword*: loops over a range (`0..3`, or `0..=3` with the end included), an array, a map or a string, with
-`for x in ...` or `for i, x in ...` for the index too. `for (init; condition; step)` is the loop of C.
+`for x in ...` or `for i, x in ...` for the index too. `for (init; condition; step)` is the loop of C. The body
+cannot add to or remove from the array or map it goes over; loop over `copy(xs)` or `keys(m)` to do that.
 
 ```burn
 for i in 0..3 {
@@ -519,7 +520,8 @@ More: https://s42yt.github.io/burn-docs/language/modules
 ## `async`
 
 *keyword*: `async fun` runs on its own thread when it is called and gives a `Future<T>` at once; `await` waits for
-its result.
+its result. An array, map or object passed to it cannot be used until the call is awaited (pass `copy(x)` to keep
+using `x`), and the function cannot change globals or read globals that hold such values.
 
 ```burn
 async fun double(n: int): int {

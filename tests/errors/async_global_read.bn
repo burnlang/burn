@@ -1,0 +1,10 @@
+var log: [string] = []
+
+async fun note(s: string): int {
+    log.push(s)
+    return 1
+}
+
+fun main() {
+    print(await note("x"))
+}

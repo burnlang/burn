@@ -7,6 +7,7 @@ import "check.bn"
 import "closures.bn"
 import "expr.bn"
 import "generics.bn"
+import "hazards.bn"
 import "hir.bn"
 import "stmt.bn"
 import "structs.bn"
@@ -117,6 +118,7 @@ pub fun directCall(c: Checker, fid: int, recv: HExpr?, args: [Expr], span: SrcSp
     var hargs = checkArgsSig(c, params, args, r, span, "`${info.name}`", sig)
     invalidateGlobals(c)
     if (info.isAsync) {
+        giveToTask(c, null, hargs, span)
         var ft = c.types.future(ret)
         return hexpr(HKind.Spawn(fid, hargs), ft)
     }

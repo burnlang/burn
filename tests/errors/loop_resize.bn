@@ -1,0 +1,9 @@
+fun main() {
+    var xs = [1, 2, 3]
+    for x in xs {
+        if (x == 2) {
+            xs.push(4)
+        }
+    }
+    print(xs)
+}

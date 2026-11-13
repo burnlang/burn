@@ -1,0 +1,1 @@
+4:5 async functions run on their own thread, so reading the global `log` here races with code that changes it
