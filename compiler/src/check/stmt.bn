@@ -730,6 +730,7 @@ fun varDecl(c: Checker, name: Ident, ty: TypeExpr?, init: Expr?, isConst: bool, 
             var sym = e.sym
             if (sym is ValSym.Global && sameSpan(e.span, nspan)) {
                 c.globals[sym.id].ty = t
+                bindFutures(c, mark, GLOBAL_KEY + sym.id, t)
                 if (narrowable(c, t, vty)) {
                     ctx.narrow[GLOBAL_KEY + sym.id] = vty
                 }
