@@ -116,6 +116,9 @@ pub def type GenericFn {
     int module
     bool private
     [GenericInstance] instances
+    int? selfTy
+    {string: int} outer
+    string owner
 }
 
 pub def type GenericType {
@@ -561,6 +564,7 @@ pub def struct Checker(loaded: Loaded) {
     [AbstractSig] abstractSigs = []
     {int: bool} staticPrivate = {}
     [GenericFn] genericFns = []
+    {int: {string: int}} genericMethods = {}
     [GenericType] genericTypes = []
     [{string: int}] tenv = []
     [PendingInstance] pendingInstances = []
@@ -1751,7 +1755,7 @@ pub def struct Checker(loaded: Loaded) {
             }
         }
         var gid = len(genericFns)
-        genericFns.push(GenericFn { decl: f, module: mi, private: vis == Vis.Priv, instances: [] })
+        genericFns.push(GenericFn { decl: f, module: mi, private: vis == Vis.Priv, instances: [], selfTy: null, outer: {}, owner: "" })
         mods[mi].gfuncs[f.name.name] = TypeEntry { sym: gid, vis: vis, span: span }
     }
 
@@ -2643,6 +2647,25 @@ pub def struct Checker(loaded: Loaded) {
             int? selfTy = t
             if (mdecl.isStatic) {
                 selfTy = null
+            }
+            if (len(mdecl.tparams) > 0) {
+                if (isInit) {
+                    error(spanIn(mi, mdecl.name.span), "`init` cannot have type parameters")
+                    continue
+                }
+                {string: int} outer = {}
+                if (len(tenv) > 0) {
+                    var top = tenv[len(tenv) - 1]
+                    for k in keys(top) {
+                        outer[k] = top[k] ?? 0
+                    }
+                }
+                var gid = len(genericFns)
+                genericFns.push(GenericFn { decl: mdecl, module: mi, private: m.vis == Vis.Priv, instances: [], selfTy: selfTy, outer: outer, owner: name.name })
+                var gm = genericMethods[ri] ?? {}
+                gm[mname] = gid
+                genericMethods[ri] = gm
+                continue
             }
             var fid = declareFun(mi, mdecl, selfTy, m.vis == Vis.Priv, true)
             funcs[fid].name = "${name.name}.${mname}"

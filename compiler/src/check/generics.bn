@@ -24,19 +24,27 @@ pub fun instantiateFn(c: Checker, gid: int, targs: [int], site: SrcSpan): int {
     }
     var decl = g.decl
     {string: int} env = {}
+    for k in keys(g.outer) {
+        env[k] = g.outer[k] ?? 0
+    }
     for i in 0..len(decl.tparams) {
         if (i < len(targs)) {
             env[decl.tparams[i].name] = targs[i]
         }
     }
     c.tenv.push(env)
-    var fid = c.declareFun(g.module, decl, null, g.private, false)
+    var fid = c.declareFun(g.module, decl, g.selfTy, g.private, g.owner != "")
     c.tenv = slice(c.tenv, 0, len(c.tenv) - 1)
     [string] shown = []
     for t in targs {
         shown.push(c.show(t))
     }
-    c.funcs[fid].name = "${decl.name.name}<${joinWith(shown, ", ")}>"
+    var base = decl.name.name
+    if (g.owner != "") {
+        base = "${g.owner}.${base}"
+        c.funcs[fid].isStatic = g.selfTy == null
+    }
+    c.funcs[fid].name = "${base}<${joinWith(shown, ", ")}>"
     c.instSites[fid] = InstanceSite { name: c.funcs[fid].name, span: site }
     g.instances.push(GenericInstance { targs: targs, target: fid })
     return fid
@@ -207,6 +215,24 @@ fun boundTypes(names: [string], binds: {string: int}): [int] {
     return out
 }
 
+/** The generic method `name` of record `ri` or one of the records it extends, or null. */
+pub fun genericMethodOf(c: Checker, ri: int, name: string): int? {
+    var r: int? = ri
+    var seen = 0
+    while (r != null && seen < 64) {
+        var gm = c.genericMethods[r]
+        if (gm != null) {
+            var g = gm[name]
+            if (g != null) {
+                return g
+            }
+        }
+        r = c.types.records[r].parent
+        seen += 1
+    }
+    return null
+}
+
 pub fun genericCall(c: Checker, gid: int, recv: HExpr?, args: [Expr], span: SrcSpan, nameSpan: SrcSpan, expected: int?): HExpr {
     var decl = c.genericFns[gid].decl
     [string] names = []
@@ -215,7 +241,7 @@ pub fun genericCall(c: Checker, gid: int, recv: HExpr?, args: [Expr], span: SrcS
     }
     {string: int} binds = {}
     var offset = 0
-    if (recv != null) {
+    if (recv != null && c.genericFns[gid].owner == "") {
         offset = 1
         if (len(decl.params) > 0) {
             unify(c, decl.params[0].ty, recv.ty, names, binds)

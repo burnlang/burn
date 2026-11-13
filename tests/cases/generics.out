@@ -12,3 +12,8 @@ ADA
 1.0
 43
 Pair<string, string> { first: "w", second: "w" } 3
+2 v2 0.5
+2/x 2/true v2/3
+[20, 20]
+a 7 y 1.5 0
+n=1 s=str
