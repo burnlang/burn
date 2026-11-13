@@ -1423,6 +1423,8 @@ fun assignExpr(c: Checker, target: Expr, op: BinOp?, value: Expr, span: SrcSpan)
     var w = writePlace(c, p, v, c.sp(value.span))
     if (p is Place.Local) {
         bindFutures(c, mark, p.slot, v.ty)
+    } else if (p is Place.Global) {
+        bindFutures(c, mark, GLOBAL_KEY + p.id, v.ty)
     }
     if (len(pre) == 0) {
         return w

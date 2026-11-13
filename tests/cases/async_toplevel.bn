@@ -1,0 +1,13 @@
+async fun fill(xs: [int]): int {
+    xs.push(len(xs))
+    return len(xs)
+}
+
+var xs = [1]
+var task = fill(xs)
+print(await task, len(xs))
+var other = fill(copy(xs))
+print(len(xs), await other)
+var later = fill(copy(xs))
+later = fill(xs)
+print(await later, len(xs))
