@@ -1,18 +1,4 @@
-* text=auto
-
-*.s text eol=lf
-*.bn text eol=lf
-*.md text eol=lf
-*.js text eol=lf
-*.json text eol=lf
-*.toml text eol=lf
-
-*.bat text eol=crlf
-*.cmd text eol=crlf
-
+* text=auto eol=lf
+*.tar.xz binary
 *.png binary
-*.jpg binary
-*.exe binary
-
-tests/lexer/*.bn -text
-tests/toml/*.toml -text
+*.svg text eol=lf
