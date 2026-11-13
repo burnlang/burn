@@ -9,13 +9,16 @@ import "signal.bn"
 import "sys.bn"
 import "task.bn"
 import "text.bn"
+import "win.bn"
 
 @Extern("burn_runtime_init")
+
 fun runtimeInit(): void
 
 @Extern("burn_rt_init")
 pub unsafe fun rtInit(meta: int, metaLen: int, globals: int, nglobals: int, stackBase: int, tramp: int): int {
     runtimeInit()
+    winInit()
     metaSet(metaDecode(meta, metaLen))
     setMainThread()
     installSignals(stackBase)
@@ -227,57 +230,75 @@ pub unsafe fun errShift(loc: int, amount: int): int {
 }
 
 @Extern("sqrt")
+
 fun cSqrt(x: float): float
 
 @Extern("floor")
+
 fun cFloor(x: float): float
 
 @Extern("ceil")
+
 fun cCeilF(x: float): float
 
 @Extern("round")
+
 fun cRound(x: float): float
 
 @Extern("fabs")
+
 fun cFabs(x: float): float
 
 @Extern("sin")
+
 fun cSin(x: float): float
 
 @Extern("cos")
+
 fun cCos(x: float): float
 
 @Extern("tan")
+
 fun cTan(x: float): float
 
 @Extern("log")
+
 fun cLog(x: float): float
 
 @Extern("log10")
+
 fun cLog10F(x: float): float
 
 @Extern("exp")
+
 fun cExp(x: float): float
 
 @Extern("asin")
+
 fun cAsin(x: float): float
 
 @Extern("acos")
+
 fun cAcos(x: float): float
 
 @Extern("atan")
+
 fun cAtan(x: float): float
 
 @Extern("pow")
+
 fun cPow(x: float, y: float): float
 
 @Extern("atan2")
+
 fun cAtan2(y: float, x: float): float
 
 @Extern("fmod")
+
 fun cFmod(x: float, y: float): float
 
 @Extern("trunc")
+
 fun cTrunc(x: float): float
 
 @Extern("burn_fmath")
@@ -405,6 +426,7 @@ pub unsafe fun fmaxBits(a: int, b: int): int {
 var rng = 0
 
 @Extern("clock_gettime")
+
 fun cClockGettime(clock: int, ts: int): Int32
 
 /** Nanoseconds from the clock `clock` (0 is the wall clock). */
@@ -746,6 +768,7 @@ pub unsafe fun clockSinceStart(): int {
 }
 
 @Extern("nanosleep")
+
 fun cNanosleep(req: int, rem: int): Int32
 
 @Extern("burn_sleep")

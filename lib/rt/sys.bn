@@ -6,75 +6,102 @@
  */
 
 @Extern("malloc")
+
 fun cMalloc(n: int): int
 
 @Extern("calloc")
+
 fun cCalloc(n: int, size: int): int
 
 @Extern("realloc")
+
 fun cRealloc(p: int, n: int): int
 
 @Extern("free")
+
 fun cFree(p: int): void
 
 @Extern("memcpy")
+
 fun cMemcpy(to: int, from: int, n: int): int
 
 @Extern("memmove")
+
 fun cMemmove(to: int, from: int, n: int): int
 
 @Extern("memset")
+
 fun cMemset(to: int, byte: int, n: int): int
 
 @Extern("memcmp")
+
 fun cMemcmp(a: int, b: int, n: int): Int32
 
-@Extern("write")
+@Extern("write", windows: "burn_win_write")
 fun cWrite(fd: int, buf: int, n: int): int
 
-@Extern("read")
+@Extern("read", windows: "burn_win_read")
 fun cRead(fd: int, buf: int, n: int): int
 
 @Extern("exit")
+
 fun cExit(code: int): void
 
 @Extern("_exit")
+
 fun cExitNow(code: int): void
 
 @Extern("abort")
+
 fun cAbort(): void
 
 @Extern("getenv")
+
 fun cGetenv(name: int): int
 
 @Extern("strlen")
+
 fun cStrlen(s: int): int
 
 @Extern("isatty")
+
 fun cIsatty(fd: int): Int32
 
-@Extern("uname")
+@Extern("uname", windows: "burn_win_uname")
 fun cUname(buf: int): Int32
 
-@Extern("sysconf")
+@Extern("sysconf", windows: "burn_win_sysconf")
 fun cSysconf(name: int): int
 
 @Extern("pthread_self")
+
 fun cThreadSelf(): int
 
 /** Whether the program runs on macOS rather than Linux, which changes some constants of the C library. */
 var macos = false
+var windows = false
 var platformKnown = false
 
-pub unsafe fun isMacos(): bool {
+unsafe fun knowPlatform() {
     if (!platformKnown) {
         var buf = cCalloc(1, 2048)
         cUname(buf)
         macos = ld8(buf) == 68 && ld8(buf + 1) == 97
+        windows = ld8(buf) == 87 && ld8(buf + 1) == 105
         cFree(buf)
         platformKnown = true
     }
+}
+
+pub unsafe fun isMacos(): bool {
+    knowPlatform()
     return macos
+}
+
+/** Whether the program runs on Windows, where the runtime goes through the functions of `win.bn`. */
+pub unsafe fun isWindows(): bool {
+    knowPlatform()
+    return windows
 }
 
 /** Whether the program runs on an ARM64 processor rather than x86-64. */
@@ -182,7 +209,7 @@ pub unsafe fun writeAll(fd: int, p: int, n: int): bool {
     return true
 }
 
-@Extern("__errno_location", macos: "__error")
+@Extern("__errno_location", macos: "__error", windows: "_errno")
 fun cErrno(): int
 
 /** The `errno` of the calling thread. */

@@ -18,7 +18,7 @@ pub def type NativeOptions {
 }
 
 /** The platforms native executables can be built for. */
-pub const NATIVE_PLATFORMS = ["linux-x86_64", "macos-x86_64", "linux-aarch64", "macos-aarch64"]
+pub const NATIVE_PLATFORMS = ["linux-x86_64", "macos-x86_64", "linux-aarch64", "macos-aarch64", "windows-x86_64"]
 
 /** The platform native executables are built for: `BURN_PLATFORM` when it is set, to cross-compile, or this one. */
 pub fun targetPlatform(): string {

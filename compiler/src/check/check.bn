@@ -2260,7 +2260,7 @@ pub def struct Checker(loaded: Loaded) {
                 if (!ok) {
                     error(aspan, "@Extern can only be used on top-level functions and global variables")
                 }
-                args = builtinArgs(mi, a, ["name", "macos"], ["string", "string"], null)
+                args = builtinArgs(mi, a, ["name", "macos", "windows"], ["string", "string", "string"], null)
             } else if (name == "Inject" || name == "Overwrite" || name == "Redirect") {
                 if (site != Site.Func(false, false)) {
                     error(aspan, "@${name} can only be used on top-level functions")
@@ -2514,7 +2514,7 @@ pub def struct Checker(loaded: Loaded) {
                 externAt = true
                 if (f.bodyless && external == null) {
                     var sym = strArg(a, "name") ?? f.name.name
-                    external = External.C(sym, strArg(a, "macos") ?? sym)
+                    external = External.C(sym, strArg(a, "macos") ?? sym, strArg(a, "windows") ?? sym)
                 }
             }
         }

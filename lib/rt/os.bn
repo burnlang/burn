@@ -10,87 +10,101 @@ import "sys.bn"
 import "text.bn"
 
 @Extern("strerror")
+
 fun cStrerror(code: int): int
 
 @Extern("fopen")
+
 fun cFopen(path: int, mode: int): int
 
 @Extern("fwrite")
+
 fun cFwrite(p: int, size: int, n: int, f: int): int
 
 @Extern("fclose")
+
 fun cFclose(f: int): Int32
 
-@Extern("stat")
+@Extern("stat", windows: "burn_win_stat")
 fun cStat(path: int, out: int): Int32
 
-@Extern("lstat")
+@Extern("lstat", windows: "burn_win_stat")
 fun cLstat(path: int, out: int): Int32
 
-@Extern("dlsym")
+@Extern("dlsym", windows: "burn_win_dlsym")
 fun cDlsym(handle: int, name: int): int
 
 @Extern("chmod")
+
 fun cChmod(path: int, mode: int): Int32
 
 @Extern("mkdir")
+
 fun cMkdir(path: int, mode: int): Int32
 
 @Extern("rmdir")
+
 fun cRmdir(path: int): Int32
 
 @Extern("unlink")
+
 fun cUnlink(path: int): Int32
 
 @Extern("rename")
+
 fun cRename(from: int, to: int): Int32
 
 @Extern("chdir")
+
 fun cChdir(path: int): Int32
 
 @Extern("getcwd")
+
 fun cGetcwd(buf: int, size: int): int
 
 @Extern("opendir")
+
 fun cOpendir(path: int): int
 
-@Extern("readdir")
+@Extern("readdir", windows: "burn_win_readdir")
 fun cReaddir(dir: int): int
 
 @Extern("closedir")
+
 fun cClosedir(dir: int): Int32
 
-@Extern("localtime_r")
+@Extern("localtime_r", windows: "burn_win_localtime_r")
 fun cLocaltime(t: int, out: int): int
 
-@Extern("pipe2", macos: "pipe")
+@Extern("pipe2", macos: "pipe", windows: "burn_rt_unavailable")
 fun cPipe(fds: int, flags: int): Int32
 
 @Extern("close")
+
 fun cCloseFd(fd: int): Int32
 
-@Extern("poll")
+@Extern("poll", windows: "burn_rt_unavailable")
 fun cPoll(fds: int, n: int, timeout: int): Int32
 
-@Extern("waitpid")
+@Extern("waitpid", windows: "burn_rt_unavailable")
 fun cWaitpid(pid: int, status: int, options: int): Int32
 
-@Extern("posix_spawnp")
+@Extern("posix_spawnp", windows: "burn_rt_unavailable")
 fun cSpawnp(pid: int, file: int, actions: int, attr: int, argv: int, envp: int): Int32
 
-@Extern("posix_spawn_file_actions_init")
+@Extern("posix_spawn_file_actions_init", windows: "burn_rt_unavailable")
 fun cActionsInit(fa: int): Int32
 
-@Extern("posix_spawn_file_actions_destroy")
+@Extern("posix_spawn_file_actions_destroy", windows: "burn_rt_unavailable")
 fun cActionsDestroy(fa: int): Int32
 
-@Extern("posix_spawn_file_actions_adddup2")
+@Extern("posix_spawn_file_actions_adddup2", windows: "burn_rt_unavailable")
 fun cActionsDup2(fa: int, fd: int, to: int): Int32
 
-@Extern("posix_spawn_file_actions_addclose")
+@Extern("posix_spawn_file_actions_addclose", windows: "burn_rt_unavailable")
 fun cActionsClose(fa: int, fd: int): Int32
 
-@Extern("posix_spawn_file_actions_addopen")
+@Extern("posix_spawn_file_actions_addopen", windows: "burn_rt_unavailable")
 fun cActionsOpen(fa: int, fd: int, path: int, flags: int, mode: int): Int32
 
 const S_IFMT = 61440
@@ -223,12 +237,12 @@ unsafe fun writeBytes(path: int, content: int, mode: string): bool {
 
 @Extern("burn_write_file")
 pub unsafe fun writeFile(path: int, content: int): int {
-    return boolInt(writeBytes(path, content, "w"))
+    return boolInt(writeBytes(path, content, "wb"))
 }
 
 @Extern("burn_append_file")
 pub unsafe fun appendFile(path: int, content: int): int {
-    return boolInt(writeBytes(path, content, "a"))
+    return boolInt(writeBytes(path, content, "ab"))
 }
 
 @Extern("burn_file_exists")
@@ -335,7 +349,7 @@ unsafe fun copyFile(from: int, to: int): bool {
     if (b == 0) {
         return false
     }
-    var ok = writeBytes(to, b, "w")
+    var ok = writeBytes(to, b, "wb")
     release(b)
     if (ok) {
         var buf = zalloc(256)
@@ -505,6 +519,7 @@ pub unsafe fun localTime(): int {
 }
 
 @Extern("clock_gettime")
+
 fun cClock(clock: int, ts: int): Int32
 
 unsafe fun clockWall(): int {
@@ -719,6 +734,8 @@ pub unsafe fun rtPlatform(): int {
     var os = "linux"
     if (isMacos()) {
         os = "macos"
+    } else if (isWindows()) {
+        os = "windows"
     }
     var arch = "x86_64"
     if (isArm64()) {

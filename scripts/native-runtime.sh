@@ -23,7 +23,7 @@ Environment:
   BURN_CC  the C compiler that assembles it (default: $CC, then cc)
   AR       the archiver (default: ar)
   TARGET   the platform to build for (default: this one), as a target triple such as
-           aarch64-apple-darwin or aarch64-unknown-linux-gnu
+           aarch64-apple-darwin, aarch64-unknown-linux-gnu or x86_64-w64-mingw32
 EOF2
 }
 
@@ -49,6 +49,7 @@ case "${TARGET:-}" in
     aarch64-unknown-linux-*) PLATFORM=linux-aarch64 ;;
     x86_64-apple-darwin) PLATFORM=macos-x86_64 ;;
     aarch64-apple-darwin) PLATFORM=macos-aarch64 ;;
+    x86_64-w64-mingw32 | x86_64-pc-windows-*) PLATFORM=windows-x86_64 ;;
     *) echo "native-runtime.sh: no native code for $TARGET" >&2; exit 1 ;;
 esac
 
@@ -70,5 +71,8 @@ build --target runtime "$ROOT/lib/rt/runtime.bn" -o "$WORK/runtime.s"
 archive runtime libburn_runtime.a
 build --target asm "$ROOT/compiler/src/bin/launcher.bn" -o "$WORK/launcher.s"
 archive launcher libburn_launcher.a
-echo "-lpthread -ldl -lm" >"$OUT/native-libs.txt"
+case "$PLATFORM" in
+    windows-*) echo "-lpthread -lws2_32 -lm -static" >"$OUT/native-libs.txt" ;;
+    *) echo "-lpthread -ldl -lm" >"$OUT/native-libs.txt" ;;
+esac
 rm -f "$OUT/libburn_bvm.a" "$OUT/bvm-libs.txt" "$OUT/libburn_core.a"
