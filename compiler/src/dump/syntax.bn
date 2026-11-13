@@ -186,8 +186,9 @@ def struct Writer() {
                 ty("", t)
                 close()
             }
-            Def.Interface(name, methods) => {
+            Def.Interface(name, methods, ts) => {
                 open("", "Interface ${id(name)}")
+                tparams(ts)
                 for m in methods {
                     open("method", "${id(m.name)} async=${m.isAsync}")
                     params(m.params)

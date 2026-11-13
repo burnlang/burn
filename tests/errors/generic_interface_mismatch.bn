@@ -1,0 +1,9 @@
+def interface Shows<T> {
+    fun show(x: T): string
+}
+
+def struct Bad :: Shows<int> {
+    fun show(x: string): string {
+        return x
+    }
+}

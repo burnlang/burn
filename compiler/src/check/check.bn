@@ -289,7 +289,7 @@ pub fun defName(d: Def): Ident {
     return match d {
         Def.Type(name, fields, tparams) => name
         Def.Alias(name, ty) => name
-        Def.Interface(name, methods) => name
+        Def.Interface(name, methods, tparams) => name
         Def.Struct(s) => s.name
         Def.Enum(name, variants) => name
         Def.Annotation(name, fields) => name
@@ -302,6 +302,9 @@ pub fun defTparams(d: Def): [Ident] {
     }
     if (d is Def.Struct) {
         return d.s.tparams
+    }
+    if (d is Def.Interface) {
+        return d.tparams
     }
     return []
 }
@@ -1559,6 +1562,23 @@ pub def struct Checker(loaded: Loaded) {
         for t in targs {
             shown.push(show(t))
         }
+        if (g.d is Def.Interface) {
+            var ii = types.newIface(IfaceDef { name: "${dname.name}<${joinWith(shown, ", ")}>", methods: [], module: g.module, span: spanIn(g.module, dname.span), ty: 0, variants: [] })
+            var it = types.ifaces[ii].ty
+            g.instances.push(GenericInstance { targs: targs, target: it })
+            instanceOf[it] = InstanceOf { gid: gid, targs: targs }
+            var names = defTparams(g.d)
+            {string: int} env = {}
+            for i in 0..len(names) {
+                if (i < len(targs)) {
+                    env[names[i].name] = targs[i]
+                }
+            }
+            tenv.push(env)
+            fillDefFor(g.module, g.d, it)
+            tenv = slice(tenv, 0, len(tenv) - 1)
+            return it
+        }
         var rec = newRecordDef("${dname.name}<${joinWith(shown, ", ")}>", g.module, spanIn(g.module, dname.span))
         rec.isClass = g.d is Def.Struct
         var ri = types.newRecord(rec)
@@ -1882,12 +1902,28 @@ pub def struct Checker(loaded: Loaded) {
                     ret = resolveTypeIn(rt, mi)
                 }
                 var slot = len(slots)
-                slots.push(IfaceSlot { name: "${d.name.name}.${m.name.name}", argc: len(params) + 1, impls: [] })
+                slots.push(IfaceSlot { name: "${types.ifaces[ii].name}.${m.name.name}", argc: len(params) + 1, impls: [] })
                 out.push(IfaceMethod { name: m.name.name, params: params, ret: ret, isAsync: m.isAsync, span: spanIn(mi, m.name.span), slot: slot })
             }
             ifaceSlotBase[ii] = 0
             types.ifaces[ii].methods = out
         }
+    }
+
+    /** The type a struct names after `:` or `::`, with its type arguments for a generic interface such as `Shows<int>`. */
+    fun superType(mi: int, h: SuperRef, sspan: SrcSpan): int? {
+        if (len(h.targs) > 0) {
+            if (lookupGenericType(mi, h.name.name) == null) {
+                error(sspan, "`${h.name.name}` takes no type arguments")
+                return T_ERROR
+            }
+            return resolveTypeIn(TypeExpr { kind: TypeKind.Named(h.name.name, h.targs), span: h.name.span }, mi)
+        }
+        if (lookupGenericType(mi, h.name.name) != null && lookupTypeName(mi, h.name.name, sspan) == null) {
+            error(sspan, "`${h.name.name}` needs type arguments, for example `${h.name.name}<int>`")
+            return T_ERROR
+        }
+        return lookupTypeName(mi, h.name.name, sspan)
     }
 
     fun structOrError(mi: int, s: Ident): bool {
@@ -1949,7 +1985,7 @@ pub def struct Checker(loaded: Loaded) {
                     emit(d)
                     extendsStruct = false
                 } else if (!extendsStruct) {
-                    var it = lookupTypeName(mi, s.name, sspan)
+                    var it = superType(mi, heads[h], sspan)
                     if (it != null) {
                         var ik = types.kindOf(it)
                         if (ik is Ty.Interface) {
@@ -1959,7 +1995,7 @@ pub def struct Checker(loaded: Loaded) {
                     continue
                 }
             }
-            var it = lookupTypeName(mi, s.name, sspan)
+            var it = superType(mi, heads[h], sspan)
             if (it == null) {
                 var d = errorDiag(sspan, "unknown struct or interface `${s.name}`")
                 var c = suggest(s.name, keys(mods[mi].types))
