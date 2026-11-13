@@ -1,0 +1,116 @@
+def struct Node(name: string) {
+    Node? next = null
+}
+
+def struct Box(label: string) {}
+
+fun clobber(xs: [string]) {
+    xs[0] = "new" + str(len(xs))
+}
+
+fun overwrite(xs: [string]): string {
+    var a = xs[0]
+    xs[0] = "zz" + str(len(xs))
+    return a + "!"
+}
+
+fun viaCall(xs: [string]): string {
+    var a = xs[0]
+    clobber(xs)
+    return a + "?"
+}
+
+fun popped(xs: [string]): string {
+    var a = xs[len(xs) - 1]
+    xs.pop()
+    return a + "."
+}
+
+fun realias(): string {
+    var ys = ["a" + str(1), "b" + str(2)]
+    var a = ys
+    ys = ["c" + str(3)]
+    return a[0] + ys[0]
+}
+
+fun field(b: Box): string {
+    var n = b.label
+    b.label = "other" + str(7)
+    return n
+}
+
+fun unlink(head: Node): string {
+    var cur = head
+    var out = ""
+    while (cur.next != null) {
+        var nx = cur.next
+        if (nx != null) {
+            out += nx.name
+            cur.next = nx.next
+        }
+    }
+    return out
+}
+
+fun walk(head: Node): string {
+    Node? cur = head
+    var out = ""
+    while (cur != null) {
+        out += cur.name
+        cur = cur.next
+    }
+    return out
+}
+
+fun lambdas(xs: [string]): string {
+    var f = fun() {
+        xs[0] = "L" + str(9)
+    }
+    var a = xs[0]
+    f()
+    return a
+}
+
+fun appended(): string {
+    var s = "a" + str(1)
+    var t = s
+    s += "more and more text to force a reallocation of the buffer"
+    return t + "|" + s
+}
+
+fun first(xs: [Box]): Box {
+    var p = xs[0]
+    return p
+}
+
+fun keep(xs: [Box]): [Box] {
+    [Box] out = []
+    for b in xs {
+        out.push(b)
+    }
+    return out
+}
+
+fun main() {
+    print(overwrite(["x" + str(1), "y"]))
+    print(viaCall(["x" + str(2), "y"]))
+    print(popped(["x", "y" + str(3)]))
+    print(realias())
+    print(field(new Box("lab" + str(4))))
+    var c = new Node("c" + str(0))
+    var b = new Node("b" + str(0))
+    b.next = c
+    var a = new Node("a" + str(0))
+    a.next = b
+    print(walk(a))
+    print(unlink(a))
+    print(walk(a))
+    print(lambdas(["q" + str(5)]))
+    print(appended())
+    [Box] boxes = [new Box("one" + str(1)), new Box("two" + str(2))]
+    var f = first(boxes)
+    boxes = []
+    print(f.label)
+    var kept = keep([new Box("k" + str(1)), new Box("k" + str(2))])
+    print(kept[0].label, kept[1].label)
+}

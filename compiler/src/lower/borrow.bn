@@ -1,0 +1,527 @@
+/**
+ * Borrowed locals: a local whose every value is read from a parameter, another local, or a field or element of one,
+ * and whose source cannot be freed while the local is used, does not need its own reference. The ownership pass then
+ * treats it like a parameter: no retain when it is set and no release when it is overwritten or goes away.
+ */
+import "../check/hir.bn"
+import "../check/types.bn"
+
+/** The runtime functions that can free a value an array, map or object holds, or run other code. */
+const RELEASERS = ["ArrClear", "ArrPop", "ArrRemove", "MapRemove", "MapSet", "Destroy", "GcCollect", "Await", "CFun", "Mem", "Exec"]
+
+def type Cand {
+    bool ok
+    [int] roots
+    bool deep
+    int from
+    int to
+}
+
+def type Walk {
+    Types types
+    [bool] mayFree
+    [bool] track
+    [[HExpr]] sets
+    [[[int]]] paths
+    [[int]] setAt
+    [int] deepAt
+    [HStmt] byId
+    [int] ends
+    [int] frames
+    int cur
+    bool asm
+}
+
+fun managedTy(types: Types, t: int): bool {
+    var k = types.kindOf(t)
+    return k is Ty.Str || k is Ty.Any || k is Ty.Array || k is Ty.Map || k is Ty.Optional || k is Ty.Func || k is Ty.Future || k is Ty.Record || k is Ty.Interface
+}
+
+fun subStmts(s: HStmt): [[HStmt]] {
+    if (s is HStmt.If) {
+        return [s.then, s.els]
+    }
+    if (s is HStmt.Loop) {
+        return [s.body, s.step]
+    }
+    if (s is HStmt.Asm) {
+        return [s.pre, s.post, s.fallback]
+    }
+    return []
+}
+
+fun stmtExprs(s: HStmt): [HExpr] {
+    if (s is HStmt.Eval) {
+        return [s.value]
+    }
+    if (s is HStmt.Return) {
+        var v = s.value
+        if (v != null) {
+            return [v]
+        }
+        return []
+    }
+    if (s is HStmt.If) {
+        return [s.cond]
+    }
+    if (s is HStmt.Loop) {
+        var c = s.cond
+        if (c != null) {
+            return [c]
+        }
+    }
+    return []
+}
+
+fun kids(e: HExpr): [HExpr] {
+    var k = e.kind
+    if (k is HKind.SetLocal) {
+        return [k.value]
+    }
+    if (k is HKind.SetGlobal) {
+        return [k.value]
+    }
+    if (k is HKind.Unary) {
+        return [k.value]
+    }
+    if (k is HKind.Conv) {
+        return [k.value]
+    }
+    if (k is HKind.ArrLen) {
+        return [k.value]
+    }
+    if (k is HKind.BoxVal) {
+        return [k.value]
+    }
+    if (k is HKind.Retain) {
+        return [k.value]
+    }
+    if (k is HKind.Release) {
+        return [k.value]
+    }
+    if (k is HKind.GetField) {
+        return [k.obj]
+    }
+    if (k is HKind.Binary) {
+        return [k.left, k.right]
+    }
+    if (k is HKind.And) {
+        return [k.left, k.right]
+    }
+    if (k is HKind.Or) {
+        return [k.left, k.right]
+    }
+    if (k is HKind.Index) {
+        return [k.obj, k.index]
+    }
+    if (k is HKind.SetField) {
+        return [k.obj, k.value]
+    }
+    if (k is HKind.SetIndex) {
+        return [k.obj, k.index, k.value]
+    }
+    if (k is HKind.Call) {
+        return k.args
+    }
+    if (k is HKind.CallIface) {
+        return k.args
+    }
+    if (k is HKind.Rt) {
+        return k.args
+    }
+    if (k is HKind.Spawn) {
+        return k.args
+    }
+    if (k is HKind.NewStruct) {
+        return k.args
+    }
+    if (k is HKind.NewArray) {
+        return k.items
+    }
+    if (k is HKind.CallIndirect) {
+        [HExpr] out = [k.callee]
+        for a in k.args {
+            out.push(a)
+        }
+        return out
+    }
+    if (k is HKind.Seq) {
+        return [k.value]
+    }
+    return []
+}
+
+fun seqStmts(e: HExpr): [HStmt] {
+    var k = e.kind
+    if (k is HKind.Seq) {
+        return k.stmts
+    }
+    return []
+}
+
+fun mentionsE(e: HExpr, slot: int): bool {
+    var k = e.kind
+    if (k is HKind.Local && k.slot == slot) {
+        return true
+    }
+    if (k is HKind.SetLocal && k.slot == slot) {
+        return true
+    }
+    for x in kids(e) {
+        if (mentionsE(x, slot)) {
+            return true
+        }
+    }
+    return mentionsL(seqStmts(e), slot)
+}
+
+fun mentionsL(l: [HStmt], slot: int): bool {
+    for s in l {
+        for x in stmtExprs(s) {
+            if (mentionsE(x, slot)) {
+                return true
+            }
+        }
+        for sub in subStmts(s) {
+            if (mentionsL(sub, slot)) {
+                return true
+            }
+        }
+    }
+    return false
+}
+
+fun simpleIndex(e: HExpr): bool {
+    var k = e.kind
+    return k is HKind.Int || k is HKind.Local
+}
+
+/** The local a path (`x`, `x.f`, `x[i]` and chains of them) starts at, or -1 when `e` is not a path. */
+fun pathRoot(e: HExpr): int {
+    var k = e.kind
+    if (k is HKind.Local) {
+        return k.slot
+    }
+    if (k is HKind.GetField) {
+        return pathRoot(k.obj)
+    }
+    if (k is HKind.Index && simpleIndex(k.index)) {
+        return pathRoot(k.obj)
+    }
+    return -1
+}
+
+/** Whether `e` itself (not what is inside it) may free a value that an array, map, object or global holds. */
+fun freesHeld(types: Types, mayFree: [bool], e: HExpr): bool {
+    var k = e.kind
+    if (k is HKind.CallIface || k is HKind.CallIndirect || k is HKind.Spawn) {
+        return true
+    }
+    if (k is HKind.Call) {
+        return k.func >= len(mayFree) || mayFree[k.func]
+    }
+    if (k is HKind.SetField) {
+        return managedTy(types, k.value.ty)
+    }
+    if (k is HKind.SetIndex) {
+        return managedTy(types, k.value.ty)
+    }
+    if (k is HKind.SetGlobal) {
+        return managedTy(types, e.ty)
+    }
+    if (k is HKind.Rt) {
+        if (contains(RELEASERS, k.name)) {
+            return true
+        }
+        for a in k.args {
+            if (types.kindOf(a.ty) is Ty.Func) {
+                return true
+            }
+        }
+    }
+    return false
+}
+
+fun walkE(w: Walk, e: HExpr): void {
+    var k = e.kind
+    if (k is HKind.Local && w.track[k.slot]) {
+        w.paths[k.slot].push(slice(w.frames, 0, len(w.frames)))
+    }
+    if (k is HKind.SetLocal) {
+        if (w.track[k.slot]) {
+            w.paths[k.slot].push(slice(w.frames, 0, len(w.frames)))
+            w.sets[k.slot].push(k.value)
+        }
+        w.setAt[k.slot].push(w.cur)
+    }
+    if (freesHeld(w.types, w.mayFree, e)) {
+        var n = len(w.deepAt)
+        if (n == 0 || w.deepAt[n - 1] != w.cur) {
+            w.deepAt.push(w.cur)
+        }
+    }
+    for x in kids(e) {
+        walkE(w, x)
+    }
+    walkL(w, seqStmts(e))
+}
+
+fun walkL(w: Walk, l: [HStmt]): void {
+    for s in l {
+        var id = len(w.byId)
+        w.byId.push(s)
+        w.ends.push(id)
+        var prev = w.cur
+        w.cur = id
+        if (s is HStmt.Asm) {
+            w.asm = true
+        }
+        w.frames.push(id * 8)
+        for e in stmtExprs(s) {
+            walkE(w, e)
+        }
+        w.frames.pop()
+        var parts = subStmts(s)
+        for pi in 0..len(parts) {
+            w.frames.push(id * 8 + pi + 1)
+            walkL(w, parts[pi])
+            w.frames.pop()
+        }
+        w.ends[id] = len(w.byId) - 1
+        w.cur = prev
+    }
+}
+
+fun descends(s: HStmt, part: int): bool {
+    if (s is HStmt.If) {
+        return part == 1 || part == 2
+    }
+    if (s is HStmt.Loop) {
+        return part == 1
+    }
+    return false
+}
+
+/** Finds the statements during which local `slot` holds a value that is used; false when it may be read before it is set. */
+fun regionOf(w: Walk, slot: int, c: Cand): bool {
+    var ps = w.paths[slot]
+    if (len(ps) == 0) {
+        return false
+    }
+    var level = 0
+    while (true) {
+        var f = ps[0][level]
+        var same = descends(w.byId[f / 8], f % 8)
+        for p in ps {
+            if (!same) {
+                break
+            }
+            if (len(p) <= level + 1 || p[level] != f) {
+                same = false
+            }
+        }
+        if (!same) {
+            break
+        }
+        level += 1
+    }
+    var a = 2147483647
+    var b = -1
+    for p in ps {
+        var id = p[level] / 8
+        if (id < a) {
+            a = id
+        }
+        if (id > b) {
+            b = id
+        }
+    }
+    var first = w.byId[a]
+    if (!(first is HStmt.Eval)) {
+        return false
+    }
+    var v = first.value.kind
+    if (!(v is HKind.SetLocal) || v.slot != slot || mentionsE(v.value, slot)) {
+        return false
+    }
+    c.from = a
+    c.to = w.ends[b]
+    return true
+}
+
+fun within(ids: [int], from: int, to: int): bool {
+    for i in ids {
+        if (i >= from && i <= to) {
+            return true
+        }
+    }
+    return false
+}
+
+fun addDeps(cands: [Cand], slot: int, deps: [int]): bool {
+    var deep = false
+    for r in cands[slot].roots {
+        if (contains(deps, r)) {
+            continue
+        }
+        deps.push(r)
+        if (cands[r].ok) {
+            if (cands[r].deep) {
+                deep = true
+            }
+            if (addDeps(cands, r, deps)) {
+                deep = true
+            }
+        }
+    }
+    return deep
+}
+
+/** Which locals of `f` can borrow their values; `mayFree[g]` says whether calling function `g` may free a held value. */
+pub fun borrowedLocals(types: Types, f: HFunc, mayFree: [bool]): [bool] {
+    var n = len(f.locals)
+    [bool] out = []
+    [bool] track = []
+    [[HExpr]] sets = []
+    [[[int]]] paths = []
+    [[int]] setAt = []
+    var any = false
+    for i in 0..n {
+        out.push(false)
+        var t = i >= f.params && managedTy(types, f.locals[i])
+        track.push(t)
+        if (t) {
+            any = true
+        }
+        sets.push([])
+        paths.push([])
+        setAt.push([])
+    }
+    if (!any || f.isAsync || f.external != null) {
+        return out
+    }
+    var w = Walk { types: types, mayFree: mayFree, track: track, sets: sets, paths: paths, setAt: setAt, deepAt: [], byId: [], ends: [], frames: [], cur: -1, asm: false }
+    walkL(w, f.body)
+    if (w.asm) {
+        return out
+    }
+    [Cand] cands = []
+    for i in 0..n {
+        var c = Cand { ok: false, roots: [], deep: false, from: 0, to: -1 }
+        cands.push(c)
+        if (!track[i] || len(sets[i]) == 0) {
+            continue
+        }
+        var ok = true
+        for v in sets[i] {
+            if (v.kind is HKind.Null) {
+                continue
+            }
+            var r = pathRoot(v)
+            if (r < 0) {
+                ok = false
+                break
+            }
+            if (!(v.kind is HKind.Local)) {
+                c.deep = true
+            }
+            if (r != i && !contains(c.roots, r)) {
+                c.roots.push(r)
+            }
+        }
+        if (ok && regionOf(w, i, c)) {
+            c.ok = true
+        }
+    }
+    var changed = true
+    while (changed) {
+        changed = false
+        for i in 0..n {
+            var c = cands[i]
+            if (!c.ok) {
+                continue
+            }
+            [int] deps = []
+            var deep = addDeps(cands, i, deps) || c.deep
+            var bad = deep && within(w.deepAt, c.from, c.to)
+            for d in deps {
+                if (!bad && within(setAt[d], c.from, c.to)) {
+                    bad = true
+                }
+            }
+            if (bad) {
+                c.ok = false
+                changed = true
+            }
+        }
+    }
+    for i in 0..n {
+        out[i] = cands[i].ok
+    }
+    return out
+}
+
+fun scanE(types: Types, e: HExpr, calls: [int]): bool {
+    var k = e.kind
+    if (k is HKind.Call) {
+        if (!contains(calls, k.func)) {
+            calls.push(k.func)
+        }
+    } else if (freesHeld(types, [], e)) {
+        return true
+    }
+    for x in kids(e) {
+        if (scanE(types, x, calls)) {
+            return true
+        }
+    }
+    return scanL(types, seqStmts(e), calls)
+}
+
+fun scanL(types: Types, l: [HStmt], calls: [int]): bool {
+    for s in l {
+        if (s is HStmt.Asm) {
+            return true
+        }
+        for e in stmtExprs(s) {
+            if (scanE(types, e, calls)) {
+                return true
+            }
+        }
+        for sub in subStmts(s) {
+            if (scanL(types, sub, calls)) {
+                return true
+            }
+        }
+    }
+    return false
+}
+
+/** For each function, whether calling it may free a value that an array, map, object or global holds. */
+pub fun mayFreeHeld(types: Types, funcs: [HFunc]): [bool] {
+    var n = len(funcs)
+    [bool] out = []
+    [[int]] callees = []
+    for f in funcs {
+        [int] cs = []
+        out.push(f.external != null || scanL(types, f.body, cs))
+        callees.push(cs)
+    }
+    var changed = true
+    while (changed) {
+        changed = false
+        for i in 0..n {
+            if (out[i]) {
+                continue
+            }
+            for g in callees[i] {
+                if (g >= n || out[g]) {
+                    out[i] = true
+                    changed = true
+                    break
+                }
+            }
+        }
+    }
+    return out
+}
